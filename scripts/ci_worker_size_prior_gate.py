@@ -34,11 +34,14 @@ ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
+SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
 CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
 BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
 REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
                   "tests/aarch64_regalloc_scan_reference.py",
                   "tests/aarch64_regalloc_facts_reference.py", REGALLOC_FACTS_TEST,
+                  SCALAR_PROJECTION_TEST, "tests/scalar_arena_projection_reference.json",
+                  "tests/scalar_arena_projection_ci_reference.py",
                   "tests/python/test_precise_stackmap_abi.py",
                   "tests/python/test_unsafe_syscall6.py")
 REGALLOC_MODES = ("default", "function", "local")
@@ -90,10 +93,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/python/test_indexed_phase_timing.py",
               "tests/python/test_x86_64_windows_packed_stackmaps.py",
               X87_PREFIX_TEST, X87_ENCODING_TEST, ASSEMBLY_PROFILE_TEST, REGALLOC_FACTS_TEST,
-              RSS_READER_TEST, RSS_PUBLICATION_TEST)
-# All existing 844 nodes remain. The 24 bounded reader controls and 11
-# publication controls share this invocation; no new job or timeout is added.
-HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11)
+              RSS_READER_TEST, RSS_PUBLICATION_TEST, SCALAR_PROJECTION_TEST)
+# All existing 879 nodes remain, including the 35 Windows reader/publication
+# controls. Eighty-nine scalar controls share this invocation and its limits.
+HOST_COUNTS = (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

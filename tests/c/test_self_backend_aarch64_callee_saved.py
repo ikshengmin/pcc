@@ -365,6 +365,8 @@ def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode
         allocation_state, counted_function_facts, old_scan_allocator, select_mode,
     )
 
+    from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
+
     select_mode(monkeypatch, mode)
     outputs = []
     graph_counts = [dict(pops=0, edges=0, hits=0) for _ in range(2)]
@@ -379,6 +381,8 @@ def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode
 
         with monkeypatch.context() as patch:
             patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            if index == 0:
+                disable_scalar_projections(patch, allocator)
             if index == 1:
                 patch.setattr(regalloc, "_function_level_facts", counted_facts)
             assembly = emit_aarch64_darwin_asm(IR, optimize=False)

@@ -1,4 +1,4 @@
-"""Public nine-module strict closure and real host-target object emission."""
+"""Public eighteen-module strict closure and real host-target object emission."""
 
 import ast
 from collections import Counter
@@ -17,6 +17,15 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
     "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff",
     "worker_process_pool",
 )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",
+      "pcc.backend.self_backend_kernel",
+      "pcc.backend.self_backend_precise_stackmaps",
+      "pcc.backend.self_backend_verify",
+      "pcc.backend.self_backend_aarch64_darwin_flow",
+      "pcc.backend.self_backend_aarch64_darwin_memory",
+      "pcc.backend.self_backend_aarch64_darwin_calls",
+      "pcc.backend.self_backend_aarch64_darwin_ops",
+      "pcc.backend.self_backend_aarch64_darwin_prologue",
+      "pcc.backend.self_backend_aarch64_darwin_returns",
       "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
       "pcc.backend.x86_64_encode")
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
@@ -219,7 +228,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
     primary_failed = False
     receipt = {"status": "RUNNING", "target": target, "sources": digests,
                "codegen_sha256": codegen_checksum(), "modules": {},
-               "scope": "public strict full closure and nine actual target objects",
+               "scope": "public strict full closure and eighteen actual target objects",
                "native_execution": False,
                "compile_profile": _bounded_compile_profile(compile_profile, complete=False)}
     output = tmp_path / "closed-world.ll"

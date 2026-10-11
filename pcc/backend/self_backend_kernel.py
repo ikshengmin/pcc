@@ -62,6 +62,24 @@ from .self_backend_ir import (
 from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
 
 
+def _scalar_window_is_complete(
+    arena: CompilerIntArena, record_id: int, stride: int, window_offset: int,
+) -> bool:
+    """Prove the original four-cell snapshot window before scalar projection.
+
+    Callers must first prove an exact IndexedFunctionKernel before obtaining
+    the arena. Nonexact owners, arenas and IDs retain their original snapshot
+    expressions, including lazy/repeated field reads and exception ordering.
+    Only the requested window is required, not the whole logical record.
+    """
+    if type(arena) is not CompilerIntArena or type(record_id) is not int:
+        return False
+    if record_id < 0:
+        return False
+    base = record_id * stride + window_offset
+    return base >= 0 and base + 3 < len(arena)
+
+
 TYPE_KIND_VOID = 0
 TYPE_KIND_INT = 1
 TYPE_KIND_FP = 2
@@ -1837,8 +1855,22 @@ class IndexedFunctionKernel:
                     )
                     incoming_count += 1
                 phi_type_id = self.intern_type(phi.type)
-                phi_type_header: CompilerInt4 = self.type_header(phi_type_id)
-                phi_kind = phi_type_header.first
+                phi_type_header_is_scalar = False
+                if type(self) is IndexedFunctionKernel:
+                    phi_type_header_scalar_id = phi_type_id
+                    phi_type_header_is_scalar = _scalar_window_is_complete(
+                        self.type_scalars, phi_type_header_scalar_id, 12, 0
+                    )
+                    if phi_type_header_is_scalar:
+                        phi_type_header_scalar = self.type_scalars.get_unchecked(
+                            phi_type_header_scalar_id * 12 + 0
+                        )
+                        phi_type_header = None
+                    else:
+                        phi_type_header: CompilerInt4 = self.type_header(phi_type_header_scalar_id)
+                else:
+                    phi_type_header: CompilerInt4 = self.type_header(phi_type_id)
+                phi_kind = (phi_type_header_scalar if phi_type_header_is_scalar else phi_type_header.first)
                 if phi_kind == TYPE_KIND_ARRAY or phi_kind == TYPE_KIND_STRUCT:
                     all_scalar = False
                 self.phi_scalars.append4(
@@ -1861,8 +1893,22 @@ class IndexedFunctionKernel:
                 phi: CompilerInt4 = self.phi_record(
                     phi_fact.first + phi_index
                 )
-                phi_type_header: CompilerInt4 = self.type_header(phi.second)
-                kind_id = phi_type_header.first
+                phi_type_header_is_scalar = False
+                if type(self) is IndexedFunctionKernel:
+                    phi_type_header_scalar_id = phi.second
+                    phi_type_header_is_scalar = _scalar_window_is_complete(
+                        self.type_scalars, phi_type_header_scalar_id, 12, 0
+                    )
+                    if phi_type_header_is_scalar:
+                        phi_type_header_scalar = self.type_scalars.get_unchecked(
+                            phi_type_header_scalar_id * 12 + 0
+                        )
+                        phi_type_header = None
+                    else:
+                        phi_type_header: CompilerInt4 = self.type_header(phi_type_header_scalar_id)
+                else:
+                    phi_type_header: CompilerInt4 = self.type_header(phi.second)
+                kind_id = (phi_type_header_scalar if phi_type_header_is_scalar else phi_type_header.first)
                 if kind_id == TYPE_KIND_ARRAY or kind_id == TYPE_KIND_STRUCT:
                     all_scalar = False
                     break
@@ -2065,14 +2111,42 @@ class IndexedFunctionKernel:
         return self.inline_error_edge_target(edge_span.first + edge_offset)
 
     def terminator_successor_count(self, block_id: int) -> int:
-        header: CompilerInt4 = self.terminator_header(block_id)
-        if header.first == PARSED_INSTRUCTION_KIND_BR:
+        header_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            header_scalar_id = block_id
+            header_is_scalar = _scalar_window_is_complete(
+                self.terminator_scalars, header_scalar_id, 8, 0
+            )
+            if header_is_scalar:
+                header_scalar = self.terminator_scalars.get_unchecked(
+                    header_scalar_id * 8 + 0
+                )
+                header = None
+            else:
+                header: CompilerInt4 = self.terminator_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = self.terminator_header(block_id)
+        if (header_scalar if header_is_scalar else header.first) == PARSED_INSTRUCTION_KIND_BR:
             return 1
-        if header.first == PARSED_INSTRUCTION_KIND_BR_COND:
+        if (header_scalar if header_is_scalar else header.first) == PARSED_INSTRUCTION_KIND_BR_COND:
             return 2
-        if header.first == PARSED_INSTRUCTION_KIND_SWITCH:
-            span: CompilerInt4 = self.terminator_span(block_id)
-            return 1 + span.third
+        if (header_scalar if header_is_scalar else header.first) == PARSED_INSTRUCTION_KIND_SWITCH:
+            span_is_scalar = False
+            if type(self) is IndexedFunctionKernel:
+                span_scalar_id = block_id
+                span_is_scalar = _scalar_window_is_complete(
+                    self.terminator_scalars, span_scalar_id, 8, 4
+                )
+                if span_is_scalar:
+                    span_scalar = self.terminator_scalars.get_unchecked(
+                        span_scalar_id * 8 + 6
+                    )
+                    span = None
+                else:
+                    span: CompilerInt4 = self.terminator_span(span_scalar_id)
+            else:
+                span: CompilerInt4 = self.terminator_span(block_id)
+            return 1 + (span_scalar if span_is_scalar else span.third)
         return 0
 
     def terminator_successor_id(
@@ -2167,16 +2241,44 @@ class IndexedFunctionKernel:
             type_id += 1
         if return_type_id < 0:
             return False
-        return_type_header: CompilerInt4 = self.type_header(return_type_id)
-        if return_type_header.first not in scalar_kinds:
+        return_type_header_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            return_type_header_scalar_id = return_type_id
+            return_type_header_is_scalar = _scalar_window_is_complete(
+                self.type_scalars, return_type_header_scalar_id, 12, 0
+            )
+            if return_type_header_is_scalar:
+                return_type_header_scalar = self.type_scalars.get_unchecked(
+                    return_type_header_scalar_id * 12 + 0
+                )
+                return_type_header = None
+            else:
+                return_type_header: CompilerInt4 = self.type_header(return_type_header_scalar_id)
+        else:
+            return_type_header: CompilerInt4 = self.type_header(return_type_id)
+        if (return_type_header_scalar if return_type_header_is_scalar else return_type_header.first) not in scalar_kinds:
             return False
         for arg in func.args:
             value_id = self.value_id(arg.name)
             arg_type_id = -1 if value_id < 0 else self.value_type_id(value_id)
             if arg_type_id < 0:
                 return False
-            arg_type_header: CompilerInt4 = self.type_header(arg_type_id)
-            if arg_type_header.first not in scalar_kinds:
+            arg_type_header_is_scalar = False
+            if type(self) is IndexedFunctionKernel:
+                arg_type_header_scalar_id = arg_type_id
+                arg_type_header_is_scalar = _scalar_window_is_complete(
+                    self.type_scalars, arg_type_header_scalar_id, 12, 0
+                )
+                if arg_type_header_is_scalar:
+                    arg_type_header_scalar = self.type_scalars.get_unchecked(
+                        arg_type_header_scalar_id * 12 + 0
+                    )
+                    arg_type_header = None
+                else:
+                    arg_type_header: CompilerInt4 = self.type_header(arg_type_header_scalar_id)
+            else:
+                arg_type_header: CompilerInt4 = self.type_header(arg_type_id)
+            if (arg_type_header_scalar if arg_type_header_is_scalar else arg_type_header.first) not in scalar_kinds:
                 return False
         block_id = 0
         while block_id < len(self.block_names):
@@ -2187,8 +2289,22 @@ class IndexedFunctionKernel:
                 phi: CompilerInt4 = self.phi_record(
                     phi_fact.first + phi_index
                 )
-                phi_type_header: CompilerInt4 = self.type_header(phi.second)
-                if phi_type_header.first not in scalar_kinds:
+                phi_type_header_is_scalar = False
+                if type(self) is IndexedFunctionKernel:
+                    phi_type_header_scalar_id = phi.second
+                    phi_type_header_is_scalar = _scalar_window_is_complete(
+                        self.type_scalars, phi_type_header_scalar_id, 12, 0
+                    )
+                    if phi_type_header_is_scalar:
+                        phi_type_header_scalar = self.type_scalars.get_unchecked(
+                            phi_type_header_scalar_id * 12 + 0
+                        )
+                        phi_type_header = None
+                    else:
+                        phi_type_header: CompilerInt4 = self.type_header(phi_type_header_scalar_id)
+                else:
+                    phi_type_header: CompilerInt4 = self.type_header(phi.second)
+                if (phi_type_header_scalar if phi_type_header_is_scalar else phi_type_header.first) not in scalar_kinds:
                     return False
                 phi_index += 1
             term_header: CompilerInt4 = self.terminator_header(block_id)
@@ -2260,8 +2376,22 @@ class IndexedFunctionKernel:
         return self.instruction_metadata.get4_unchecked(instruction_id)
 
     def instruction_payload_id_by_id(self, instruction_id: int) -> int:
-        metadata: CompilerInt4 = self.instruction_metadata_by_id(instruction_id)
-        return metadata.second
+        metadata_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            metadata_scalar_id = instruction_id
+            metadata_is_scalar = _scalar_window_is_complete(
+                self.instruction_metadata, metadata_scalar_id, 4, 0
+            )
+            if metadata_is_scalar:
+                metadata_scalar = self.instruction_metadata.get_unchecked(
+                    metadata_scalar_id * 4 + 1
+                )
+                metadata = None
+            else:
+                metadata: CompilerInt4 = self.instruction_metadata_by_id(metadata_scalar_id)
+        else:
+            metadata: CompilerInt4 = self.instruction_metadata_by_id(instruction_id)
+        return (metadata_scalar if metadata_is_scalar else metadata.second)
 
     def _freeze_gep_records(self) -> None:
         if isinstance(self.indexed_call_plane, IndexedFunctionSeed):
@@ -3205,20 +3335,62 @@ class IndexedFunctionKernel:
         self.pointer_type_ids.clear()
 
     def value_slot_id(self, value_id: int) -> int:
-        header: CompilerInt4 = self.value_header(value_id)
-        return header.third
+        header_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            header_scalar_id = value_id
+            header_is_scalar = _scalar_window_is_complete(
+                self.value_scalars, header_scalar_id, 8, 0
+            )
+            if header_is_scalar:
+                header_scalar = self.value_scalars.get_unchecked(
+                    header_scalar_id * 8 + 2
+                )
+                header = None
+            else:
+                header: CompilerInt4 = self.value_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = self.value_header(value_id)
+        return (header_scalar if header_is_scalar else header.third)
 
     def value_slot_offset(self, value_id: int) -> int:
-        header: CompilerInt4 = self.value_header(value_id)
-        slot_id = header.third
+        header_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            header_scalar_id = value_id
+            header_is_scalar = _scalar_window_is_complete(
+                self.value_scalars, header_scalar_id, 8, 0
+            )
+            if header_is_scalar:
+                header_scalar = self.value_scalars.get_unchecked(
+                    header_scalar_id * 8 + 2
+                )
+                header = None
+            else:
+                header: CompilerInt4 = self.value_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = self.value_header(value_id)
+        slot_id = (header_scalar if header_is_scalar else header.third)
         if slot_id < 0:
             return -1
         slot: CompilerInt2 = self.slot_record(slot_id)
         return slot.first
 
     def value_slot_type_id(self, value_id: int) -> int:
-        header: CompilerInt4 = self.value_header(value_id)
-        slot_id = header.third
+        header_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            header_scalar_id = value_id
+            header_is_scalar = _scalar_window_is_complete(
+                self.value_scalars, header_scalar_id, 8, 0
+            )
+            if header_is_scalar:
+                header_scalar = self.value_scalars.get_unchecked(
+                    header_scalar_id * 8 + 2
+                )
+                header = None
+            else:
+                header: CompilerInt4 = self.value_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = self.value_header(value_id)
+        slot_id = (header_scalar if header_is_scalar else header.third)
         if slot_id < 0:
             return -1
         slot: CompilerInt2 = self.slot_record(slot_id)
@@ -3244,14 +3416,42 @@ class IndexedFunctionKernel:
     def alloca_offset(self, value_id: int) -> int:
         if len(self.value_scalars) == 0:
             return self.alloca_offsets[value_id]
-        header: CompilerInt4 = self.value_header(value_id)
-        return header.fourth
+        header_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            header_scalar_id = value_id
+            header_is_scalar = _scalar_window_is_complete(
+                self.value_scalars, header_scalar_id, 8, 0
+            )
+            if header_is_scalar:
+                header_scalar = self.value_scalars.get_unchecked(
+                    header_scalar_id * 8 + 3
+                )
+                header = None
+            else:
+                header: CompilerInt4 = self.value_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = self.value_header(value_id)
+        return (header_scalar if header_is_scalar else header.fourth)
 
     def alloca_type_id(self, value_id: int) -> int:
         if len(self.value_scalars) == 0:
             return self.alloca_type_ids[value_id]
-        state: CompilerInt4 = self.value_state(value_id)
-        return state.first
+        state_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            state_scalar_id = value_id
+            state_is_scalar = _scalar_window_is_complete(
+                self.value_scalars, state_scalar_id, 8, 4
+            )
+            if state_is_scalar:
+                state_scalar = self.value_scalars.get_unchecked(
+                    state_scalar_id * 8 + 4
+                )
+                state = None
+            else:
+                state: CompilerInt4 = self.value_state(state_scalar_id)
+        else:
+            state: CompilerInt4 = self.value_state(value_id)
+        return (state_scalar if state_is_scalar else state.first)
 
     def clear_value_registers(self) -> None:
         index = 0
@@ -3266,16 +3466,44 @@ class IndexedFunctionKernel:
         self.value_scalars.set_unchecked(value_id * 8 + 5, -1)
 
     def value_register(self, value_id: int) -> int | None:
-        state: CompilerInt4 = self.value_state(value_id)
-        register_index = state.second
+        state_is_scalar = False
+        if type(self) is IndexedFunctionKernel:
+            state_scalar_id = value_id
+            state_is_scalar = _scalar_window_is_complete(
+                self.value_scalars, state_scalar_id, 8, 4
+            )
+            if state_is_scalar:
+                state_scalar = self.value_scalars.get_unchecked(
+                    state_scalar_id * 8 + 5
+                )
+                state = None
+            else:
+                state: CompilerInt4 = self.value_state(state_scalar_id)
+        else:
+            state: CompilerInt4 = self.value_state(value_id)
+        register_index = (state_scalar if state_is_scalar else state.second)
         return None if register_index < 0 else register_index
 
     def legacy_value_registers(self) -> dict[str, int]:
         result: dict[str, int] = {}
         value_id = 0
         while value_id < len(self.value_names):
-            state: CompilerInt4 = self.value_state(value_id)
-            register_index = state.second
+            state_is_scalar = False
+            if type(self) is IndexedFunctionKernel:
+                state_scalar_id = value_id
+                state_is_scalar = _scalar_window_is_complete(
+                    self.value_scalars, state_scalar_id, 8, 4
+                )
+                if state_is_scalar:
+                    state_scalar = self.value_scalars.get_unchecked(
+                        state_scalar_id * 8 + 5
+                    )
+                    state = None
+                else:
+                    state: CompilerInt4 = self.value_state(state_scalar_id)
+            else:
+                state: CompilerInt4 = self.value_state(value_id)
+            register_index = (state_scalar if state_is_scalar else state.second)
             if register_index >= 0:
                 result[self.value_names[value_id]] = register_index
             value_id += 1

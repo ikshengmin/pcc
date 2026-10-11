@@ -14,6 +14,7 @@ from .self_backend_aarch64_darwin_mem import (
 )
 from .self_backend_ir import TypeDesc
 from .self_backend_kernel import (
+    _scalar_window_is_complete,
     TYPE_KIND_FP,
     TYPE_KIND_INT,
     TYPE_KIND_PTR,
@@ -62,8 +63,22 @@ def emit_binop_indexed(
     kernel: IndexedFunctionKernel, op: str, type_id: int,
     lhs_register: int = 9, rhs_register: int = 10, result_register: int = 11,
 ) -> list[str]:
-    header: CompilerInt4 = kernel.type_header(type_id)
-    if header.first != TYPE_KIND_INT:
+    header_is_scalar = False
+    if type(kernel) is IndexedFunctionKernel:
+        header_scalar_id = type_id
+        header_is_scalar = _scalar_window_is_complete(
+            kernel.type_scalars, header_scalar_id, 12, 0
+        )
+        if header_is_scalar:
+            header_scalar = kernel.type_scalars.get_unchecked(
+                header_scalar_id * 12 + 0
+            )
+            header = None
+        else:
+            header: CompilerInt4 = kernel.type_header(header_scalar_id)
+    else:
+        header: CompilerInt4 = kernel.type_header(type_id)
+    if (header_scalar if header_is_scalar else header.first) != TYPE_KIND_INT:
         raise BackendUnavailable(
             f"self backend only supports integer binops, got type_id={type_id}"
         )

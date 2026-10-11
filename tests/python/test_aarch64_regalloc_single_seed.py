@@ -162,7 +162,8 @@ def load_facts(path, *, count=False):
         assert (counter.pops, counter.edges) == (1, 1)
     tree = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
                            helper, function], type_ignores=[])
-    namespace = dict(CompilerInt4=Record, PARSED_INSTRUCTION_KINDS=tuple(range(16)),
+    namespace = dict(CompilerInt4=Record, IndexedFunctionKernel=type("ExactKernel", (), {}),
+                     PARSED_INSTRUCTION_KINDS=tuple(range(16)),
                      PARSED_INSTRUCTION_KIND_CALL=2, _POOL_REJECTED_INSTRUCTION_KIND_IDS=(14, 15),
                      _counts=counts)
     exec(compile(ast.fix_missing_locations(tree), str(path), "exec"), namespace)

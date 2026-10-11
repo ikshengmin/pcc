@@ -74,6 +74,7 @@ from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import const_int_from_value, is_aggregate_literal_value
 from .self_backend_value_arena import CompilerInt2, CompilerInt4
 from .self_backend_kernel import (
+    _scalar_window_is_complete,
     TYPE_KIND_FP,
     TYPE_KIND_INT,
     TYPE_KIND_PTR,
@@ -302,11 +303,23 @@ def emit_memory_instruction_by_id(
                 )
                 storage_matches = alloca_type_id == value_type_id
                 if alloca_type_id >= 0 and not storage_matches:
-                    alloca_type_header: CompilerInt4 = (
-                        indexed_kernel.type_header(alloca_type_id)
-                    )
+                    alloca_type_header_is_scalar = False
+                    if type(indexed_kernel) is IndexedFunctionKernel:
+                        alloca_type_header_scalar_id = alloca_type_id
+                        alloca_type_header_is_scalar = _scalar_window_is_complete(
+                            indexed_kernel.type_scalars, alloca_type_header_scalar_id, 12, 0
+                        )
+                        if alloca_type_header_is_scalar:
+                            alloca_type_header_scalar = indexed_kernel.type_scalars.get_unchecked(
+                                alloca_type_header_scalar_id * 12 + 0
+                            )
+                            alloca_type_header = None
+                        else:
+                            alloca_type_header: CompilerInt4 = indexed_kernel.type_header(alloca_type_header_scalar_id)
+                    else:
+                        alloca_type_header: CompilerInt4 = indexed_kernel.type_header(alloca_type_id)
                     storage_matches = (
-                        alloca_type_header.first == TYPE_KIND_PTR
+                        (alloca_type_header_scalar if alloca_type_header_is_scalar else alloca_type_header.first) == TYPE_KIND_PTR
                         and value_type_header.first == TYPE_KIND_PTR
                     )
                 if storage_matches:
@@ -635,11 +648,23 @@ def emit_memory_instruction_by_id(
                 )
                 storage_matches = alloca_type_id == value_type_id
                 if alloca_type_id >= 0 and not storage_matches:
-                    alloca_type_header: CompilerInt4 = (
-                        indexed_kernel.type_header(alloca_type_id)
-                    )
+                    alloca_type_header_is_scalar = False
+                    if type(indexed_kernel) is IndexedFunctionKernel:
+                        alloca_type_header_scalar_id = alloca_type_id
+                        alloca_type_header_is_scalar = _scalar_window_is_complete(
+                            indexed_kernel.type_scalars, alloca_type_header_scalar_id, 12, 0
+                        )
+                        if alloca_type_header_is_scalar:
+                            alloca_type_header_scalar = indexed_kernel.type_scalars.get_unchecked(
+                                alloca_type_header_scalar_id * 12 + 0
+                            )
+                            alloca_type_header = None
+                        else:
+                            alloca_type_header: CompilerInt4 = indexed_kernel.type_header(alloca_type_header_scalar_id)
+                    else:
+                        alloca_type_header: CompilerInt4 = indexed_kernel.type_header(alloca_type_id)
                     storage_matches = (
-                        alloca_type_header.first == TYPE_KIND_PTR
+                        (alloca_type_header_scalar if alloca_type_header_is_scalar else alloca_type_header.first) == TYPE_KIND_PTR
                         and value_type_header.first == TYPE_KIND_PTR
                     )
                 if storage_matches:

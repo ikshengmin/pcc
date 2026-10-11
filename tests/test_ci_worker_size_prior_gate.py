@@ -47,11 +47,13 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11)
+    assert gate.HOST_COUNTS == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
-    assert gate.HOST_FILES[18:] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
-    assert sum(gate.HOST_COUNTS) == 879 and sum(gate.HOST_COUNTS[:18]) == 844
+    assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
+    assert gate.HOST_FILES[20] == gate.SCALAR_PROJECTION_TEST
+    assert sum(gate.HOST_COUNTS) == 968 and sum(gate.HOST_COUNTS[:20]) == 879
+    assert sum(gate.HOST_COUNTS[:18]) == 844
     assert sum(gate.HOST_COUNTS[:17]) == 812 and sum(gate.HOST_COUNTS[:16]) == 764
     assert sum(gate.HOST_COUNTS[:14]) == 755
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
@@ -586,7 +588,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 173, 0, 4, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -748,12 +750,25 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
         "worker_resource_plan", "pipeline_frontend_workers",
         "pipeline_frontend_indexed_stage", "pipeline_indexed_handoff", "worker_process_pool",
     )) + ("pcc.backend.self_backend_aarch64_darwin_regalloc",
+          "pcc.backend.self_backend_kernel",
+          "pcc.backend.self_backend_precise_stackmaps",
+          "pcc.backend.self_backend_verify",
+          "pcc.backend.self_backend_aarch64_darwin_flow",
+          "pcc.backend.self_backend_aarch64_darwin_memory",
+          "pcc.backend.self_backend_aarch64_darwin_calls",
+          "pcc.backend.self_backend_aarch64_darwin_ops",
+          "pcc.backend.self_backend_aarch64_darwin_prologue",
+          "pcc.backend.self_backend_aarch64_darwin_returns",
           "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
           "pcc.backend.x86_64_encode")
     source = ROOT / ("pcc.backend.self_backend_aarch64_darwin_regalloc".replace(".", "/") + ".py")
     definitions = [node.name for node in ast.parse(source.read_text()).body
                    if isinstance(node, ast.FunctionDef)]
     assert "allocate_aarch64_block_registers" in definitions
+    reference = json.loads((ROOT / "tests/scalar_arena_projection_reference.json").read_text())
+    changed_modules = {site["path"][:-3].replace("/", ".") for site in reference["sites"]}
+    assert len(changed_modules) == 10 and changed_modules <= set(MODULES)
+    assert len(MODULES) == 18
     gate_tree = ast.parse((ROOT / gate.CLOSURE_TEST).read_text())
     closure = next(node for node in gate_tree.body if isinstance(node, ast.FunctionDef)
                    and node.name == "test_worker_size_prior_modules_strict_target_emission")
@@ -1145,7 +1160,7 @@ def test_strict_progress_is_atomic_bounded_and_keeps_identity(tmp_path, monkeypa
             assert json.loads(path.read_text()) == receipt
             assert receipt["progress"][-1] == {"phase": phase, "state": state,
                                                 "module": module, "elapsed_s": 1.25}
-    assert len(publications) == 8 + 4 * len(closure.MODULES) == 44
+    assert len(publications) == 8 + 4 * len(closure.MODULES) == 80
     assert receipt["status"] == "RUNNING" and receipt["sources"] == {"original": "sha"}
     assert receipt["codegen_sha256"] == "original-codegen"
     assert receipt["modules"] == {"done": {"object_sha256": "bytes"}}

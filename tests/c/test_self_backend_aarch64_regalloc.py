@@ -190,6 +190,8 @@ def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeyp
         counted_function_facts, old_scan_allocator, select_mode,
     )
 
+    from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
+
     select_mode(monkeypatch, mode)
     source = _TRIPLE + '''
 declare i64 @opaque(i64)
@@ -229,6 +231,8 @@ _opaque:
         for index, allocator in enumerate((reference, allocate_aarch64_block_registers)):
             with monkeypatch.context() as patch:
                 patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+                if index == 0:
+                    disable_scalar_projections(patch, allocator)
                 if index == 1:
                     patch.setattr(aarch64_regalloc, "_function_level_facts", counted_facts)
                 module = parse_self_backend_module(source)
@@ -639,8 +643,22 @@ def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
     assert instructions(kernels[1]) == before
     assert allocation_state(funcs[0]) == allocation_state(funcs[1])
     expected_removed = removed_metadata_reads(funcs[0]) if mode != "local" else 0
+    from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
+
+    projected_instructions = (sum(kernels[0].instruction_count(block_id)
+                                  for block_id in range(len(kernels[0].block_names)))
+                              if mode != "local" and not funcs[0].is_vararg else 0)
     metadata = type(kernels[0]).instruction_metadata_by_id
     counts = [0, 0]
+    payload_counts = [0, 0]
+    payload = type(kernels[0]).instruction_payload_id_by_id
+
+    def counted_payload(kernel, instruction_id):
+        for index, target in enumerate(kernels):
+            if kernel is target:
+                payload_counts[index] += 1
+                break
+        return payload(kernel, instruction_id)
 
     def counted(kernel, instruction_id):
         for index, target in enumerate(kernels):
@@ -651,7 +669,10 @@ def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
 
     with monkeypatch.context() as patch:
         patch.setattr(type(kernels[0]), "instruction_metadata_by_id", counted)
-        reference(funcs[0])
+        patch.setattr(type(kernels[0]), "instruction_payload_id_by_id", counted_payload)
+        with patch.context() as snapshot_patch:
+            disable_scalar_projections(snapshot_patch, reference)
+            reference(funcs[0])
         patch.setattr(aarch64_regalloc, "_function_level_facts", counted_facts)
         allocate_aarch64_block_registers(funcs[1])
     assert graph_counts[1]["pops"] <= graph_counts[0]["pops"]
@@ -660,7 +681,9 @@ def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
         assert graph_counts[1]["hits"] > 0
         assert graph_counts[1]["pops"] < graph_counts[0]["pops"]
         assert graph_counts[1]["edges"] < graph_counts[0]["edges"]
-    assert counts[0] - counts[1] == expected_removed
+    assert payload_counts[0] == payload_counts[1]
+    assert counts[0] - counts[1] == (expected_removed + 2 * projected_instructions
+                                      + payload_counts[0])
     if shape not in ("empty", "vararg") and mode != "local":
         assert expected_removed > 0
     if shape == "vararg":
@@ -688,10 +711,14 @@ def test_aarch64_regalloc_scan_reuse_preserves_syscall_failure(monkeypatch, mode
 
     select_mode(monkeypatch, mode)
     source = _build_syscall6_module(triple="arm64-apple-darwin")
+    from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
+
     failures = []
-    for allocator in (old_scan_allocator(), allocate_aarch64_block_registers):
+    for index, allocator in enumerate((old_scan_allocator(), allocate_aarch64_block_registers)):
         with monkeypatch.context() as patch:
             patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+            if index == 0:
+                disable_scalar_projections(patch, allocator)
             with pytest.raises(BackendUnavailable, match="syscall6") as failure:
                 emit_self_asm(source)
         failures.append((type(failure.value), str(failure.value)))

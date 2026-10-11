@@ -196,8 +196,10 @@ def test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps(
             return _build_shapes()
         return parse_self_backend_module(_stale_managed_ssa_ir("arm64-apple-darwin23.6.0"))
 
+    from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
+
     outputs = []
-    for allocator in (old_scan_allocator(), regalloc.allocate_aarch64_block_registers):
+    for index, allocator in enumerate((old_scan_allocator(), regalloc.allocate_aarch64_block_registers)):
         states = []
 
         def allocate(func):
@@ -206,6 +208,8 @@ def test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps(
 
         with monkeypatch.context() as patch:
             patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            if index == 0:
+                disable_scalar_projections(patch, allocator)
             assembly = emit_aarch64_darwin_indexed_module(module(), optimize=False)
             assembly_states = list(states)
             states.clear()

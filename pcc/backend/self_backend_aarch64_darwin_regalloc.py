@@ -49,6 +49,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_move_register_line,
 )
 from .self_backend_kernel import (
+    _scalar_window_is_complete,
     IndexedFunctionKernel,
     TYPE_KIND_ARRAY,
     TYPE_KIND_INT,
@@ -191,37 +192,121 @@ def _candidate_indexed_definition_type_id(
 ) -> int:
     raw: CompilerInt4 = kernel.instruction_record(record_id)
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
-        header: CompilerInt4 = kernel.type_header(raw.first)
+        header_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            header_scalar_id = raw.first
+            header_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, header_scalar_id, 12, 0
+            )
+            if header_is_scalar:
+                header_scalar = kernel.type_scalars.get_unchecked(
+                    header_scalar_id * 12 + 0
+                )
+                header = None
+            else:
+                header: CompilerInt4 = kernel.type_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = kernel.type_header(raw.first)
         return (
             raw.first
-            if header.first == TYPE_KIND_INT or header.first == TYPE_KIND_PTR
+            if (header_scalar if header_is_scalar else header.first) == TYPE_KIND_INT or (header_scalar if header_is_scalar else header.first) == TYPE_KIND_PTR
             else -1
         )
     if kind_id == PARSED_INSTRUCTION_KIND_BINOP:
-        binop_type: CompilerInt4 = kernel.type_header(raw.second)
+        binop_type_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            binop_type_scalar_id = raw.second
+            binop_type_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, binop_type_scalar_id, 12, 0
+            )
+            if binop_type_is_scalar:
+                binop_type_scalar = kernel.type_scalars.get_unchecked(
+                    binop_type_scalar_id * 12 + 0
+                )
+                binop_type = None
+            else:
+                binop_type: CompilerInt4 = kernel.type_header(binop_type_scalar_id)
+        else:
+            binop_type: CompilerInt4 = kernel.type_header(raw.second)
         return (
             raw.second
-            if binop_type.first == TYPE_KIND_INT
+            if (binop_type_scalar if binop_type_is_scalar else binop_type.first) == TYPE_KIND_INT
             else -1
         )
     if kind_id == PARSED_INSTRUCTION_KIND_ICMP:
-        compared: CompilerInt4 = kernel.type_header(raw.second)
-        if compared.first != TYPE_KIND_INT and compared.first != TYPE_KIND_PTR:
+        compared_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            compared_scalar_id = raw.second
+            compared_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, compared_scalar_id, 12, 0
+            )
+            if compared_is_scalar:
+                compared_scalar = kernel.type_scalars.get_unchecked(
+                    compared_scalar_id * 12 + 0
+                )
+                compared = None
+            else:
+                compared: CompilerInt4 = kernel.type_header(compared_scalar_id)
+        else:
+            compared: CompilerInt4 = kernel.type_header(raw.second)
+        if (compared_scalar if compared_is_scalar else compared.first) != TYPE_KIND_INT and (compared_scalar if compared_is_scalar else compared.first) != TYPE_KIND_PTR:
             return -1
         return -1 if dest_id < 0 else kernel.value_type_id(dest_id)
     if kind_id == PARSED_INSTRUCTION_KIND_CAST:
-        src_header: CompilerInt4 = kernel.type_header(raw.second)
-        dst_header: CompilerInt4 = kernel.type_header(raw.fourth)
-        src_kind = src_header.first
-        dst_kind = dst_header.first
+        src_header_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            src_header_scalar_id = raw.second
+            src_header_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, src_header_scalar_id, 12, 0
+            )
+            if src_header_is_scalar:
+                src_header_scalar = kernel.type_scalars.get_unchecked(
+                    src_header_scalar_id * 12 + 0
+                )
+                src_header = None
+            else:
+                src_header: CompilerInt4 = kernel.type_header(src_header_scalar_id)
+        else:
+            src_header: CompilerInt4 = kernel.type_header(raw.second)
+        dst_header_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            dst_header_scalar_id = raw.fourth
+            dst_header_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, dst_header_scalar_id, 12, 0
+            )
+            if dst_header_is_scalar:
+                dst_header_scalar = kernel.type_scalars.get_unchecked(
+                    dst_header_scalar_id * 12 + 0
+                )
+                dst_header = None
+            else:
+                dst_header: CompilerInt4 = kernel.type_header(dst_header_scalar_id)
+        else:
+            dst_header: CompilerInt4 = kernel.type_header(raw.fourth)
+        src_kind = (src_header_scalar if src_header_is_scalar else src_header.first)
+        dst_kind = (dst_header_scalar if dst_header_is_scalar else dst_header.first)
         if (
             (src_kind == TYPE_KIND_INT or src_kind == TYPE_KIND_PTR)
             and (dst_kind == TYPE_KIND_INT or dst_kind == TYPE_KIND_PTR)
         ):
             return raw.fourth
         return -1
-    result_header: CompilerInt4 = kernel.type_header(raw.first)
-    result_kind = result_header.first
+    result_header_is_scalar = False
+    if type(kernel) is IndexedFunctionKernel:
+        result_header_scalar_id = raw.first
+        result_header_is_scalar = _scalar_window_is_complete(
+            kernel.type_scalars, result_header_scalar_id, 12, 0
+        )
+        if result_header_is_scalar:
+            result_header_scalar = kernel.type_scalars.get_unchecked(
+                result_header_scalar_id * 12 + 0
+            )
+            result_header = None
+        else:
+            result_header: CompilerInt4 = kernel.type_header(result_header_scalar_id)
+    else:
+        result_header: CompilerInt4 = kernel.type_header(raw.first)
+    result_kind = (result_header_scalar if result_header_is_scalar else result_header.first)
     return (
         raw.first
         if result_kind == TYPE_KIND_INT or result_kind == TYPE_KIND_PTR
@@ -234,9 +319,37 @@ def _register_type_ids_match(
 ) -> bool:
     if left_id == right_id:
         return True
-    left: CompilerInt4 = kernel.type_header(left_id)
-    right: CompilerInt4 = kernel.type_header(right_id)
-    return left.first == TYPE_KIND_PTR and right.first == TYPE_KIND_PTR
+    left_is_scalar = False
+    if type(kernel) is IndexedFunctionKernel:
+        left_scalar_id = left_id
+        left_is_scalar = _scalar_window_is_complete(
+            kernel.type_scalars, left_scalar_id, 12, 0
+        )
+        if left_is_scalar:
+            left_scalar = kernel.type_scalars.get_unchecked(
+                left_scalar_id * 12 + 0
+            )
+            left = None
+        else:
+            left: CompilerInt4 = kernel.type_header(left_scalar_id)
+    else:
+        left: CompilerInt4 = kernel.type_header(left_id)
+    right_is_scalar = False
+    if type(kernel) is IndexedFunctionKernel:
+        right_scalar_id = right_id
+        right_is_scalar = _scalar_window_is_complete(
+            kernel.type_scalars, right_scalar_id, 12, 0
+        )
+        if right_is_scalar:
+            right_scalar = kernel.type_scalars.get_unchecked(
+                right_scalar_id * 12 + 0
+            )
+            right = None
+        else:
+            right: CompilerInt4 = kernel.type_header(right_scalar_id)
+    else:
+        right: CompilerInt4 = kernel.type_header(right_id)
+    return (left_scalar if left_is_scalar else left.first) == TYPE_KIND_PTR and (right_scalar if right_is_scalar else right.first) == TYPE_KIND_PTR
 
 
 def _text_list_contains(values: list[str], value: str) -> bool:
@@ -503,31 +616,67 @@ def _function_level_facts(
         safe = True
         instruction_index = 0
         while instruction_index < block_fact.second:
-            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
-                block_fact.first + instruction_index
-            )
+            metadata_is_scalar = False
+            if type(kernel) is IndexedFunctionKernel:
+                metadata_scalar_id = block_fact.first + instruction_index
+                metadata_is_scalar = _scalar_window_is_complete(
+                    kernel.instruction_metadata, metadata_scalar_id, 4, 0
+                )
+                if metadata_is_scalar:
+                    metadata_scalar = kernel.instruction_metadata.get_unchecked(
+                        metadata_scalar_id * 4 + 0
+                    )
+                    metadata = None
+                else:
+                    metadata: CompilerInt4 = kernel.instruction_metadata_by_id(metadata_scalar_id)
+            else:
+                metadata: CompilerInt4 = kernel.instruction_metadata_by_id(block_fact.first + instruction_index)
             if (
-                not 0 <= metadata.first < len(PARSED_INSTRUCTION_KINDS)
-                or metadata.first in _POOL_REJECTED_INSTRUCTION_KIND_IDS
+                not 0 <= (metadata_scalar if metadata_is_scalar else metadata.first) < len(PARSED_INSTRUCTION_KINDS)
+                or (metadata_scalar if metadata_is_scalar else metadata.first) in _POOL_REJECTED_INSTRUCTION_KIND_IDS
             ):
                 safe = False
             instruction_index += 1
         block_safe.append(safe)
         instruction_index = 0
         while instruction_index < block_fact.second:
-            metadata = kernel.instruction_metadata_by_id(
-                block_fact.first + instruction_index
-            )
-            if not safe or metadata.first == PARSED_INSTRUCTION_KIND_CALL:
+            metadata_is_scalar = False
+            if type(kernel) is IndexedFunctionKernel:
+                metadata_scalar_id = block_fact.first + instruction_index
+                metadata_is_scalar = _scalar_window_is_complete(
+                    kernel.instruction_metadata, metadata_scalar_id, 4, 0
+                )
+                if metadata_is_scalar:
+                    metadata_scalar = kernel.instruction_metadata.get_unchecked(
+                        metadata_scalar_id * 4 + 0
+                    )
+                    metadata = None
+                else:
+                    metadata = kernel.instruction_metadata_by_id(metadata_scalar_id)
+            else:
+                metadata = kernel.instruction_metadata_by_id(block_fact.first + instruction_index)
+            if not safe or (metadata_scalar if metadata_is_scalar else metadata.first) == PARSED_INSTRUCTION_KIND_CALL:
                 barriers.append(position)
                 if not safe:
                     hard_barriers.append(position)
                 else:
                     call_positions.append(position)
-            instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(
-                block_fact.first + instruction_index
-            )
-            destination = instruction_fact.first
+            instruction_fact_is_scalar = False
+            if type(kernel) is IndexedFunctionKernel:
+                instruction_fact_scalar_id = block_fact.first + instruction_index
+                instruction_fact_is_scalar = _scalar_window_is_complete(
+                    kernel.instruction_facts, instruction_fact_scalar_id, 4, 0
+                )
+                if instruction_fact_is_scalar:
+                    instruction_fact_scalar = kernel.instruction_facts.get_unchecked(
+                        instruction_fact_scalar_id * 4 + 0
+                    )
+                    instruction_fact = None
+                else:
+                    instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(instruction_fact_scalar_id)
+            else:
+                instruction_fact: CompilerInt4 = kernel.instruction_fact_by_id(block_fact.first + instruction_index)
+            destination = (instruction_fact_scalar if instruction_fact_is_scalar else instruction_fact.first)
             if destination >= 0:
                 def_block[destination] = block_id
             use_index = 0
@@ -1030,8 +1179,22 @@ def _append_phi_intervals(
     phi_index = 0
     while phi_index < phi_fact.second:
         phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
-        header: CompilerInt4 = kernel.type_header(phi.second)
-        if header.first == TYPE_KIND_ARRAY or header.first == TYPE_KIND_STRUCT:
+        header_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            header_scalar_id = phi.second
+            header_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, header_scalar_id, 12, 0
+            )
+            if header_is_scalar:
+                header_scalar = kernel.type_scalars.get_unchecked(
+                    header_scalar_id * 12 + 0
+                )
+                header = None
+            else:
+                header: CompilerInt4 = kernel.type_header(header_scalar_id)
+        else:
+            header: CompilerInt4 = kernel.type_header(phi.second)
+        if (header_scalar if header_is_scalar else header.first) == TYPE_KIND_ARRAY or (header_scalar if header_is_scalar else header.first) == TYPE_KIND_STRUCT:
             # An aggregate phi sends the whole edge down the slot-only path.
             return
         phi_index += 1
@@ -1499,10 +1662,24 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 gep_span: CompilerInt4 = kernel.gep_span(
                     kernel.instruction_payload_id_by_id(instruction_id)
                 )
-                gep_type: CompilerInt4 = kernel.type_header(gep_span.second)
+                gep_type_is_scalar = False
+                if type(kernel) is IndexedFunctionKernel:
+                    gep_type_scalar_id = gep_span.second
+                    gep_type_is_scalar = _scalar_window_is_complete(
+                        kernel.type_scalars, gep_type_scalar_id, 12, 0
+                    )
+                    if gep_type_is_scalar:
+                        gep_type_scalar = kernel.type_scalars.get_unchecked(
+                            gep_type_scalar_id * 12 + 0
+                        )
+                        gep_type = None
+                    else:
+                        gep_type: CompilerInt4 = kernel.type_header(gep_type_scalar_id)
+                else:
+                    gep_type: CompilerInt4 = kernel.type_header(gep_span.second)
                 value_type_id = (
                     gep_span.second
-                    if gep_type.first == TYPE_KIND_PTR
+                    if (gep_type_scalar if gep_type_is_scalar else gep_type.first) == TYPE_KIND_PTR
                     else -1
                 )
             else:

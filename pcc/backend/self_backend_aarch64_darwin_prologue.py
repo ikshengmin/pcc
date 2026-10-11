@@ -41,6 +41,8 @@ from .self_backend_ir import (
 )
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_kernel import (
+    IndexedFunctionKernel,
+    _scalar_window_is_complete,
     TYPE_KIND_FP,
     TYPE_KIND_INT,
     TYPE_KIND_PTR,
@@ -150,8 +152,22 @@ def emit_function_prologue(
         if func.indexed_slot_projection:
             arg_value_id = kernel.value_id(arg.name)
             arg_type_id = kernel.value_type_id(arg_value_id)
-            arg_header = kernel.type_header(arg_type_id)
-            if arg_header.first in (
+            arg_header_is_scalar = False
+            if type(kernel) is IndexedFunctionKernel:
+                arg_header_scalar_id = arg_type_id
+                arg_header_is_scalar = _scalar_window_is_complete(
+                    kernel.type_scalars, arg_header_scalar_id, 12, 0
+                )
+                if arg_header_is_scalar:
+                    arg_header_scalar = kernel.type_scalars.get_unchecked(
+                        arg_header_scalar_id * 12 + 0
+                    )
+                    arg_header = None
+                else:
+                    arg_header = kernel.type_header(arg_header_scalar_id)
+            else:
+                arg_header = kernel.type_header(arg_type_id)
+            if (arg_header_scalar if arg_header_is_scalar else arg_header.first) in (
                 TYPE_KIND_INT,
                 TYPE_KIND_FP,
                 TYPE_KIND_PTR,

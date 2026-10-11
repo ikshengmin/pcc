@@ -79,6 +79,7 @@ from .self_backend_ir import (
     parsed_function_value_slot_offset,
 )
 from .self_backend_kernel import (
+    _scalar_window_is_complete,
     TYPE_KIND_ARRAY,
     TYPE_KIND_FP,
     TYPE_KIND_INT,
@@ -2383,10 +2384,24 @@ def emit_call_instruction_indexed(
                 f"indexed call result slot is missing for {dest!r}"
             )
         slot_type_id = kernel.slot_type_id(slot_id)
-        slot_header: CompilerInt4 = kernel.type_header(slot_type_id)
+        slot_header_is_scalar = False
+        if type(kernel) is IndexedFunctionKernel:
+            slot_header_scalar_id = slot_type_id
+            slot_header_is_scalar = _scalar_window_is_complete(
+                kernel.type_scalars, slot_header_scalar_id, 12, 0
+            )
+            if slot_header_is_scalar:
+                slot_header_scalar = kernel.type_scalars.get_unchecked(
+                    slot_header_scalar_id * 12 + 0
+                )
+                slot_header = None
+            else:
+                slot_header: CompilerInt4 = kernel.type_header(slot_header_scalar_id)
+        else:
+            slot_header: CompilerInt4 = kernel.type_header(slot_type_id)
         if (
-            slot_header.first == TYPE_KIND_ARRAY
-            or slot_header.first == TYPE_KIND_STRUCT
+            (slot_header_scalar if slot_header_is_scalar else slot_header.first) == TYPE_KIND_ARRAY
+            or (slot_header_scalar if slot_header_is_scalar else slot_header.first) == TYPE_KIND_STRUCT
         ):
             lines.extend(
                 store_value_regs_to_slot_parts(
