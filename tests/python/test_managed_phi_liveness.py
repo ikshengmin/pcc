@@ -76,7 +76,40 @@ def test_phi_liveness_matches_set_oracle_without_repeated_fixpoint_scans(monkeyp
         return original(self, index)
 
     monkeypatch.setattr(type(kernel), 'phi_incoming', counted)
+    # Existing real parser/kernel oracle: observe the actual host arenas at
+    # result construction, after the final matrix consumer has returned.
+    original_arena = stackmaps.CompilerIntArena
+    original_packed = stackmaps.PackedManagedLiveness
+    created = []
+    checkpoints = []
+
+    class TrackedArena(original_arena):
+        def __init__(self, initial_capacity=8):
+            super().__init__(initial_capacity)
+            self.close_calls = 0
+            self.releases = 0
+            created.append(self)
+
+        def close(self):
+            self.close_calls += 1
+            if not self._closed:
+                self.releases += 1
+            super().close()
+
+    class CheckedPacked(original_packed):
+        def __init__(self):
+            # tracked_values/index, uses, definitions, live_in/out, scratch.
+            assert len(created) == 7
+            checkpoints.append(tuple(arena._closed for arena in created))
+            assert checkpoints[-1] == (False, False, True, True, False, True, False)
+            super().__init__()
+
+    monkeypatch.setattr(stackmaps, "CompilerIntArena", TrackedArena)
+    monkeypatch.setattr(stackmaps, "PackedManagedLiveness", CheckedPacked)
     actual = stackmaps._native_managed_liveness(func, origins, kernel)
+    assert len(checkpoints) == 1
+    assert all(created[index].close_calls == 2 and created[index].releases == 1
+               for index in (2, 3, 5))
     assert _call_states(kernel, actual) == wanted
     incoming_count = fanin + int(loop)
     # One seed scan, plus the existing final backwards scan per predecessor.

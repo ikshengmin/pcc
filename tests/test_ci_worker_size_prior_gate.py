@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
+    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -59,8 +59,10 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[25:27] == (gate.PARSE_BUFFER_TEST, gate.PARSE_BUFFER_OBJECT_TEST)
     assert gate.HOST_FILES[27:28] == (gate.ARM_CALL_VENEERS_TEST,)
     assert gate.HOST_FILES[28:30] == (gate.TREE_RECOVERY_TEST, gate.TREE_RECOVERY_GUARD_TEST)
-    assert gate.HOST_FILES[30:] == (gate.TAR_ATTRIBUTES_TEST, gate.TAR_STRICT_ORACLE_TEST)
-    assert sum(gate.HOST_COUNTS) == 1649 and sum(gate.HOST_COUNTS[:30]) == 1527
+    assert gate.HOST_FILES[30:32] == (gate.TAR_ATTRIBUTES_TEST, gate.TAR_STRICT_ORACLE_TEST)
+    assert gate.HOST_FILES[32:] == (gate.MANAGED_SCRATCH_TEST, gate.MANAGED_MEMORY_TEST)
+    assert sum(gate.HOST_COUNTS) == 1684 and sum(gate.HOST_COUNTS[:32]) == 1649
+    assert sum(gate.HOST_COUNTS[:30]) == 1527
     assert sum(gate.HOST_COUNTS[:28]) == 1431
     assert sum(gate.HOST_COUNTS[:27]) == 1376
     assert sum(gate.HOST_COUNTS[:25]) == 1276
@@ -71,6 +73,17 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert sum(gate.HOST_COUNTS[:18]) == 926
     assert sum(gate.HOST_COUNTS[:17]) == 894 and sum(gate.HOST_COUNTS[:16]) == 846
     assert sum(gate.HOST_COUNTS[:14]) == 837
+    for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1)):
+        count = 0
+        for node in ast.parse((ROOT / filename).read_text()).body:
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+                cases = 1
+                for decorator in node.decorator_list:
+                    assert isinstance(decorator, ast.Call)
+                    assert ast.unparse(decorator.func) == "pytest.mark.parametrize"
+                    cases *= len(ast.literal_eval(decorator.args[1]))
+                count += cases
+        assert count == expected_count
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -878,7 +891,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -997,8 +1010,16 @@ def test_linux_arm_transport_inputs_markers_and_exact_inventory_are_bound():
 
 
 def test_aarch64_regalloc_inputs_and_exact_nodes_are_bound(tmp_path):
-    assert len(gate.REGALLOC_HOST_NODES) == 80
-    assert len(set(gate.REGALLOC_HOST_NODES)) == 80
+    assert gate.REGALLOC_HOST_NODES[80:] == tuple(
+        gate.MANAGED_PHI_TEST + "::test_phi_liveness_matches_set_oracle_without_repeated_fixpoint_scans["
+        + selection + "-" + loop + "-" + fanin + "]"
+        for selection in ("all", "alternating", "none")
+        for loop in ("False", "True") for fanin in ("2", "9", "65")
+    )
+    assert {gate.MANAGED_SCRATCH_TEST, gate.MANAGED_MEMORY_TEST, gate.MANAGED_PHI_TEST,
+            "tests/managed_scratch_retirement_reference.json"} <= set(gate.REGALLOC_INPUTS)
+    assert len(gate.REGALLOC_HOST_NODES) == 98
+    assert len(set(gate.REGALLOC_HOST_NODES)) == 98
     assert len(gate.REGALLOC_NATIVE_NODES) == 3
     assert gate.REGALLOC_NATIVE_NODES == tuple(
         "tests/c/test_self_backend_aarch64_regalloc.py::"

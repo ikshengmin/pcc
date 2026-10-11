@@ -4407,6 +4407,12 @@ def _native_managed_liveness(
                 changed = True
             block_id -= 1
 
+    # The fixed point has consumed these matrices. The backward scan retains
+    # live_in, tracked_values, tracked_index and scratch until its own end.
+    uses.close()
+    definitions.close()
+    live_out.close()
+
     result: PackedManagedLiveness = PackedManagedLiveness()
     current_live_state = CompilerIntArena(1)
     current_live_state.append(0)
@@ -4668,6 +4674,12 @@ def _build_function_stack_map_plan_native(
     aliases = _native_pointer_aliases(kernel)
     roots = _native_root_states(func, globals_by_name, aliases, kernel)
     origins = _native_managed_origins(func, aliases, roots, kernel)
+    # Origins now own copied scalar states; aliases and convergence scratch
+    # have no later consumers. Keep origin states for liveness and reloads.
+    aliases.close()
+    origins.transfers.close()
+    origins.transfer_ids.close()
+    origins.proposal.close()
     live_after = _native_managed_liveness(func, origins, kernel)
     identity = identity_name or func.name
     fid = function_id(identity)

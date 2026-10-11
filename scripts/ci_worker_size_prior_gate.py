@@ -52,6 +52,9 @@ ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
 SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
+MANAGED_SCRATCH_TEST = "tests/python/test_managed_scratch_retirement.py"
+MANAGED_MEMORY_TEST = "tests/python/test_managed_scratch_host_memory.py"
+MANAGED_PHI_TEST = "tests/python/test_managed_phi_liveness.py"
 CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
 BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
 REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
@@ -60,7 +63,9 @@ REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
                   SCALAR_PROJECTION_TEST, "tests/scalar_arena_projection_reference.json",
                   "tests/scalar_arena_projection_ci_reference.py",
                   "tests/python/test_precise_stackmap_abi.py",
-                  "tests/python/test_unsafe_syscall6.py")
+                  "tests/python/test_unsafe_syscall6.py",
+                  MANAGED_SCRATCH_TEST, MANAGED_MEMORY_TEST, MANAGED_PHI_TEST,
+                  "tests/managed_scratch_retirement_reference.json")
 REGALLOC_MODES = ("default", "function", "local")
 REGALLOC_SHAPES = ("safe", "call", "loop", "empty", "syscall", "inline-error",
                   "madd", "reload", "vararg", "invalid-low", "invalid-high")
@@ -76,6 +81,10 @@ REGALLOC_HOST_NODES = (
       + mode + "-" + shape + "]" for mode in REGALLOC_MODES for shape in ("branches", "root-reloads")),
     CALLEE_SAVED_TEST + "::test_callee_saved_registers_are_saved_and_restored_on_every_exit",
     CALLEE_SAVED_TEST + "::test_mode_off_emits_no_callee_saved_registers",
+    *(MANAGED_PHI_TEST + "::test_phi_liveness_matches_set_oracle_without_repeated_fixpoint_scans["
+      + selection + "-" + loop + "-" + fanin + "]"
+      for selection in ("all", "alternating", "none")
+      for loop in ("False", "True") for fanin in ("2", "9", "65")),
 )
 REGALLOC_NATIVE_NODES = tuple(
     REGALLOC_TEST + "::test_aarch64_call_result_executes_through_indexed_emission[" + mode + "]"
@@ -151,10 +160,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               ELF_RELOCATION_CONTEXT_TEST, STACKMAP_BUDGET_TEST, STACKMAP_HOST_BUDGET_TEST,
               PARSE_BUFFER_TEST, PARSE_BUFFER_OBJECT_TEST, ARM_CALL_VENEERS_TEST,
               TREE_RECOVERY_TEST, TREE_RECOVERY_GUARD_TEST,
-              TAR_ATTRIBUTES_TEST, TAR_STRICT_ORACLE_TEST)
-# All existing 1569 nodes remain. Catch-only exception controls join the
-# same default-xdist invocation, including the tar metadata/strict controls.
-HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71)
+              TAR_ATTRIBUTES_TEST, TAR_STRICT_ORACLE_TEST,
+              MANAGED_SCRATCH_TEST, MANAGED_MEMORY_TEST)
+# All existing1649 nodes remain; finite lifetime controls and one small
+# host-list memory comparison use the same default-xdist invocation.
+HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 316, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
