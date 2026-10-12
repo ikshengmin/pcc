@@ -17,8 +17,8 @@ pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
 @c_abi_export("pcc_linux_directory_open")
 def directory_open(path: c_ptr) -> c_ptr:
     arm: i64 = 1 if load_i8(target_platform_machine(), 0) == 97 else 0
-    # Linux AArch64 uses 16384 for O_DIRECTORY; x86-64 uses 65536.
-    flags: i64 = (16384 if arm else 65536) | 524288
+    # O_DIRECTORY | O_CLOEXEC: AArch64 (16384 | 524288), x86-64 (65536 | 524288).
+    flags: i64 = 540672 if arm else 589824
     fd: i64 = syscall6(56 if arm else 257, -100, path, flags, 0, 0, 0)
     if fd < 0:
         pcc_errno_set(0 - fd)

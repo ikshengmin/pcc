@@ -122,3 +122,36 @@ def test_directory_open_closes_fd_before_reporting_allocation_failure(target, fd
         ("pcc_errno_set", 12),
         ("null",),
     ]
+
+
+def _assert_raw_flag_selection(statement):
+    assert isinstance(statement, ast.AnnAssign)
+    assert isinstance(statement.target, ast.Name) and statement.target.id == "flags"
+    assert isinstance(statement.annotation, ast.Name) and statement.annotation.id == "i64"
+    selection = statement.value
+    assert isinstance(selection, ast.IfExp)
+    assert isinstance(selection.test, ast.Name) and selection.test.id == "arm"
+    assert isinstance(selection.body, ast.Constant) and type(selection.body.value) is int
+    assert isinstance(selection.orelse, ast.Constant) and type(selection.orelse.value) is int
+    assert selection.body.value == (16384 | 524288)
+    assert selection.orelse.value == (65536 | 524288)
+
+
+def test_directory_open_flags_keep_top_level_raw_literal_selection():
+    # The raw annotation contextualizer handles a top-level conditional's
+    # literal arms. A BinOp containing that conditional stays semantic int.
+    # This is a source-shape guard, not a PCC compilation test.
+    module = ast.parse(_SOURCE.read_text(encoding="utf-8"), filename=str(_SOURCE))
+    function = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "directory_open"
+    )
+    flags = next(
+        node for node in function.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name) and node.target.id == "flags"
+    )
+    _assert_raw_flag_selection(flags)
+    rejected = ast.parse("flags: i64 = (16384 if arm else 65536) | 524288").body[0]
+    with pytest.raises(AssertionError):
+        _assert_raw_flag_selection(rejected)
