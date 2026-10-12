@@ -91,6 +91,13 @@ def _owned(classes, rows, bit=True):
 def test_negative_summary_bound_source_and_fake_controls():
     root = Path(__file__).resolve().parents[1]
     source = _read(root / "pcc/backend/elf_x86_64.py")
+    progress = ast.parse(_read(root / "tests/elf_relocation_progress_preimage.py"))
+    progress_fields = {node.targets[0].id: ast.literal_eval(node.value)
+                       for node in progress.body if isinstance(node, ast.Assign)}
+    for changed, original in reversed(progress_fields["OWNER_REVERSE_EDITS"]):
+        assert source.count(changed) == 1
+        source = source.replace(changed, original)
+    assert hashlib.sha256(source.encode()).hexdigest() == progress_fields["BASE_OWNER_SHA256"]
     references = ast.parse(_read(root / "tests/elf_negative_classification_preimage.py"))
     constants = {node.targets[0].id: ast.literal_eval(node.value)
                  for node in references.body if isinstance(node, ast.Assign)}

@@ -240,3 +240,45 @@ class CoarsePhaseTiming:
             return True
         except BaseException:
             return False
+
+
+    def elf_relocation_progress(self, event, completed_sections, total_sections,
+                                completed_relocations, total_relocations) -> bool:
+        """At most one scale, one GOT boundary and eight completed-row quantiles.
+
+        R includes NONE rows. Section progress credits their initial resident
+        row weights, not actual applied rows, resolution calls, throughput or time. Unknown/custom scale cannot publish a partial total.
+        """
+        try:
+            if type(event) is not str or event not in ("scale", "scale_unknown", "got_complete", "sections"):
+                return False
+            limit = ((1 << 63) - 1) // 8
+            values = (completed_sections, total_sections, completed_relocations, total_relocations)
+            if any(type(value) is not int or value < 0 or value > limit for value in values):
+                return False
+            if event == "scale_unknown":
+                if any(values):
+                    return False
+                parts = ["pcc elf relocation progress", "event=scale", "total_relocations_known=0"]
+            else:
+                if completed_sections > total_sections or completed_relocations > total_relocations:
+                    return False
+                if event == "sections":
+                    if not completed_sections or not completed_relocations:
+                        return False
+                elif completed_sections or completed_relocations:
+                    return False
+                parts = ["pcc elf relocation progress", "event=" + event]
+                if event == "scale":
+                    parts.extend(("count_basis=initial_resident", "total_relocations_known=1",
+                                  "total_relocations=" + str(total_relocations)))
+                elif event == "sections":
+                    parts.extend(("count_basis=initial_resident", "completed_sections=" + str(completed_sections),
+                                  "total_sections=" + str(total_sections),
+                                  "completed_section_initial_relocations=" + str(completed_relocations),
+                                  "total_relocations=" + str(total_relocations)))
+            sys.stderr.write(" ".join(parts) + "\n")
+            sys.stderr.flush()
+            return True
+        except BaseException:
+            return False

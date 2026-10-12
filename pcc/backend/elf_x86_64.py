@@ -1064,6 +1064,60 @@ def _report_classification_skips(timing, completed_sections, total_sections,
         return False
 
 
+def _elf_relocation_progress_counts(alloc_sections):
+    """Resident row cardinalities only; never load or iterate relocation data."""
+    try:
+        from .owned_elf_inputs import _InputSection
+        if type(alloc_sections) is not list:
+            return None
+        # Keep the weighted numerator within signed 64 bits on native hosts.
+        limit = ((1 << 63) - 1) // 8
+        if len(alloc_sections) > limit:
+            return None
+        # total rows, completed sections/rows, last quantile; then section counts.
+        counts = [0, 0, 0, 0]
+        for item in alloc_sections:
+            if type(item) is not tuple or len(item) != 3:
+                return None
+            observed_section = item[2]
+            if type(observed_section) is _InputSection:
+                count = observed_section.relocation_count
+            elif type(observed_section) is ElfSection:
+                rows = observed_section.relocations
+                if type(rows) is tuple:
+                    count = len(rows)
+                elif type(rows) is _PackedElfRelocations:
+                    if (type(rows.payload) is not bytes or type(rows.offset) is not int
+                            or type(rows.size) is not int or rows.offset < 0 or rows.size < 0
+                            or rows.offset > len(rows.payload)
+                            or rows.size > len(rows.payload) - rows.offset or rows.size % 24):
+                        return None
+                    count = rows.size // 24
+                else:
+                    return None
+            else:
+                return None
+            if type(count) is not int or count < 0 or count > limit - counts[0]:
+                return None
+            counts[0] += count
+            counts.append(count)
+        return counts
+    except BaseException:
+        # Optional evidence must not introduce a new linker failure.
+        return None
+
+
+def _report_relocation_progress(timing, event, completed_sections, total_sections,
+                                completed_relocations, total_relocations):
+    try:
+        return timing.elf_relocation_progress(
+            event, completed_sections, total_sections,
+            completed_relocations, total_relocations,
+        )
+    except BaseException:
+        return False
+
+
 def _link_static_executable_image(
     objects: list[ElfObject],
     *,
@@ -1404,6 +1458,22 @@ def _link_static_executable_image(
         boundaries["__" + family + "_array_start"] = begin
         boundaries["__" + family + "_array_end"] = end
 
+    if coordinator_timing is not None:
+        try:
+            relocation_progress = _elf_relocation_progress_counts(alloc_sections)
+            relocation_progress_active = 1
+            if relocation_progress is None:
+                if not _report_relocation_progress(coordinator_timing, "scale_unknown", 0, 0, 0, 0):
+                    relocation_progress_active = 0
+            elif not _report_relocation_progress(
+                    coordinator_timing, "scale", 0, len(relocation_progress) - 4,
+                    0, relocation_progress[0]):
+                relocation_progress = None
+                relocation_progress_active = 0
+        except BaseException:
+            relocation_progress = None
+            relocation_progress_active = 0
+
     def resolve_symbol(object_index: int, symbol_index: int) -> tuple[int, ElfSymbol]:
         identity = _symbol_identity(objects, definitions, object_index, symbol_index)
         if identity[0] == "weak-zero":
@@ -1453,6 +1523,14 @@ def _link_static_executable_image(
                     )
                 value = resolve_symbol(target_object, target_symbol)[0]
         _write_int(image, got_offset + relative, value, 64, value < 0)
+
+    if coordinator_timing is not None:
+        try:
+            if relocation_progress_active and not _report_relocation_progress(
+                    coordinator_timing, "got_complete", 0, 0, 0, 0):
+                relocation_progress = None
+        except BaseException:
+            relocation_progress = None
 
     for object_index, section_index, section in alloc_sections:
         if section.type == SHT_NOBITS and section.relocations:
@@ -1537,6 +1615,23 @@ def _link_static_executable_image(
                 # _relocation_width made this unreachable unless a newly
                 # accepted writer relocation was not deliberately linked.
                 raise ElfError(f"relocation type {relocation.type} has no link rule")
+        if coordinator_timing is not None:
+            try:
+                if relocation_progress is not None:
+                    progress_section = relocation_progress[1]
+                    relocation_progress[2] += relocation_progress[progress_section + 4]
+                    relocation_progress[1] = progress_section + 1
+                    if relocation_progress[0]:
+                        progress_bucket = 8 * relocation_progress[2] // relocation_progress[0]
+                        if progress_bucket > relocation_progress[3]:
+                            relocation_progress[3] = progress_bucket
+                            if not _report_relocation_progress(
+                                    coordinator_timing, "sections", relocation_progress[1],
+                                    len(relocation_progress) - 4,
+                                    relocation_progress[2], relocation_progress[0]):
+                                relocation_progress = None
+            except BaseException:
+                relocation_progress = None
 
     if coordinator_timing is not None:
         coordinator_timing.complete("elf_image_resolve_relocate", image_phase_started)

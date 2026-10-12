@@ -56,6 +56,13 @@ def _without_negative_summary(source):
     # Invert only the separately source-bound negative-summary candidate. Its
     # actual loop and proof consumer have their own fake-only controls.
     root = Path(__file__).resolve().parents[1]
+    progress = ast.parse(_text(root / "tests/elf_relocation_progress_preimage.py"))
+    progress_fields = {node.targets[0].id: ast.literal_eval(node.value)
+                       for node in progress.body if isinstance(node, ast.Assign)}
+    for changed, original in reversed(progress_fields["OWNER_REVERSE_EDITS"]):
+        assert source.count(changed) == 1
+        source = source.replace(changed, original)
+    assert _sha(source) == progress_fields["BASE_OWNER_SHA256"]
     tree = ast.parse(_text(root / "tests/elf_negative_classification_preimage.py"))
     fields = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
               if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
