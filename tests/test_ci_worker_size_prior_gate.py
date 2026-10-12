@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10)
+    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -66,24 +66,25 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[38:40] == (gate.ELF_PROGRESS_TEST, gate.ELF_PROGRESS_SOURCE_TEST)
     assert gate.HOST_FILES[40:42] == (gate.ELF_APPLICATION_TEST, gate.ELF_APPLICATION_SOURCE_TEST)
     assert gate.HOST_FILES[42:43] == (gate.MANAGED_DIRTY_ROWS_TEST,)
-    assert gate.HOST_FILES[43:] == (gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST)
-    assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 45
-    assert sum(gate.HOST_COUNTS) == 1987 and sum(gate.HOST_COUNTS[:43]) == 1934
-    assert sum(gate.HOST_COUNTS[:42]) == 1839
-    assert sum(gate.HOST_COUNTS[:40]) == 1830
-    assert sum(gate.HOST_COUNTS[:38]) == 1820
-    assert sum(gate.HOST_COUNTS[:36]) == 1811
-    assert sum(gate.HOST_COUNTS[:34]) == 1793
-    assert sum(gate.HOST_COUNTS[:32]) == 1758
-    assert sum(gate.HOST_COUNTS[:30]) == 1636
-    assert sum(gate.HOST_COUNTS[:28]) == 1540
-    assert sum(gate.HOST_COUNTS[:27]) == 1485
-    assert sum(gate.HOST_COUNTS[:25]) == 1385
-    assert sum(gate.HOST_COUNTS[:23]) == 1230
-    assert sum(gate.HOST_COUNTS[:22]) == 1214
-    assert sum(gate.HOST_COUNTS[:21]) == 1159
-    assert sum(gate.HOST_COUNTS[:20]) == 1070
-    assert sum(gate.HOST_COUNTS[:18]) == 1035
+    assert gate.HOST_FILES[43:45] == (gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST)
+    assert gate.HOST_FILES[45:] == (gate.HOME_SUMMARY_CI_TEST,)
+    assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 46
+    assert sum(gate.HOST_COUNTS) == 2023 and sum(gate.HOST_COUNTS[:43]) == 1969
+    assert sum(gate.HOST_COUNTS[:42]) == 1874
+    assert sum(gate.HOST_COUNTS[:40]) == 1865
+    assert sum(gate.HOST_COUNTS[:38]) == 1855
+    assert sum(gate.HOST_COUNTS[:36]) == 1846
+    assert sum(gate.HOST_COUNTS[:34]) == 1828
+    assert sum(gate.HOST_COUNTS[:32]) == 1793
+    assert sum(gate.HOST_COUNTS[:30]) == 1671
+    assert sum(gate.HOST_COUNTS[:28]) == 1575
+    assert sum(gate.HOST_COUNTS[:27]) == 1520
+    assert sum(gate.HOST_COUNTS[:25]) == 1420
+    assert sum(gate.HOST_COUNTS[:23]) == 1265
+    assert sum(gate.HOST_COUNTS[:22]) == 1249
+    assert sum(gate.HOST_COUNTS[:21]) == 1194
+    assert sum(gate.HOST_COUNTS[:20]) == 1105
+    assert sum(gate.HOST_COUNTS[:18]) == 1070
     assert sum(gate.HOST_COUNTS[:17]) == 1003 and sum(gate.HOST_COUNTS[:16]) == 943
     assert sum(gate.HOST_COUNTS[:14]) == 934
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1)):
@@ -119,7 +120,20 @@ def test_default_command_retains_project_xdist(tmp_path):
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
-    assert tuple(len(node.decorator_list[0].args[1].elts) for node in facts_nodes) == (4, 8, 3, 5, 6, 6)
+    expected_facts = [('test_random_small_cfg_matches_frozen_facts', 4), ('test_named_cfg_contracts', 8), ('test_minus_one_retains_whole_old_stamp_history', 3), ('test_custom_protocols_keep_original_calls', 10), ('test_accessor_errors_and_swallowed_terminator_indexerror', 6), ('test_counted_walk_and_cache_bound', 6), ('test_home_summary_random_canonical_cfg_matches_frozen_facts', 4), ('test_home_summary_adversarial_cfg_and_order', 6), ('test_home_summary_exact_work_and_reusable_scratch_bounds', 6), ('test_home_summary_negative_values_keep_original_stamp_path', 2), ('test_home_summary_custom_extra_hash_cannot_change_first_error', 1), ('test_home_summary_installed_observer_retains_established_walks', 4), ('test_home_summary_partial_scc_failure_releases_scratch_and_preserves_error', 1), ('test_home_summary_preimage_is_exact_and_rejects_drift', 4), ('test_home_summary_deep_chain_uses_iterative_bounded_scratch', 1), ('test_home_summary_canonical_custom_seed_keeps_original_calls', 1)]
+    actual_facts = []
+    for node in facts_nodes:
+        cases = 1
+        for mark in node.decorator_list:
+            assert isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.parametrize"
+            assert isinstance(mark.args[1], (ast.List, ast.Tuple))
+            cases *= len(mark.args[1].elts)
+        actual_facts.append((node.name, cases))
+    assert actual_facts == expected_facts
+    timing_nodes = [node for node in ast.parse((ROOT / gate.HOME_SUMMARY_CI_TEST).read_text()).body
+                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
+    assert [node.name for node in timing_nodes] == ["test_home_summary_ci_same_input_abba"]
+    assert not timing_nodes[0].decorator_list
     assert "tests/aarch64_regalloc_facts_reference.py" in gate.REGALLOC_INPUTS
     assert gate.REGALLOC_FACTS_TEST in gate.REGALLOC_INPUTS
     for path, count in ((gate.X87_PREFIX_TEST, 4), (gate.X87_ENCODING_TEST, 5)):
@@ -944,7 +958,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -1069,7 +1083,7 @@ def test_aarch64_regalloc_inputs_and_exact_nodes_are_bound(tmp_path):
         for selection in ("all", "alternating", "none")
         for loop in ("False", "True") for fanin in ("2", "9", "65")
     )
-    assert {gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST,
+    assert {gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST, gate.HOME_SUMMARY_CI_TEST,
             gate.MANAGED_SCRATCH_TEST, gate.MANAGED_MEMORY_TEST, gate.MANAGED_PHI_TEST,
             "tests/managed_scratch_retirement_reference.json"} <= set(gate.REGALLOC_INPUTS)
     assert gate.REGALLOC_INPUTS[-4:] == (

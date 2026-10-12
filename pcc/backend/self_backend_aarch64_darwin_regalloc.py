@@ -800,11 +800,15 @@ def _function_level_facts(
     visited: list[int] = [-1] * len(successors)
     pending: list[int] = []
     facts_observe = False
+    summary_enabled = cache_enabled and type(kernel) is IndexedFunctionKernel
     import sys
     if sys.implementation.name == "cpython":
         _facts_observer = _HOST_FACTS_STRUCTURE_OBSERVER
         _facts_sample = None
         if _facts_observer is not None:
+            # The observer counts the established value walks and memo drains.
+            # Keep that contract even when begin declines or observation fails.
+            summary_enabled = False
             try:
                 _facts_sample = _facts_observer.begin(
                     def_block, use_blocks, predecessors, block_base, block_end
@@ -815,10 +819,196 @@ def _function_level_facts(
                     _facts_observer.fail()
                 except BaseException:
                     pass
+    # Only exact production kernels with canonical, nonnegative values may
+    # reorder private graph work. Collection and every accessor above remain
+    # in their original order; custom/negative IDs and seeds retain that path.
+    if summary_enabled:
+        for value_id in use_blocks:
+            if value_id < 0:
+                summary_enabled = False
+                break
+            for seed in use_blocks[value_id]:
+                if not 0 <= seed < len(predecessors):
+                    summary_enabled = False
+                    break
+
+    summary_low: dict[int, int] = {}
+    summary_high: dict[int, int] = {}
+    if summary_enabled:
+        # Group only value IDs, never per-value reachability sets. Identical
+        # sole-seed queries keep the existing bounded memo. A shared home with
+        # differing/multiple seeds offers reuse, but need not have overlapping
+        # closures: in the zero-overlap case Tarjan adds bounded linear work.
+        home_values: dict[int, list[int]] = {}
+        home_seed: dict[int, int] = {}
+        summary_index: list[int] = []
+        summary_link: list[int] = []
+        summary_component: list[int] = []
+        summary_touched: list[int] = []
+        summary_active: list[int] = []
+        summary_nodes: list[int] = []
+        summary_edges: list[int] = []
+        summary_members: list[int] = []
+        component_low: list[int] = []
+        component_high: list[int] = []
+        group_values: list[int] = []
+        summary_complete = False
+        try:
+            for value_id in use_blocks:
+                home = def_block.get(value_id, -1)
+                query_seed = -1
+                query_multiple = False
+                for seed in use_blocks[value_id]:
+                    if seed != home:
+                        if query_seed < 0:
+                            query_seed = seed
+                        elif seed != query_seed:
+                            query_multiple = True
+                if query_seed >= 0:
+                    if home not in home_values:
+                        home_values[home] = []
+                        home_seed[home] = query_seed
+                    home_values[home].append(value_id)
+                    if query_multiple or query_seed != home_seed[home]:
+                        home_seed[home] = -2
+            for home in home_values:
+                group_values = home_values[home]
+                if len(group_values) < 2 or home_seed[home] != -2:
+                    continue
+                if not summary_index:
+                    summary_index = [-1] * len(predecessors)
+                    summary_link = [-1] * len(predecessors)
+                    summary_component = [-1] * len(predecessors)
+                # Iterative Tarjan on inverse CFG edges with home removed.
+                # Arrays are allocated once; only touched vertices are reset
+                # between homes. The active/DFS/member stacks total O(B).
+                for value_id in group_values:
+                    for seed in use_blocks[value_id]:
+                        if seed == home or summary_index[seed] >= 0:
+                            continue
+                        summary_index[seed] = len(summary_touched)
+                        summary_link[seed] = summary_index[seed]
+                        summary_touched.append(seed)
+                        summary_active.append(seed)
+                        summary_nodes.append(seed)
+                        summary_edges.append(0)
+                        while summary_nodes:
+                            node_id = summary_nodes[-1]
+                            edge_index = summary_edges[-1]
+                            if edge_index < len(predecessors[node_id]):
+                                predecessor = predecessors[node_id][edge_index]
+                                summary_edges[-1] = edge_index + 1
+                                if predecessor == home:
+                                    continue
+                                if summary_index[predecessor] < 0:
+                                    summary_index[predecessor] = len(summary_touched)
+                                    summary_link[predecessor] = summary_index[predecessor]
+                                    summary_touched.append(predecessor)
+                                    summary_active.append(predecessor)
+                                    summary_nodes.append(predecessor)
+                                    summary_edges.append(0)
+                                elif summary_component[predecessor] < 0:
+                                    if summary_index[predecessor] < summary_link[node_id]:
+                                        summary_link[node_id] = summary_index[predecessor]
+                                continue
+                            summary_nodes.pop()
+                            summary_edges.pop()
+                            if summary_link[node_id] == summary_index[node_id]:
+                                component_id = len(component_low)
+                                # Assign every member before folding edges,
+                                # so an internal cycle never reads an unfinished
+                                # component's extrema. Other targets are done.
+                                while True:
+                                    member_id = summary_active.pop()
+                                    summary_component[member_id] = component_id
+                                    summary_members.append(member_id)
+                                    if member_id == node_id:
+                                        break
+                                lowest = -1
+                                highest = -1
+                                for member_id in summary_members:
+                                    base = block_base[member_id]
+                                    if lowest < 0 or base < lowest:
+                                        lowest = base
+                                    for predecessor in predecessors[member_id]:
+                                        # Even an edge cut at home makes the
+                                        # value live through home's block_end.
+                                        end = block_end[predecessor]
+                                        if end > highest:
+                                            highest = end
+                                        if predecessor != home:
+                                            target_component = summary_component[predecessor]
+                                            if target_component != component_id:
+                                                low = component_low[target_component]
+                                                high = component_high[target_component]
+                                                if low < lowest:
+                                                    lowest = low
+                                                if high > highest:
+                                                    highest = high
+                                component_low.append(lowest)
+                                component_high.append(highest)
+                                summary_members.clear()
+                            if summary_nodes:
+                                parent_id = summary_nodes[-1]
+                                if summary_link[node_id] < summary_link[parent_id]:
+                                    summary_link[parent_id] = summary_link[node_id]
+                    lowest = -1
+                    highest = -1
+                    for seed in use_blocks[value_id]:
+                        if seed != home:
+                            component_id = summary_component[seed]
+                            low = component_low[component_id]
+                            high = component_high[component_id]
+                            if lowest < 0 or low < lowest:
+                                lowest = low
+                            if high > highest:
+                                highest = high
+                    summary_low[value_id] = lowest
+                    summary_high[value_id] = highest
+                for member_id in summary_touched:
+                    summary_index[member_id] = -1
+                    summary_link[member_id] = -1
+                    summary_component[member_id] = -1
+                summary_touched.clear()
+                component_low.clear()
+                component_high.clear()
+            summary_complete = True
+        finally:
+            # Release graph scratch on success and on failure, including a
+            # partially discovered SCC. Only O(V) scalar results survive to
+            # the original value-order publication below.
+            group_values.clear()
+            home_values.clear()
+            home_seed.clear()
+            summary_index.clear()
+            summary_link.clear()
+            summary_component.clear()
+            summary_touched.clear()
+            summary_active.clear()
+            summary_nodes.clear()
+            summary_edges.clear()
+            summary_members.clear()
+            component_low.clear()
+            component_high.clear()
+            if not summary_complete:
+                summary_low.clear()
+                summary_high.clear()
+
     for value_id in use_blocks:
         home = def_block.get(value_id, -1)
         lowest = -1
         textual_highest = last_use[value_id]
+        if summary_enabled and value_id in summary_low:
+            # Publish all dictionaries in the original use/value order; a
+            # graph maximum must never absorb another value's textual use.
+            lowest = summary_low[value_id]
+            highest = summary_high[value_id]
+            if textual_highest > highest:
+                highest = textual_highest
+            last_use[value_id] = highest
+            if lowest >= 0:
+                first_live[value_id] = lowest
+            continue
         highest = textual_highest
         if cache_enabled:
             highest = -1
@@ -907,6 +1097,8 @@ def _function_level_facts(
         last_use[value_id] = highest
         if lowest >= 0:
             first_live[value_id] = lowest
+    summary_low.clear()
+    summary_high.clear()
     facts_result = (
         block_base,
         last_use,

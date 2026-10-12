@@ -187,10 +187,11 @@ def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeyp
         pytest.skip("AArch64 Darwin execution")
     from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
     from tests.aarch64_regalloc_scan_reference import (
-        counted_function_facts, old_scan_allocator, select_mode,
+        old_scan_allocator, select_mode,
     )
 
     from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
+    from tests.python.test_aarch64_regalloc_single_seed import SOURCE, load_facts
 
     select_mode(monkeypatch, mode)
     source = _TRIPLE + '''
@@ -204,11 +205,34 @@ tail:
   %result = add i64 %first, %second
   ret i64 %result
 }
+define i64 @shared_homes(i64 %arg) {
+entry:
+  %left = add i64 %arg, 3
+  %right = add i64 %arg, 5
+  br label %loop
+loop:
+  %index = phi i64 [0, %entry], [%next, %body]
+  %total = phi i64 [0, %entry], [%sum, %body]
+  %more = icmp slt i64 %index, 3
+  br i1 %more, label %body, label %done
+body:
+  %part = add i64 %left, %right
+  %sum = add i64 %total, %part
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  %tail = add i64 %left, %right
+  %result = add i64 %total, %tail
+  ret i64 %result
+}
 define i32 @main() {
 entry:
   %actual = call i64 @two_calls(i64 11)
   %bad = icmp ne i64 %actual, 66
-  %status = zext i1 %bad to i32
+  %shared = call i64 @shared_homes(i64 7)
+  %shared_bad = icmp ne i64 %shared, 88
+  %either_bad = or i1 %bad, %shared_bad
+  %status = zext i1 %either_bad to i32
   ret i32 %status
 }
 '''
@@ -227,7 +251,10 @@ _opaque:
         outputs = []
         graph_counts = [dict(pops=0, edges=0, hits=0) for _ in range(2)]
         reference = old_scan_allocator(facts_counts=graph_counts[0])
-        counted_facts = counted_function_facts(aarch64_regalloc._function_level_facts, graph_counts[1])
+        # Execute the exact current helper with its real production globals;
+        # the finite harness contributes only AST operation counters here.
+        counted_facts, summary_counts = load_facts(SOURCE, count_summary=True)
+        counted_facts.__globals__.update(vars(aarch64_regalloc))
         for index, allocator in enumerate((reference, allocate_aarch64_block_registers)):
             with monkeypatch.context() as patch:
                 patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
@@ -247,11 +274,15 @@ _opaque:
             result = subprocess.run([str(executable)], capture_output=True, timeout=10)
             assert result.returncode == 0, result.stderr
         assert outputs[0] == outputs[1]
+        graph_counts[1] = {key: summary_counts[key] for key in ("pops", "edges", "hits")}
         if mode != "local":
+            assert summary_counts["summary_nodes"] > 0
+            assert summary_counts["summary_homes"] > 0
             assert graph_counts[1]["hits"] > 0
             assert graph_counts[1]["pops"] < graph_counts[0]["pops"]
             assert graph_counts[1]["edges"] < graph_counts[0]["edges"]
         else:
+            assert summary_counts["summary_nodes"] == 0
             assert graph_counts == [dict(pops=0, edges=0, hits=0)] * 2
 
 
