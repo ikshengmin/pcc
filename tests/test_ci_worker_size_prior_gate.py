@@ -897,7 +897,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
