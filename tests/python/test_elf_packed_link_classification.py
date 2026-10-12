@@ -385,6 +385,8 @@ def test_packed_view_does_not_survive_until_next_source_load(tmp_path, monkeypat
 def test_tiny_same_input_final_link_alternating_raw_receipt(tmp_path):
     # Normal-CI-only observation. This test never runs an emitted image, starts
     # a process, profiles, changes GC configuration, or asserts a speedup.
+    import __future__
+    import ast
     import gc
     import hashlib
     import json
@@ -406,8 +408,60 @@ def test_tiny_same_input_final_link_alternating_raw_receipt(tmp_path):
     staged = store.stage(str(path))
     packed_rows = sum(section.relocation_count for section in staged.sections)
     assert packed_rows == 1536
-    linkers = {"original": original_linker(elf),
-               "candidate": elf._link_static_executable_image}
+    def timing_linkers():
+        # Both measured functions start with fresh code objects and independent
+        # copies of one module snapshot. Do not replace the live module owner.
+        root = Path(__file__).resolve().parents[2]
+        owner_path = root / "pcc/backend/elf_x86_64.py"
+        live = elf._link_static_executable_image
+        assert Path(elf.__file__).resolve() == owner_path.resolve()
+        assert Path(live.__code__.co_filename).resolve() == owner_path.resolve()
+        assert live.__module__ == elf.__name__
+        assert live.__name__ == live.__code__.co_name == "_link_static_executable_image"
+        raw_owner = owner_path.read_bytes()
+        owner_text = raw_owner.decode("utf-8").replace("\r\n", "\n")
+        assert "\r" not in owner_text
+        tree = ast.parse(owner_text)
+        owners = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == live.__name__]
+        assert len(owners) == 1 and not owners[0].decorator_list
+        owner = owners[0]
+        assert live.__code__.co_firstlineno == owner.lineno
+        candidate_source = "".join(owner_text.splitlines(keepends=True)[
+            owner.lineno - 1:owner.end_lineno])
+        original_source = ORIGINAL_LINK_IMAGE_SOURCE.replace("\r\n", "\n")
+        assert "\r" not in original_source
+        flags = __future__.annotations.compiler_flag
+        assert live.__code__.co_flags & flags == flags
+        assert any(isinstance(node, ast.ImportFrom) and node.module == "__future__"
+                   and any(alias.name == "annotations" for alias in node.names) for node in tree.body)
+        assert hashlib.sha256(original_source.encode("utf-8")).hexdigest() == (
+            "094f3b9e02b8e6c7e6afaa0ea8bd1dff75cb8dd304594d117511b715e0a6ba59")
+        snapshot = dict(vars(elf))
+        linkers = {}
+        for name, source in (("original", original_source), ("candidate", candidate_source)):
+            namespace = dict(snapshot)
+            code = compile(source, "<fresh timing " + name + " final-image linker>", "exec",
+                           flags=flags, dont_inherit=True, optimize=sys.flags.optimize)
+            exec(code, namespace, namespace)
+            linkers[name] = namespace[live.__name__]
+            assert linkers[name] is not live
+            assert linkers[name].__globals__ is namespace
+            assert linkers[name].__code__.co_flags & flags == flags
+        assert linkers["original"].__globals__ is not linkers["candidate"].__globals__
+        assert elf._link_static_executable_image is live
+        preparation = {
+            "schema": "fresh-source-both.v1", "warmup_calls": 0,
+            "method": "fresh compile/exec once per variant; reused four times each",
+            "globals": "independent copies of one dict(vars(elf)) snapshot; globals=locals",
+            "compile_flags": flags, "dont_inherit": True, "optimize": sys.flags.optimize,
+            "function_source": "exact AST line slice; UTF-8 with CRLF normalized to LF",
+            "candidate_source_lines": [owner.lineno, owner.end_lineno],
+            "owner_raw_sha256": hashlib.sha256(raw_owner).hexdigest(),
+        }
+        return linkers, preparation, hashlib.sha256(candidate_source.encode("utf-8")).hexdigest()
+
+    linkers, preparation, candidate_function_sha256 = timing_linkers()
     orders = (("original", "candidate"), ("candidate", "original"),
               ("original", "candidate"), ("candidate", "original"))
     rounds = []
@@ -451,6 +505,8 @@ def test_tiny_same_input_final_link_alternating_raw_receipt(tmp_path):
                    for name in source_paths},
         "original_function_sha256": hashlib.sha256(
             ORIGINAL_LINK_IMAGE_SOURCE.encode()).hexdigest(),
+        "candidate_function_sha256": candidate_function_sha256,
+        "preparation": preparation,
         "runtime": {"implementation": sys.implementation.name,
                     "version": sys.version, "executable": sys.executable,
                     "executable_sha256": hashlib.sha256(
@@ -461,11 +517,13 @@ def test_tiny_same_input_final_link_alternating_raw_receipt(tmp_path):
                "policy": "unchanged; counts recorded per call; no collection attribution"},
         "rounds": rounds,
         "timing_threshold": None,
-        "limits": ("Unwarmed same-process synthetic input; fresh reference and candidate "
-                   "may have different interpreter warm states. First image creates "
-                   "the immutable expected bytes retained equally thereafter; cache, "
-                   "allocation and GC state may vary. No production speedup inference."),
+        "limits": ("Unwarmed same-process synthetic input; both measured functions are fresh. "
+                   "Shared helpers, imports, caches, allocator and GC state are not reset. The first call "
+                   "precedes creation of immutable expected bytes retained thereafter. "
+                   "Adaptive state evolves across four calls per variant; no cold-global "
+                   "or Stage1/production speedup inference."),
     }
+    assert receipt["source"]["pcc/backend/elf_x86_64.py"] == preparation["owner_raw_sha256"]
     output = tmp_path / "arm-packed-classification-final-image-ab.json"
     data = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
     assert len(data.encode()) <= 8192

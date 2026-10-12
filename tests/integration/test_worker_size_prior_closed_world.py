@@ -40,7 +40,9 @@ MODULES = tuple("pcc.frontends.python." + name for name in (
       "pcc.backend.owned_elf_inputs", "pcc.backend.elf_x86_64",
       "pcc.backend.elf_aarch64_relocations",
       "pcc.backend.x86_64_asm_driver",
-      "pcc.backend.x86_64_encode") + TAR_COMPILER_MODULES
+      "pcc.backend.x86_64_encode") + TAR_COMPILER_MODULES + (
+    "pcc.backend.owned_elf_link", "pcc.backend.indexed_phase_timing",
+)
 SECTION = re.compile(r"^; ---- module: ([A-Za-z_][\w.]*) ----$", re.M)
 DEFINITION = re.compile(r'^define[^\n]*@"?([A-Za-z_][\w.$]*)"?\(', re.M)
 

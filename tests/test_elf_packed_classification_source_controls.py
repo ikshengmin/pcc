@@ -52,6 +52,53 @@ def _classification(source):
     return loop, prefix, suffix
 
 
+def _without_image_timing(source):
+    # Invert only the optional parameter and the six exact top-level guards
+    # (five begin/complete pairs). Historical prefix/suffix hashes below still
+    # prove that layout, relocation, cleanup and all other source are unchanged.
+    edits = (
+        ('    _input_store=None,\n    coordinator_timing=None,\n) -> bytearray:',
+         '    _input_store=None,\n) -> bytearray:'),
+        ('    """Build a private mutable image, fully validated before publication."""\n'
+         '    image_phase_started = 0\n'
+         '    if coordinator_timing is not None:\n'
+         '        image_phase_started = coordinator_timing.begin("elf_image_select_inputs")\n',
+         '    """Build a private mutable image, fully validated before publication."""\n'),
+        ('    if coordinator_timing is not None:\n'
+         '        coordinator_timing.complete("elf_image_select_inputs", image_phase_started)\n'
+         '        image_phase_started = coordinator_timing.begin("elf_image_classify_layout")\n'
+         '    alloc_sections: list[tuple[int, int, ElfSection]] = []\n',
+         '    alloc_sections: list[tuple[int, int, ElfSection]] = []\n'),
+        ('    image_size = max(rx_file_end, rw_file_end, metadata_file_end, header_bytes)\n'
+         '    if coordinator_timing is not None:\n'
+         '        coordinator_timing.complete("elf_image_classify_layout", image_phase_started)\n'
+         '        image_phase_started = coordinator_timing.begin("elf_image_allocate_copy")\n',
+         '    image_size = max(rx_file_end, rw_file_end, metadata_file_end, header_bytes)\n'),
+        ('    if coordinator_timing is not None:\n'
+         '        coordinator_timing.complete("elf_image_allocate_copy", image_phase_started)\n'
+         '        image_phase_started = coordinator_timing.begin("elf_image_resolve_relocate")\n'
+         '    boundaries = {}\n',
+         '    boundaries = {}\n'),
+        ('    if coordinator_timing is not None:\n'
+         '        coordinator_timing.complete("elf_image_resolve_relocate", image_phase_started)\n'
+         '        image_phase_started = coordinator_timing.begin("elf_image_finalize")\n'
+         '    if _input_store is not None:\n'
+         '        _input_store.clear()\n'
+         '    # Validate the exact bytes',
+         '    if _input_store is not None:\n'
+         '        _input_store.clear()\n'
+         '    # Validate the exact bytes'),
+        ('    if coordinator_timing is not None:\n'
+         '        coordinator_timing.complete("elf_image_finalize", image_phase_started)\n'
+         '    return image\n',
+         '    return image\n'),
+    )
+    for instrumented, historical in edits:
+        assert source.count(instrumented) == 1
+        source = source.replace(instrumented, historical)
+    return source
+
+
 def _runner(loop, environment):
     # Admit only this small loop's known operations before compiling the fake
     # wrapper. Neither complete linker function nor reference loader executes.
@@ -236,9 +283,11 @@ def test_source_bound_classification_loop_fake_controls():
     original = strings[0].replace("\r\n", "\n")
     assert "\r" not in original and _sha(original) == ORIGINAL_FUNCTION_SHA256
     old_loop, _old_prefix, _old_suffix = _classification(original)
-    new_loop, prefix, suffix = _classification(candidate)
-    # The whole pre-classifier owner region includes public constructors,
-    # parsing and iteration; the suffix includes layout and application.
+    new_loop, prefix, suffix = _classification(_without_image_timing(candidate))
+    # After the narrowly admitted diagnostic additions are removed, preserve
+    # the historical whole-owner proof; do not repin it to the new candidate.
+    # The prefix includes public construction/parsing/iteration and the suffix
+    # includes layout, application, cleanup, finalization and the public parser.
     assert _sha(prefix) == UNCHANGED_PREFIX_SHA256
     assert _sha(suffix) == UNCHANGED_SUFFIX_SHA256
     original_loop_text = "".join(original.splitlines(keepends=True)[

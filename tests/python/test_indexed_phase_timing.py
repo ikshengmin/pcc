@@ -486,26 +486,30 @@ def test_unknown_boundaries_do_not_read_clock_or_write_diagnostics(monkeypatch, 
     assert sink.lines == [] and not timer.failed
 
 
-def test_coordinator_vocabulary_is_nine_fixed_flushed_pairs(monkeypatch):
+def test_coordinator_vocabulary_is_fourteen_fixed_flushed_pairs(monkeypatch):
     labels = (
         "result_read", "runtime_verify", "artifact_link", "elf_stage_inputs",
-        "elf_link_image", "elf_verify_inputs", "elf_write_image",
+        "elf_link_image", "elf_image_select_inputs", "elf_image_classify_layout",
+        "elf_image_allocate_copy", "elf_image_resolve_relocate", "elf_image_finalize",
+        "elf_verify_inputs", "elf_write_image",
         "executable_publish", "artifact_cleanup",
     )
     assert tuple(timing_module._COORDINATOR_PARENTS) == labels
     sink = RecordingSink()
-    ticks = iter(range(100, 118))
+    ticks = iter(range(100, 128))
     monkeypatch.setattr(timing_module.time, "perf_counter_ns", lambda: next(ticks))
     monkeypatch.setattr(timing_module.sys, "stderr", sink)
     timer = CoarsePhaseTiming()
     for label in labels:
         timer.complete(label, timer.begin(label))
-    assert len(sink.lines) == sink.flushes == 18
+    assert len(sink.lines) == sink.flushes == 28
     assert set(vars(timer)) == {"failed"}
     for index, row in enumerate(_events(sink)):
         label = labels[index // 2]
         assert row["scope"] == "coordinator" and row["phase"] == label
-        assert row["parent"] == ("artifact_link" if 3 <= index // 2 <= 7 else "none")
+        expected_parent = ("elf_link_image" if 5 <= index // 2 <= 9 else
+                           "artifact_link" if 3 <= index // 2 <= 12 else "none")
+        assert row["parent"] == expected_parent
         assert row["event"] == ("begin" if index % 2 == 0 else "complete")
         assert row["clock_ok"] == "1" and "module" not in row
         assert row.get("duration_ns") == (None if index % 2 == 0 else "1")
@@ -706,6 +710,137 @@ def _mocked_source_body(body, namespace):
     return namespace["selected_control"]
 
 
+_ELF_IMAGE_PHASES = (
+    "elf_image_select_inputs", "elf_image_classify_layout", "elf_image_allocate_copy",
+    "elf_image_resolve_relocate", "elf_image_finalize",
+)
+
+
+def _elf_image_timing_skeleton():
+    # Read the production source, but execute only its six timing guards and
+    # unchanged return. Every complete linker region is replaced by one fake.
+    function = _source_function("pcc/backend/elf_x86_64.py", "_link_static_executable_image")
+    args = function.args
+    assert args.kwonlyargs[-1].arg == "coordinator_timing"
+    assert isinstance(args.kw_defaults[-1], ast.Constant) and args.kw_defaults[-1].value is None
+    assert [arg.arg for arg in args.kwonlyargs] == [
+        "archives", "entry", "base_address", "archive_selections",
+        "compact_archive_relocations", "_input_store", "coordinator_timing",
+    ]
+    assert isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant)
+    assert ast.unparse(function.body[1]) == "image_phase_started = 0"
+    assert ast.unparse(function.body[-1]) == "return image"
+    guards = []
+    for index, node in enumerate(function.body):
+        if any(isinstance(child, ast.Name) and child.id == "coordinator_timing"
+               for child in ast.walk(node)):
+            guards.append((index, node))
+    assert len(guards) == 6 and guards[0][0] == 2
+    assert guards[-1][0] == len(function.body) - 2
+    expected_bodies = []
+    for index in range(6):
+        lines = ["if coordinator_timing is not None:"]
+        if index:
+            lines.append('    coordinator_timing.complete("' + _ELF_IMAGE_PHASES[index - 1]
+                         + '", image_phase_started)')
+        if index < 5:
+            lines.append('    image_phase_started = coordinator_timing.begin("'
+                         + _ELF_IMAGE_PHASES[index] + '")')
+        expected_bodies.append(ast.parse("\n".join(lines)).body[0])
+    for (_index, actual), expected in zip(guards, expected_bodies):
+        assert ast.dump(actual, include_attributes=False) == ast.dump(expected, include_attributes=False)
+    # Exact starts/ends establish five exhaustive, sequential spans, with both
+    # original cache clears inside their original regions. No loop is timed.
+    regions = [function.body[left[0] + 1:right[0]]
+               for left, right in zip(guards, guards[1:])]
+    assert all(regions)
+    assert ast.unparse(regions[0][0].test) == "not objects"
+    assert ast.unparse(regions[0][-1].test) == "entry not in definitions"
+    assert ast.unparse(regions[1][0].target) == "alloc_sections"
+    assert ast.unparse(regions[1][-1]) == "image_size = max(rx_file_end, rw_file_end, metadata_file_end, header_bytes)"
+    assert ast.unparse(regions[2][0]) == "if _input_store is not None:\n    _input_store.clear()"
+    assert ast.unparse(regions[2][-1].test) == "veneer_pools"
+    assert ast.unparse(regions[3][0]) == "boundaries = {}"
+    assert isinstance(regions[3][-1], ast.For) and ast.unparse(regions[3][-1].iter) == "alloc_sections"
+    assert ast.unparse(regions[4][0]) == "if _input_store is not None:\n    _input_store.clear()"
+    assert isinstance(regions[4][-1], ast.For) and ast.unparse(regions[4][-1].iter) == "program_headers"
+    assert sum(map(len, regions)) + len(guards) + 3 == len(function.body)
+    assert not any(isinstance(node, ast.Name) and node.id in ("CoarsePhaseTiming", "time", "sys")
+                   for node in ast.walk(function))
+    public = _source_function("pcc/backend/elf_x86_64.py", "link_static_executable")
+    assert "coordinator_timing" not in ast.unparse(public)
+    skeleton = [function.body[1]]
+    for index, (_position, guard) in enumerate(guards):
+        skeleton.append(guard)
+        if index < 5:
+            skeleton.append(ast.parse('operation("' + _ELF_IMAGE_PHASES[index] + '")').body[0])
+    skeleton.append(function.body[-1])
+    return skeleton
+
+
+def test_elf_image_timing_has_five_exhaustive_top_level_spans():
+    _elf_image_timing_skeleton()
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+@pytest.mark.parametrize("failure", (None, *_ELF_IMAGE_PHASES))
+@pytest.mark.parametrize("error_type", (ValueError, DiagnosticAbort))
+@pytest.mark.parametrize("diagnostic_fault", (None, "clock", "write", "flush"))
+def test_mock_elf_image_boundaries_keep_success_and_each_failure(
+    monkeypatch, enabled, failure, error_type, diagnostic_fault,
+):
+    operations, reads = [], []
+    sink = RecordingSink(diagnostic_fault, DiagnosticAbort("diagnostic failure"))
+    monkeypatch.setattr(timing_module.sys, "stderr", sink)
+
+    def clock():
+        assert enabled, "disabled final-image timing read a clock"
+        reads.append(None)
+        if diagnostic_fault == "clock":
+            raise DiagnosticAbort("clock failure")
+        return 100 + len(reads)
+
+    monkeypatch.setattr(timing_module.time, "perf_counter_ns", clock)
+    timer = CoarsePhaseTiming() if enabled else None
+    error, cause, image = error_type("original final-image operation"), OSError("original cause"), object()
+
+    def operation(phase):
+        operations.append(phase)
+        if phase == failure:
+            raise error from cause
+
+    invoke = _mocked_source_body(_elf_image_timing_skeleton(), dict(
+        coordinator_timing=timer, operation=operation, image=image,
+    ))
+    if failure is None:
+        assert invoke() is image
+        expected_operations = list(_ELF_IMAGE_PHASES)
+    else:
+        with pytest.raises(error_type) as caught:
+            invoke()
+        assert caught.value is error and caught.value.__cause__ is cause
+        assert caught.value.__suppress_context__
+        expected_operations = list(_ELF_IMAGE_PHASES[:_ELF_IMAGE_PHASES.index(failure) + 1])
+    assert operations == expected_operations
+    expected_events = []
+    if enabled:
+        for phase in expected_operations:
+            expected_events.append((phase, "begin"))
+            if phase != failure:
+                expected_events.append((phase, "complete"))
+    rows = _events(sink)
+    assert [(row["phase"], row["event"]) for row in rows] == expected_events
+    assert all(row["parent"] == "elf_link_image" and row["scope"] == "coordinator" for row in rows)
+    assert all("duration_ns" not in row for row in rows if row["event"] == "begin")
+    assert len(reads) == (1 if enabled and diagnostic_fault == "clock" else len(expected_events))
+    assert sink.flushes == (0 if diagnostic_fault == "write" else len(expected_events))
+    if diagnostic_fault == "clock":
+        assert all(row["clock_ok"] == "0" and "duration_ns" not in row for row in rows)
+    else:
+        assert all(row["clock_ok"] == "1" for row in rows)
+        assert all(row["duration_ns"] == "1" for row in rows if row["event"] == "complete")
+
+
 @pytest.mark.parametrize("enabled", (False, True))
 @pytest.mark.parametrize("failure,secondary", (
     (None, None), ("stage", None), ("link", None), ("clear", None),
@@ -777,8 +912,11 @@ def test_mock_elf_tail_keeps_operation_and_cleanup_error_precedence(
 
     def link(inputs, **kwargs):
         assert inputs == [staged, thread, intrinsic]
-        assert kwargs["entry"] == "_start" and kwargs["archive_selections"] is None
         assert isinstance(kwargs["_input_store"], Store)
+        expected = dict(entry="_start", archive_selections=None, _input_store=kwargs["_input_store"])
+        if enabled:
+            expected["coordinator_timing"] = timer
+        assert kwargs == expected
         operation("link")
         return image
 

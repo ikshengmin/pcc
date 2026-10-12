@@ -119,9 +119,15 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     if coordinator_timing is not None:
         image_started = coordinator_timing.begin("elf_link_image")
     try:
-        image = _link_static_executable_image(
-            inputs, entry=entry, archive_selections=selections, _input_store=store,
-        )
+        if coordinator_timing is not None:
+            image = _link_static_executable_image(
+                inputs, entry=entry, archive_selections=selections, _input_store=store,
+                coordinator_timing=coordinator_timing,
+            )
+        else:
+            image = _link_static_executable_image(
+                inputs, entry=entry, archive_selections=selections, _input_store=store,
+            )
         if coordinator_timing is not None:
             coordinator_timing.complete("elf_link_image", image_started)
     finally:

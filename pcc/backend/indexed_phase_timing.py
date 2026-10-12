@@ -130,6 +130,11 @@ _COORDINATOR_PARENTS = {
     "artifact_link": "none",
     "elf_stage_inputs": "artifact_link",
     "elf_link_image": "artifact_link",
+    "elf_image_select_inputs": "elf_link_image",
+    "elf_image_classify_layout": "elf_link_image",
+    "elf_image_allocate_copy": "elf_link_image",
+    "elf_image_resolve_relocate": "elf_link_image",
+    "elf_image_finalize": "elf_link_image",
     "elf_verify_inputs": "artifact_link",
     "elf_write_image": "artifact_link",
     "executable_publish": "artifact_link",
@@ -164,7 +169,7 @@ def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name
 
 
 class CoarsePhaseTiming:
-    """At most nine fixed coordinator boundary pairs in the direct build path."""
+    """At most fourteen fixed coordinator boundary pairs in the direct build path."""
 
     def __init__(self):
         self.failed = False

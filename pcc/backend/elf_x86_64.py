@@ -995,8 +995,12 @@ def _link_static_executable_image(
     archive_selections: list[tuple[int, str]] | None = None,
     compact_archive_relocations: bool = False,
     _input_store=None,
+    coordinator_timing=None,
 ) -> bytearray:
     """Build a private mutable image, fully validated before publication."""
+    image_phase_started = 0
+    if coordinator_timing is not None:
+        image_phase_started = coordinator_timing.begin("elf_image_select_inputs")
     if not objects:
         raise ElfError("static ELF link requires at least one explicit object")
     if base_address < 0x10000 or base_address % _PAGE:
@@ -1032,6 +1036,9 @@ def _link_static_executable_image(
     if entry not in definitions:
         raise ElfError(f"entry symbol {entry!r} is not defined")
 
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_image_select_inputs", image_phase_started)
+        image_phase_started = coordinator_timing.begin("elf_image_classify_layout")
     alloc_sections: list[tuple[int, int, ElfSection]] = []
     for object_index, obj in enumerate(objects):
         for section_index, section in enumerate(obj.sections, start=1):
@@ -1248,6 +1255,9 @@ def _link_static_executable_image(
             address_cursor += section.size
         metadata_file_end = cursor
     image_size = max(rx_file_end, rw_file_end, metadata_file_end, header_bytes)
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_image_classify_layout", image_phase_started)
+        image_phase_started = coordinator_timing.begin("elf_image_allocate_copy")
     if _input_store is not None:
         _input_store.clear()
     image = bytearray(image_size)
@@ -1268,6 +1278,9 @@ def _link_static_executable_image(
         for pool_start, slot_count in veneer_pools:
             initialize_veneer_pool(image, pool_start, slot_count)
 
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_image_allocate_copy", image_phase_started)
+        image_phase_started = coordinator_timing.begin("elf_image_resolve_relocate")
     boundaries = {}
     for family in ("init", "fini"):
         selected = [item for item in alloc_sections if item[2].name.startswith("." + family + "_array")]
@@ -1410,6 +1423,9 @@ def _link_static_executable_image(
                 # accepted writer relocation was not deliberately linked.
                 raise ElfError(f"relocation type {relocation.type} has no link rule")
 
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_image_resolve_relocate", image_phase_started)
+        image_phase_started = coordinator_timing.begin("elf_image_finalize")
     if _input_store is not None:
         _input_store.clear()
     # Validate the exact bytes that will become executable metadata after all
@@ -1483,6 +1499,8 @@ def _link_static_executable_image(
     for program_header in program_headers:
         image[phoff:phoff + _PROGRAM_HEADER.size] = program_header
         phoff += _PROGRAM_HEADER.size
+    if coordinator_timing is not None:
+        coordinator_timing.complete("elf_image_finalize", image_phase_started)
     return image
 
 
