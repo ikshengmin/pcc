@@ -1,6 +1,8 @@
 """One bounded source/fake-only control; no PCC import, linking, I/O or clock."""
 
 import ast
+
+from tests.test_elf_packed_application_source_controls import _without_packed_application
 import copy
 import hashlib
 from pathlib import Path
@@ -31,7 +33,7 @@ def _extract(node, namespace):
 
 def test_relocation_progress_bound_source_and_fake_controls():
     root = Path(__file__).resolve().parents[1]
-    source = _text(root / 'pcc/backend/elf_x86_64.py')
+    source = _without_packed_application(_text(root / 'pcc/backend/elf_x86_64.py'))
     reference = ast.parse(_text(root / 'tests/elf_relocation_progress_preimage.py'))
     fields = {node.targets[0].id: ast.literal_eval(node.value)
               for node in reference.body if isinstance(node, ast.Assign)}

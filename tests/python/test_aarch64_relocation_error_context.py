@@ -77,12 +77,14 @@ def test_error_context_call_stays_in_original_exception_handler():
     calls = [node for node in ast.walk(link) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name)
              and node.func.id == "_aarch64_relocation_error_context"]
-    assert len(calls) == 1
-    handlers = [node for node in ast.walk(link) if isinstance(node, ast.ExceptHandler)
-                and isinstance(node.type, ast.Name) and node.type.id == "ValueError"
-                and calls[0] in list(ast.walk(node))]
-    assert len(handlers) == 1
-    handler = handlers[0]
-    assert len(handler.body) == 1 and isinstance(handler.body[0], ast.Raise)
-    assert isinstance(handler.body[0].cause, ast.Name)
-    assert handler.body[0].cause.id == handler.name == "exc"
+    assert len(calls) == 2
+    assert {ast.unparse(call.args[3]) for call in calls} == {"relocation_offset", "relocation.offset"}
+    for call in calls:
+        handlers = [node for node in ast.walk(link) if isinstance(node, ast.ExceptHandler)
+                    and isinstance(node.type, ast.Name) and node.type.id == "ValueError"
+                    and call in list(ast.walk(node))]
+        assert len(handlers) == 1
+        handler = handlers[0]
+        assert len(handler.body) == 1 and isinstance(handler.body[0], ast.Raise)
+        assert isinstance(handler.body[0].cause, ast.Name)
+        assert handler.body[0].cause.id == handler.name == "exc"

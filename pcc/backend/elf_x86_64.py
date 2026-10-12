@@ -1536,85 +1536,152 @@ def _link_static_executable_image(
         if section.type == SHT_NOBITS and section.relocations:
             raise ElfError(f"NOBITS section {section.name!r} carries relocations")
         placement = placements[(object_index, section_index)]
-        for relocation in section.relocations:
-            if relocation.type == R_X86_64_NONE:
-                continue
-            patch = placement.file_offset + relocation.offset
-            place = placement.address + relocation.offset
-            symbol_address, _symbol = resolve_symbol(
-                object_index, relocation.symbol_index
-            )
-            if machine == EM_AARCH64:
-                from .elf_aarch64_relocations import (
-                    apply_call26_with_veneer,
-                    apply_relocation,
-                    veneer_slot_offset,
+        relocations = section.relocations
+        if (type(machine) is int and machine == EM_AARCH64
+                and type(relocations) is _PackedElfRelocations
+                and type(relocations.payload) is bytes
+                and type(relocations.offset) is int and type(relocations.size) is int):
+            try:
+                # Match the public iterator's range and per-row payload reads,
+                # without projecting an unused temporary frozen record.
+                for position in range(relocations.offset, relocations.offset + relocations.size, _RELA.size):
+                    relocation_offset, info, addend = _RELA.unpack_from(relocations.payload, position)
+                    symbol_index, relocation_type = info >> 32, info & 0xFFFFFFFF
+                    # Preserve the previous generic row's release boundary.
+                    relocation = None
+                    if relocation_type == R_X86_64_NONE:
+                        continue
+                    patch = placement.file_offset + relocation_offset
+                    place = placement.address + relocation_offset
+                    symbol_address, _symbol = resolve_symbol(
+                        object_index, symbol_index
+                    )
+                    from .elf_aarch64_relocations import (
+                        apply_call26_with_veneer,
+                        apply_relocation,
+                        veneer_slot_offset,
+                    )
+                    target = symbol_address
+                    if relocation_type in (311, 312, 541, 542):
+                        identity = _symbol_identity(objects, definitions, object_index, symbol_index)
+                        kind = "tpoff" if relocation_type in (541, 542) else "address"
+                        target = got_address + got_offsets[(identity, kind)]
+                    elif relocation_type in (549, 551):
+                        target = tls_offset(object_index, symbol_index)
+                    try:
+                        if (relocation_type == 283 and _symbol.type == STT_FUNC
+                                and _symbol.section_index != SHN_UNDEF
+                                and not -(1 << 27) <= target + addend - place < (1 << 27)
+                                and (object_index, section_index) in branch_pools):
+                            slot_index = branch_slots[(object_index, section_index)][
+                                (object_index, symbol_index, addend)
+                            ]
+                            pool_starts = branch_pools[(object_index, section_index)]
+                            veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
+                                                   for pool in pool_starts)
+                            apply_call26_with_veneer(image, patch,
+                                                    target + addend, place,
+                                                    veneer_offsets)
+                        else:
+                            apply_relocation(image, patch, relocation_type,
+                                             target + addend, place)
+                    except ValueError as exc:
+                        raise ElfError(str(exc) + _aarch64_relocation_error_context(
+                            object_index, section_index, section.name,
+                            relocation_offset, relocation_type,
+                            symbol_index,
+                            objects[object_index].symbols[symbol_index].name,
+                            _symbol.name, symbol_address, addend, target, place,
+                            placement.file_offset, placement.address,
+                            section.size, image_size,
+                        )) from exc
+            finally:
+                # Do not retain a source view in an exception traceback.
+                del relocations
+        else:
+            # Transfer ownership to for's original single GET_ITER operation.
+            relocation_sources = [relocations]
+            del relocations
+            for relocation in relocation_sources.pop():
+                if relocation.type == R_X86_64_NONE:
+                    continue
+                patch = placement.file_offset + relocation.offset
+                place = placement.address + relocation.offset
+                symbol_address, _symbol = resolve_symbol(
+                    object_index, relocation.symbol_index
                 )
-                target = symbol_address
-                if relocation.type in (311, 312, 541, 542):
-                    identity = _symbol_identity(objects, definitions, object_index, relocation.symbol_index)
-                    kind = "tpoff" if relocation.type in (541, 542) else "address"
-                    target = got_address + got_offsets[(identity, kind)]
-                elif relocation.type in (549, 551):
-                    target = tls_offset(object_index, relocation.symbol_index)
-                try:
-                    if (relocation.type == 283 and _symbol.type == STT_FUNC
-                            and _symbol.section_index != SHN_UNDEF
-                            and not -(1 << 27) <= target + relocation.addend - place < (1 << 27)
-                            and (object_index, section_index) in branch_pools):
-                        slot_index = branch_slots[(object_index, section_index)][
-                            (object_index, relocation.symbol_index, relocation.addend)
-                        ]
-                        pool_starts = branch_pools[(object_index, section_index)]
-                        veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
-                                               for pool in pool_starts)
-                        apply_call26_with_veneer(image, patch,
-                                                target + relocation.addend, place,
-                                                veneer_offsets)
-                    else:
-                        apply_relocation(image, patch, relocation.type,
-                                         target + relocation.addend, place)
-                except ValueError as exc:
-                    raise ElfError(str(exc) + _aarch64_relocation_error_context(
-                        object_index, section_index, section.name,
-                        relocation.offset, relocation.type,
-                        relocation.symbol_index,
-                        objects[object_index].symbols[relocation.symbol_index].name,
-                        _symbol.name, symbol_address, relocation.addend, target, place,
-                        placement.file_offset, placement.address,
-                        section.size, image_size,
-                    )) from exc
-            elif relocation.type == R_X86_64_64:
-                _write_int(image, patch, symbol_address + relocation.addend, 64, False)
-            elif relocation.type in (R_X86_64_PC32, R_X86_64_PLT32):
-                _write_int(image, patch, symbol_address + relocation.addend - place, 32, True)
-            elif relocation.type == R_X86_64_32:
-                _write_int(image, patch, symbol_address + relocation.addend, 32, False)
-            elif relocation.type == R_X86_64_32S:
-                _write_int(image, patch, symbol_address + relocation.addend, 32, True)
-            elif relocation.type in (
-                R_X86_64_GOTPCREL,
-                R_X86_64_GOTPCRELX,
-                R_X86_64_REX_GOTPCRELX,
-                R_X86_64_GOTTPOFF,
-            ):
-                identity = _symbol_identity(
-                    objects, definitions, object_index, relocation.symbol_index
-                )
-                kind = (
-                    "tpoff"
-                    if relocation.type == R_X86_64_GOTTPOFF
-                    else "address"
-                )
-                slot = got_address + got_offsets[(identity, kind)]
-                _write_int(image, patch, slot + relocation.addend - place, 32, True)
-            elif relocation.type == R_X86_64_TPOFF32:
-                value = tls_offset(object_index, relocation.symbol_index)
-                _write_int(image, patch, value + relocation.addend, 32, True)
-            else:
-                # _relocation_width made this unreachable unless a newly
-                # accepted writer relocation was not deliberately linked.
-                raise ElfError(f"relocation type {relocation.type} has no link rule")
+                if machine == EM_AARCH64:
+                    from .elf_aarch64_relocations import (
+                        apply_call26_with_veneer,
+                        apply_relocation,
+                        veneer_slot_offset,
+                    )
+                    target = symbol_address
+                    if relocation.type in (311, 312, 541, 542):
+                        identity = _symbol_identity(objects, definitions, object_index, relocation.symbol_index)
+                        kind = "tpoff" if relocation.type in (541, 542) else "address"
+                        target = got_address + got_offsets[(identity, kind)]
+                    elif relocation.type in (549, 551):
+                        target = tls_offset(object_index, relocation.symbol_index)
+                    try:
+                        if (relocation.type == 283 and _symbol.type == STT_FUNC
+                                and _symbol.section_index != SHN_UNDEF
+                                and not -(1 << 27) <= target + relocation.addend - place < (1 << 27)
+                                and (object_index, section_index) in branch_pools):
+                            slot_index = branch_slots[(object_index, section_index)][
+                                (object_index, relocation.symbol_index, relocation.addend)
+                            ]
+                            pool_starts = branch_pools[(object_index, section_index)]
+                            veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
+                                                   for pool in pool_starts)
+                            apply_call26_with_veneer(image, patch,
+                                                    target + relocation.addend, place,
+                                                    veneer_offsets)
+                        else:
+                            apply_relocation(image, patch, relocation.type,
+                                             target + relocation.addend, place)
+                    except ValueError as exc:
+                        raise ElfError(str(exc) + _aarch64_relocation_error_context(
+                            object_index, section_index, section.name,
+                            relocation.offset, relocation.type,
+                            relocation.symbol_index,
+                            objects[object_index].symbols[relocation.symbol_index].name,
+                            _symbol.name, symbol_address, relocation.addend, target, place,
+                            placement.file_offset, placement.address,
+                            section.size, image_size,
+                        )) from exc
+                elif relocation.type == R_X86_64_64:
+                    _write_int(image, patch, symbol_address + relocation.addend, 64, False)
+                elif relocation.type in (R_X86_64_PC32, R_X86_64_PLT32):
+                    _write_int(image, patch, symbol_address + relocation.addend - place, 32, True)
+                elif relocation.type == R_X86_64_32:
+                    _write_int(image, patch, symbol_address + relocation.addend, 32, False)
+                elif relocation.type == R_X86_64_32S:
+                    _write_int(image, patch, symbol_address + relocation.addend, 32, True)
+                elif relocation.type in (
+                    R_X86_64_GOTPCREL,
+                    R_X86_64_GOTPCRELX,
+                    R_X86_64_REX_GOTPCRELX,
+                    R_X86_64_GOTTPOFF,
+                ):
+                    identity = _symbol_identity(
+                        objects, definitions, object_index, relocation.symbol_index
+                    )
+                    kind = (
+                        "tpoff"
+                        if relocation.type == R_X86_64_GOTTPOFF
+                        else "address"
+                    )
+                    slot = got_address + got_offsets[(identity, kind)]
+                    _write_int(image, patch, slot + relocation.addend - place, 32, True)
+                elif relocation.type == R_X86_64_TPOFF32:
+                    value = tls_offset(object_index, relocation.symbol_index)
+                    _write_int(image, patch, value + relocation.addend, 32, True)
+                else:
+                    # _relocation_width made this unreachable unless a newly
+                    # accepted writer relocation was not deliberately linked.
+                    raise ElfError(f"relocation type {relocation.type} has no link rule")
+            del relocation_sources
         if coordinator_timing is not None:
             try:
                 if relocation_progress is not None:

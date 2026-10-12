@@ -90,7 +90,7 @@ def _outcome(link, obj, **kwargs):
         return (type(exc), str(exc), _exception_chain(exc))
 
 
-def test_staged_final_image_matches_reference_and_removes_only_classification_records(tmp_path, monkeypatch):
+def test_staged_final_image_matches_reference_and_removes_packed_records(tmp_path, monkeypatch):
     obj, text_rows, data_rows = _fixture()
     path = tmp_path / "input.o"
     path.write_bytes(elf.emit_relocatable(obj))
@@ -113,7 +113,8 @@ def test_staged_final_image_matches_reference_and_removes_only_classification_re
     assert after == before and after[0] == "image"
     # Staging ended before counting. No archives or public re-validation are
     # included, and every nonempty alloc relocation range is exact packed.
-    assert (before_calls, after_calls) == (2 * expected_rows, expected_rows)
+    # The candidate now avoids projections in classification and application.
+    assert (before_calls, after_calls) == (2 * expected_rows, 0)
     assert path.read_bytes() == elf.emit_relocatable(obj)
     store.verify()
 
@@ -496,7 +497,7 @@ def test_tiny_same_input_final_link_alternating_raw_receipt(tmp_path):
                     "tests/python/test_elf_packed_link_classification.py")
     receipt = {
         "schema": "pcc.arm-packed-classification-final-image-ab.v1",
-        "scope": "one frozen synthetic staged PCO; host final-image link only",
+        "scope": "one frozen synthetic staged PCO; cumulative classification/application host link only",
         "input": {"sha256": hashlib.sha256(encoded).hexdigest(),
                   "bytes": len(encoded), "packed_rows": packed_rows,
                   "rela_bytes": packed_rows * 24, "text_bytes": 24, "data_bytes": 8},

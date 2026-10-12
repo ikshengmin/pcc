@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1)
+    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -63,8 +63,10 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[32:34] == (gate.MANAGED_SCRATCH_TEST, gate.MANAGED_MEMORY_TEST)
     assert gate.HOST_FILES[34:36] == (gate.ELF_PACKED_TEST, gate.ELF_PACKED_SOURCE_TEST)
     assert gate.HOST_FILES[36:38] == (gate.ELF_NEGATIVE_TEST, gate.ELF_NEGATIVE_SOURCE_TEST)
-    assert gate.HOST_FILES[38:] == (gate.ELF_PROGRESS_TEST, gate.ELF_PROGRESS_SOURCE_TEST)
-    assert sum(gate.HOST_COUNTS) == 1818 and sum(gate.HOST_COUNTS[:38]) == 1808
+    assert gate.HOST_FILES[38:40] == (gate.ELF_PROGRESS_TEST, gate.ELF_PROGRESS_SOURCE_TEST)
+    assert gate.HOST_FILES[40:] == (gate.ELF_APPLICATION_TEST, gate.ELF_APPLICATION_SOURCE_TEST)
+    assert sum(gate.HOST_COUNTS) == 1827 and sum(gate.HOST_COUNTS[:40]) == 1818
+    assert sum(gate.HOST_COUNTS[:38]) == 1808
     assert sum(gate.HOST_COUNTS[:36]) == 1799
     assert sum(gate.HOST_COUNTS[:34]) == 1781
     assert sum(gate.HOST_COUNTS[:32]) == 1746
@@ -897,7 +899,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -1220,6 +1222,9 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "tests/python/test_elf_relocation_progress.py",
         "tests/test_elf_relocation_progress_source_controls.py",
         "tests/elf_relocation_progress_preimage.py",
+        "tests/python/test_elf_packed_application.py",
+        "tests/test_elf_packed_application_source_controls.py",
+        "tests/elf_packed_application_preimage.py",
     )
     assert gate.ELF_OWNER_NODE == (
         "tests/python/test_pipeline_self_backend_link_owner.py::"
@@ -1242,6 +1247,8 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
     assert gate.ELF_NEGATIVE_SOURCE_TEST in gate.HOST_FILES
     assert gate.ELF_PROGRESS_TEST in gate.HOST_FILES
     assert gate.ELF_PROGRESS_SOURCE_TEST in gate.HOST_FILES
+    assert gate.ELF_APPLICATION_TEST in gate.HOST_FILES
+    assert gate.ELF_APPLICATION_SOURCE_TEST in gate.HOST_FILES
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     identity = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "source_identity")
@@ -1265,7 +1272,9 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
                                           (gate.ELF_NEGATIVE_TEST, 8, 0),
                                           (gate.ELF_NEGATIVE_SOURCE_TEST, 1, 0),
                                           (gate.ELF_PROGRESS_TEST, 9, 0),
-                                          (gate.ELF_PROGRESS_SOURCE_TEST, 1, 0)):
+                                          (gate.ELF_PROGRESS_SOURCE_TEST, 1, 0),
+                                          (gate.ELF_APPLICATION_TEST, 8, 0),
+                                          (gate.ELF_APPLICATION_SOURCE_TEST, 1, 0)):
         total = gated = 0
         for node in ast.parse((ROOT / path).read_text()).body:
             if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):

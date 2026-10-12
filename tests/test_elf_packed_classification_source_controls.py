@@ -5,6 +5,8 @@ This is neither final-image correctness nor a performance observation.
 """
 
 import ast
+
+from tests.test_elf_packed_application_source_controls import _without_packed_application
 import copy
 import hashlib
 from pathlib import Path
@@ -296,7 +298,7 @@ def _mixed_lifetime_case(loop):
 
 def test_source_bound_classification_loop_fake_controls():
     root = Path(__file__).resolve().parents[1]
-    candidate = _text(root / "pcc/backend/elf_x86_64.py")
+    candidate = _without_packed_application(_text(root / "pcc/backend/elf_x86_64.py"))
     reference = ast.parse(_text(root / "tests/elf_link_image_preimage.py"))
     strings = [node.value.value for node in reference.body
                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
