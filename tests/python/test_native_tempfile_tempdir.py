@@ -100,3 +100,54 @@ def test_native_tempdir_runtime_creates_and_cleans(tmp_path):
     assert run.returncode == 0, run.stderr
     assert run.stderr == ""
     assert run.stdout == "True\nFalse\n"
+
+
+def test_native_tempdir_default_probe_and_nonempty_cleanup(tmp_path, pcc_runtime_archive):
+    from pcc.frontends.python.pipeline import compile_python
+
+    temp_root = tmp_path / "default-root"
+    temp_root.mkdir()
+    src = tmp_path / "default_tempdir.py"
+    exe = tmp_path / "default_tempdir.out"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import os
+            import tempfile
+
+            def main() -> None:
+                # No explicit dir: the owned provider must probe TMPDIR.
+                path = ""
+                with tempfile.TemporaryDirectory(prefix="pcc_directory_") as tmp:
+                    path = tmp
+                    print(tmp)
+                    os.mkdir(tmp + "/nested")
+                    with open(tmp + "/nested/entry.txt", "w") as handle:
+                        handle.write("owned")
+                    print(os.listdir(tmp) == ["nested"])
+                    print(os.listdir(tmp + "/nested") == ["entry.txt"])
+                print(os.path.exists(path))
+                print(os.path.exists(path + "/nested/entry.txt"))
+
+            if __name__ == "__main__":
+                main()
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    compile_python(
+        str(src), str(exe), backend="self", ir_scaffold_mode="on",
+        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+    )
+    run = subprocess.run(
+        [str(exe)], capture_output=True, text=True, timeout=20,
+        env=dict(os.environ, PATH="/nonexistent", TMPDIR=str(temp_root)),
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stderr == ""
+    lines = run.stdout.splitlines()
+    assert len(lines) == 5, run.stdout
+    assert Path(lines[0]).parent == temp_root
+    assert lines[1:] == ["True", "True", "False", "False"]
+    # Both the initial .pcc_probe_ directory and the nonempty tree are gone.
+    assert list(temp_root.iterdir()) == []
