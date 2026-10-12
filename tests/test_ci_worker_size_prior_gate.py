@@ -1214,6 +1214,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         "tests/python/test_elf_negative_classification_summary.py",
         "tests/test_elf_negative_classification_source_controls.py",
         "tests/elf_negative_classification_preimage.py",
+        "scripts/pcc_record_inventory.py",
     )
     assert gate.ELF_OWNER_NODE == (
         "tests/python/test_pipeline_self_backend_link_owner.py::"
@@ -2391,22 +2392,48 @@ def test_arm_packed_width_cache_source_and_observation_contract():
     oracle_tree = ast.parse((ROOT / "tests/elf_validate_object_preimage.py").read_text())
     original = ast.literal_eval(next(node.value for node in oracle_tree.body
                                     if isinstance(node, ast.Assign)
-                                    and node.targets[0].id == "ORIGINAL_VALIDATE_OBJECT_SOURCE"))
+                                    and len(node.targets) == 1
+                                    and isinstance(next(iter(node.targets)), ast.Name)
+                                    and next(iter(node.targets)).id == "ORIGINAL_VALIDATE_OBJECT_SOURCE"))
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "77c35a2eca9f99889622a6423b294885c0df22feeabce0694b61499b9d9533ae")
     source = (ROOT / "pcc/backend/elf_x86_64.py").read_text()
     tree = ast.parse(source)
     candidate = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                      and node.name == "_validate_object")
-    restored = copy.deepcopy(candidate)
-    cache = next(node for node in restored.body if isinstance(node, ast.AnnAssign)
-                 and isinstance(node.target, ast.Name) and node.target.id == "relocation_widths")
-    assert ast.unparse(cache) == "relocation_widths: dict[int, int] = {}"
-    restored.body.remove(cache)
-    sections = next(node for node in restored.body if isinstance(node, ast.For)
-                    and ast.unparse(node.target) == "(index, section)")
-    guard = next(node for node in sections.body if isinstance(node, ast.Assign)
-                 and node.targets[0].id == "cache_widths")
+    def one(nodes):
+        matches = list(nodes)
+        assert len(matches) == 1
+        return next(iter(matches))
+
+    def named(node, name):
+        return isinstance(node, ast.Name) and node.id == name
+
+    def assigned(node, name):
+        return (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and named(one(node.targets), name))
+
+    def dump(node):
+        return ast.dump(node, include_attributes=False)
+
+    def statements(nodes):
+        return dump(ast.Module(body=list(nodes), type_ignores=[]))
+
+    def section_loop(function):
+        return one(node for node in function.body if isinstance(node, ast.For)
+                   and isinstance(node.target, ast.Tuple)
+                   and all(isinstance(item, ast.Name) for item in node.target.elts)
+                   and tuple(item.id for item in node.target.elts) == ("index", "section"))
+
+    def relocation_loop(sections):
+        return one(node for node in sections.body if isinstance(node, ast.For)
+                   and named(node.target, "relocation")
+                   and dump(node.iter) == dump(ast.parse("section.relocations", mode="eval").body))
+
+    original_function = one(ast.parse(original).body)
+    original_sections = section_loop(original_function)
+    original_relocations = relocation_loop(original_sections)
+    original_width = one(node for node in original_relocations.body if assigned(node, "width"))
     expected_guard = ast.parse(
         "type(obj) is ElfObject and type(obj.sections) is tuple and type(obj.symbols) is tuple "
         "and type(section) is ElfSection and type(section.data) is bytes "
@@ -2414,14 +2441,7 @@ def test_arm_packed_width_cache_source_and_observation_contract():
         "and type(section.relocations.payload) is bytes "
         "and type(section.relocations.offset) is int and type(section.relocations.size) is int "
         "and type(obj.machine) is int and obj.machine == EM_AARCH64", mode="eval").body
-    assert ast.dump(guard.value, include_attributes=False) == ast.dump(
-        expected_guard, include_attributes=False)
-    index = sections.body.index(guard)
-    relocations = sections.body[index + 1]
-    assert isinstance(relocations, ast.For) and ast.unparse(relocations.iter) == "section.relocations"
-    branch = relocations.body[1]
-    assert isinstance(branch, ast.If) and ast.unparse(branch.test) == "cache_widths"
-    expected = ast.parse("""if cache_widths:
+    expected_branch = one(ast.parse("""if cache_widths:
     width = relocation_widths.get(relocation.type)
     if width is None:
         width = _relocation_width(relocation.type, obj.machine)
@@ -2429,20 +2449,149 @@ def test_arm_packed_width_cache_source_and_observation_contract():
             relocation_widths[relocation.type] = width
 else:
     width = _relocation_width(relocation.type, obj.machine)
-""").body[0]
-    assert ast.dump(branch) == ast.dump(expected)
-    sections.body.remove(guard)
-    relocations.body[1:2] = branch.orelse
-    # Removing only the declared optimization exactly restores the frozen
-    # validator, including row order, symbol validation and stack-map checks.
-    assert ast.dump(restored) == ast.dump(ast.parse(original).body[0])
+""").body)
+    # Admit exactly the separately checked negative-proof additions. Do not
+    # skip arbitrary statements while looking for the mandatory row traversal.
+    expected_initial = one(ast.parse("classification_candidate = None").body)
+    expected_summary_gate = one(ast.parse("""if (type(obj) is ElfObject and type(obj.sections) is tuple
+        and type(obj.symbols) is tuple and type(section) is ElfSection
+        and type(section.relocations) is _PackedElfRelocations):
+    candidate = section.relocations._classification_candidate
+    if (type(candidate) is list and len(candidate) == 1
+            and (candidate[0] is None or type(candidate[0]) is bool)):
+        candidate[0] = None
+        if cache_widths and type(_RELA) is struct.Struct and _RELA.format == "<QQq":
+            classification_candidate = candidate
+            classification_candidate[0] = True
+""").body)
+    expected_summary_tail = one(ast.parse("""if classification_candidate is not None and classification_candidate[0] is True:
+    if type(relocation) is not ElfRelocation or type(relocation.type) is not int:
+        classification_candidate[0] = None
+    elif relocation.type in (283, 311, 312, 541, 542):
+        classification_candidate[0] = False
+""").body)
+
+    def restore_declared_optimizations(function):
+        restored = copy.deepcopy(function)
+        cache = one(node for node in restored.body if isinstance(node, ast.AnnAssign)
+                    and named(node.target, "relocation_widths"))
+        assert dump(cache) == dump(one(ast.parse("relocation_widths: dict[int, int] = {}").body))
+        sections = section_loop(restored)
+        # The successful-width cache is initialized immediately before the
+        # original section walk, never before the original object checks.
+        assert restored.body == [part for node in restored.body if node is not cache
+                                 for part in ([cache, node] if node is sections else [node])]
+        guard = one(node for node in sections.body if assigned(node, "cache_widths"))
+        assert dump(guard.value) == dump(expected_guard)
+        initial = one(node for node in sections.body if assigned(node, "classification_candidate"))
+        assert dump(initial) == dump(expected_initial)
+        summary_gate = one(node for node in sections.body if dump(node) == dump(expected_summary_gate))
+        relocations = relocation_loop(sections)
+        branch = one(node for node in relocations.body if isinstance(node, ast.If)
+                     and named(node.test, "cache_widths"))
+        assert dump(branch) == dump(expected_branch)
+        summary_tail = one(node for node in relocations.body if dump(node) == dump(expected_summary_tail))
+        # Exact complete lists bind all first-error/read order, not just loop
+        # existence or relative locations. Every original check stays in place.
+        assert statements(sections.body) == statements(
+            [node for node in original_sections.body if node is not original_relocations]
+            + [guard, initial, summary_gate, relocations])
+        assert statements(relocations.body) == statements(
+            [branch if node is original_width else node for node in original_relocations.body]
+            + [summary_tail])
+        restored.body.remove(cache)
+        sections.body = [node for node in sections.body
+                         if node is not guard and node is not initial and node is not summary_gate]
+        relocations.body = [part for node in relocations.body if node is not summary_tail
+                            for part in (branch.orelse if node is branch else [node])]
+        # Removing only the declared optimizations restores the entire frozen
+        # validator, including symbol and stack-map checks and traversal order.
+        assert dump(restored) == dump(original_function)
+
+    restore_declared_optimizations(candidate)
+    # Four bounded AST-only negative controls. Never execute either validator.
+    for fault in ("extra-statement", "earlier-width", "weakened-type", "cache-cap"):
+        changed = copy.deepcopy(candidate)
+        sections = section_loop(changed)
+        relocations = relocation_loop(sections)
+        branch = one(node for node in relocations.body if isinstance(node, ast.If)
+                     and named(node.test, "cache_widths"))
+        if fault == "extra-statement":
+            extra = one(ast.parse("unexpected_observation = None").body)
+            sections.body = [part for node in sections.body
+                             for part in ([extra, node] if node is relocations else [node])]
+        elif fault == "earlier-width":
+            relocations.body = [branch] + [node for node in relocations.body if node is not branch]
+        elif fault == "weakened-type":
+            guard = one(node for node in sections.body if assigned(node, "cache_widths"))
+            guard.value = ast.Constant(value=True)
+        else:
+            cap = one(node for node in ast.walk(branch) if isinstance(node, ast.Constant)
+                      and node.value == 21)
+            cap.value = 22
+        with pytest.raises(AssertionError):
+            restore_declared_optimizations(changed)
+    # Load only the literal classification and two source-discovery/report
+    # functions. The inventory tool's PCC/parser/emitter imports never run.
+    from collections import Counter
+
+    inventory_tree = ast.parse((ROOT / "scripts/pcc_record_inventory.py").read_text())
+    contract = ast.literal_eval(one(node.value for node in inventory_tree.body
+                                   if assigned(node, "DATA_PLANE_CLASS_CONTRACT")))
+    categories = one(node.value for node in inventory_tree.body
+                     if assigned(node, "_DATA_PLANE_CLASSIFICATIONS"))
+    assert isinstance(categories, ast.Call) and named(categories.func, "frozenset")
+    assert not categories.keywords
+    categories = frozenset(ast.literal_eval(one(categories.args)))
+    key = "owned_elf_inputs.py:_ClassificationProof"
+    assert contract[key] == "semantic_record"
+    input_tree = ast.parse((ROOT / "pcc/backend/owned_elf_inputs.py").read_text())
+    proof = one(node for node in input_tree.body if isinstance(node, ast.ClassDef)
+                and node.name == "_ClassificationProof")
+    expected_proof = one(ast.parse("""@dataclass(frozen=True)
+class _ClassificationProof:
+    sha256: str
+    size: int
+    section_ranges: tuple
+    section_bits: tuple
+""").body)
+    assert dump(proof) == dump(expected_proof)
+    function_names = ("_discover_self_backend_classes", "data_plane_class_contract_report")
+    functions = [one(node for node in inventory_tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == name) for name in function_names]
+    names = {"sorted", "set", "str", "len", "isinstance", "dict", "Counter",
+             "_discover_self_backend_classes"}
+    attributes = {"glob", "parse", "read_text", "add", "items", "values"}
+    for function in functions:
+        for node in ast.walk(function):
+            assert not isinstance(node, (ast.Import, ast.ImportFrom))
+            if isinstance(node, ast.Call):
+                assert ((isinstance(node.func, ast.Name) and node.func.id in names)
+                        or (isinstance(node.func, ast.Attribute) and node.func.attr in attributes))
+    namespace = {"ast": ast, "Path": Path, "Counter": Counter,
+                 "_SCRIPT_DIR": ROOT / "scripts", "DATA_PLANE_CLASS_CONTRACT": contract,
+                 "_DATA_PLANE_CLASSIFICATIONS": categories}
+    code = compile(ast.Module(body=functions, type_ignores=[]),
+                   "<source-only record classification contract>", "exec", dont_inherit=True)
+    exec(code, namespace)
+    report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
+    assert report["unclassified"] == report["stale_classifications"] == report["invalid_classifications"] == []
+    assert report["discovered_class_count"] == report["classified_class_count"]
+    missing = dict(contract)
+    del missing[key]
+    namespace["DATA_PLANE_CLASS_CONTRACT"] = missing
+    missing_report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
+    assert missing_report["unclassified"] == [key]
+    assert missing_report["stale_classifications"] == missing_report["invalid_classifications"] == []
+    assert missing_report["discovered_class_count"] == missing_report["classified_class_count"] + 1
+
     elf_tests = ast.parse((ROOT / gate.ELF_FORMAT_TEST).read_text())
     observation = next(node for node in elf_tests.body if isinstance(node, ast.FunctionDef)
                        and node.name == "test_arm_packed_width_cache_same_input_alternating_receipt")
     order = next(node for node in ast.walk(observation) if isinstance(node, ast.For)
                  and isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name)
                  and node.iter.func.id == "enumerate")
-    assert ast.literal_eval(order.iter.args[0]) == (
+    assert ast.literal_eval(one(order.iter.args)) == (
         "original candidate", "candidate original", "original candidate", "candidate original")
     text = ast.get_source_segment((ROOT / gate.ELF_FORMAT_TEST).read_text(), observation)
     assert 'assert output.stat().st_size <= 4096' in text

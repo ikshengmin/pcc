@@ -56,7 +56,8 @@ ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               ELF_PACKED_TEST, ELF_PACKED_SOURCE_TEST, "tests/elf_link_image_preimage.py",
               "pcc/backend/owned_elf_link.py", "pcc/backend/indexed_phase_timing.py",
               ELF_NEGATIVE_TEST, ELF_NEGATIVE_SOURCE_TEST,
-              "tests/elf_negative_classification_preimage.py")
+              "tests/elf_negative_classification_preimage.py",
+              "scripts/pcc_record_inventory.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
 SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"

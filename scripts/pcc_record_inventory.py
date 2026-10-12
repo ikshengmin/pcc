@@ -73,6 +73,7 @@ SCHEMA = "pcc.compiler-record-inventory.v1"
 DATA_PLANE_CLASS_CONTRACT = {
     # Owned ELF linker source identities and validated layout metadata remain
     # resident; payloads belong to one explicitly bounded input-store cache.
+    "owned_elf_inputs.py:_ClassificationProof": "semantic_record",
     "owned_elf_inputs.py:_InputSource": "semantic_record",
     "owned_elf_inputs.py:_InputSection": "phase_shell",
     "owned_elf_inputs.py:_InputObject": "phase_shell",
