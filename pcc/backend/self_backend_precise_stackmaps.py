@@ -1358,6 +1358,30 @@ _TRANSFER_GEP = 2
 _TRANSFER_JOIN = 3
 
 
+def _managed_origin_types_identical(actual: object, expected: object) -> bool:
+    return actual is expected
+
+
+def _managed_origin_arena_has_shape(arena: CompilerIntArena, length: int) -> bool:
+    """Check only ordinary storage metadata, never scan host payload values."""
+    if type(arena) is not CompilerIntArena:
+        return False
+    try:
+        if type(arena._address) is not int or type(arena._length) is not int:
+            return False
+        if type(arena._capacity) is not int or arena._closed is not False:
+            return False
+        if arena._length < 0 or arena._capacity < 0:
+            return False
+        if length >= 0 and arena._length != length:
+            return False
+        if arena._address != 0:
+            return arena._length <= arena._capacity
+        return type(arena._values) is list and len(arena._values) == arena._length
+    except AttributeError:
+        return False
+
+
 class PackedManagedOrigins:
     """Dense managed-pointer provenance lattice indexed by value ID."""
 
@@ -1567,6 +1591,129 @@ class PackedManagedOrigins:
             ):
                 self.set_state(value_id, _ORIGIN_AMBIGUOUS)
             value_id += 1
+
+    def _converge_fresh(self, transfer_count: int) -> None:
+        """Converge builder-proven plain payloads using the unused fourth lanes.
+
+        Only _native_managed_origins supplies the freshness/payload proof.
+        Public construction, mutation and repeated convergence keep converge.
+        """
+
+        if (
+            type(self) is not PackedManagedOrigins
+            or type(self.value_count) is not int
+            or self.value_count < 0
+            or type(transfer_count) is not int
+            or transfer_count < 0
+            or not _managed_origin_arena_has_shape(self.states, self.value_count * 3)
+            or not _managed_origin_arena_has_shape(self.transfers, self.value_count * 4)
+            or not _managed_origin_arena_has_shape(self.transfer_ids, -1)
+            or not _managed_origin_arena_has_shape(self.proposal, 3)
+        ):
+            self.converge()
+            return
+        if transfer_count == 0:
+            return
+        if 4 * transfer_count >= self.value_count:
+            self.converge()
+            return
+
+        # M counts successful transfer writes, so T <= M even with duplicate
+        # destinations. With R >= 2, 4*M < V bounds index-related operations:
+        # 2*V + (R+2)*T < (R+1)*V old outer-kind reads. This is an operation
+        # bound, not a timing claim. Host storage temporarily holds T ID ints.
+        # The original first sweep never writes the index, including R == 1.
+        indexed = False
+        active_count = 0
+        covered_prefix = 0
+        failed = False
+        try:
+            changed = True
+            while changed:
+                changed = False
+                position = 0
+                sweep_count = active_count if indexed else self.value_count
+                while position < sweep_count:
+                    value_id = position
+                    if indexed:
+                        value_id = self.transfers.get_unchecked(position * 4 + 3)
+                    elif self.transfers.get_unchecked(value_id * 4) == _TRANSFER_NONE:
+                        position += 1
+                        continue
+                    state_offset = value_id * 3
+                    old_kind = self.states.get_unchecked(state_offset)
+                    old_root = self.states.get_unchecked(state_offset + 1)
+                    old_derived = self.states.get_unchecked(state_offset + 2)
+                    if old_kind == _ORIGIN_AMBIGUOUS:
+                        position += 1
+                        continue
+                    self.write_proposed(value_id)
+                    proposed_kind = self.proposal.get_unchecked(0)
+                    proposed_root = self.proposal.get_unchecked(1)
+                    proposed_derived = self.proposal.get_unchecked(2)
+                    if proposed_kind == _ORIGIN_UNKNOWN:
+                        position += 1
+                        continue
+                    if (
+                        old_kind == proposed_kind
+                        and old_root == proposed_root
+                        and old_derived == proposed_derived
+                    ):
+                        position += 1
+                        continue
+                    if old_kind == _ORIGIN_UNKNOWN:
+                        self.set_state(
+                            value_id,
+                            proposed_kind,
+                            proposed_root,
+                            proposed_derived,
+                        )
+                    else:
+                        self.set_state(value_id, _ORIGIN_AMBIGUOUS)
+                    changed = True
+                    position += 1
+                if changed and not indexed:
+                    value_id = 0
+                    while value_id < self.value_count:
+                        if self.transfers.get_unchecked(value_id * 4) != _TRANSFER_NONE:
+                            # Fresh initialization made these lanes zero and
+                            # builder-checked destinations restrict every prior
+                            # setter to the other three lanes. Cover a store
+                            # before attempting it, including a failing store.
+                            covered_prefix = active_count + 1
+                            self.transfers.set_unchecked(active_count * 4 + 3, value_id)
+                            active_count += 1
+                        value_id += 1
+                    indexed = True
+            position = 0
+            sweep_count = active_count if indexed else self.value_count
+            while position < sweep_count:
+                value_id = position
+                if indexed:
+                    value_id = self.transfers.get_unchecked(position * 4 + 3)
+                elif self.transfers.get_unchecked(value_id * 4) == _TRANSFER_NONE:
+                    position += 1
+                    continue
+                if self.states.get_unchecked(value_id * 3) == _ORIGIN_UNKNOWN:
+                    self.set_state(value_id, _ORIGIN_AMBIGUOUS)
+                position += 1
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            cleanup_error = None
+            position = 0
+            while position < covered_prefix:
+                try:
+                    self.transfers.set_unchecked(position * 4 + 3, 0)
+                except BaseException as exc:
+                    # Attempt all covered lanes; preserve a primary failure.
+                    if cleanup_error is None:
+                        cleanup_error = exc
+                position += 1
+            if not failed and cleanup_error is not None:
+                raise cleanup_error
+
 
     def is_tracked(self, value_id: int) -> bool:
         kind = self.states.get_unchecked(value_id * 3)
@@ -4095,11 +4242,28 @@ def _native_managed_origins(
 ) -> PackedManagedOrigins:
     origins = PackedManagedOrigins(len(kernel.value_names))
     join_values = CompilerIntArena()
+    # Ordinary fresh storage permits callback-free checks after existing
+    # copies. Keep the original call expressions and their argument lifetimes.
+    # These O(seed + M + J) proof reads are additional to convergence's bound.
+    plain_origins = (
+        type(kernel) is IndexedFunctionKernel
+        and type(origins) is PackedManagedOrigins
+        and type(origins.value_count) is int
+        and origins.value_count >= 0
+        and _managed_origin_arena_has_shape(origins.states, origins.value_count * 3)
+        and _managed_origin_arena_has_shape(origins.transfers, origins.value_count * 4)
+        and _managed_origin_arena_has_shape(origins.transfer_ids, 0)
+        and _managed_origin_arena_has_shape(origins.proposal, 3)
+        and _managed_origin_arena_has_shape(join_values, 0)
+    )
+    transfer_count = 0
     for arg in func.args:
         if arg.type.is_ptr:
             value_id = kernel.value_id(arg.name)
             if value_id >= 0:
                 origins.set_state(value_id, _ORIGIN_RAW)
+                if plain_origins:
+                    plain_origins = type(value_id) is int and 0 <= value_id < origins.value_count
     block_id = 0
     while block_id < len(kernel.block_names):
         block: CompilerInt4 = kernel.block_fact(block_id)
@@ -4129,8 +4293,19 @@ def _native_managed_origins(
                         phi.third + incoming_index
                     )
                     join_values.append(incoming.first)
+                    if plain_origins:
+                        plain_origins = type(join_values.get_unchecked(len(join_values) - 1)) is int
                     incoming_index += 1
                 origins.set_join(phi.first, join_values)
+                transfer_count += 1
+                if plain_origins:
+                    # Only an exact value record has an ordinary first field;
+                    # custom record getters must not be read a second time.
+                    plain_origins = (
+                        _managed_origin_types_identical(type(phi), CompilerInt4)
+                        and type(phi.first) is int
+                        and 0 <= phi.first < origins.value_count
+                    )
             phi_index += 1
         instruction_index = 0
         while instruction_index < block.second:
@@ -4179,6 +4354,7 @@ def _native_managed_origins(
             )
             kind_id = metadata.first
             payload_id = metadata.second
+            copied_transfer_source = False
             if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
                 load_record: CompilerInt4 = kernel.instruction_record(payload_id)
                 aliases.resolve(load_record.third)
@@ -4197,6 +4373,8 @@ def _native_managed_origins(
                         root_offset,
                         0,
                     )
+                    if plain_origins:
+                        plain_origins = type(root_offset) is int
             elif kind_id == PARSED_INSTRUCTION_KIND_CAST:
                 cast_record: CompilerInt4 = kernel.instruction_record(payload_id)
                 cast_source_type_is_scalar = False
@@ -4219,6 +4397,8 @@ def _native_managed_origins(
                         _TRANSFER_COPY,
                         cast_record.third,
                     )
+                    transfer_count += 1
+                    copied_transfer_source = True
                 else:
                     origins.set_state(dest_id, _ORIGIN_RAW)
             elif kind_id == PARSED_INSTRUCTION_KIND_GEP:
@@ -4230,20 +4410,36 @@ def _native_managed_origins(
                     header.third,
                     NO_OFFSET if offset is None else offset,
                 )
+                transfer_count += 1
+                copied_transfer_source = True
+                if plain_origins:
+                    plain_origins = offset is None or type(offset) is int
             elif kind_id == PARSED_INSTRUCTION_KIND_SELECT:
                 select_record: CompilerInt4 = kernel.instruction_record(payload_id)
                 join_values.clear()
                 join_values.append(select_record.third)
+                if plain_origins:
+                    plain_origins = type(join_values.get_unchecked(len(join_values) - 1)) is int
                 join_values.append(select_record.fourth)
+                if plain_origins:
+                    plain_origins = type(join_values.get_unchecked(len(join_values) - 1)) is int
                 origins.set_join(dest_id, join_values)
+                transfer_count += 1
             else:
                 # Cold/unsupported pointer-producing shapes stay raw; they do
                 # not gain managed provenance merely from LLVM's opaque ptr.
                 origins.set_state(dest_id, _ORIGIN_RAW)
+            if plain_origins:
+                plain_origins = type(dest_id) is int and 0 <= dest_id < origins.value_count
+                if plain_origins and copied_transfer_source:
+                    plain_origins = type(origins.transfers.get_unchecked(dest_id * 4 + 1)) is int
             instruction_index += 1
         block_id += 1
     join_values.close()
-    origins.converge()
+    if plain_origins:
+        origins._converge_fresh(transfer_count)
+    else:
+        origins.converge()
     return origins
 
 
