@@ -21,7 +21,7 @@ this contract.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .precise_stackmap import (
     ARCH_X86_64,
@@ -172,6 +172,10 @@ class _PackedElfRelocations:
     payload: bytes
     offset: int = 0
     size: int | None = None
+    # Parser-owned scratch only, never a consumable classification proof.
+    _classification_candidate: list[bool | None] | None = field(
+        default=None, repr=False, compare=False,
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "payload", bytes(self.payload))
@@ -285,6 +289,18 @@ def _validate_object(obj: ElfObject) -> None:
             and type(obj.machine) is int
             and obj.machine == EM_AARCH64
         )
+        classification_candidate = None
+        if (type(obj) is ElfObject and type(obj.sections) is tuple
+                and type(obj.symbols) is tuple and type(section) is ElfSection
+                and type(section.relocations) is _PackedElfRelocations):
+            candidate = section.relocations._classification_candidate
+            if (type(candidate) is list and len(candidate) == 1
+                    and (candidate[0] is None or type(candidate[0]) is bool)):
+                # A reused view must not retain a previous validation's answer.
+                candidate[0] = None
+                if cache_widths and type(_RELA) is struct.Struct and _RELA.format == "<QQq":
+                    classification_candidate = candidate
+                    classification_candidate[0] = True
         for relocation in section.relocations:
             if relocation.symbol_index < 0 or relocation.symbol_index >= len(obj.symbols):
                 raise ElfError(
@@ -304,6 +320,13 @@ def _validate_object(obj: ElfObject) -> None:
                 raise ElfError(
                     f"section {section.name!r} relocation is outside its payload"
                 )
+            if classification_candidate is not None and classification_candidate[0] is True:
+                # Unknown/custom records cannot certify absence. These reads
+                # follow every original per-row validation and never resolve symbols.
+                if type(relocation) is not ElfRelocation or type(relocation.type) is not int:
+                    classification_candidate[0] = None
+                elif relocation.type in (283, 311, 312, 541, 542):
+                    classification_candidate[0] = False
     for index, symbol in enumerate(obj.symbols):
         if index == 0:
             continue
@@ -570,7 +593,7 @@ def parse_relocatable(data: bytes, *, compact_relocations: bool = False) -> ElfO
     return _parse_relocatable(data, compact_relocations=compact_relocations)
 
 
-def _parse_relocatable_indexed(data: bytes):
+def _parse_relocatable_indexed(data: bytes, *, _classification_summaries=None):
     """Return private file ranges only after the ordinary strict parse succeeds.
 
     The input store binds these immutable ranges to the exact source length and
@@ -579,12 +602,15 @@ def _parse_relocatable_indexed(data: bytes):
     """
     data = bytes(data)
     ranges = []
-    obj = _parse_relocatable(data, compact_relocations=True, _section_ranges=ranges)
+    obj = _parse_relocatable(
+        data, compact_relocations=True, _section_ranges=ranges,
+        _classification_summaries=_classification_summaries,
+    )
     return obj, tuple(ranges)
 
 
 def _parse_relocatable(data: bytes, *, compact_relocations: bool = False,
-                       _section_ranges=None) -> ElfObject:
+                       _section_ranges=None, _classification_summaries=None) -> ElfObject:
     header = _unpack_elf_header(data)
     if header[1] != ET_REL:
         raise ElfError(f"expected ET_REL, got ELF type {header[1]}")
@@ -728,7 +754,16 @@ def _parse_relocatable(data: bytes, *, compact_relocations: bool = False,
             raise ElfError(f"section {mutable_sections[target].name!r} has multiple RELA tables")
         payload = section_payload(rela_index)
         if compact_relocations:
-            relocations = _PackedElfRelocations(payload)
+            candidate = None
+            if (header[2] == EM_AARCH64 and _section_ranges is not None
+                    and type(_classification_summaries) is list):
+                try:
+                    candidate = [None]
+                except MemoryError:
+                    pass  # Optional optimization metadata may be abandoned.
+            relocations = _PackedElfRelocations(
+                payload, _classification_candidate=candidate,
+            )
         else:
             rows: list[ElfRelocation] = []
             for offset in range(0, len(payload), _RELA.size):
@@ -747,6 +782,24 @@ def _parse_relocatable(data: bytes, *, compact_relocations: bool = False,
     obj = ElfObject(tuple(mutable_sections), tuple(symbols), header[2])
     if _section_ranges is not None:
         _section_ranges.extend(ranges)
+    # Only the ordinary constructor's successful return commits a result:
+    # symbol and stack-map validation happen after the mandatory RELA walk.
+    if (header[2] == EM_AARCH64 and _section_ranges is not None
+            and type(_classification_summaries) is list
+            and type(obj) is ElfObject and type(obj.sections) is tuple):
+        try:
+            summaries = []
+            for section in obj.sections:
+                bit = None
+                if type(section) is ElfSection and type(section.relocations) is _PackedElfRelocations:
+                    candidate = section.relocations._classification_candidate
+                    if type(candidate) is list and len(candidate) == 1:
+                        if candidate[0] is True or candidate[0] is False:
+                            bit = candidate[0]
+                summaries.append(bit)
+            _classification_summaries.extend(summaries)
+        except MemoryError:
+            _classification_summaries.clear()
     return obj
 
 
@@ -986,6 +1039,31 @@ def link_static_executable(
     ))
 
 
+def _staged_classification_is_empty(store, objects, object_index, section_index, section, relocations):
+    try:
+        if (type(objects) is not list or type(object_index) is not int
+                or not 0 <= object_index < len(objects)):
+            return False
+        from .owned_elf_inputs import _classification_is_empty
+        return _classification_is_empty(
+            store, objects[object_index], section_index, section, relocations,
+        )
+    except MemoryError:
+        # Failure to acquire optional evidence takes the original scan path.
+        return False
+
+
+def _report_classification_skips(timing, completed_sections, total_sections,
+                                 skipped_sections, skipped_relocations):
+    try:
+        return timing.elf_classification_skips(
+            completed_sections, total_sections, skipped_sections, skipped_relocations,
+        )
+    except BaseException:
+        # Optional bounded evidence must not replace a linker result or error.
+        return False
+
+
 def _link_static_executable_image(
     objects: list[ElfObject],
     *,
@@ -1070,35 +1148,57 @@ def _link_static_executable_image(
     }
     if machine == EM_AARCH64:
         got_reloc_types = {311, 312, 541, 542}
+    # A prior generic row must still be released by the original first packed
+    # unpack/split/assignment, not by a metadata-only shortcut.
+    relocation = None
+    summary_counts = None
+    if coordinator_timing is not None:
+        try:
+            # completed sections, skipped sections/rows, last bucket, total sections
+            summary_counts = [0, 0, 0, 0, len(alloc_sections)]
+        except BaseException:
+            pass
     for object_index, section_index, section in alloc_sections:
         relocations = section.relocations
         if type(machine) is int and machine == EM_AARCH64 and type(relocations) is _PackedElfRelocations:
             try:
-                # Keep the iterator's exact range and per-row payload reads. Only
-                # its transient frozen record is unnecessary during classification.
-                for position in range(relocations.offset, relocations.offset + relocations.size, _RELA.size):
-                    _offset, info, addend = _RELA.unpack_from(relocations.payload, position)
-                    symbol_index, relocation_type = info >> 32, info & 0xFFFFFFFF
-                    # The ordinary loop overwrites its previous row here. Release
-                    # a preceding custom row at the same boundary before callbacks.
-                    relocation = None
-                    if (machine == EM_AARCH64 and relocation_type == 283
-                            and section.flags & SHF_EXECINSTR
-                            and not section.flags & SHF_WRITE):
-                        slots = branch_slots.setdefault((object_index, section_index), {})
-                        branch_key = (object_index, symbol_index, addend)
-                        if branch_key not in slots:
-                            slots[branch_key] = len(slots)
-                    if relocation_type not in got_reloc_types:
-                        continue
-                    identity = _symbol_identity(
-                        objects, definitions, object_index, symbol_index
-                    )
-                    kind = "tpoff" if relocation_type in ((541, 542) if machine == EM_AARCH64 else (R_X86_64_GOTTPOFF,)) else "address"
-                    key = (identity, kind)
-                    if key not in got_seen:
-                        got_seen.add(key)
-                        got_identities.append(key)
+                if (relocation is None and _input_store is not None
+                        and _staged_classification_is_empty(
+                            _input_store, objects, object_index, section_index, section, relocations,
+                        )):
+                    if summary_counts is not None:
+                        try:
+                            if relocations.size:
+                                summary_counts[1] += 1
+                                summary_counts[2] += relocations.size // _RELA.size
+                        except BaseException:
+                            summary_counts = None
+                else:
+                    # Keep the iterator's exact range and per-row payload reads. Only
+                    # its transient frozen record is unnecessary during classification.
+                    for position in range(relocations.offset, relocations.offset + relocations.size, _RELA.size):
+                        _offset, info, addend = _RELA.unpack_from(relocations.payload, position)
+                        symbol_index, relocation_type = info >> 32, info & 0xFFFFFFFF
+                        # The ordinary loop overwrites its previous row here. Release
+                        # a preceding custom row at the same boundary before callbacks.
+                        relocation = None
+                        if (machine == EM_AARCH64 and relocation_type == 283
+                                and section.flags & SHF_EXECINSTR
+                                and not section.flags & SHF_WRITE):
+                            slots = branch_slots.setdefault((object_index, section_index), {})
+                            branch_key = (object_index, symbol_index, addend)
+                            if branch_key not in slots:
+                                slots[branch_key] = len(slots)
+                        if relocation_type not in got_reloc_types:
+                            continue
+                        identity = _symbol_identity(
+                            objects, definitions, object_index, symbol_index
+                        )
+                        kind = "tpoff" if relocation_type in ((541, 542) if machine == EM_AARCH64 else (R_X86_64_GOTTPOFF,)) else "address"
+                        key = (identity, kind)
+                        if key not in got_seen:
+                            got_seen.add(key)
+                            got_identities.append(key)
             finally:
                 # An exception traceback must not retain this source's view.
                 del relocations
@@ -1126,6 +1226,21 @@ def _link_static_executable_image(
                     got_seen.add(key)
                     got_identities.append(key)
             del relocation_sources
+        if summary_counts is not None:
+            try:
+                # Count only after the whole section and its original cleanup.
+                # These are unweighted section quantiles, never per-row observations.
+                summary_counts[0] += 1
+                summary_bucket = 8 * summary_counts[0] // summary_counts[4]
+                if summary_bucket > summary_counts[3]:
+                    summary_counts[3] = summary_bucket
+                    if not _report_classification_skips(
+                        coordinator_timing, summary_counts[0], summary_counts[4],
+                        summary_counts[1], summary_counts[2],
+                    ):
+                        summary_counts = None
+            except BaseException:
+                summary_counts = None
 
     metadata_sections = [
         item for item in alloc_sections

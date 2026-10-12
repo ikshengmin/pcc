@@ -10,6 +10,7 @@ retention, not constant-space linking: symbols and the final image remain reside
 from dataclasses import dataclass
 import hashlib
 import os
+import struct
 
 from . import elf_x86_64 as elf
 
@@ -28,6 +29,15 @@ def file_sha256(path: str) -> str:
 
 
 @dataclass(frozen=True)
+class _ClassificationProof:
+    # Kept with one source's original digest and immutable validated ranges.
+    sha256: str
+    size: int
+    section_ranges: tuple
+    section_bits: tuple
+
+
+@dataclass(frozen=True)
 class _InputSource:
     path: str
     offset: int
@@ -37,6 +47,7 @@ class _InputSource:
     kind: str
     whole_file: bool
     section_ranges: tuple | None = None
+    classification_proof: _ClassificationProof | None = None
 
 
 @dataclass(frozen=True)
@@ -168,10 +179,14 @@ class ElfInputStore:
         self.duplicate_member_names = []
         self.current_index = -1
         self.current = None
+        self.current_classification_proof = None
+        self.current_classification_payload = None
 
     def clear(self) -> None:
         self.current = None
         self.current_index = -1
+        self.current_classification_proof = None
+        self.current_classification_payload = None
 
     def _read(self, source):
         with open(source.path, "rb") as stream:
@@ -205,14 +220,30 @@ class ElfInputStore:
         source = _InputSource(path, offset, size, "", label or path, kind, whole_file)
         data, digest = self._read(source)
         ranges = None
+        proof = None
         if kind == "ASM":
             obj = self._parse(data, kind)
         else:
-            obj, ranges = elf._parse_relocatable_indexed(data)
+            summaries = None
+            if type(kind) is str and kind == "PCO":
+                try:
+                    summaries = []
+                except MemoryError:
+                    pass
+            obj, ranges = elf._parse_relocatable_indexed(
+                data, _classification_summaries=summaries,
+            )
+            try:
+                if (type(obj) is elf.ElfObject and type(obj.machine) is int
+                        and obj.machine == elf.EM_AARCH64 and type(summaries) is list
+                        and len(summaries) == len(ranges)):
+                    proof = _ClassificationProof(digest, size, ranges, tuple(summaries))
+            except MemoryError:
+                proof = None
         del data
         index = len(self.sources)
         self.sources.append(_InputSource(
-            path, offset, size, digest, source.label, kind, whole_file, ranges,
+            path, offset, size, digest, source.label, kind, whole_file, ranges, proof,
         ))
         sections = tuple(
             _InputSection(self, index, si, section.name, section.type, section.flags,
@@ -228,6 +259,20 @@ class ElfInputStore:
         self.clear()
         source = self.sources[index]
         data, _digest = self._read(source)
+        proof = None
+        try:
+            if (type(data) is bytes and type(_digest) is str
+                    and type(source) is _InputSource and type(source.kind) is str and source.kind == "PCO"
+                    and type(source.classification_proof) is _ClassificationProof):
+                candidate = source.classification_proof
+                if (type(candidate.sha256) is str and candidate.sha256 == _digest
+                        and type(candidate.size) is int and candidate.size == len(data)
+                        and candidate.section_ranges is source.section_ranges
+                        and type(candidate.section_ranges) is tuple
+                        and type(candidate.section_bits) is tuple):
+                    proof = candidate
+        except MemoryError:
+            proof = None
         # No indexed byte can be consumed until the complete source has passed
         # the same exact-length and SHA check. Only this one immutable payload
         # is cached; the index retains neither payloads nor relocation objects.
@@ -235,6 +280,8 @@ class ElfInputStore:
         del data
         self.current = obj
         self.current_index = index
+        self.current_classification_proof = proof
+        self.current_classification_payload = obj if proof is not None else None
         return obj
 
     def read_archive(self, archive_index: int):
@@ -282,3 +329,48 @@ class ElfInputStore:
         for path, digest in zip(self.archives, self.archive_hashes):
             if file_sha256(path) != digest:
                 raise elf.ElfError("staged ELF archive identity changed: " + path)
+
+
+def _classification_is_empty(store, owner, section_index, section, relocations) -> bool:
+    """Consume only a completed staged proof, after the original checked load."""
+    if (type(store) is not ElfInputStore or type(owner) is not _InputObject
+            or type(owner.machine) is not int or owner.machine != elf.EM_AARCH64
+            or type(owner.sections) is not tuple or type(section_index) is not int
+            or not 1 <= section_index <= len(owner.sections)
+            or owner.sections[section_index - 1] is not section
+            or type(section) is not _InputSection
+            or section.store is not store or type(store.sources) is not list
+            or type(section.source_index) is not int
+            or not 0 <= section.source_index < len(store.sources)
+            or type(section.section_index) is not int):
+        return False
+    source = store.sources[section.source_index]
+    if type(source) is not _InputSource or type(source.kind) is not str or source.kind != "PCO":
+        return False
+    proof = source.classification_proof
+    if (type(proof) is not _ClassificationProof
+            or getattr(store, "current_classification_proof", None) is not proof
+            or type(source.sha256) is not str or type(proof.sha256) is not str
+            or source.sha256 != proof.sha256
+            or type(source.size) is not int or type(proof.size) is not int
+            or source.size != proof.size
+            or source.section_ranges is not proof.section_ranges
+            or type(proof.section_ranges) is not tuple
+            or type(proof.section_bits) is not tuple
+            or len(proof.section_ranges) != len(proof.section_bits)
+            or not 0 <= section.section_index < len(proof.section_bits)
+            or proof.section_bits[section.section_index] is not True):
+        return False
+    row = proof.section_ranges[section.section_index]
+    if (type(row) is not tuple or len(row) != 4
+            or type(row[2]) is not int or type(row[3]) is not int
+            or type(relocations) is not elf._PackedElfRelocations
+            or type(relocations.payload) is not bytes
+            or type(relocations.offset) is not int or type(relocations.size) is not int
+            or type(elf._RELA) is not struct.Struct or elf._RELA.format != "<QQq"
+            or type(store.current_index) is not int
+            or store.current_index != section.source_index
+            or store.current is not relocations.payload
+            or store.current_classification_payload is not relocations.payload):
+        return False
+    return relocations.offset == row[2] and relocations.size == row[3]

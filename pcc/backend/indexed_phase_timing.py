@@ -213,3 +213,30 @@ class CoarsePhaseTiming:
             )
         except BaseException:
             pass
+
+
+    def elf_classification_skips(self, completed_sections: int, total_sections: int,
+                                 skipped_sections: int, skipped_relocations: int) -> bool:
+        """One fixed-field snapshot; caller coalesces at most eight quantiles.
+
+        Sections are unweighted. Skipped relocation rows are a lower bound on
+        avoided classification work, not total rows, elapsed time, or a speedup.
+        """
+        try:
+            values = (completed_sections, total_sections, skipped_sections, skipped_relocations)
+            if any(type(value) is not int or value < 0 for value in values):
+                return False
+            if not 0 < completed_sections <= total_sections or skipped_sections > completed_sections:
+                return False
+            parts = [
+                "pcc elf classification skips",
+                "completed_sections=" + str(completed_sections),
+                "total_sections=" + str(total_sections),
+                "skipped_sections=" + str(skipped_sections),
+                "skipped_relocations_lower_bound=" + str(skipped_relocations),
+            ]
+            sys.stderr.write(" ".join(parts) + "\n")
+            sys.stderr.flush()
+            return True
+        except BaseException:
+            return False

@@ -52,6 +52,22 @@ def _classification(source):
     return loop, prefix, suffix
 
 
+def _without_negative_summary(source):
+    # Invert only the separately source-bound negative-summary candidate. Its
+    # actual loop and proof consumer have their own fake-only controls.
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse(_text(root / "tests/elf_negative_classification_preimage.py"))
+    fields = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
+              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+    lines = source.splitlines(keepends=True)
+    for start, end, expected, original in reversed(fields["OWNER_REVERSE_EDITS"]):
+        assert "".join(lines[start:end]) == expected
+        lines[start:end] = original.splitlines(keepends=True)
+    restored = "".join(lines)
+    assert _sha(restored) == fields["BASE_OWNER_SHA256"]
+    return restored
+
+
 def _without_image_timing(source):
     # Invert only the optional parameter and the six exact top-level guards
     # (five begin/complete pairs). Historical prefix/suffix hashes below still
@@ -283,7 +299,7 @@ def test_source_bound_classification_loop_fake_controls():
     original = strings[0].replace("\r\n", "\n")
     assert "\r" not in original and _sha(original) == ORIGINAL_FUNCTION_SHA256
     old_loop, _old_prefix, _old_suffix = _classification(original)
-    new_loop, prefix, suffix = _classification(_without_image_timing(candidate))
+    new_loop, prefix, suffix = _classification(_without_image_timing(_without_negative_summary(candidate)))
     # After the narrowly admitted diagnostic additions are removed, preserve
     # the historical whole-owner proof; do not repin it to the new candidate.
     # The prefix includes public construction/parsing/iteration and the suffix

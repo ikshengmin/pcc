@@ -732,8 +732,12 @@ def _elf_image_timing_skeleton():
     assert ast.unparse(function.body[-1]) == "return image"
     guards = []
     for index, node in enumerate(function.body):
-        if any(isinstance(child, ast.Name) and child.id == "coordinator_timing"
-               for child in ast.walk(node)):
+        if isinstance(node, ast.If) and any(
+                isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "coordinator_timing"
+                and child.func.attr in ("begin", "complete")
+                for child in ast.walk(node)):
             guards.append((index, node))
     assert len(guards) == 6 and guards[0][0] == 2
     assert guards[-1][0] == len(function.body) - 2

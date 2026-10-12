@@ -46,13 +46,17 @@ ELF_RELOCATION_CONTEXT_TEST = "tests/python/test_aarch64_relocation_error_contex
 ARM_CALL_VENEERS_TEST = "tests/python/test_aarch64_elf_call_veneers.py"
 ELF_PACKED_TEST = "tests/python/test_elf_packed_link_classification.py"
 ELF_PACKED_SOURCE_TEST = "tests/test_elf_packed_classification_source_controls.py"
+ELF_NEGATIVE_TEST = "tests/python/test_elf_negative_classification_summary.py"
+ELF_NEGATIVE_SOURCE_TEST = "tests/test_elf_negative_classification_source_controls.py"
 ELF_OWNER_NODE = ELF_OWNER_TEST + "::test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly"
 ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               "pcc/backend/owned_elf_inputs.py", "pcc/backend/elf_x86_64.py",
               "pcc/backend/elf_aarch64_relocations.py", "tests/elf_validate_object_preimage.py",
               ELF_RELOCATION_CONTEXT_TEST, ARM_CALL_VENEERS_TEST,
               ELF_PACKED_TEST, ELF_PACKED_SOURCE_TEST, "tests/elf_link_image_preimage.py",
-              "pcc/backend/owned_elf_link.py", "pcc/backend/indexed_phase_timing.py")
+              "pcc/backend/owned_elf_link.py", "pcc/backend/indexed_phase_timing.py",
+              ELF_NEGATIVE_TEST, ELF_NEGATIVE_SOURCE_TEST,
+              "tests/elf_negative_classification_preimage.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
 SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
@@ -166,10 +170,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               TREE_RECOVERY_TEST, TREE_RECOVERY_GUARD_TEST,
               TAR_ATTRIBUTES_TEST, TAR_STRICT_ORACLE_TEST,
               MANAGED_SCRATCH_TEST, MANAGED_MEMORY_TEST,
-              ELF_PACKED_TEST, ELF_PACKED_SOURCE_TEST)
-# All existing 1684 nodes remain; tiny final-image differential controls
+              ELF_PACKED_TEST, ELF_PACKED_SOURCE_TEST,
+              ELF_NEGATIVE_TEST, ELF_NEGATIVE_SOURCE_TEST)
+# All existing 1799 nodes remain; eight negative-summary image controls
 # and one source/fake control use the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1)
+HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
