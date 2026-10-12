@@ -4367,45 +4367,217 @@ def _native_managed_liveness(
                 set_bit(uses, block_id, tracked_id)
         block_id += 1
 
+    def cfg_arena_is_plain(arena: CompilerIntArena) -> bool:
+        # This proof must not call custom arena/list/int behavior. It runs
+        # after seed construction, whose callbacks could have changed CFG
+        # tables. Missing or nonordinary storage retains the original loop.
+        if type(arena) is not CompilerIntArena:
+            return False
+        try:
+            if type(arena._address) is not int or type(arena._length) is not int:
+                return False
+            if type(arena._capacity) is not int or arena._closed is not False:
+                return False
+            if arena._length < 0:
+                return False
+            if arena._address != 0:
+                # Raw arena payloads are already machine integers. This
+                # branch, including the new scratch, needs native CI proof.
+                return arena._length <= arena._capacity
+            if type(arena._values) is not list:
+                return False
+            if len(arena._values) != arena._length:
+                return False
+            scalar_index = 0
+            while scalar_index < arena._length:
+                if type(arena._values[scalar_index]) is not int:
+                    return False
+                scalar_index += 1
+            return True
+        except AttributeError:
+            return False
+
+    dirty_rows_enabled = False
+    if word_count > 0 and type(kernel) is IndexedFunctionKernel:
+        try:
+            dirty_rows_enabled = (
+                cfg_arena_is_plain(kernel.terminator_scalars)
+                and cfg_arena_is_plain(kernel.terminator_case_scalars)
+                and cfg_arena_is_plain(kernel.error_edge_spans)
+                and cfg_arena_is_plain(kernel.error_edge_scalars)
+            )
+        except AttributeError:
+            dirty_rows_enabled = False
+
     changed = True
     word_mask = (1 << 30) - 1
-    while changed:
-        changed = False
-        block_id = block_count - 1
-        while block_id >= 0:
-            # This backward union analysis is monotone: live-in/live-out can
-            # only grow from their initial seeds. Carrying the previous row
-            # preserves the PHI seeds and has the same least fixed point as
-            # rebuilding an empty row, with no extra dense matrix.
-            scratch.copy_prefix_from_unchecked(
-                live_out, block_id * word_count, word_count,
-            )
-            successor_position = 0
-            successor_count = kernel.cfg_successor_count(block_id)
-            while successor_position < successor_count:
-                successor = kernel.cfg_successor_id(
-                    block_id,
-                    successor_position,
+    if dirty_rows_enabled:
+        # Two scalar slots per block: reverse-edge head and dirty flags.
+        # Reverse links are (predecessor, previous head), with heads stored
+        # as link offsets plus one so zero is the empty-list sentinel.
+        row_head_offset = 0
+        row_dirty_offset = 1
+        row_width = 2
+        predecessor_offset = 0
+        predecessor_next_offset = 1
+        row_state = CompilerIntArena(max(1, block_count * row_width))
+        # A successfully constructed scheduler arena is owned immediately.
+        # Nested handlers preserve an in-flight business exception even if
+        # close itself fails, and still attempt the other arena's release.
+        try:
+            row_state.append_zeros(block_count * row_width)
+            reverse_edges = CompilerIntArena(1)
+            try:
+                first_sweep = True
+                while changed:
+                    changed = False
+                    block_id = block_count - 1
+                    while block_id >= 0:
+                        row_offset = block_id * row_width
+                        if not first_sweep:
+                            if row_state.get_unchecked(row_offset + row_dirty_offset) == 0:
+                                block_id -= 1
+                                continue
+                            # Clear before transfer: a self-edge must be able to redirty.
+                            row_state.set_unchecked(row_offset + row_dirty_offset, 0)
+                        # This backward union analysis is monotone: live-in/live-out can
+                        # only grow from their initial seeds. Carrying the previous row
+                        # preserves the PHI seeds and has the same least fixed point as
+                        # rebuilding an empty row, with no extra dense matrix.
+                        scratch.copy_prefix_from_unchecked(
+                            live_out, block_id * word_count, word_count,
+                        )
+                        successor_position = 0
+                        successor_count = kernel.cfg_successor_count(block_id)
+                        while successor_position < successor_count:
+                            successor = kernel.cfg_successor_id(
+                                block_id,
+                                successor_position,
+                            )
+                            if successor < 0 or successor >= block_count:
+                                _fail(func, f"unknown CFG successor id {successor}")
+                            scratch.or_prefix_from_unchecked(
+                                live_in,
+                                successor * word_count,
+                                word_count,
+                            )
+                            if first_sweep:
+                                # Only an edge whose original read, bounds check and
+                                # union succeeded may become a reverse dependency.
+                                head_offset = successor * row_width + row_head_offset
+                                previous_head = row_state.get_unchecked(head_offset)
+                                row_state.set_unchecked(head_offset, len(reverse_edges) + 1)
+                                reverse_edges.append2(block_id, previous_head)
+                            successor_position += 1
+                        if scratch.converge_liveness_row_unchecked(
+                            uses,
+                            definitions,
+                            live_out,
+                            live_in,
+                            block_id * word_count,
+                            word_count,
+                            word_mask,
+                        ):
+                            changed = True
+                            if first_sweep:
+                                row_state.set_unchecked(row_offset + row_dirty_offset, 1)
+                            else:
+                                head = row_state.get_unchecked(row_offset + row_head_offset)
+                                while head != 0:
+                                    edge_offset = head - 1
+                                    predecessor = reverse_edges.get_unchecked(
+                                        edge_offset + predecessor_offset
+                                    )
+                                    row_state.set_unchecked(
+                                        predecessor * row_width + row_dirty_offset, 1
+                                    )
+                                    head = reverse_edges.get_unchecked(
+                                        edge_offset + predecessor_next_offset
+                                    )
+                        block_id -= 1
+                    if first_sweep:
+                        # All edges are now known. Bit 1 records the original changed
+                        # rows; bit 2 seeds the next sweep without altering that set.
+                        block_id = 0
+                        while block_id < block_count:
+                            row_offset = block_id * row_width
+                            if row_state.get_unchecked(row_offset + row_dirty_offset) & 1:
+                                head = row_state.get_unchecked(row_offset + row_head_offset)
+                                while head != 0:
+                                    edge_offset = head - 1
+                                    predecessor = reverse_edges.get_unchecked(
+                                        edge_offset + predecessor_offset
+                                    )
+                                    dirty_offset = predecessor * row_width + row_dirty_offset
+                                    row_state.set_unchecked(
+                                        dirty_offset, row_state.get_unchecked(dirty_offset) | 2
+                                    )
+                                    head = reverse_edges.get_unchecked(
+                                        edge_offset + predecessor_next_offset
+                                    )
+                            block_id += 1
+                        block_id = 0
+                        while block_id < block_count:
+                            dirty_offset = block_id * row_width + row_dirty_offset
+                            row_state.set_unchecked(
+                                dirty_offset, row_state.get_unchecked(dirty_offset) >> 1
+                            )
+                            block_id += 1
+                        first_sweep = False
+            except BaseException:
+                try:
+                    reverse_edges.close()
+                except BaseException:
+                    pass
+                raise
+            else:
+                reverse_edges.close()
+        except BaseException:
+            try:
+                row_state.close()
+            except BaseException:
+                pass
+            raise
+        else:
+            row_state.close()
+    else:
+        while changed:
+            changed = False
+            block_id = block_count - 1
+            while block_id >= 0:
+                # This backward union analysis is monotone: live-in/live-out can
+                # only grow from their initial seeds. Carrying the previous row
+                # preserves the PHI seeds and has the same least fixed point as
+                # rebuilding an empty row, with no extra dense matrix.
+                scratch.copy_prefix_from_unchecked(
+                    live_out, block_id * word_count, word_count,
                 )
-                if successor < 0 or successor >= block_count:
-                    _fail(func, f"unknown CFG successor id {successor}")
-                scratch.or_prefix_from_unchecked(
+                successor_position = 0
+                successor_count = kernel.cfg_successor_count(block_id)
+                while successor_position < successor_count:
+                    successor = kernel.cfg_successor_id(
+                        block_id,
+                        successor_position,
+                    )
+                    if successor < 0 or successor >= block_count:
+                        _fail(func, f"unknown CFG successor id {successor}")
+                    scratch.or_prefix_from_unchecked(
+                        live_in,
+                        successor * word_count,
+                        word_count,
+                    )
+                    successor_position += 1
+                if scratch.converge_liveness_row_unchecked(
+                    uses,
+                    definitions,
+                    live_out,
                     live_in,
-                    successor * word_count,
+                    block_id * word_count,
                     word_count,
-                )
-                successor_position += 1
-            if scratch.converge_liveness_row_unchecked(
-                uses,
-                definitions,
-                live_out,
-                live_in,
-                block_id * word_count,
-                word_count,
-                word_mask,
-            ):
-                changed = True
-            block_id -= 1
+                    word_mask,
+                ):
+                    changed = True
+                block_id -= 1
 
     # The fixed point has consumed these matrices. The backward scan retains
     # live_in, tracked_values, tracked_index and scratch until its own end.

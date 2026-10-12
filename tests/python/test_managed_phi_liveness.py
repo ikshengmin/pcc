@@ -50,7 +50,7 @@ def _call_states(kernel, states):
 @pytest.mark.parametrize('fanin', [2, 9, 65])
 @pytest.mark.parametrize('loop', [False, True])
 @pytest.mark.parametrize('selection', ['all', 'alternating', 'none'])
-def test_phi_liveness_matches_set_oracle_without_repeated_fixpoint_scans(monkeypatch, fanin, loop, selection):
+def test_phi_liveness_matches_set_oracle_without_repeated_fixpoint_scans(monkeypatch, tmp_path, fanin, loop, selection):
     source = _phi_module(fanin, loop)
     expected_func = parse_self_backend_module(source).functions[0]
     expected_kernel = get_indexed_function_kernel(expected_func)
@@ -120,3 +120,13 @@ def test_phi_liveness_matches_set_oracle_without_repeated_fixpoint_scans(monkeyp
     origins.close()
     kernel.close_native_tables()
     expected_kernel.close_native_tables()
+
+    if fanin == 65 and loop and selection == 'all':
+        # Preserve the existing 18 oracle cases and their seven-arena checks.
+        # One existing CI call additionally observes truly ordinary kernels;
+        # the allocation spies above intentionally force the fallback gate.
+        monkeypatch.setattr(type(kernel), 'phi_incoming', original)
+        monkeypatch.setattr(stackmaps, "CompilerIntArena", original_arena)
+        monkeypatch.setattr(stackmaps, "PackedManagedLiveness", original_packed)
+        from tests.managed_liveness_dirty_rows_ci_reference import record_real_kernel_overhead
+        record_real_kernel_overhead(tmp_path, source)

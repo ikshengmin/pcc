@@ -71,6 +71,7 @@ SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
 MANAGED_SCRATCH_TEST = "tests/python/test_managed_scratch_retirement.py"
 MANAGED_MEMORY_TEST = "tests/python/test_managed_scratch_host_memory.py"
 MANAGED_PHI_TEST = "tests/python/test_managed_phi_liveness.py"
+MANAGED_DIRTY_ROWS_TEST = "tests/python/test_managed_liveness_dirty_rows.py"
 CALLEE_SAVED_TEST = "tests/c/test_self_backend_aarch64_callee_saved.py"
 BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
 REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
@@ -81,7 +82,11 @@ REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
                   "tests/python/test_precise_stackmap_abi.py",
                   "tests/python/test_unsafe_syscall6.py",
                   MANAGED_SCRATCH_TEST, MANAGED_MEMORY_TEST, MANAGED_PHI_TEST,
-                  "tests/managed_scratch_retirement_reference.json")
+                  "tests/managed_scratch_retirement_reference.json",
+                  MANAGED_DIRTY_ROWS_TEST,
+                  "tests/managed_liveness_dirty_rows_reference.json",
+                  "tests/managed_liveness_dirty_rows_reference.py",
+                  "tests/managed_liveness_dirty_rows_ci_reference.py")
 REGALLOC_MODES = ("default", "function", "local")
 REGALLOC_SHAPES = ("safe", "call", "loop", "empty", "syscall", "inline-error",
                   "madd", "reload", "vararg", "invalid-low", "invalid-high")
@@ -181,10 +186,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               ELF_PACKED_TEST, ELF_PACKED_SOURCE_TEST,
               ELF_NEGATIVE_TEST, ELF_NEGATIVE_SOURCE_TEST,
               ELF_PROGRESS_TEST, ELF_PROGRESS_SOURCE_TEST,
-              ELF_APPLICATION_TEST, ELF_APPLICATION_SOURCE_TEST)
-# All existing 1818 nodes remain; eight bounded application controls and one
-# source/fake control use the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1)
+              ELF_APPLICATION_TEST, ELF_APPLICATION_SOURCE_TEST,
+              MANAGED_DIRTY_ROWS_TEST)
+# All existing 1827 nodes remain; 95 finite dirty-row controls use the same
+# default-xdist invocation. Real-kernel observations stay in the existing PHI gate.
+HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
