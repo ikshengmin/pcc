@@ -557,6 +557,13 @@ def _note_use_block(use_blocks: dict[int, list[int]], value_id: int, block_id: i
         blocks.append(block_id)
 
 
+# Host-only diagnostic seam. The adapter owns installation and restoration;
+# the standalone implementation guard is also the native pruning boundary.
+import sys
+if sys.implementation.name == "cpython":
+    _HOST_FACTS_STRUCTURE_OBSERVER = None
+
+
 def _function_level_facts(
     kernel,
 ) -> tuple[
@@ -792,6 +799,22 @@ def _function_level_facts(
     first_live: dict[int, int] = {}
     visited: list[int] = [-1] * len(successors)
     pending: list[int] = []
+    facts_observe = False
+    import sys
+    if sys.implementation.name == "cpython":
+        _facts_observer = _HOST_FACTS_STRUCTURE_OBSERVER
+        _facts_sample = None
+        if _facts_observer is not None:
+            try:
+                _facts_sample = _facts_observer.begin(
+                    def_block, use_blocks, predecessors, block_base, block_end
+                )
+                facts_observe = _facts_sample is not None
+            except BaseException:
+                try:
+                    _facts_observer.fail()
+                except BaseException:
+                    pass
     for value_id in use_blocks:
         home = def_block.get(value_id, -1)
         lowest = -1
@@ -815,6 +838,53 @@ def _function_level_facts(
                 pending.pop()
             elif len(graph_low) < len(successors):
                 cache_miss = True
+        # Disabled observation pays only one local predicate per value.
+        # Enabled observation retains the explicit native pruning guard and
+        # executes the identical business body before recording a whole row.
+        if facts_observe:
+            import sys
+            if sys.implementation.name == "cpython":
+                if _facts_sample is not None:
+                    _facts_query = False
+                    try:
+                        _facts_query = _facts_observer.query(
+                            _facts_sample, home, bool(pending),
+                            cache_enabled and cache_key >= 0 and cached_low >= 0,
+                        )
+                    except BaseException:
+                        _facts_sample = None
+                        facts_observe = False
+                        try:
+                            _facts_observer.fail()
+                        except BaseException:
+                            pass
+                    if _facts_query:
+                        while pending:
+                            block_id = pending.pop()
+                            base = block_base[block_id]
+                            if lowest < 0 or base < lowest:
+                                lowest = base
+                            for predecessor in predecessors[block_id]:
+                                end = block_end[predecessor]
+                                if end > highest:
+                                    highest = end
+                                if predecessor != home and visited[predecessor] != value_id:
+                                    visited[predecessor] = value_id
+                                    pending.append(predecessor)
+                            try:
+                                _facts_more = _facts_observer.row(
+                                    _facts_sample, block_id, len(predecessors[block_id])
+                                )
+                            except BaseException:
+                                _facts_more = False
+                                _facts_sample = None
+                                try:
+                                    _facts_observer.fail()
+                                except BaseException:
+                                    pass
+                            if not _facts_more:
+                                facts_observe = False
+                                break
         while pending:
             block_id = pending.pop()
             base = block_base[block_id]
@@ -837,7 +907,7 @@ def _function_level_facts(
         last_use[value_id] = highest
         if lowest >= 0:
             first_live[value_id] = lowest
-    return (
+    facts_result = (
         block_base,
         last_use,
         barriers,
@@ -846,6 +916,17 @@ def _function_level_facts(
         hard_barriers,
         first_live,
     )
+    import sys
+    if sys.implementation.name == "cpython":
+        if _facts_sample is not None:
+            try:
+                _facts_observer.complete(_facts_sample)
+            except BaseException:
+                try:
+                    _facts_observer.fail()
+                except BaseException:
+                    pass
+    return facts_result
 
 
 def _linear_scan_assign(kernel, intervals: list[tuple[int, int, int]]) -> None:

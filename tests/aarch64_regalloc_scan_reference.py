@@ -134,10 +134,24 @@ def counted_function_facts(function, counts):
                 node.body.insert(0, self.increment("hits"))
             return node
 
+    from tests.aarch64_regalloc_facts_reference import _function_level_facts as reference
     tree = ast.parse(inspect.getsource(function))
+    reference_tree = ast.parse(inspect.getsource(reference))
+    reference_loop = next(node for node in ast.walk(reference_tree)
+                          if isinstance(node, ast.While) and isinstance(node.test, ast.Name)
+                          and node.test.id == "pending")
+    loops = [node for node in ast.walk(tree) if isinstance(node, ast.While)
+             and isinstance(node.test, ast.Name) and node.test.id == "pending"]
+    expected = 2 if any(isinstance(node, ast.Name) and node.id == "_HOST_FACTS_STRUCTURE_OBSERVER"
+                        for node in ast.walk(tree)) else 1
+    assert len(loops) == expected
+    assert sorted(len(node.body) for node in loops) == ([4, 6] if expected == 2 else [4])
+    canonical = ast.dump(ast.Module(body=reference_loop.body, type_ignores=[]))
+    for loop in loops:
+        assert ast.dump(ast.Module(body=loop.body[:4], type_ignores=[])) == canonical
     counter = Count()
     tree = counter.visit(tree)
-    assert (counter.pops, counter.edges) == (1, 1)
+    assert (counter.pops, counter.edges) == (expected, expected)
     namespace = dict(function.__globals__)
     namespace["_facts_counts"] = counts
     exec(compile(ast.fix_missing_locations(tree), "<counted-facts-graph-visits>", "exec"), namespace)

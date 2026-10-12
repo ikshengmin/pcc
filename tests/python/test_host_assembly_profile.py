@@ -1445,11 +1445,13 @@ def _arm_fake(tmp_path, monkeypatch):
     for module, names in ((backend, (adapter.ARM_CAPTURE, "_emit_prepared_aarch64_darwin_lines_active",
                                     "_emit_function", "_emit_dense_indexed_function_blocks")),
                           (prologue, ("emit_function_prologue",)),
-                          (regalloc, ("allocate_aarch64_block_registers", "note_aarch64_reload_destinations")),
+                          (regalloc, ("allocate_aarch64_block_registers", "note_aarch64_reload_destinations",
+                                      "_function_level_facts")),
                           (stackmaps, ("build_stack_map_plans",))):
         for name in names:
             setattr(module, name, _elf_owned_function(transport if name == adapter.ARM_CAPTURE else placeholder,
                                                       module, name))
+    regalloc._HOST_FACTS_STRUCTURE_OBSERVER = None
     backend._prologue_emit_function_prologue = prologue.emit_function_prologue
     prologue.allocate_aarch64_block_registers = regalloc.allocate_aarch64_block_registers
     backend.note_aarch64_reload_destinations = regalloc.note_aarch64_reload_destinations
@@ -1588,7 +1590,7 @@ def test_arm_backend_nonselected_startup_never_imports_pcc_or_profiler(tmp_path,
 
 
 def test_arm_backend_selected_startup_binds_manifest_sources_and_callable_owners(tmp_path, monkeypatch):
-    for case in ("valid", "adapter", "capture", "target", "module", "source", "owner", "callable", "alias"):
+    for case in ("valid", "adapter", "capture", "target", "module", "source", "owner", "callable", "facts_callable", "alias"):
         with monkeypatch.context() as patch:
             fake = _arm_fake(tmp_path / case, patch)
             identity = fake.config["identity"]
@@ -1600,6 +1602,8 @@ def test_arm_backend_selected_startup_binds_manifest_sources_and_callable_owners
                 Path(fake.backend.__file__).write_text("# changed owner\n")
             elif case == "callable":
                 fake.backend.emit_aarch64_darwin_indexed_transport = lambda *args, **kwargs: None
+            elif case == "facts_callable":
+                fake.regalloc._function_level_facts = lambda *args: None
             elif case == "alias":
                 fake.backend.build_stack_map_plans = lambda *args: None
             manifest = _arm_startup(fake, patch, _manifest(fake.root, ("other", adapter.MODULE), 1))
@@ -1978,3 +1982,77 @@ def test_arm_backend_source_bindings_use_real_worker_call_and_existing_report_bo
     assert "free_tool_id" not in ast.get_source_segment(implementation, arm)
     assert not any(isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(("pcc", "cProfile", "_lsprof"))
                    for node in ast.parse(implementation).body)
+
+
+@pytest.mark.parametrize("mode", ["normal", "foreign", "takeover", "partial_install", "cleanup_raises"])
+def test_arm_facts_hook_is_local_restored_and_business_exception_wins(tmp_path, monkeypatch, mode):
+    fake = _arm_fake(tmp_path, monkeypatch)
+    foreign = object()
+    observers = []
+    error = BaseException("business")
+    fake.control.backend_error = error
+    if mode == "foreign":
+        fake.regalloc._HOST_FACTS_STRUCTURE_OBSERVER = foreign
+    if mode == "partial_install":
+        class Partial(ModuleType):
+            def __setattr__(self, name, value):
+                super().__setattr__(name, value)
+                if name == "_HOST_FACTS_STRUCTURE_OBSERVER" and value is not None:
+                    raise BaseException("mutated then raised")
+        fake.regalloc.__class__ = Partial
+    if mode == "cleanup_raises":
+        def failed(self, reason="error"):
+            raise BaseException("cleanup")
+        monkeypatch.setattr(adapter._FactsStructureObserver, "fail", failed)
+    def inspect(*args, **kwargs):
+        hook = fake.regalloc._HOST_FACTS_STRUCTURE_OBSERVER
+        if mode == "foreign":
+            assert hook is foreign
+        else:
+            assert isinstance(hook, adapter._FactsStructureObserver)
+            observers.append(hook)
+            if mode != "partial_install":
+                sample = hook.begin({1: 0, 2: 0}, {1: [1], 2: [1]}, [[], [0]], [0, 1], [0, 1])
+                assert sample is not None
+            if mode == "takeover":
+                fake.regalloc._HOST_FACTS_STRUCTURE_OBSERVER = foreign
+    fake.control.backend_callback = inspect
+    _arm_attach(fake)
+    assert fake.regalloc._HOST_FACTS_STRUCTURE_OBSERVER is (foreign if mode == "foreign" else None)
+    with pytest.raises(BaseException) as raised:
+        _arm_call(fake)
+    assert raised.value is error
+    assert fake.regalloc._HOST_FACTS_STRUCTURE_OBSERVER is (foreign if mode in ("foreign", "takeover") else None)
+    assert all(observer.active is None for observer in observers)
+    fake.phase.report(None, False)
+    result = _result(fake)
+    assert "facts_structure" in result
+    assert [row[0] for row in fake.events].count("backend") == 1
+
+
+@pytest.mark.parametrize("mode", ["valid", "missing_parent", "duplicate_parent", "missing_global", "duplicate_global", "duplicate_child", "same_label_different_identity"])
+def test_facts_pop_edge_requires_unique_raw_parent_and_child_identity(mode):
+    def facts():
+        pass
+    code = "".join(["<method 'pop'", " of 'list' objects>"])
+    child = _entry(code, count=19)
+    parent = _entry(facts.__code__, [child])
+    entries = [parent, _entry(code)]
+    if mode == "missing_parent":
+        entries = entries[1:]
+    elif mode == "duplicate_parent":
+        entries.append(parent)
+    elif mode == "missing_global":
+        entries.pop()
+    elif mode == "duplicate_global":
+        entries.append(_entry(code))
+    elif mode == "duplicate_child":
+        parent.calls.append(_entry(code))
+    elif mode == "same_label_different_identity":
+        other = code.encode().decode()
+        assert other == code and other is not code
+        entries[1] = _entry(other)
+    result = adapter._facts_pop_edge(entries, facts.__code__)
+    assert result["available"] is (mode == "valid")
+    if mode == "valid":
+        assert result["calls"] == 19 and "memo-hit drain" in result["interpretation"]

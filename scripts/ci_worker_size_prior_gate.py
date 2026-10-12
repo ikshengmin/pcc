@@ -67,6 +67,8 @@ ELF_INPUTS = (ELF_FORMAT_TEST, ELF_STAGING_TEST, ELF_OWNER_TEST,
               "tests/elf_packed_application_preimage.py")
 REGALLOC_TEST = "tests/c/test_self_backend_aarch64_regalloc.py"
 REGALLOC_FACTS_TEST = "tests/python/test_aarch64_regalloc_single_seed.py"
+FACTS_STRUCTURE_TEST = "tests/python/test_aarch64_facts_structure.py"
+FACTS_NATIVE_BOUNDARY_TEST = "tests/python/test_aarch64_facts_native_boundary.py"
 SCALAR_PROJECTION_TEST = "tests/python/test_scalar_arena_projections.py"
 MANAGED_SCRATCH_TEST = "tests/python/test_managed_scratch_retirement.py"
 MANAGED_MEMORY_TEST = "tests/python/test_managed_scratch_host_memory.py"
@@ -77,6 +79,7 @@ BRANCH_PARITY_TEST = "tests/python/test_aarch64_branch_layout_parity.py"
 REGALLOC_INPUTS = (REGALLOC_TEST, CALLEE_SAVED_TEST, BRANCH_PARITY_TEST,
                   "tests/aarch64_regalloc_scan_reference.py",
                   "tests/aarch64_regalloc_facts_reference.py", REGALLOC_FACTS_TEST,
+                  FACTS_STRUCTURE_TEST, FACTS_NATIVE_BOUNDARY_TEST,
                   SCALAR_PROJECTION_TEST, "tests/scalar_arena_projection_reference.json",
                   "tests/scalar_arena_projection_ci_reference.py",
                   "tests/python/test_precise_stackmap_abi.py",
@@ -187,10 +190,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               ELF_NEGATIVE_TEST, ELF_NEGATIVE_SOURCE_TEST,
               ELF_PROGRESS_TEST, ELF_PROGRESS_SOURCE_TEST,
               ELF_APPLICATION_TEST, ELF_APPLICATION_SOURCE_TEST,
-              MANAGED_DIRTY_ROWS_TEST)
-# All existing 1827 nodes remain; 95 finite dirty-row controls use the same
-# default-xdist invocation. Real-kernel observations stay in the existing PHI gate.
-HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 48, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95)
+              MANAGED_DIRTY_ROWS_TEST, FACTS_STRUCTURE_TEST, FACTS_NATIVE_BOUNDARY_TEST)
+# All existing 1922 nodes remain; 55 source/fake observer controls and two
+# real native-pruning/typing controls use the same default-xdist invocation.
+HOST_COUNTS = (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 2)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

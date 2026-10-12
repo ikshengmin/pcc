@@ -428,10 +428,234 @@ def _attach(config, manifest_sha256, assembly, timing, encoder, elf):
         raise
 
 
+# Count bounds, not latency bounds. Explicit transient buffer payload is
+# two 4-byte (B+1) vectors and a B-byte bitmap: 9B+8, excluding Python metadata.
+FACTS_BLOCK_CAP = 1 << 19
+FACTS_CENSUS_CAP = 1 << 23
+FACTS_INITIALIZED_CAP = 1 << 20
+FACTS_POP_CAP = 1 << 22
+FACTS_CALL_CAP = 1024
+FACTS_DETAIL_CAP = 32
+
+
+class _FactsStructureObserver:
+    """One home per call; census synchronously borrows exact builtin inputs.
+
+    begin() reads bounded existing containers without mutation, retaining or
+    exporting none. Later callbacks receive scalars and the bounded sample.
+    """
+
+    def __init__(self):
+        self.calls = self.census = self.initialized = self.pops = 0
+        self.skipped = self.invalid = self.selected = self.completed = 0
+        self.disabled = None
+        self.active = None
+        self.details = []
+        self.totals = dict(P=0, Q=0, U=0, E_seen=0, B=0, E_all=0,
+                           seed_active=0, seed_traffic=0, walking_queries=0,
+                           memo_hits=0, censored_calls=0)
+
+    def _spend(self, count):
+        if self.census + count > FACTS_CENSUS_CAP:
+            self.disabled = "census_cap"
+            return False
+        self.census += count
+        return True
+
+    def begin(self, definitions, uses, predecessors, bases, ends):
+        if self.active is not None:
+            # An earlier facts invocation raised before complete().
+            self.fail("unfinished_facts")
+        if self.disabled is not None:
+            return None
+        if self.calls >= FACTS_CALL_CAP:
+            self.disabled = "call_cap"
+            return None
+        self.calls += 1
+        self.skipped += 1
+        if (type(definitions) is not dict or type(uses) is not dict
+                or type(predecessors) is not list or type(bases) is not list
+                or type(ends) is not list):
+            return None
+        B = len(predecessors)
+        if not 0 < B <= FACTS_BLOCK_CAP or len(bases) != B or len(ends) != B:
+            return None
+        # Validate before any lookup that could invoke custom equality/indexing.
+        for value, home in definitions.items():
+            if not self._spend(1):
+                return None
+            if type(value) is not int or type(home) is not int or not -1 <= home < B:
+                return None
+        if self.initialized + B > FACTS_INITIALIZED_CAP:
+            self.disabled = "initialized_blocks_cap"
+            return None
+        self.initialized += B
+        from array import array
+        counts = array("I", [0])
+        if counts.itemsize != 4 or FACTS_CENSUS_CAP >= 1 << 32:
+            self.fail("counter_width")
+            return None
+        counts *= B + 1
+        traffic = counts[:]
+        for value, seeds in uses.items():
+            if not self._spend(1):
+                return None
+            # -1 aliases the original visited sentinel; never observe it.
+            if type(value) is not int or value == -1 or type(seeds) is not list:
+                return None
+            home = definitions.get(value, -1)
+            nonhome = 0
+            for seed in seeds:
+                if not self._spend(1):
+                    return None
+                if type(seed) is not int or not 0 <= seed < B:
+                    return None
+                if seed != home:
+                    nonhome += 1
+            if nonhome:
+                counts[home + 1] += 1
+                traffic[home + 1] += nonhome
+        E_all = 0
+        # These rows are constructed locally by facts, containing its integer
+        # block_id. Inspect each existing row once; do not traverse its edges.
+        for row in predecessors:
+            if not self._spend(1):
+                return None
+            if type(row) is not list:
+                return None
+            E_all += len(row)
+        if not self._spend(B + 1):
+            return None
+        selected = -1
+        for index in range(B + 1):
+            if counts[index] >= 2 and (selected < 0
+                    or counts[index] > counts[selected]
+                    or (counts[index] == counts[selected] and traffic[index] > traffic[selected])):
+                selected = index
+        if selected < 0:
+            return None
+        sample = dict(call=self.calls, home=selected - 1, B=B, E_all=E_all,
+                      seed_active=counts[selected], seed_traffic=traffic[selected],
+                      walking_queries=0, memo_hits=0, P=0, Q=0, U=0, E_seen=0,
+                      censored=None, seen=bytearray(B))
+        # No vectors or references to graph/kernel/uses leave this method.
+        self.active = sample
+        self.selected += 1
+        self.skipped -= 1
+        return sample
+
+    def query(self, sample, home, walking, memo_hit):
+        if home != sample["home"]:
+            return False
+        if self.disabled is not None or sample["censored"] is not None:
+            return False
+        if memo_hit:
+            sample["memo_hits"] += 1
+        if walking:
+            sample["walking_queries"] += 1
+            return True
+        return False
+
+    def row(self, sample, block, edges):
+        # Called only after the complete original row body, never per edge.
+        # Any partial bookkeeping failure invalidates the entire sample.
+        sample["P"] += 1
+        sample["Q"] += edges
+        self.pops += 1
+        if not sample["seen"][block]:
+            sample["seen"][block] = 1
+            sample["U"] += 1
+            sample["E_seen"] += edges
+        if self.pops >= FACTS_POP_CAP:
+            self.disabled = "global_pop_cap"
+            sample["censored"] = self.disabled
+        elif sample["P"] >= 8 * sample["B"]:
+            sample["censored"] = "call_pop_cap"
+        if sample["censored"] is not None:
+            sample["seen"] = None
+            return False
+        return True
+
+    def complete(self, sample):
+        sample["seen"] = None
+        row = {key: value for key, value in sample.items() if key != "seen"}
+        row["repeated_pops_lower_bound"] = row["P"] - row["U"]
+        row["repeated_edges_lower_bound"] = row["Q"] - row["E_seen"]
+        row["compression_lower_bound"] = 1 + (
+            row["repeated_pops_lower_bound"] + row["repeated_edges_lower_bound"]
+        ) / (row["B"] + row["E_all"])
+        # Only successful facts calls contribute evidence; invalid samples
+        # never publish partial P/Q or a ratio.
+        totals = {key: value + (int(sample["censored"] is not None)
+                               if key == "censored_calls" else sample[key])
+                  for key, value in self.totals.items()}
+        details = self.details + [row] if len(self.details) < FACTS_DETAIL_CAP else self.details
+        completed = self.completed + 1
+        # Prepare all allocating work before committing the successful row.
+        self.totals, self.details, self.completed = totals, details, completed
+        self.active = None
+
+    def fail(self, reason="observer_error"):
+        self.disabled = reason
+        if self.active is not None:
+            self.active["seen"] = None
+            self.active = None
+            self.invalid += 1
+
+    def report(self):
+        return dict(
+            schema="pcc.host-facts-structure.v1", calls=self.calls,
+            selected=self.selected, completed=self.completed, skipped=self.skipped,
+            invalid=self.invalid, disabled=self.disabled, census_items=self.census,
+            initialized_blocks=self.initialized, pop_budget_used=self.pops,
+            totals=self.totals.copy(), details=self.details,
+            details_omitted=self.completed - len(self.details),
+            limits=dict(blocks=FACTS_BLOCK_CAP, census=FACTS_CENSUS_CAP,
+                        initialized_blocks=FACTS_INITIALIZED_CAP, pops=FACTS_POP_CAP,
+                        calls=FACTS_CALL_CAP, detail_rows=FACTS_DETAIL_CAP,
+                        per_call_pops_per_block=8, explicit_buffer_bytes_per_block=9),
+            selection="One home with at least two seed-active values, ranked by active values, raw nonhome seed traffic, then lowest home. Home -1 is valid. Home-only values are excluded; duplicate seeds count traffic. This biases toward reuse; one negative home is not a global negative.",
+            interpretation="P/Q count completed observed walk rows/row lengths after existing memoization. walking_queries and memo_hits cover selected queries admitted before censoring; seed_active is the full census count. U/E_seen count first-seen rows/row lengths. Caps censor a prefix, never a whole-home ratio. P-U and Q-E_seen are repeated-work lower bounds; 1+(P+Q-U-E_seen)/(B+E_all) is a conservative whole-home compression lower bound for successful facts. No SCC was computed; SCC constants, native fit and net benefit are unknown. Profile overhead and profiler memory are not bounded by this report.",
+        )
+
+
+def _invalidate_facts(observer, reason):
+    try:
+        observer.fail(reason)
+    except BaseException:
+        # Diagnostic cleanup must not replace the backend's result/exception.
+        try:
+            observer.active = None
+            observer.disabled = "observer_error"
+        except BaseException:
+            pass
+
+
+def _facts_pop_edge(entries, facts_code):
+    """Resolve one raw facts code and its unique actual list.pop child."""
+    unavailable = dict(available=False, reason="raw_identity_unresolved_or_ambiguous")
+    parents = [entry for entry in entries if entry.code is facts_code]
+    if len(parents) != 1:
+        return unavailable
+    children = [child for child in parents[0].calls or ()
+                if type(child.code) is str and child.code == "<method 'pop' of 'list' objects>"]
+    if len(children) != 1:
+        return unavailable
+    child = children[0]
+    matches = [entry for entry in entries if entry.code is child.code]
+    if len(matches) != 1:
+        return unavailable
+    return dict(available=True, calls=child.callcount, recursive_calls=child.reccallcount,
+                self_s=child.inlinetime, cumulative_s=child.totaltime,
+                interpretation="Raw facts-to-list.pop edge: C includes actual walk pops plus memo-hit drain pops. C is not selected P; no selected or capped count is subtracted from backend totals.")
+
+
 def _attach_arm(config, manifest_sha256, backend, timing, prologue, regalloc, stackmaps):
     original = backend.emit_aarch64_darwin_indexed_transport
     phase_type = timing.ModulePhaseTiming
     original_report = phase_type.report
+    facts_code = regalloc._function_level_facts.__code__
+    facts_observer = _FactsStructureObserver()
     # No IR module, invocation arguments, result, phase or traceback is retained.
     state = {"used": False, "owned": False, "profiler": None, "timing_id": None,
              "status": "NOT_CAPTURED", "diagnostic_errors": [], "disabled": False}
@@ -482,6 +706,8 @@ def _attach_arm(config, manifest_sha256, backend, timing, prologue, regalloc, st
         state["used"] = True
         state["timing_id"] = id(phase)
         profiler = None
+        facts_previous = None
+        facts_installed = False
         try:
             try:
                 _write(directory / "claim.json", dict(base, status="CLAIMED"))
@@ -506,11 +732,31 @@ def _attach_arm(config, manifest_sha256, backend, timing, prologue, regalloc, st
             # exactly once. Its BaseException is never caught or replaced.
             if profiler is not None:
                 state["status"] = "BACKEND_RAISED"
+            if profiler is not None and not state["diagnostic_errors"]:
+                try:
+                    facts_previous = regalloc._HOST_FACTS_STRUCTURE_OBSERVER
+                    if facts_previous is not None:
+                        _invalidate_facts(facts_observer, "foreign_hook")
+                    else:
+                        regalloc._HOST_FACTS_STRUCTURE_OBSERVER = facts_observer
+                        facts_installed = True
+                except BaseException:
+                    _invalidate_facts(facts_observer, "hook_install_failed")
             result = original(*args, **kwargs)
             if profiler is not None:
                 state["status"] = "BACKEND_RETURNED"
             return result
         finally:
+            try:
+                # An assignment that raised after mutation still belongs to us.
+                if regalloc._HOST_FACTS_STRUCTURE_OBSERVER is facts_observer:
+                    regalloc._HOST_FACTS_STRUCTURE_OBSERVER = facts_previous
+                elif facts_installed:
+                    _invalidate_facts(facts_observer, "foreign_hook_preserved")
+                if facts_observer.active is not None:
+                    _invalidate_facts(facts_observer, "facts_or_backend_raised")
+            except BaseException:
+                _invalidate_facts(facts_observer, "hook_restore_failed")
             if profiler is not None:
                 # Official API only, once; no slot freeing or hook clearing.
                 # A slot name cannot identify arbitrary same-name takeovers.
@@ -555,8 +801,9 @@ def _attach_arm(config, manifest_sha256, backend, timing, prologue, regalloc, st
                                     id(backend._emit_prepared_aarch64_darwin_lines_active.__code__),
                                     id(backend._emit_function.__code__),
                                     id(prologue.emit_function_prologue.__code__))
+                            entries = profiler.getstats()
                             value.update(_summary(
-                                profiler.getstats(), Path(config["root"]),
+                                entries, Path(config["root"]),
                                 _labels((backend, prologue, regalloc, stackmaps)), keys,
                                 pinned_edges=((keys[1], id(stackmaps.build_stack_map_plans.__code__)),
                                               (keys[1], keys[2]),
@@ -565,6 +812,8 @@ def _attach_arm(config, manifest_sha256, backend, timing, prologue, regalloc, st
                                               (keys[2], id(backend._emit_dense_indexed_function_blocks.__code__)),
                                               (keys[3], id(regalloc.allocate_aarch64_block_registers.__code__))),
                                 attribution="Backend transport includes prepare, planning, function emission and finalization. Function emission includes reload/prologue setup and bodies; prologue includes regalloc. Direct owner edges overlap these inclusive scopes; shared helper self is combined. Cumulative times must not be summed."))
+                            value["facts_pop_edge"] = _facts_pop_edge(entries, facts_code)
+                        value["facts_structure"] = facts_observer.report()
                         _write(directory / "result.json", value)
                 except BaseException:
                     try:
@@ -958,6 +1207,7 @@ def install():
                     (backend._emit_dense_indexed_function_blocks, backend, "_emit_dense_indexed_function_blocks"),
                     (regalloc.note_aarch64_reload_destinations, regalloc, "note_aarch64_reload_destinations"),
                     (regalloc.allocate_aarch64_block_registers, regalloc, "allocate_aarch64_block_registers"),
+                    (regalloc._function_level_facts, regalloc, "_function_level_facts"),
                     (stackmaps.build_stack_map_plans, stackmaps, "build_stack_map_plans")):
                 if (function.__module__ != module.__name__ or function.__qualname__ != name
                         or Path(function.__code__.co_filename).resolve() != Path(module.__file__).resolve()):

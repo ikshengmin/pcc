@@ -59,7 +59,8 @@ def _forbidden(*args, **kwargs):
 
 
 def _namespace(*, original=False):
-    namespace = dict(valueclass=lambda cls: dataclass(frozen=True)(cls))
+    namespace = dict(valueclass=lambda cls: dataclass(frozen=True)(cls),
+                     _HOST_FACTS_STRUCTURE_OBSERVER=None)
     arena_tree = _tree("pcc/backend/self_backend_value_arena.py")
     records = [copy.deepcopy(node) for node in arena_tree.body
                if isinstance(node, ast.ClassDef) and node.name in ("CompilerInt2", "CompilerInt4")]

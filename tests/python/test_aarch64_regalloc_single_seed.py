@@ -156,16 +156,32 @@ def load_facts(path, *, count=False):
                 node.body.insert(0, self.bump("writes"))
             return node
 
+    loops = [node for node in ast.walk(function) if isinstance(node, ast.While)
+             and isinstance(node.test, ast.Name) and node.test.id == "pending"]
+    if path == ORACLE:
+        assert len(loops) == 1
+    else:
+        assert len(loops) == 2
+        plain = next(node for node in loops if len(node.body) == 4)
+        observed = next(node for node in loops if len(node.body) == 6)
+        # Do not weaken the traversal oracle: the prefix's four business
+        # statements and the untouched original body must be AST-identical.
+        reference = ast.parse(ORACLE.read_text())
+        old_loop = next(node for node in ast.walk(reference) if isinstance(node, ast.While)
+                        and isinstance(node.test, ast.Name) and node.test.id == "pending")
+        canonical = ast.dump(ast.Module(body=old_loop.body, type_ignores=[]))
+        assert ast.dump(ast.Module(body=plain.body, type_ignores=[])) == canonical
+        assert ast.dump(ast.Module(body=observed.body[:4], type_ignores=[])) == canonical
     if count:
         counter = Count()
         function = counter.visit(function)
-        assert (counter.pops, counter.edges) == (1, 1)
+        assert (counter.pops, counter.edges) == ((1, 1) if path == ORACLE else (2, 2))
     tree = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
                            helper, function], type_ignores=[])
     namespace = dict(CompilerInt4=Record, IndexedFunctionKernel=type("ExactKernel", (), {}),
                      PARSED_INSTRUCTION_KINDS=tuple(range(16)),
                      PARSED_INSTRUCTION_KIND_CALL=2, _POOL_REJECTED_INSTRUCTION_KIND_IDS=(14, 15),
-                     _counts=counts)
+                     _counts=counts, _HOST_FACTS_STRUCTURE_OBSERVER=None)
     exec(compile(ast.fix_missing_locations(tree), str(path), "exec"), namespace)
     return namespace["_function_level_facts"], counts
 
