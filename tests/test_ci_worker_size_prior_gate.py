@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 2)
+    assert gate.HOST_COUNTS == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -68,7 +68,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[42:43] == (gate.MANAGED_DIRTY_ROWS_TEST,)
     assert gate.HOST_FILES[43:] == (gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST)
     assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 45
-    assert sum(gate.HOST_COUNTS) == 1979 and sum(gate.HOST_COUNTS[:43]) == 1934
+    assert sum(gate.HOST_COUNTS) == 1987 and sum(gate.HOST_COUNTS[:43]) == 1934
     assert sum(gate.HOST_COUNTS[:42]) == 1839
     assert sum(gate.HOST_COUNTS[:40]) == 1830
     assert sum(gate.HOST_COUNTS[:38]) == 1820
@@ -135,7 +135,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     ]
     assert tuple(len(node.decorator_list[0].args[1].elts) for node in profiles[48:]) == (5, 7)
     for filename, expected_count in ((gate.FACTS_STRUCTURE_TEST, 43),
-                                     (gate.FACTS_NATIVE_BOUNDARY_TEST, 2)):
+                                     (gate.FACTS_NATIVE_BOUNDARY_TEST, 10)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
             if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
@@ -944,7 +944,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 2) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 253, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 32, 24, 11, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 71, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
