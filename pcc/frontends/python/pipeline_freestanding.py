@@ -31,6 +31,16 @@ def source_declares_runtime_port_module(source: str) -> bool:
     return _source_declares_module_directive(source, "__pcc_runtime_port__")
 
 
+def _triple_at(chars: list[str], index: int, quote: str) -> bool:
+    """``source[index:index + 3] == quote * 3`` over the character list."""
+    return (
+        index + 2 < len(chars)
+        and chars[index] == quote
+        and chars[index + 1] == quote
+        and chars[index + 2] == quote
+    )
+
+
 def _source_without_literals_or_comments(source: str) -> str:
     """Mask strings/comments without changing indentation or line numbers.
 
@@ -38,15 +48,21 @@ def _source_without_literals_or_comments(source: str) -> str:
     Looking for a substring before lexical masking rejects those modules.
     Keep this scan independent of the parser: it selects the parser's mode
     and must also execute in the native bootstrap compiler.
+
+    Index a character list, not the str: pcc stores str as UTF-8, so
+    ``source[i]`` on a non-ASCII source rescans from byte 0. This loop was
+    quadratic under pcc1 and took 97% of a Stage2 export worker's samples.
     """
+    chars = list(source)
+    length = len(chars)
     out: list[str] = []
     quote = ""
     triple = False
     escaped = False
     comment = False
     index = 0
-    while index < len(source):
-        char = source[index]
+    while index < length:
+        char = chars[index]
         if comment:
             if char == "\n":
                 comment = False
@@ -69,7 +85,7 @@ def _source_without_literals_or_comments(source: str) -> str:
             if char == quote:
                 if not triple:
                     quote = ""
-                elif source[index:index + 3] == quote * 3:
+                elif _triple_at(chars, index, quote):
                     out.append("   ")
                     index += 3
                     quote = ""
@@ -83,7 +99,7 @@ def _source_without_literals_or_comments(source: str) -> str:
             out.append(" ")
         elif char == "'" or char == '"':
             quote = char
-            triple = source[index:index + 3] == char * 3
+            triple = _triple_at(chars, index, char)
             if triple:
                 out.append("   ")
                 index += 3
@@ -113,6 +129,11 @@ def _contains_directive_name(line: str, marker: str) -> bool:
 
 
 def _source_declares_module_directive(source: str, marker: str) -> bool:
+    # Masking only blanks literal and comment characters, so a line can name
+    # the marker only if the source text contains it. Almost no module does;
+    # skip the mask for them.
+    if marker not in source:
+        return False
     declaration = marker + " = True"
     found = False
     for raw_line, at_module_scope in _source_module_scope_lines(

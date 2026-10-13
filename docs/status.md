@@ -92,6 +92,10 @@ micro-optimizations were below 5% and are parked in the archive.
   over-releases a live replacement, `test_gc_relocation_sweep_verdict.py` code 23
   pre-existing); `tuple(list of finalizable instances)` + collect aborts with
   `BAD_INCREF`; `test_gc_backend4_production.py` fails a source-text assertion.
+- `tests/python/test_raw_addresses_are_ints.py::test_raw_addresses_execute_as_ints_on_the_self_backend`:
+  `py_bytes_new(_str_utf8("hey"), 3)` yields `b'mpl'` (stale pointer from the
+  str -> raw-pointer extern path); independent of the 2026-10-13 commits (A/B
+  each). Repro: archive `repros/str_utf8_extern_dangling_probe.py`.
 - Host tests failing on a clean HEAD snapshot (pre-existing), among others:
   `test_py_multi_file_compile.py` (borrowed-rebind IR shape, raw-int scalar slot
   count, mock of the removed `_link_with_clang`, static-export constructor arg
