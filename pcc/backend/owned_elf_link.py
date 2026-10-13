@@ -40,15 +40,18 @@ def _image_sha256(image: bytearray) -> str:
 
 
 def assemble(text: str, target: str, *, phase_timing=None):
+    # Keep each lazy import and its call in the same target branch. Native
+    # lowering must not merge different providers under one callable name.
     if is_aarch64_linux_triple(target):
-        from .arm64_elf_driver import assemble_file
+        from .arm64_elf_driver import assemble_file as assemble_aarch64
+        return assemble_aarch64(text)
     elif is_x86_64_linux_triple(target):
-        from .x86_64_asm_driver import assemble_file
+        from .x86_64_asm_driver import assemble_file as assemble_x86_64
         if phase_timing is not None:
-            return assemble_file(text, phase_timing=phase_timing)
+            return assemble_x86_64(text, phase_timing=phase_timing)
+        return assemble_x86_64(text)
     else:
         raise ElfError("unsupported owned ELF target: " + target)
-    return assemble_file(text)
 
 
 def _thread_pointer_object(target: str):
