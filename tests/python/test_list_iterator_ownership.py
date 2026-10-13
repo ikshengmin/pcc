@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 
-@pytest.mark.parametrize("shape", ["borrowed", "temporary", "enumerate", "raising", "source_lifetime"])
+@pytest.mark.parametrize("shape", ["borrowed", "temporary", "enumerate", "enumerate_temporary", "raising", "source_lifetime"])
 def test_list_iterator_releases_owners_on_success_and_error(
     tmp_path, monkeypatch, pcc_runtime_archive, python_program_compiler, shape,
 ):
@@ -15,6 +15,7 @@ def test_list_iterator_releases_owners_on_success_and_error(
         "borrowed": "xs = build(count)\n    ys = list(xs)\n    assert ys is not xs\n    assert len(xs) == len(ys) == count\n    assert ys[0] is xs[0]",
         "temporary": "ys = list(build(count))\n    assert len(ys) == count",
         "enumerate": "xs = build(count)\n    ys = list(enumerate(xs))\n    assert len(ys) == count\n    assert ys[0][0] == 0\n    assert ys[0][1] is xs[0]",
+        "enumerate_temporary": "pairs = enumerate(build(count))\n    ys = [pair for pair in pairs]\n    assert len(ys) == count\n    assert ys[0][0] == 0",
         "raising": "try:\n        ys = list(Broken(count))\n    except ValueError as exc:\n        assert str(exc) == 'iterator failure'\n    else:\n        assert False\n    try:\n        ys = list(NoIterator())\n    except ValueError as exc:\n        assert str(exc) == 'iter failure'\n    else:\n        assert False",
         "source_lifetime": "global source_destroyed\n    source_destroyed = 0\n    ys = list(Source(count))\n    assert len(ys) == count\n    gc.collect()\n    assert source_destroyed == 1",
     }

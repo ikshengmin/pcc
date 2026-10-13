@@ -527,7 +527,13 @@ class BuiltinTypeAttrLoweringMixin:
         helper (the for-loop form never reaches here — for
         normalization desugars it to a counter). Returns None for
         shapes this lowering does not cover so the caller falls
-        through unchanged."""
+        through unchanged.
+
+        The list is published straight into the caller's output root (or a
+        root of its own) and the iterable is an owned slot-call operand, as
+        in ``_emit_reversed_builtin``: ``list(enumerate(xs))`` hands its
+        operand slot to this producer, and an owned temporary iterable is
+        released with the operand roots."""
         start_expr = None
         if len(expr.args) == 1 and not expr.kwargs:
             pass
@@ -541,24 +547,39 @@ class BuiltinTypeAttrLoweringMixin:
             start_expr = expr.kwargs[0][1]
         else:
             return None
-        iter_obj = self._emit_as_object(expr.args[0])
-        if start_expr is not None:
-            start_val = self._emit_expr_as_i64(start_expr)
-        else:
-            start_val = ir.Constant(_I64, 0)
-        result = self.builder.call(
-            self.runtime["py_enumerate_list"],
-            [iter_obj, start_val],
-            name=self._fresh("enumerate.list"),
-        )
-        # This value-position runtime call returns a fresh managed list.
-        # Loop-normalized enumerate does not execute this emitter and may
-        # use raw state, so record ownership here rather than by AST name.
-        self._note_owned_dynamic_call_value(result)
-        # py_obj_iter raises TypeError for non-iterables; iteration can
-        # propagate pending exceptions.
-        self._emit_post_call_err_check(getattr(expr, "span", None))
-        return result
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("enumerate.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            source = self._emit_slot_call_operand(expr.args[0], "enumerate.source")
+            roots.append(source)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if start_expr is not None:
+                start_val = self._emit_expr_as_i64(start_expr)
+            else:
+                start_val = ir.Constant(_I64, 0)
+            # py_obj_iter raises TypeError for non-iterables; iteration can
+            # propagate pending exceptions.
+            self._slot_call_runtime_call(
+                "py_enumerate_list", (source,), result_slot=output,
+                suffix_args=(start_val,), span=getattr(expr, "span", None),
+            )
+            self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("enumerate.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
 
     # Encoding-name sets mirror the ``str.encode`` lowering in
     # ``string_method_lowering.py`` so the two-arg ``bytes``/``bytearray``
