@@ -38,6 +38,7 @@ producer error instead of silently teaching a moving collector to rewrite it.
 
 from __future__ import annotations
 
+import hashlib
 import struct
 from dataclasses import dataclass
 
@@ -217,6 +218,65 @@ HEADER_SIZE = _HEADER.size
 FUNCTION_SIZE = _FUNCTION.size
 RECORD_SIZE = _RECORD.size
 LOCATION_SIZE = _LOCATION.size
+
+# Tables that passed validate_stack_map_payload, keyed by expected architecture,
+# the resource limits in force and the SHA-256 of every byte except the
+# function-address words.  No check except the final image's unresolved-address
+# check reads those words, and the ELF input validator lets relocations write
+# nothing else in the section, so a linked table whose other bytes match a
+# validated relocatable one has the same verdict apart from that check.  The
+# link validated each table on input and again after relocation; the second
+# pass repeated identical work.
+_VALIDATED_ADDRESS_FREE_TABLES: dict[str, bool] = {}
+_VALIDATED_ADDRESS_FREE_TABLE_LIMIT = 65536
+
+
+def _address_free_table_key(payload: bytes, expected_arch) -> str:
+    """Key for _VALIDATED_ADDRESS_FREE_TABLES, or "" for a malformed layout.
+
+    Walks only the header and function records; the full validator reports
+    every malformed layout this walk rejects.
+    """
+    if len(payload) < HEADER_SIZE:
+        return ""
+    function_count = _HEADER.unpack_from(payload, 0)[4]
+    if function_count > MAX_FUNCTIONS:
+        return ""
+    digest = hashlib.sha256()
+    cursor = HEADER_SIZE
+    copied = 0
+    for _ in range(function_count):
+        if cursor + FUNCTION_SIZE > len(payload):
+            return ""
+        record_count = _FUNCTION.unpack_from(payload, cursor)[4]
+        address_offset = cursor + 8
+        digest.update(payload[copied:address_offset])
+        copied = address_offset + 8
+        cursor += FUNCTION_SIZE + record_count * RECORD_SIZE
+    if cursor > len(payload):
+        return ""
+    digest.update(payload[copied:])
+    return (
+        str(expected_arch) + ":" + str(MAX_FUNCTIONS) + ":" + str(MAX_RECORDS)
+        + ":" + str(MAX_LOCATIONS) + ":" + str(len(payload)) + ":" + digest.hexdigest()
+    )
+
+
+def _require_resolved_function_addresses(payload: bytes) -> None:
+    """The final-image address check of an already validated table layout."""
+    function_count = _HEADER.unpack_from(payload, 0)[4]
+    cursor = HEADER_SIZE
+    for _ in range(function_count):
+        function_fields = _FUNCTION.unpack_from(payload, cursor)
+        if function_fields[1] == 0:
+            raise PreciseStackMapError("final-image function address is unresolved")
+        cursor += FUNCTION_SIZE + function_fields[4] * RECORD_SIZE
+
+
+def _remember_validated_table(key: str) -> None:
+    if len(_VALIDATED_ADDRESS_FREE_TABLES) >= _VALIDATED_ADDRESS_FREE_TABLE_LIMIT:
+        _VALIDATED_ADDRESS_FREE_TABLES.clear()
+    _VALIDATED_ADDRESS_FREE_TABLES[key] = True
 
 
 @dataclass(frozen=True)
@@ -1045,6 +1105,15 @@ def validate_stack_map_payload(
 
     if not isinstance(payload, bytes):
         raise PreciseStackMapError("stack-map payload must be immutable bytes")
+    # A budgeted caller is charged for the work below, so only unbudgeted
+    # validation reuses an earlier verdict on the same address-free bytes.
+    table_key = ""
+    if compact_budget is None:
+        table_key = _address_free_table_key(payload, expected_arch)
+        if table_key and table_key in _VALIDATED_ADDRESS_FREE_TABLES:
+            if final_image:
+                _require_resolved_function_addresses(payload)
+            return
     header, cursor = _take(payload, 0, _HEADER, "stack-map header")
     magic, version, arch, pointer_size, function_count, table_count, _hres = header
     if magic != MAGIC:
@@ -1354,6 +1423,8 @@ def validate_stack_map_payload(
 
     if cursor != table_start:
         raise PreciseStackMapError("stack-map record layout changed during validation")
+    if table_key:
+        _remember_validated_table(table_key)
 
 
 def _skip_safepoint_records(
