@@ -24,6 +24,16 @@ worker-prior gates (Linux x86_64, Windows, macOS) failed again.
 
 ## Stage1 within 2400 s (goal 1 / platform qualification)
 
+Run 38391246598 (`510ed001`), Linux aarch64 wheel job: Stage1 produced a static
+pcc1 in 2389.3 s (11 s under the cap, peak tree RSS 6.4 GB), and that pcc1
+compiled the canary in 325.9 s and ran it. The five-GC chain then stopped:
+GC0 Stage2 hit the 2400 s stage deadline while still in its per-module export
+phase (273 of ~460 modules exported, 3920 worker-seconds, about two workers
+because the GC0 and GC1 chains shared the 4-vCPU runner; the largest exports
+under pcc1 took 170-350 s each, e.g. `pcc.driver.cli_bootstrap` 348.5 s);
+GC1/GC2 were cancelled as peers. The same job at `0f6fa1d9` timed out in the
+Stage1 link, so the aarch64 Stage1 margin is a few seconds either way.
+
 From run 38375711981 (`pcc indexed phase totals` in each
 `platform-qualification/shared/stage1.log`):
 
