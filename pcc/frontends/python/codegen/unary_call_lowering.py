@@ -205,7 +205,9 @@ class UnaryCallLoweringMixin:
                     name=self._fresh("complex.neg"),
                 )
             if isinstance(ty, FloatType):
-                return self.builder.fneg(operand, name=self._fresh("fneg"))
+                return self.builder.fneg(
+                    self._f64_from_emitted(operand, expr.operand), name=self._fresh("fneg")
+                )
             if (self._int_exprs_are_boxed() and isinstance(ty, (IntType, BoolType))
                     and not (isinstance(ty, IntType) and ty.name in ("pcc.i64", "pcc.u64"))):
                 operand_obj = marshal.marshal_to_object(

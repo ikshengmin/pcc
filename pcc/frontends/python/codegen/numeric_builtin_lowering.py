@@ -188,7 +188,7 @@ class NumericBuiltinLoweringMixin:
             return got
         if isinstance(arg.ty, FloatType) and len(expr.args) == 1:
             # Exact: int(1e20) is a bignum, NaN/inf raise CPython's errors.
-            value = self._emit_expr(arg)
+            value = self._f64_from_emitted(self._emit_expr(arg), arg)
             got = self.builder.call(
                 self.runtime["py_int_from_f64_exact"],
                 [value],

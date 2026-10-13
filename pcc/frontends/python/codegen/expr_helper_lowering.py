@@ -282,6 +282,21 @@ class ExprHelperLoweringMixin:
 
     # -- UnaryOp -------------------------------------------------------
 
+    def _f64_from_emitted(self, value: ir.Value, expr: Expr) -> ir.Value:
+        """The ``double`` of an emitted float-typed expression.
+
+        A float result can arrive boxed: a call through a live import binding
+        or another object call returns its result object even when the
+        callee is typed ``-> float``. Unbox it and release the owned box.
+        """
+        if not isinstance(value.type, ir.PointerType):
+            return value
+        unboxed = marshal.marshal_from_object(
+            self.builder, self.module, self.runtime, value, FloatType(name="float")
+        )
+        self._gc_release_if_owned(value, expr)
+        return unboxed
+
     def _emit_expr_as_i64(self, expr: Expr) -> ir.Value:
         """Emit an expression and coerce the result to ``i64``.
 
@@ -322,7 +337,9 @@ class ExprHelperLoweringMixin:
                 return i
             return self.builder.zext(value, _I64, name=self._fresh("b2i"))
         if isinstance(expr.ty, FloatType):
-            return self.builder.fptosi(value, _I64, name=self._fresh("f2i"))
+            return self.builder.fptosi(
+                self._f64_from_emitted(value, expr), _I64, name=self._fresh("f2i")
+            )
         if isinstance(expr.ty, DynType) or self._is_object(expr.ty):
             # Go through the runtime.
             boxed = marshal.marshal_to_object(
