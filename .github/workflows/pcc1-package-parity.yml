@@ -17,6 +17,7 @@ on:
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
       - "tests/python/test_stage2_export_capture.py"
+      - "tests/python/test_platform_machine_provider.py"
       - "tests/python/test_worker_guard_cadence.py"
       - "tests/python/test_worker_current_rss.py"
       - "tests/python/test_worker_tree_recovery_guard.py"
@@ -164,6 +165,7 @@ on:
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
       - "tests/python/test_stage2_export_capture.py"
+      - "tests/python/test_platform_machine_provider.py"
       - "tests/python/test_worker_guard_cadence.py"
       - "tests/python/test_worker_current_rss.py"
       - "tests/python/test_worker_tree_recovery_guard.py"
@@ -592,6 +594,7 @@ jobs:
         run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py
 
       - name: Qualify all five GC self-host chains and Stage1 admission metrics
+        id: platform_qualification
         env:
           # Explicit marker opts in only this push commit and Linux ARM Stage1.
           # PRs and later unmarked commits stay off. These times include
@@ -600,6 +603,94 @@ jobs:
           PCC_HOST_ELF_STAGE_PROFILE: "0"
           PCC_HOST_ARM_BACKEND_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-backend-profile]') && '1' || '0' }}
         run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1
+
+      - name: Admit this gate's existing runtime for the platform provider probe
+        id: platform_runtime
+        if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
+        shell: uv run --frozen --no-sync --python 3.13 python {0}
+        env:
+          PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+          UV_PYTHON_DOWNLOADS: "never"
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, str(Path.cwd()))
+          from scripts.bootstrap_platform import source_identity
+          from pcc.frontends.python.owned_runtime_build import runtime_build_config
+          from pcc.frontends.python.pipeline_targets import host_target_triple
+          from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
+          def unrun(reason):
+              message = "UNRUN platform machine provider probe: " + reason
+              print("::notice::" + message)
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("ready=false\n")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(message + "\n")
+              raise SystemExit(0)
+
+          receipt_path = Path("build/worker-prior-gate/stage1.json")
+          if not receipt_path.exists():
+              unrun("this gate did not publish stage1.json")
+          receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+          if receipt.get("phase") != "stage1" or receipt.get("status") not in ("PASS", "FAIL"):
+              raise RuntimeError("invalid terminal Stage1 gate receipt")
+          source = receipt["source"]
+          current = source_identity()
+          if (
+              source.get("clean_commit") is not True
+              or source.get("commit") != os.environ["GITHUB_SHA"]
+              or source.get("commit") != current["commit"]
+              or source.get("source_sha256") != current["source_sha256"]
+          ):
+              raise RuntimeError("Stage1 runtime receipt does not identify this clean checkout")
+          runtime = receipt.get("runtime")
+          if runtime is None:
+              unrun("this gate did not publish a completed runtime identity")
+          if runtime["target"] != host_target_triple() or runtime["config"] != runtime_build_config():
+              raise RuntimeError("Stage1 runtime target/configuration mismatch")
+          raw_path = runtime["path"]
+          if not isinstance(raw_path, str) or any(ch in raw_path for ch in "\r\n"):
+              raise RuntimeError("invalid Stage1 runtime path")
+          archive = Path(raw_path)
+          if not archive.is_absolute():
+              raise RuntimeError("Stage1 runtime path must be absolute")
+          files = [(suffix, Path(raw_path + suffix))
+                   for suffix in ("", ".capi_syms", ".provenance.json")]
+          for suffix, path in files:
+              expected = runtime["hashes"][suffix]
+              if (
+                  not isinstance(expected, str) or len(expected) != 64
+                  or any(ch not in "0123456789abcdef" for ch in expected)
+              ):
+                  raise RuntimeError("invalid recorded runtime hash: " + suffix)
+          missing = []
+          for suffix, path in files:
+              if not path.exists():
+                  missing.append(suffix or "archive")
+                  continue
+              if not path.is_file():
+                  raise RuntimeError("runtime artifact is not a file: " + str(path))
+              with path.open("rb") as stream:
+                  observed = hashlib.file_digest(stream, "sha256").hexdigest()
+              if observed != runtime["hashes"][suffix]:
+                  raise RuntimeError("runtime artifact hash mismatch: " + str(path))
+          if missing:
+              unrun("recorded runtime artifacts missing: " + ", ".join(missing))
+          verified, _manifest = _verified_test_runtime_archive(archive)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("archive=" + str(verified) + "\nready=true\n")
+
+      - name: Verify the compiled sibling platform machine provider
+        if: ${{ !cancelled() && steps.platform_runtime.outputs.ready == 'true' }}
+        env:
+          PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
+          PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q --junitxml=build/worker-prior-gate/platform-machine-provider.xml tests/python/test_platform_machine_provider.py
 
       - name: Verify the new pcc1 on native prior worker shapes
         run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1
