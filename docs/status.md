@@ -103,6 +103,22 @@ recorded as `darwin_target` instead of asserted. Worker-prior strict closure
   (aarch64) and ~3700 s (x86_64): over 3600 s, hence the 6000 s budget.
 - Linux x86_64 wheels of both runs were still in Stage1 after 85 min (slow
   runners).
+- GC3 canary root cause, reproduced locally with pcc0: `sys.stdout`,
+  `sys.stderr` and the `object` class root are malloc'd immortals without an
+  object node. `pcc_gc_foreign_lease_acquire` gave such an owner a mode guard
+  on GC0-2 but on GC3/GC4 only for graph-leaf tags, so passing `sys.stderr`
+  as an argument (`phase_timing.report(sys.stderr, ...)` in the worker) raised
+  "slot-call owned-result lease failed". Fix (a no-node immortal outside the
+  nursery/zpage gets the leaf mode guard) is in the worktree, NOT committed at
+  the end of 2026-10-14: `pcc/runtime/py/freestanding_gc_root_operations.py`,
+  `tests/python/test_foreign_address_leases.py` (model cases, GC0-4),
+  `tests/python/test_immortal_stream_operand_lease.py` (five-GC native; GC3/4
+  raised before). A/B `ab_regress_iter8.out` in the job tmp: 16 of 17 files
+  passed with no regression; the alignment file was still running.
+- Run 38449385286 (`984cb2d4`): the four macOS pcc0/worker-prior jobs and
+  Windows RSS publication pass; Linux/Windows Stage1, strict closure and the
+  Windows PE diagnostic were still running at 19:17 UTC. Without the lease fix
+  its GC3 canary is expected to fail again (now with the file and line).
 
 Stage1 projections (`stage1_projection.py` in the archive: per-module times
 scaled against the complete `1c980956` runs): Linux aarch64 2338-2362 s
@@ -249,6 +265,14 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
   (probe: archive `scripts/gc4_list_shapes_probe.py`). `ys = enumerate(build(n))`
   completed under GC4 before the enumerate fix only because it leaked every
   item; now that the items are freed it aborts like the other shapes.
+- `isinstance(x, object)` and `issubclass(A, object)` return False (CPython:
+  True): the `object` value is `py_builtin_type_for_tag(-1)` ->
+  `pcc_type_cls_object` (a `py_class_new("object")` class), while user class
+  MROs end with the distinct `py_object_root_cache` root; non-instances never
+  match. Repro: archive `gc3lease/object_identity.py`.
+- `test_foreign_address_leases.py::test_native_gc3_gc4_foreign_address_movement_and_overlap`
+  fails before running: "pcc self-link mode does not support link arguments"
+  (same on the `e06cd523` snapshot).
 - `str.upper()`/`str.lower()` map only ASCII letters (`"é".upper()` stays
   `"é"`); non-ASCII case mapping needs Unicode tables in the runtime.
 - `[... for i, c in enumerate(s)]` over a non-ASCII str still indexes by
