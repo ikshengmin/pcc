@@ -309,6 +309,9 @@ class Layer1InitMixin:
         self._cross_module_func_defs: dict[str, FuncDef] = {}
         self._cross_module_identity_decorators: dict[str, bool] = {}
         self._cross_module_semantic_functions: dict[str, tuple[str, str]] = {}
+        # Undo records for module-visible aliases a function-local from-import
+        # overwrote; ``_emit_user_function`` installs one list per function.
+        self._function_import_alias_undo: list = []
         self._module_block_func_defs: dict[str, FuncDef] = {}
         self._module_block_funcdef_ids: set[int] = set()
         self._owned_local_names: set[str] = set()

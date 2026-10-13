@@ -1183,6 +1183,7 @@ class UserFunctionLoweringMixin:
         saved_builder = self.builder
         saved_fn = self.current_function
         saved_fd = self.current_func_def
+        saved_import_alias_undo = self._function_import_alias_undo
         saved_entry_block = getattr(self, "_current_entry_block", None)
         saved_try_err_block = getattr(self, "_try_err_block", None)
         saved_cpy_operand_cleanup_block = getattr(
@@ -1264,6 +1265,7 @@ class UserFunctionLoweringMixin:
 
         self.current_function = fn
         self.current_func_def = fd
+        self._function_import_alias_undo = []
         self._try_err_block = None
         self._cpy_operand_cleanup_block = None
         # An exception handler cannot span a Python function boundary.  Keep
@@ -1730,6 +1732,8 @@ class UserFunctionLoweringMixin:
             self._di_restore_scope(saved_di_scope)
             self.current_function = saved_fn
             self.current_func_def = saved_fd
+            self._restore_function_import_aliases(self._function_import_alias_undo)
+            self._function_import_alias_undo = saved_import_alias_undo
             self._current_entry_block = saved_entry_block
             self._try_err_block = saved_try_err_block
             self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block

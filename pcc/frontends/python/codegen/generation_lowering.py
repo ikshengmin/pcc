@@ -256,6 +256,7 @@ class GenerationLoweringMixin:
             setattr(self, "_cross_module_func_defs", {})
             setattr(self, "_cross_module_identity_decorators", {})
             setattr(self, "_cross_module_semantic_functions", {})
+            setattr(self, "_function_import_alias_undo", [])
             setattr(self, "_module_block_func_defs", {})
             setattr(self, "_module_block_funcdef_ids", set())
             setattr(self, "_unboxed_typed_int_abi_cache", {})

@@ -51,6 +51,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_cross_module_func_defs",
     "_cross_module_identity_decorators",
     "_cross_module_semantic_functions",
+    "_function_import_alias_undo",
     "_cstr_counter",
     "_cstr_pool",
     "_current_global_names",

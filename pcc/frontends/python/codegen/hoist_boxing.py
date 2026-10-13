@@ -198,6 +198,103 @@ def function_local_bindings(fd):
     return tuple(names)
 
 
+def _collect_import_providers(node, providers, others):
+    """Split this owner's bindings into from-import providers and the rest.
+
+    Mirrors ``collect_scope_bindings``: nested function, class and lambda
+    bodies own their bindings, while their headers execute here.
+    """
+    if node is None or _is_scalar(node):
+        return
+    if isinstance(node, (tuple, list)):
+        for item in node:
+            _collect_import_providers(item, providers, others)
+        return
+    if isinstance(node, Lambda):
+        for arg in node.params:
+            _collect_import_providers(
+                _dataclass_field_value(arg, "default", None), providers, others)
+        return
+    if isinstance(node, FuncDef):
+        append_name_once(others, node.name)
+        _collect_import_providers(node.decorators, providers, others)
+        for arg in node.args:
+            _collect_import_providers(
+                _dataclass_field_value(arg, "default", None), providers, others)
+        return
+    if isinstance(node, ClassDef):
+        append_name_once(others, node.name)
+        _collect_import_providers(node.bases, providers, others)
+        _collect_import_providers(node.keywords, providers, others)
+        _collect_import_providers(node.decorators, providers, others)
+        return
+    if _is_import_from_stmt(node):
+        prefix = (str(getattr(node, "level", 0) or 0) + ":"
+                  + str(getattr(node, "module", "") or "") + ":")
+        for imported_name, bound_name in _import_names_from_stmt(node):
+            if imported_name == "*":
+                continue
+            keys = providers.get(bound_name)
+            if keys is None:
+                providers[bound_name] = [prefix + imported_name]
+            else:
+                append_name_once(keys, prefix + imported_name)
+        return
+    if isinstance(node, (Assign, Delete)):
+        for target in node.targets:
+            _target_names(target, others)
+    elif isinstance(node, AugAssign):
+        _target_names(node.target, others)
+    elif isinstance(node, For):
+        _target_names(node.target, others)
+    elif isinstance(node, With):
+        for _, as_var in node.items:
+            if as_var is not None:
+                _target_names(as_var, others)
+    elif isinstance(node, Import):
+        for mod_name, asname in node.names:
+            bound = asname or mod_name.split(".", 1)[0]
+            if bound:
+                append_name_once(others, bound)
+    if isinstance(node, Try):
+        for handler in node.handlers:
+            handler_name = _dataclass_field_value(handler, "name", "")
+            if handler_name:
+                append_name_once(others, handler_name)
+    if _is_walrus(node):
+        _target_names(node.args[0], others)
+        _collect_import_providers(node.args[1], providers, others)
+        return
+    for field in _dataclass_field_names(node):
+        if field not in _CELL_SKIP_FIELDS:
+            _collect_import_providers(
+                _dataclass_field_value(node, field, None), providers, others)
+
+
+def function_import_conflict_names(fd):
+    """Names whose function-local from-imports need a runtime binding.
+
+    A from-import of a native sibling export is otherwise a static alias that
+    every later use resolves to, independent of control flow.  That is only
+    sound while each binding of the name in this function names one provider.
+    Another provider, any other binding, a parameter, or a global/nonlocal
+    declaration makes the executing binding the only correct source.
+    """
+    providers = {}
+    others = []
+    for arg in fd.args:
+        if arg.name:
+            append_name_once(others, arg.name)
+    for name in scope_declared_names(fd.body, True, True):
+        append_name_once(others, name)
+    _collect_import_providers(fd.body, providers, others)
+    conflicts = []
+    for name, keys in providers.items():
+        if len(keys) > 1 or name_in(others, name):
+            append_name_once(conflicts, name)
+    return tuple(conflicts)
+
+
 def stable_capture_parameters(body, param_names):
     """Entry-bound parameters remain bound unless a lexical operation clears them.
 

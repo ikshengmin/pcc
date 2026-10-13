@@ -17,6 +17,12 @@ from pcc.frontends.python.codegen.cpy_import_state import (
 )
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call
+from pcc.frontends.python.codegen.hoist_analysis import (
+    name_in,
+)
+from pcc.frontends.python.codegen.hoist_boxing import (
+    function_import_conflict_names,
+)
 from pcc.frontends.python.codegen.vthread_effect_analysis import (
     vthread_proven_suspension_module_alias,
     vthread_proven_value_alias,
@@ -63,6 +69,13 @@ def _native_builtin_type_value_names():
         "str",
         "tuple",
     )
+
+
+def _restore_alias_entry(mapping, key: str, present: bool, value) -> None:
+    if present:
+        mapping[key] = value
+    else:
+        mapping.pop(key, None)
 
 
 def _native_star_export_items(exports: dict):
@@ -1736,6 +1749,66 @@ class NativeModuleAliasMixin:
                 continue
         return True
 
+    def _note_function_import_alias(self, local_name: str) -> None:
+        """Record a function-local import that overwrites a module alias.
+
+        Like class method bodies, a function body must not leave another
+        provider behind for a name the rest of the module already resolves.
+        A name nothing else bound stays visible to later hoisted helpers.
+        """
+        if self.current_func_def is None:
+            return
+        semantic = self._cross_module_semantic_functions
+        if local_name not in self.functions and local_name not in semantic:
+            return
+        undo = self._function_import_alias_undo
+        for entry in undo:
+            if entry[0] == local_name:
+                return
+        func_defs = self._cross_module_func_defs
+        extension_modules = self._native_extension_modules()
+        identity = self._cross_module_identity_decorators
+        generators = getattr(self, "_generator_func_names", None)
+        undo.append((
+            local_name,
+            local_name in self.functions,
+            self.functions.get(local_name),
+            local_name in func_defs,
+            func_defs.get(local_name),
+            local_name in semantic,
+            semantic.get(local_name),
+            local_name in extension_modules,
+            extension_modules.get(local_name),
+            local_name in identity,
+            identity.get(local_name),
+            generators is not None and local_name in generators,
+        ))
+
+    def _restore_function_import_aliases(self, undo: list) -> None:
+        """Undo ``_note_function_import_alias`` records, newest first."""
+        index = len(undo) - 1
+        while index >= 0:
+            entry = undo[index]
+            index -= 1
+            name = entry[0]
+            _restore_alias_entry(self.functions, name, entry[1], entry[2])
+            _restore_alias_entry(self._cross_module_func_defs, name, entry[3], entry[4])
+            _restore_alias_entry(
+                self._cross_module_semantic_functions, name, entry[5], entry[6],
+            )
+            _restore_alias_entry(
+                self._native_extension_modules(), name, entry[7], entry[8],
+            )
+            _restore_alias_entry(
+                self._cross_module_identity_decorators, name, entry[9], entry[10],
+            )
+            generators = getattr(self, "_generator_func_names", None)
+            if generators is not None:
+                if entry[11]:
+                    generators.add(name)
+                else:
+                    generators.discard(name)
+
     def _bind_native_cross_module_export(
         self,
         *,
@@ -1753,6 +1826,7 @@ class NativeModuleAliasMixin:
         owning_module = info.get("owning_module", src_module)
         export_name = info.get("export_name", attr_name)
         if kind == "function":
+            self._note_function_import_alias(local_name)
             semantic_functions = self._cross_module_semantic_functions
             if info.get("semantic_decorator"):
                 semantic_functions[local_name] = (owning_module, export_name)
@@ -1993,6 +2067,9 @@ class NativeModuleAliasMixin:
         """For each name imported from a native sibling module,
         declare an extern function of matching signature and register
         in ``self.functions`` so subsequent calls resolve to it."""
+        conflict_names = ()
+        if self.current_func_def is not None:
+            conflict_names = function_import_conflict_names(self.current_func_def)
         for attr_name, as_name in stmt.names:
             if attr_name == "*":
                 for export_name, export_info in _native_star_export_items(exports):
@@ -2031,13 +2108,18 @@ class NativeModuleAliasMixin:
                         as_name,
                     )
                 continue
-            if (
-                self.current_func_def is not None
-                and info.get("kind") in ("module_global", "constant")
+            if self.current_func_def is not None and (
+                info.get("kind") in ("module_global", "constant")
+                or (
+                    info.get("kind") in ("function", "class")
+                    and name_in(conflict_names, local_name)
+                )
             ):
                 # A from-import executes a binding in this function's scope.
                 # Declaring a consumer module cell does not initialize a local
                 # value, and a constant shortcut would ignore later rebinding.
+                # A static function/class alias is flow-insensitive, so a
+                # name with another provider or binding needs this value too.
                 self._emit_compiled_module_import_from(
                     src_module,
                     [(attr_name, as_name)],
