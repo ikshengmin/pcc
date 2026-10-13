@@ -95,7 +95,7 @@ def test_macos_workflow_retains_opt_in_timing_stderr():
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in macos
     assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in macos
     assert 'PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:' not in macos
-    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in macos
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"' in macos
 
 
 def test_resource_task_diagnostics_retain_only_assigned_modules(tmp_path, monkeypatch):

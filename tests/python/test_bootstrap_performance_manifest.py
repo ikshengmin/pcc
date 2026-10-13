@@ -71,7 +71,7 @@ def test_bootstrap_defaults_to_safe_auto_lanes_and_rejects_wide_override() -> No
     # 600 s left under 20% margin over a healthy local Stage1 (518 s) and
     # cannot fit a 3-core CI runner; the watchdog stops runaways only.
     assert options.stage_timeout == 1800
-    assert bootstrap.SAFE_MAX_STAGE_TIMEOUT == 2400
+    assert bootstrap.SAFE_MAX_STAGE_TIMEOUT == 6000
     assert options.external_memory_guard == "0"
     assert options.in_process_codegen == "0"
     assert options.defer_frontend_codegen == "1"

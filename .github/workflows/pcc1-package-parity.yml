@@ -2,6 +2,11 @@ name: Package platform and pcc1 wheel gates
 
 on:
   workflow_dispatch:
+    inputs:
+      full_chain:
+        description: "Linux/Windows: run every collector's Stage2/Stage3 fixed point after Stage1"
+        type: boolean
+        default: false
   push:
     branches: [master]
     paths:
@@ -476,9 +481,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Separate hosted runners: no needs, artifact download or shared concurrency
     # group may put this gate on the Stage1 critical path.
-    # Budget: 20 min runtime + up to 40 min bounded tests + 30 min strict
+    # Budget: 20 min runtime + up to 40 min bounded tests + 60 min strict
     # closure + 30 min setup/receipts. Failures remain hard job failures.
-    timeout-minutes: 120
+    timeout-minutes: 150
     env:
       PCC_BUILD_BACKEND: self
       PCC_RUNTIME_CC: pcc
@@ -512,17 +517,18 @@ jobs:
         run: uv sync --frozen --dev --python 3.13
 
       # fa62fbd9 receipts: compile alone took 189-278s; the 634 MB whole
-      # parse was still incomplete at 300s. class_gen emission alone is
-      # reported at ~150s on a fast Mac. 1800s is a conservative CI budget,
-      # NOT a measured whole-gate completion time. Retain phase receipts to
-      # establish that time without blocking Stage1. Local default stays 300s.
+      # parse was still incomplete at 300s. a21fa121 receipts (Linux): the
+      # whole-closure phases end at 1400-1580 s, then 34 module emits take
+      # 24-32 s each, ~2400-2500 s in all; 1800 s always timed out. 3600 s
+      # is the CI budget. macOS records the strict closure as not run: its
+      # ~8.6 GB peak exceeds the 7 GB runner. Local default stays 300s.
       - name: Validate macOS default xdist, native prior workers, and changed-module emission
         if: matrix.platform == 'macos-arm64'
-        run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 1800
+        run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 3600
 
       - name: Validate other-platform default xdist, native prior workers, and changed-module emission
         if: matrix.platform != 'macos-arm64'
-        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 1800
+        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 3600
 
       - name: Preserve independent preflight evidence
         if: always()
@@ -597,7 +603,11 @@ jobs:
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
         run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py
 
-      - name: Qualify all five GC self-host chains and Stage1 admission metrics
+      # A push qualifies Stage1 and the native canary under all five
+      # collectors. The Stage2/Stage3 fixed point needs ~200k pcc1 task-s of
+      # Stage2 codegen today (docs/status.md), beyond this 6 h job; run it by
+      # manual dispatch with full_chain.
+      - name: Build Stage1 and run the five-collector native canary
         id: platform_qualification
         env:
           # Explicit marker opts in only this push commit and Linux ARM Stage1.
@@ -606,7 +616,7 @@ jobs:
           PCC_HOST_ASSEMBLY_PROFILE: "0"
           PCC_HOST_ELF_STAGE_PROFILE: "0"
           PCC_HOST_ARM_BACKEND_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-backend-profile]') && '1' || '0' }}
-        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1
+        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1${{ inputs.full_chain && ' --full-chain' || '' }}
 
       - name: Admit this gate's existing runtime for the platform provider probe
         id: platform_runtime
@@ -754,9 +764,9 @@ jobs:
   pcc1-package-parity:
     name: macOS arm64 native pcc1 and installed wheel
     runs-on: macos-15
-    # 20 min runtime + 40 min Stage1 + setup, native checks, wheel and receipts.
-    # This outer allowance does not change the 2400s Stage1 watchdog.
-    timeout-minutes: 90
+    # 20 min runtime + up to 100 min Stage1 + setup, native checks, wheel and
+    # receipts. This outer allowance does not change the 6000s Stage1 watchdog.
+    timeout-minutes: 180
     env:
       PCC_REQUIRE_CURRENT_PCC1: "1"
       PCC_BOOTSTRAP_OUT_DIR: "${{ github.workspace }}/build/bootstrap"
@@ -770,8 +780,8 @@ jobs:
       PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"
       PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"
       PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"
-      # Three M1 cores: a local 12-core Stage1 already takes ~520 s.
-      PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"
+      # Three M1 cores near one admitted worker: projected ~4500-5000 s.
+      PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"
       # Keep phase/module timing in the retained process stderr on timeout.
       PCC_PY_FRONTEND_WORKER_TIMING: "1"
     steps:

@@ -627,7 +627,7 @@ def test_stage1_wiring_is_opt_in_surgical_and_uses_existing_report_boundary():
     worker = (root / "pcc/frontends/python/pipeline_frontend_worker_execution.py").read_text()
     assert worker.index("codegen_ms = int((time.monotonic() - codegen_started)") < worker.index("phase_timing.report(sys.stderr, phase_timing_complete)")
     workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
-    stage1 = workflow.split("      - name: Qualify all five GC self-host chains and Stage1 admission metrics\n", 1)[1].split("\n      - name:", 1)[0]
+    stage1 = workflow.split("      - name: Build Stage1 and run the five-collector native canary\n", 1)[1].split("\n      - name:", 1)[0]
     assert 'PCC_HOST_ASSEMBLY_PROFILE: "0"' in stage1
     assert 'PCC_HOST_ELF_STAGE_PROFILE: "0"' in stage1
     assert "PCC_HOST_ARM_BACKEND_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-backend-profile]') && '1' || '0' }}" in stage1

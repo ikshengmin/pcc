@@ -820,7 +820,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
     for path in (gate.RSS_PUBLICATION_TEST, gate.RSS_READER_TEST, gate.RSS_PUBLISHER_TEST):
         assert path in publication
-    assert "timeout-minutes: 360" in other and "timeout-minutes: 90" in mac
+    assert "timeout-minutes: 360" in other and "timeout-minutes: 180" in mac
     assert other.count("- { platform:") == 3
     assert "uv sync --frozen --dev --python 3.13" in other
     assert "uv sync --frozen --dev\n" in mac
@@ -836,11 +836,11 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         assert "needs:" not in body and "actions/download-artifact" not in body
         assert "--phase stage1" not in body and "--phase pcc1" not in body
     assert "fail-fast: false" in preflight
-    assert "timeout-minutes: 120" in preflight
+    assert "timeout-minutes: 150" in preflight
     for platform, runner in (("macos-arm64", "macos-15"), ("linux-x86_64", "ubuntu-24.04"),
                              ("linux-aarch64", "ubuntu-24.04-arm"), ("windows-x86_64", "windows-2022")):
         assert "- { platform: " + platform + ", runner: " + runner + " }" in preflight
-    assert preflight.count("--phase preflight --strict-closure-timeout 1800") == 2
+    assert preflight.count("--phase preflight --strict-closure-timeout 3600") == 2
     assert "if: matrix.platform == 'macos-arm64'" in preflight
     assert "if: matrix.platform != 'macos-arm64'" in preflight
     assert "uv sync --frozen --dev\n" in preflight
@@ -858,18 +858,26 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body
         assert "ci_worker_size_prior_gate.py" not in body and "needs:" not in body
-    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "2400"' in mac
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"' in mac
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
+    # A push qualifies Stage1 plus the five-collector canary; the full
+    # Stage2/Stage3 chain is a manual dispatch input, never a soft failure.
+    assert "full_chain:" in text and "type: boolean" in text
+    assert "--phase stage1${{ inputs.full_chain && ' --full-chain' || '' }}" in other
 
 
-def test_other_platform_entry_keeps_the_original_full_gc_matrix_once():
+def test_other_platform_entry_runs_the_five_gc_matrix_once():
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     commands = [node for node in ast.walk(tree) if isinstance(node, ast.List)
                 and any(isinstance(item, ast.Constant) and item.value == "scripts/bootstrap_platform.py" for item in node.elts)]
     assert len(commands) == 1
-    constants = [item.value for item in commands[0].elts if isinstance(item, ast.Constant)]
-    assert constants[:5] == ["scripts/bootstrap_platform.py", "--gc", "all", "--stage", "3"]
-    assert "--runtime-archive" in constants and "2400" in constants and "17179869184" in constants
+    elements = commands[0].elts
+    constants = [item.value for item in elements if isinstance(item, ast.Constant)]
+    assert constants[:4] == ["scripts/bootstrap_platform.py", "--gc", "all", "--stage"]
+    stage = elements[[getattr(item, "value", None) for item in elements].index("--stage") + 1]
+    assert isinstance(stage, ast.Name) and stage.id == "stage_limit"
+    assert "--runtime-archive" in constants and "17179869184" in constants
+    assert gate.STAGE1_TIMEOUT_S == 6000
 
 
 @pytest.mark.parametrize("target,machine,failing", [
@@ -982,7 +990,10 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
         expected += ["linux-arm-transport-host", "linux-arm-transport-routes", "linux-arm-transport-native"]
     if target == "linux":
         expected += ["linux-elf-format", "linux-elf-staging", "linux-elf-owner"]
-    expected += ["native-pcc0", "strict-closure", "runtime-identity"]
+    expected += ["native-pcc0"]
+    if target != "darwin":
+        expected += ["strict-closure"]
+    expected += ["runtime-identity"]
     if failing:
         with pytest.raises(RuntimeError, match="original platform gate failure"):
             gate.run(out, "preflight", strict_closure_timeout=1800)
@@ -993,6 +1004,11 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
     receipt = json.loads((out / "preflight.json").read_text())
     assert receipt["status"] == ("FAIL" if failing else "PASS")
     assert receipt["source"] == source
+    if target == "darwin" and failing is None:
+        # The macOS runner cannot hold the strict closure's peak RSS.
+        assert receipt["strict-closure"]["status"] == "NOT_RUN"
+    else:
+        assert "strict-closure" not in receipt
     if failing == "runtime-identity":
         assert "runtime" not in receipt
     else:
@@ -1031,7 +1047,7 @@ def test_windows_exit_changed_shape_inputs_are_bound_and_trigger_ci():
     for name in gate.TAR_ATTRIBUTES_INPUTS:
         assert workflow.count('      - "' + name + '"') == 2
     # Appended coverage uses the existing native call and unchanged CI budget.
-    assert workflow.count("--strict-closure-timeout 1800") == 2
+    assert workflow.count("--strict-closure-timeout 3600") == 2
 
 
 def test_linux_arm_transport_inputs_markers_and_exact_inventory_are_bound():
@@ -2297,12 +2313,20 @@ def test_strict_closure_budget_reaches_existing_guard_without_changing_xdist(tmp
     assert "-n0" not in command and "-o" not in command
 
 
-@pytest.mark.parametrize("arguments,expected", (([], 300), (["--strict-closure-timeout", "1800"], 1800)))
+@pytest.mark.parametrize("arguments,expected", (([], 300), (["--strict-closure-timeout", "3600"], 3600)))
 def test_cli_keeps_local_strict_budget_and_accepts_explicit_ci_budget(tmp_path, monkeypatch, arguments, expected):
     calls = []
     monkeypatch.setattr(gate, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
     gate.main(["--out-dir", str(tmp_path), "--phase", "preflight", *arguments])
-    assert calls == [((tmp_path, "preflight"), {"strict_closure_timeout": expected})]
+    assert calls == [((tmp_path, "preflight"), {"strict_closure_timeout": expected, "full_chain": False})]
+
+
+@pytest.mark.parametrize("arguments,expected", (([], False), (["--full-chain"], True)))
+def test_cli_selects_the_full_chain_only_when_asked(tmp_path, monkeypatch, arguments, expected):
+    calls = []
+    monkeypatch.setattr(gate, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    gate.main(["--out-dir", str(tmp_path), "--phase", "stage1", *arguments])
+    assert calls == [((tmp_path, "stage1"), {"strict_closure_timeout": 300, "full_chain": expected})]
 
 
 @pytest.mark.parametrize("timeout", ("0", "-1"))
@@ -2316,7 +2340,10 @@ def test_cli_rejects_unbounded_or_negative_strict_budget(tmp_path, monkeypatch, 
 @pytest.mark.parametrize("target,machine", (("darwin", "arm64"), ("linux", "x86_64"),
                                              ("linux", "aarch64"), ("win32", "amd64")))
 @pytest.mark.parametrize("independent_preflight", ("missing", "failed"))
-def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, target, machine, independent_preflight):
+@pytest.mark.parametrize("full_chain", (False, True))
+@pytest.mark.parametrize("darwin_workers", (2, 1.3))
+def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, target, machine, independent_preflight,
+                                                      full_chain, darwin_workers):
     root, out = tmp_path / "repo", tmp_path / "stage1"
     archive = out / "runtime/libpy_runtime_pcc_py.a"
     root.mkdir()
@@ -2354,23 +2381,24 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
         if target == "darwin":
             assert command == ["chosen-python", "scripts/bootstrap.py", "--backend", "self", "--stage", "1", "--out-dir", str(destination)]
             assert env["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "1"
-            assert env["PCC_BOOTSTRAP_STAGE_TIMEOUT"] == "2400"
+            assert env["PCC_BOOTSTRAP_STAGE_TIMEOUT"] == "6000"
             assert env["PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES"] == "4294967296"
             assert env["PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES"] == "2147483648"
             assert env["PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES"] == "536870912"
             gate.save(out / "profile/stage1.result.json", {"compile_wall_ms": 1000, "returncode": 0,
                                                            "publish_barrier_returncode": 0})
             gate.save(destination / "stage1.process.test/result.json", {
-                "status": "COMPLETE", "returncode": 0, "timeout_s": 2400,
+                "status": "COMPLETE", "returncode": 0, "timeout_s": 6000,
                 "max_tree_rss_bytes": 3221225472, "peak_tree_rss_bytes": 2147483648,
                 "darwin_preflight_reserve_bytes": 536870912,
             })
             (destination / "stage1.process.test/target.stderr").write_text("original diagnostics")
             binary = destination / "pcc1"
         else:
-            assert command == ["chosen-python", "scripts/bootstrap_platform.py", "--gc", "all", "--stage", "3",
+            assert command == ["chosen-python", "scripts/bootstrap_platform.py", "--gc", "all",
+                               "--stage", "3" if full_chain else "1",
                                "--out-dir", str(destination), "--runtime-archive", str(archive),
-                               "--timeout", "2400", "--rss-limit", "17179869184", "--cpu-budget", "4"]
+                               "--timeout", "6000", "--rss-limit", "17179869184", "--cpu-budget", "4"]
             assert env["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "0"
             gate.save(destination / "shared/receipt.json", {"stages": [{"seconds": 1}]})
             (destination / "shared/stage1.log").write_text("original diagnostics")
@@ -2382,16 +2410,24 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
     def metrics(text, wall):
         assert text == "original diagnostics" and wall == 1
         return {"open_attempts": 0, "source_bytes_complete": 10, "source_bytes_total": 10,
-                "completed_modules": 1, "planned_modules": 1, "average_workers": 2}
+                "completed_modules": 1, "planned_modules": 1, "average_workers": darwin_workers}
 
     monkeypatch.setattr(gate, "guarded", guarded)
     monkeypatch.setattr(gate, "runtime_identity", identity)
     monkeypatch.setattr(gate.subprocess, "run", bootstrap)
     monkeypatch.setattr(gate, "admission_metrics", metrics)
-    gate.run(out, "stage1")
+    gate.run(out, "stage1", full_chain=full_chain)
     assert calls == ["runtime-build", "runtime-identity", "bootstrap", "runtime-identity"]
     receipt = json.loads((out / "stage1.json").read_text())
     assert receipt["status"] == "PASS" and receipt["source"] == source and receipt["runtime"] == runtime
+    if target == "darwin":
+        # The 45-minute macOS target is recorded, not enforced.
+        assert receipt["darwin_target"] == {
+            "wall_s": 1, "wall_s_max": 1800, "average_workers": darwin_workers,
+            "average_workers_min": 2, "met": darwin_workers >= 2,
+        }
+    else:
+        assert "darwin_target" not in receipt
     assert receipt["compiler"]["sha256"] == gate.sha(receipt["compiler"]["path"])
     assert not (out / "preflight.json").exists()
 
