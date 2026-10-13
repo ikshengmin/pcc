@@ -38,11 +38,7 @@ def exists(root, name):
 
 
 def wait_file(root, name):
-    # Peer markers and cancellation depend on another process being scheduled.
-    # On loaded Linux x86 CI runners the GC4 growth case's cancellation did
-    # not arrive within the former 6 s in 3 of 5 runs. Stay below the outer
-    # runner's 20 s process-group timeout, which owns hard failure.
-    deadline = time.monotonic() + 15.0
+    deadline = time.monotonic() + 6.0
     while not exists(root, name):
         assert time.monotonic() < deadline, "missing worker marker: " + name
         time.sleep(0.005)
@@ -60,8 +56,7 @@ def events(root):
 
 
 def wait_event(root, event, index):
-    # Same bound and reason as wait_file.
-    deadline = time.monotonic() + 15.0
+    deadline = time.monotonic() + 6.0
     while not any(row[:2] == [event, str(index)] for row in events(root)):
         assert time.monotonic() < deadline, "missing admission event: " + event
         time.sleep(0.005)

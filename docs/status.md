@@ -75,7 +75,9 @@ micro-optimizations were below 5% and are parked in the archive.
    when native five-GC execution against CPython covers the behavior, keeping
    what the test meant to check on a shape that still needs the binder.
 2. `tests/fixtures/native/worker_size_priors.py` peer-wait deadline 6 s -> 15 s
-   (staged, not committed) for the Linux x86_64 GC4 growth gate.
+   for the Linux x86_64 GC4 growth gate. This test change was committed by
+   mistake inside the documentation commit `4a3e9246` without review and is
+   restored to 6 s in the following commit; the proposal itself stays open.
 3. Source-pinned files: `tests/test_elf_*_source_controls.py` SHA-pin
    `pcc/backend/elf_x86_64.py`; any link-loop change needs the preimages updated.
 4. A Windows unhandled-exception reporter (code, image offset, stack scan) to
