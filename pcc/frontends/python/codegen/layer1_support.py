@@ -124,6 +124,19 @@ def _import_from_level_or_zero(stmt) -> int:
     return level or 0
 
 
+def _import_from_binds_nothing_at_runtime(stmt) -> bool:
+    """``from M import ...`` consumed at parse / type-inference time.
+
+    Statement lowering emits no runtime binding for these modules, so no
+    earlier pass may plan a runtime global for their names either.
+    """
+    module = _import_from_module_or_empty(stmt)
+    return bool(module) and (
+        module.split(".")[0] in ("__future__", "typing", "abc", "click")
+        or module == "pcc.extern"
+    )
+
+
 def _is_import_stmt(stmt):
     if type(stmt).__name__ in {"Global", "Nonlocal"}:
         return False

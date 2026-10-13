@@ -17,6 +17,9 @@ from pcc.frontends.python.codegen.cpy_import_state import (
 )
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call
+from pcc.frontends.python.codegen.layer1_support import (
+    _import_from_binds_nothing_at_runtime,
+)
 from pcc.frontends.python.codegen.hoist_analysis import (
     name_in,
 )
@@ -1986,6 +1989,11 @@ class NativeModuleAliasMixin:
         same compilation unit can resolve the call. Class imports
         declare the class global + method externs via
         ``class_lowering.declare_extern_class``."""
+        # A compile-time-only import (typing, abc, ...) executes no binding,
+        # so a name without a static export must not become a runtime global:
+        # its consumers would read that never-published global instead of
+        # treating the name as compile-time metadata.
+        runtime_binding = not _import_from_binds_nothing_at_runtime(stmt)
         for attr_name, as_name in stmt.names:
             if attr_name == "*":
                 for export_name, export_info in _native_star_export_items(exports):
@@ -2009,8 +2017,9 @@ class NativeModuleAliasMixin:
                         full_submodule,
                     )
                     continue
-                gv = self._native_extension_module_global(local_name)
-                self._native_extension_modules()[local_name] = gv
+                if runtime_binding:
+                    gv = self._native_extension_module_global(local_name)
+                    self._native_extension_modules()[local_name] = gv
                 continue
             if self._bind_native_cross_module_export(
                 local_name=local_name,
@@ -2019,8 +2028,9 @@ class NativeModuleAliasMixin:
                 info=info,
             ):
                 continue
-            gv = self._native_extension_module_global(local_name)
-            self._native_extension_modules()[local_name] = gv
+            if runtime_binding:
+                gv = self._native_extension_module_global(local_name)
+                self._native_extension_modules()[local_name] = gv
 
     def _native_import_from_submodule(
         self,

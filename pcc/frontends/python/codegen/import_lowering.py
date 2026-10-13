@@ -10,7 +10,11 @@ from pcc.package.environment import package_site_roots
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Arg, Assign, Attr, AugAssign, BinOp, BoolExpr, BoolLit, BoolType, Break, Call, ClassDef, ClassType, Compare, Continue, Delete, DictExpr, DictType, DynType, ExceptHandler, Expr, ExprStmt, FloatLit, FloatType, For, FuncDef, FuncType, Global, If, IfExpr, Import, ImportFrom, IntLit, IntType, Lambda, ListExpr, ListType, Module, Name, Nonlocal, NoneLit, NoneType, Pass, Raise, Return, Slice, SourceSpan, Stmt, StrLit, StrType, Subscript, Try, TupleExpr, TupleType, Type, UnaryOp, ValueClassType, While, With
-from pcc.frontends.python.codegen.layer1_support import _import_from_level_or_zero, _import_from_module_or_empty
+from pcc.frontends.python.codegen.layer1_support import (
+    _import_from_binds_nothing_at_runtime,
+    _import_from_level_or_zero,
+    _import_from_module_or_empty,
+)
 from pcc.frontends.python.codegen.local_bound_lowering import mark_local_bound
 
 _Name = Name
@@ -1017,10 +1021,7 @@ class ImportLoweringMixin:
         if import_module == "pcc.unsafe":
             self._register_unsafe_scaffold_imports(stmt)
             return
-        if import_module and (
-            import_module.split(".")[0] in ("__future__", "typing", "abc", "click")
-            or import_module == "pcc.extern"
-        ):
+        if _import_from_binds_nothing_at_runtime(stmt):
             if import_module == "typing":
                 self._register_typing_compile_time_aliases(stmt)
             # Consumed at parse / type-inference time; no runtime IR.
