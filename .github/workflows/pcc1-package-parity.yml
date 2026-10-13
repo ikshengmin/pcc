@@ -604,9 +604,9 @@ jobs:
         run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py
 
       # A push qualifies Stage1 and the native canary under all five
-      # collectors. The Stage2/Stage3 fixed point needs ~200k pcc1 task-s of
-      # Stage2 codegen today (docs/status.md), beyond this 6 h job; run it by
-      # manual dispatch with full_chain.
+      # collectors. Stage2 codegen alone needs ~66k-116k pcc1 task-s today
+      # (8-14x Stage1 per module, docs/status.md), beyond this 6 h job; run
+      # the Stage2/Stage3 fixed point by manual dispatch with full_chain.
       - name: Build Stage1 and run the five-collector native canary
         id: platform_qualification
         env:

@@ -566,7 +566,7 @@ def run(out, phase, *, strict_closure_timeout=300, full_chain=False):
                     # One shared Stage1, then every collector's chain. A push
                     # qualifies Stage1 plus the native canary under all five
                     # collectors; the Stage2/Stage3 fixed point (--full-chain,
-                    # manual dispatch) needs ~200k pcc1 task-s for Stage2
+                    # manual dispatch) needs ~66k-116k pcc1 task-s of Stage2
                     # codegen today, beyond a 6 h hosted job.
                     stage_limit = "3" if full_chain else "1"
                     command = [sys.executable, "scripts/bootstrap_platform.py", "--gc", "all", "--stage", stage_limit,
