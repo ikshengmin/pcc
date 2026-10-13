@@ -17,6 +17,7 @@ on:
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
       - "tests/python/test_stage2_export_capture.py"
+      - "tests/python/test_aarch64_call_target_reuse.py"
       - "tests/python/test_platform_machine_provider.py"
       - "tests/python/test_worker_guard_cadence.py"
       - "tests/python/test_worker_current_rss.py"
@@ -165,6 +166,7 @@ on:
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
       - "tests/python/test_stage2_export_capture.py"
+      - "tests/python/test_aarch64_call_target_reuse.py"
       - "tests/python/test_platform_machine_provider.py"
       - "tests/python/test_worker_guard_cadence.py"
       - "tests/python/test_worker_current_rss.py"
@@ -590,8 +592,8 @@ jobs:
       - name: Install locked development dependencies
         run: uv sync --frozen --dev --python 3.13
 
-      - name: Verify Stage2 export evidence retention contracts
-        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py
+      - name: Verify host Stage2 export-retention and AArch64 call-emission contracts
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py
 
       - name: Qualify all five GC self-host chains and Stage1 admission metrics
         id: platform_qualification

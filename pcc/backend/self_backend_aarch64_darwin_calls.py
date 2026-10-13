@@ -2085,7 +2085,11 @@ def emit_call_instruction_indexed(
             f"self backend saw malformed variadic call in {func.name!r}: fixed args exceed actual args"
         )
 
-    fixed_count = fixed_arg_count if is_vararg_call and not is_aarch64_linux_triple(module_symbols.target_triple) else arg_count
+    # Reuse one immutable target decision per call. Keep the zero-query
+    # path for nonvariadic calls with no arguments or only FP registers.
+    linux_known = is_vararg_call
+    linux = linux_known and is_aarch64_linux_triple(module_symbols.target_triple)
+    fixed_count = fixed_arg_count if is_vararg_call and not linux else arg_count
     stack_arg_entries: list[tuple[int, int]] = []
     indirect_stack_ptr_entries: list[tuple[int, int]] = []
     pending_indirect_stack_literals: list[tuple[int, int]] = []
@@ -2132,19 +2136,25 @@ def emit_call_instruction_indexed(
                 first_register_index = fpr_index
                 fpr_index += register_count
         elif register_class == 1:
-            if is_aarch64_linux_triple(module_symbols.target_triple) and not arg_is_indirect:
+            if not linux_known:
+                linux = is_aarch64_linux_triple(module_symbols.target_triple)
+                linux_known = True
+            if linux and not arg_is_indirect:
                 argument_span: CompilerInt4 = kernel.type_span(arg_type_id)
                 if argument_span.fourth >= 16:
                     gpr_index = _align_to(gpr_index, 2)
             if gpr_index + register_count > 8:
                 register_count = 0
-                if is_aarch64_linux_triple(module_symbols.target_triple):
+                if linux:
                     gpr_index = 8
             else:
                 first_register_index = gpr_index
                 gpr_index += register_count
         if register_count == 0:
-            if is_aarch64_linux_triple(module_symbols.target_triple):
+            if not linux_known:
+                linux = is_aarch64_linux_triple(module_symbols.target_triple)
+                linux_known = True
+            if linux:
                 stack_offset = _align_to(stack_offset, stack_arg_alignment_indexed(kernel, arg_type_id))
             if arg_is_indirect:
                 ptr_offset = stack_offset
