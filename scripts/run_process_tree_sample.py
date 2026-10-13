@@ -136,23 +136,28 @@ def _owned_process_pids(observed_processes, current_pids):
 
     A numeric session ID alone cannot establish ownership after its last known
     process exits: both PIDs and SIDs can be reused. Only a matching start
-    identity anchors a session, and a reused observed PID is never readmitted.
+    identity anchors a session, and a reused observed PID is never readmitted
+    through its session. A new process that received a reused PID is still
+    discovered through its fresh kernel parent, like any other new child.
     Fresh kernel parent IDs also avoid trusting a stale ps ancestry row.
     """
     current = {}
+    reused = set()
     for pid in current_pids:
         identity = _process_identity(pid)
         if identity is not None:
             previous = observed_processes.get(pid)
-            if previous is None or previous.start_time == identity.start_time:
-                current[pid] = identity
-    owned = current.keys() & observed_processes.keys()
+            if previous is not None and previous.start_time != identity.start_time:
+                reused.add(pid)
+            current[pid] = identity
+    owned = (current.keys() & observed_processes.keys()) - reused
     while True:
         sessions = {current[pid].session_id for pid in owned}
         discovered = {
             pid for pid, identity in current.items()
             if pid not in owned and (
-                identity.parent_pid in owned or identity.session_id in sessions
+                identity.parent_pid in owned
+                or (pid not in reused and identity.session_id in sessions)
             )
         }
         if not discovered:

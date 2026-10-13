@@ -81,6 +81,41 @@ def test_owned_rss_retains_orphans_and_rejects_stale_parent_pid(monkeypatch):
     assert set(tool._owned_tree_rows(rows, observed)) == {10}
 
 
+def test_reused_pid_is_readmitted_only_through_an_owned_kernel_parent(monkeypatch):
+    """A new worker can receive the PID of a worker that exited earlier.
+
+    macOS reused PID 7199 within one CI Stage1 build. The new worker was a
+    child of the owned coordinator, but its PID had been observed with another
+    start time, so it never entered the tree state and the coordinator aborted
+    Stage1 with active_missing. Its fresh kernel parent proves ownership just
+    as it does for a PID seen for the first time; a shared session does not.
+    """
+    tool = _load_tool_module()
+    identity = tool._ProcessIdentity
+    observed = {
+        10: identity(10, 1, (100, 0)),
+        11: identity(10, 10, (110, 0)),
+        12: identity(10, 11, (120, 0)),
+        14: identity(10, 11, (125, 0)),
+    }
+    live = {
+        10: identity(10, 1, (100, 0)),
+        11: identity(10, 10, (110, 0)),
+        12: identity(10, 11, (130, 0)),  # New worker of the owned coordinator.
+        14: identity(10, 1, (150, 0)),   # Reused PID in the session, parent 1.
+        16: identity(10, 12, (160, 0)),  # Child of the new worker.
+    }
+    monkeypatch.setattr(tool, "_process_identity", live.get)
+    rows = {10: (1, 100, "driver"), 11: (10, 200, "coordinator"),
+            12: (11, 300, "new worker"), 14: (1, 400, "reused session PID"),
+            16: (12, 500, "worker child")}
+    owned = tool._owned_tree_rows(rows, observed)
+    assert set(owned) == {10, 11, 12, 16}
+    assert observed[12].start_time == (130, 0)
+    assert observed[14].start_time == (125, 0)
+    assert tool._owned_session_pids(10, observed, live) == {11, 12, 16}
+
+
 def test_cleanup_never_signals_a_reaped_root_or_reused_descendant(monkeypatch):
     tool = _load_tool_module()
     identity = tool._ProcessIdentity
