@@ -1373,25 +1373,15 @@ def _add_local_callable_effect(
             return
 
 
-def _compute_local_vthread_effects(
-    module: Module,
-    native_exports: Optional[dict],
-    *,
-    effect_summary: Optional[dict] = None,
-    summary_module_name: str = "",
-) -> tuple[set[int], set[str], set[int], set[str]]:
-    """Compute one fixed point spanning functions and proven local methods."""
-    module_aliases, value_aliases = _vthread_import_aliases(module)
-    imported_functions, imported_modules = _cross_module_bindings(
-        module,
-        native_exports,
-    )
-    functions = _module_function_defs(module)
-    function_names = {fd.name for fd in functions}
-    for local_name in tuple(imported_functions):
-        if local_name in function_names:
-            imported_functions.pop(local_name, None)
+def _local_vthread_context(module: Module):
+    """Per-module analysis inputs that do not depend on ``native_exports``.
 
+    Each callable's lexical nodes, virtual-thread bindings, attribute calls and
+    local class hints, plus the module's threading evidence.  Computing them
+    once lets every pass over the module share one walk of each body.
+    """
+    module_aliases, value_aliases = _vthread_import_aliases(module)
+    functions = _module_function_defs(module)
     methods, bases = _class_method_tables(module)
     method_defs = _class_method_defs(module)
     local_classes = set(methods)
@@ -1428,6 +1418,47 @@ def _compute_local_vthread_effects(
         method_defs,
         callable_context,
     )
+    return (
+        module_aliases,
+        value_aliases,
+        functions,
+        methods,
+        bases,
+        method_defs,
+        callable_context,
+        threading_context,
+    )
+
+
+def _compute_local_vthread_effects(
+    module: Module,
+    native_exports: Optional[dict],
+    *,
+    effect_summary: Optional[dict] = None,
+    summary_module_name: str = "",
+    local_context=None,
+) -> tuple[set[int], set[str], set[int], set[str]]:
+    """Compute one fixed point spanning functions and proven local methods."""
+    if local_context is None:
+        local_context = _local_vthread_context(module)
+    (
+        module_aliases,
+        value_aliases,
+        functions,
+        methods,
+        bases,
+        method_defs,
+        callable_context,
+        threading_context,
+    ) = local_context
+    imported_functions, imported_modules = _cross_module_bindings(
+        module,
+        native_exports,
+    )
+    function_names = {fd.name for fd in functions}
+    for local_name in tuple(imported_functions):
+        if local_name in function_names:
+            imported_functions.pop(local_name, None)
     proof_cache = {}
     graph: dict[str, list[str]] = {}
     effects: set[str] = set()
@@ -2511,15 +2542,31 @@ def annotate_closed_world_vthread_effects(
     functions_by_module: dict[str, list[FuncDef]] = {}
     graph: dict[tuple[str, str], list[tuple[str, str]]] = {}
     may_park: set[tuple[str, str]] = set()
+    # Both passes below read the same per-module inputs.  The per-module
+    # export worker (one module) keeps its context for the metadata pass; a
+    # whole-closure annotation recomputes it there rather than holding every
+    # module's lexical node lists at once.
+    keep_contexts = len(parsed_modules) == 1
+    local_contexts: list = []
 
     for module, module_name in zip(parsed_modules, module_names):
-        functions = _module_function_defs(module)
-        threading_context = _threading_analysis_context(module, functions)
+        local_context = _local_vthread_context(module)
+        if keep_contexts:
+            local_contexts.append(local_context)
+        (
+            vthread_modules,
+            vthread_values,
+            functions,
+            _methods,
+            _bases,
+            _method_defs,
+            callable_context,
+            threading_context,
+        ) = local_context
         functions_by_module[module_name] = functions
         function_names: set[str] = set()
         for fd in functions:
             function_names.add(fd.name)
-        vthread_modules, vthread_values = _vthread_import_aliases(module)
         imported_functions, imported_modules = _cross_module_bindings(
             module,
             native_exports,
@@ -2530,6 +2577,9 @@ def annotate_closed_world_vthread_effects(
 
         for fd in functions:
             key = (module_name, fd.name)
+            scope_nodes, binding_state, attribute_calls, _class_hints = (
+                callable_context[id(fd)]
+            )
             direct_suspend, local_callees, sibling_callees = (
                 _scan_function_effects(
                     fd,
@@ -2539,6 +2589,8 @@ def annotate_closed_world_vthread_effects(
                     imported_functions,
                     imported_modules,
                     native_exports,
+                    scope_nodes=scope_nodes,
+                    binding_state=binding_state,
                 )
             )
             edges: list[tuple[str, str]] = []
@@ -2554,6 +2606,7 @@ def annotate_closed_world_vthread_effects(
                 fd,
                 module,
                 threading_context=threading_context,
+                attribute_calls=attribute_calls,
             ):
                 may_park.add(key)
 
@@ -2601,13 +2654,19 @@ def annotate_closed_world_vthread_effects(
     metadata_changed = True
     while metadata_changed:
         metadata_changed = False
-        for module, module_name in zip(parsed_modules, module_names):
+        for position, (module, module_name) in enumerate(
+            zip(parsed_modules, module_names)
+        ):
             (
                 _function_ids,
                 function_effect_names,
                 _method_ids,
                 method_effect_keys,
-            ) = _compute_local_vthread_effects(module, native_exports)
+            ) = _compute_local_vthread_effects(
+                module,
+                native_exports,
+                local_context=local_contexts[position] if keep_contexts else None,
+            )
             exports = native_exports.get(module_name, {})
             for fd in _module_function_defs(module):
                 info = exports.get(fd.name)
