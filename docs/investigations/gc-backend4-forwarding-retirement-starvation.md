@@ -275,6 +275,22 @@ env -u LC_ALL uv run python /Users/jiamo/pcc-recovery-archive/2026-10-13/scripts
   /tmp/gc4-list-shapes enumerate reversed borrowed enumerate_value
 ```
 
+### 2026-10-14: no list copy needed; threshold 200-500 objects
+Source `984cb2d4`, same setup. A function that only builds and drops
+`[Item(i) for i in range(n)]` (class with `__del__`), then `gc.collect()`:
+
+- n = 50 and 200: GC4 matches CPython.
+- n = 500, 1000, 2000: GC4 aborts with `[BAD_INCREF]` in the collect; GC0-3
+  match CPython. Without `__del__` (n = 2000) GC4 matches.
+- Without the `gc.collect()` call, GC4 has finalized only 359 of 500, 680 of
+  1000 and 1324 of 2000 objects when the function has returned; CPython and
+  GC0-3 have finalized all of them. So once a background cycle has relocated
+  part of the list, a refcount-dead object whose relocation is not yet retired
+  is not finalized on release.
+
+Repro programs and runner: `/Users/jiamo/pcc-recovery-archive/2026-10-13/gc4/min/`
+(`probe.py DIR NAME...` compiles DIR/NAME.py with pcc0 and runs GC0-4).
+
 ## What this investigation does not claim
 `owns_stw=1` was observed on the sole thread of a single-threaded probe before
 any `pcc_stop_the_world` call of its own. That may be trivially true when there
