@@ -335,6 +335,7 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
                    and node.func.id == "_replace_worker_resource" for node in ast.walk(write))
     assert "deadline = time.monotonic() + 1.0" in source
     assert 'winerror = getattr(error, "winerror", None)' in source
+    assert 'if winerror is None and execution_runtime.implementation.name == "pcc":' in source
     assert "retryable = winerror in (5, 32)" in source
     assert 'retryable = execution_runtime.platform == "win32" and error.errno == 13' in source
 

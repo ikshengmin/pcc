@@ -229,7 +229,11 @@ def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
 
 @pytest.mark.parametrize("platform_name,retried", (("win32", True), ("linux", False)))
 def test_errno_only_denial_retries_only_on_windows(report, monkeypatch, platform_name, retried):
-    """The pcc runtime reports a Windows sharing violation as EACCES, no winerror."""
+    """The pcc runtime reports a Windows sharing violation as EACCES, no winerror.
+
+    Only that runtime lacks winerror; under CPython an errno-only
+    PermissionError stays unrelated (test_unrelated_replace_errors_are_not_retried).
+    """
     import sys
 
     attempts = []
@@ -242,6 +246,7 @@ def test_errno_only_denial_retries_only_on_windows(report, monkeypatch, platform
 
     monkeypatch.setattr(policy, "_replace_worker_resource", replace)
     monkeypatch.setattr(sys, "platform", platform_name)
+    monkeypatch.setattr(sys, "implementation", SimpleNamespace(name="pcc"))
     if retried:
         policy.publish_worker_resource("complete")
         assert len(attempts) == 2

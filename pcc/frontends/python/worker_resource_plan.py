@@ -562,12 +562,13 @@ def publish_worker_resource(phase: str) -> None:
                 break
             except PermissionError as error:
                 remaining = deadline - time.monotonic()
-                # CPython reports the sharing violation as winerror 5 or 32.
-                # The pcc runtime has no winerror and reports the errno its
-                # Windows layer maps those codes to (EACCES).
+                # CPython reports the sharing violation as winerror 5 or 32;
+                # any other PermissionError is unrelated. The pcc runtime has
+                # no winerror and raises the errno its Windows layer maps those
+                # codes to (EACCES), so only there does errno decide.
                 import sys as execution_runtime
                 winerror = getattr(error, "winerror", None)
-                if winerror is None:
+                if winerror is None and execution_runtime.implementation.name == "pcc":
                     retryable = execution_runtime.platform == "win32" and error.errno == 13
                 else:
                     retryable = winerror in (5, 32)
