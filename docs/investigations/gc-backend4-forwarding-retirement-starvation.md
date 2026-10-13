@@ -252,6 +252,29 @@ finish decrefs the entry's target; freeing a *target* moves its entry to
 already invalid. Not yet established which free path missed
 `_forwarding_remove_target` for that target.
 
+### 2026-10-14: more finalizer calls than objects in ordinary list programs
+Source `de777b21`, macOS arm64, host pcc compile with `PCC_PYTHON_IR_PASSES=off`
+and a source-matched runtime archive. Program: the body of
+`tests/python/test_list_iterator_ownership.py` (2000 instances whose class
+has `__del__`, built in a function, then `gc.collect()`), one shape per run.
+
+- GC0-GC3: every shape finalizes 2000 then 4000 objects.
+- GC4: `list(xs)` and `list(reversed(xs))` abort with `[BAD_INCREF]` before
+  the first count; `list(enumerate(xs))` and an `enumerate(...)` value print
+  2472 and 2483 finalizer calls for 2000 objects, then abort with
+  `[BAD_INCREF]`. More calls than objects is consistent with the
+  `finalizer-ran-on-live-copy` over-release above (a relocated object's
+  `__del__` running on both the copy and the old shell), now reached by
+  ordinary list programs, not only by the sweep-verdict probe. Not yet
+  established that it is the same path.
+
+Repro (run from the repository root):
+
+```bash
+env -u LC_ALL uv run python /Users/jiamo/pcc-recovery-archive/2026-10-13/scripts/gc4_list_shapes_probe.py \
+  /tmp/gc4-list-shapes enumerate reversed borrowed enumerate_value
+```
+
 ## What this investigation does not claim
 `owns_stw=1` was observed on the sole thread of a single-threaded probe before
 any `pcc_stop_the_world` call of its own. That may be trivially true when there

@@ -38,6 +38,16 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 - `263d12af` CI limits (next section): Stage1 watchdog 6000 s, push gate is
   Stage1 plus the five-collector native canary, full chain by manual dispatch,
   strict closure 3600 s (not run on macOS), fixture peer wait 15 s.
+  `85825b40` counts its 26 new gate tests in HOST_COUNTS (all three
+  worker-prior jobs of run 38436916173 failed on the stale count).
+- `52ca3f80` native `os.replace`/`os.unlink`/`os.rmdir` raise CPython's errno
+  subclass with errno, strerror, filename(s) (was a bare OSError, so
+  `except FileNotFoundError` missed a missing file); the worker RSS publication
+  retries an errno-only EACCES on Windows (pcc has no `winerror` yet). Cause of
+  the Windows native prior-worker failure in run 38437580834.
+- `98ee6010` comprehension targets at module scope and in native lambdas are
+  registered roots (`[w.upper() for w in words]` at module scope did not
+  compile; the targets were not GC roots there).
 
 ## CI (follow each pushed commit)
 
@@ -204,17 +214,15 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
   item; now that the items are freed it aborts like the other shapes.
 - `str.upper()`/`str.lower()` map only ASCII letters (`"é".upper()` stays
   `"é"`); non-ASCII case mapping needs Unicode tables in the runtime.
-- Module-scope comprehensions whose element calls a method on the target
-  (`[w.upper() for w in words]`, any source type) fail codegen with
-  "slot-call name has no authoritative registered root"; inside a function they
-  compile. Same cause as
-  `test_py_comprehension_iterators.py::test_comprehension_over_user_iterable_uses_native_iterator_protocol`.
 - `[... for i, c in enumerate(s)]` over a non-ASCII str still indexes by
   codepoint per item (`py_obj_getitem_i64`), so it stays quadratic; `for` loops
   over `enumerate(s)` are normalised to a plain `for` and are linear.
 - `test_py_for_target_representation_join.py`: 4 tests fail at `a21fa121`
   (a `SimpleNamespace` codegen double lacks `_module_globals`; IR-shape
   assertions on dict iteration).
+- `test_worker_resource_plan.py::test_macos_failure_workflow_preserves_narrow_guard_evidence`
+  fails since `2a3ad7ff` (2026-10-11): it pins the macOS evidence upload paths,
+  and that commit added the worker-prior-gate paths.
 - `test_python_cpython_alignment.py` at `a21fa121`: `super_call` ("slot-call
   operand has no authoritative source or owned result: Call") and
   `import_math_alias` (self IR verifier: an extern call that expects a double
