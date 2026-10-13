@@ -108,13 +108,13 @@ recorded as `darwin_target` instead of asserted. Worker-prior strict closure
   object node. `pcc_gc_foreign_lease_acquire` gave such an owner a mode guard
   on GC0-2 but on GC3/GC4 only for graph-leaf tags, so passing `sys.stderr`
   as an argument (`phase_timing.report(sys.stderr, ...)` in the worker) raised
-  "slot-call owned-result lease failed". Fix (a no-node immortal outside the
-  nursery/zpage gets the leaf mode guard) is in the worktree, NOT committed at
-  the end of 2026-10-14: `pcc/runtime/py/freestanding_gc_root_operations.py`,
-  `tests/python/test_foreign_address_leases.py` (model cases, GC0-4),
-  `tests/python/test_immortal_stream_operand_lease.py` (five-GC native; GC3/4
-  raised before). A/B `ab_regress_iter8.out` in the job tmp: 16 of 17 files
-  passed with no regression; the alignment file was still running.
+  "slot-call owned-result lease failed". Fixed in `c5363d80` (a no-node
+  immortal outside the nursery/zpage gets the leaf mode guard; model cases for
+  GC0-4 in `test_foreign_address_leases.py`, five-GC native test
+  `test_immortal_stream_operand_lease.py`, GC3/4 raised before). A/B at commit
+  time: 16 of 17 files passed with no regression; in the alignment file 65
+  cases passed and `super_call` failed on both sides (pre-existing); its
+  remaining cases had not finished. CI for `c5363d80` validates the canary.
 - Run 38449385286 (`984cb2d4`): the four macOS pcc0/worker-prior jobs and
   Windows RSS publication pass; Linux/Windows Stage1, strict closure and the
   Windows PE diagnostic were still running at 19:17 UTC. Without the lease fix
