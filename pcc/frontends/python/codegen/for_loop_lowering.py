@@ -388,6 +388,14 @@ def _for_prepare_owned_object_target(host, target_ident: str, target_ty: Type):
         host._for_target_owned_names = set()
     host._for_target_owned_names.add(target_ident)
     host._ensure_owned_local_gc_root(target_ident, alloca, _CSTR)
+    if host.current_func_def is None and host.current_function is not None:
+        # No ``def`` in scope (module init, class body, native lambda), yet
+        # the slot is this function's owned local: a comprehension target
+        # here must be a registered root for the collectors and for
+        # slot-call operands, as it is inside a function.
+        host._ensure_local_gc_frame_root(
+            target_ident, alloca, _CSTR, host._gc_one_slot_frame_map(), allow_module=True,
+        )
     owned_flag = host._ensure_owned_local_flag(target_ident, alloca)
     if initial_obj is not None:
         host.builder.call(host.runtime["pcc_gc_pin"], [initial_obj])
