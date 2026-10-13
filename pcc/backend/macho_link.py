@@ -358,6 +358,16 @@ def _is_zerofill(section) -> bool:
 # here (vm space, no file payload).
 _S_THREAD_LOCAL_ZEROFILL = 0x12
 
+# Merged __TEXT,__text is split into sections of at most this many bytes, at
+# input boundaries. One input's code is whole functions, so a boundary never
+# falls inside fallthrough code. The executable linker can place a branch
+# thunk island only between output sections, and AArch64 b/bl reach +-128
+# MiB, so a single merged __text larger than that left call sites in its
+# middle out of reach of every island. Keep this below the executable
+# linker's island span.
+_TEXT_KEY = ("__TEXT", "__text")
+_TEXT_CHUNK_BYTES = 32 * 1024 * 1024
+
 
 def _align_up(value: int, align_log2: int) -> int:
     mask = (1 << align_log2) - 1
@@ -883,6 +893,8 @@ def link_relocatable_native(
     ]
 
     local_renames = _local_symbol_renames(symbol_tables)
+    text_chunk_index = 0
+    text_chunk_key = _TEXT_KEY
 
     for index, obj in enumerate(parsed_objects):
 
@@ -950,6 +962,9 @@ def link_relocatable_native(
         # This input's own section addresses and their merged bases, keyed by
         # (segname, sectname): a stored address is rebased through them.
         input_section_addr: dict[tuple[str, str], tuple[int, int]] = {}
+        # This input's section keys mapped to the merged sections they joined;
+        # only __TEXT,__text can land in a later chunk.
+        input_merged_key: dict[tuple[str, str], tuple[str, str]] = {}
         for sec_index, sec in enumerate(sections, start=1):
             key = _section_key(sec)
             sec_flags = _section_flags(sec)
@@ -1046,10 +1061,22 @@ def link_relocatable_native(
                 if compact_budget is not None:
                     stack_map_snapshot_bytes += len(payload)
                 continue
-            if key not in merged:
-                merged[key] = _MergedSection(key[0], key[1], sec_flags)
-                order.append(key)
-            target = merged[key]
+            merged_key = key
+            if key == _TEXT_KEY and not _is_zerofill(sec):
+                current = merged.get(text_chunk_key)
+                if (
+                    current is not None
+                    and current.data_size > 0
+                    and current.data_size + sec_size > _TEXT_CHUNK_BYTES
+                ):
+                    text_chunk_index += 1
+                    text_chunk_key = ("__TEXT", "__text" + str(text_chunk_index))
+                merged_key = text_chunk_key
+            input_merged_key[key] = merged_key
+            if merged_key not in merged:
+                merged[merged_key] = _MergedSection(merged_key[0], merged_key[1], sec_flags)
+                order.append(merged_key)
+            target = merged[merged_key]
             if (target.flags & spec.SECTION_TYPE) != (sec_flags & spec.SECTION_TYPE):
                 raise LinkError(
                     f"{key} has conflicting section TYPES across inputs "
@@ -1124,7 +1151,7 @@ def link_relocatable_native(
                     # record what it has to be rebased by once the merged
                     # layout is known.
                     rebases.append((
-                        target, reloc, input_section_addr,
+                        target, reloc, input_section_addr, input_merged_key,
                     ))
             if relocations_proven and target.proven_prefix_open:
                 target.proven_relocations = len(target.relocations)
@@ -1166,6 +1193,7 @@ def link_relocatable_native(
                 raise LinkError(f"symbol {name!r} names section {sec_index}")
             sec = sections[sec_index - 1]
             key = _section_key(sec)
+            merged_key = input_merged_key.get(key, key)
             # n_value is the section-relative address in an object file;
             # subtract the section's own addr to get the payload offset.
             if isinstance(sym, (NativeSymbol, PackedNativeSymbol)):
@@ -1176,13 +1204,13 @@ def link_relocatable_native(
                     - _section_addr(sec, sec_index, section_addrs)
                     + bases[sec_index]
                 )
-            merged[key].symbols.append(TextSymbol(
+            merged[merged_key].symbols.append(TextSymbol(
                 name,
                 offset,
                 external=bool(sym_type & spec.N_EXT),
                 private_external=bool(sym_type & spec.N_PEXT),
             ))
-            defined[name] = key
+            defined[name] = merged_key
 
     # Keep each input payload once while calculating offsets. Growing the
     # merged bytearray for every object copies an ever-larger prefix in the
@@ -1269,7 +1297,7 @@ def link_relocatable_native(
         for sym in section.symbols:
             symbol_at.setdefault((key, sym.offset), sym.name)
 
-    for target, entry, input_addrs in rebases:
+    for target, entry, input_addrs, input_keys in rebases:
         offset = entry.offset
         target_key = entry.section
         assert target_key is not None
@@ -1279,6 +1307,7 @@ def link_relocatable_native(
                 "same input does not contain"
             )
         old_addr, new_base = input_addrs[target_key]
+        merged_target_key = input_keys.get(target_key, target_key)
         if not isinstance(target.data, bytearray):
             target.data = bytearray(target.data)
         stored, = _struct.unpack_from("<Q", target.data, offset)
@@ -1288,7 +1317,7 @@ def link_relocatable_native(
         # zeroes the field, rather than keeping a section target with the
         # address baked in — which survives any later reordering, so pcc
         # does the same whenever a defined symbol sits exactly there.
-        owner = symbol_at.get((target_key, rebased))
+        owner = symbol_at.get((merged_target_key, rebased))
         if owner is not None:
             _struct.pack_into("<Q", target.data, offset, 0)
             target.relocations.append(Relocation(
@@ -1305,7 +1334,7 @@ def link_relocatable_native(
                 pcrel=entry.pcrel,
                 length=entry.length,
                 addend=0,
-                section=entry.section,
+                section=merged_target_key,
                 target_offset=rebased,
             ))
 
