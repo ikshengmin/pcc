@@ -112,6 +112,20 @@ _UNSAFE_RAW_POINTER_RETURNS = frozenset(
         "darwin_libsystem_symbol",
         "darwin_errno_location",
         "page_alloc",
+        "call_ptr_ptr_i64",
+        "call_ptr_ptr_ptr_i32",
+        "call_ptr_ptr_ptr_i64_ptr",
+        "call_ptr_i64_i64",
+        "getcwd",
+        "initial_environ",
+        "uname_field",
+        "va_start",
+        "va_arg_ptr",
+        "va_cursor",
+        "directory_open",
+        "directory_next",
+        "windows_full_path",
+        "windows_real_path",
     }
 )
 

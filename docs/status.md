@@ -17,10 +17,22 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   the unboxed value instead of rooting a boxed pointer in the i64 cell.
 - `97f3d52f` `self.__class__(kw=..., **mapping)` keeps the parser's operand
   order, so the constructor-unpack path compiles it.
+- `3a2530be` the freestanding-directive scan indexes a character list instead
+  of the source str (pcc1 str indexing of non-ASCII text is O(index)).
+- `28ce3e92` restores the 6 s worker-prior fixture deadline (see decision 2).
+- `1c980956` the ELF link reuses a relocatable `.pcc_stackmaps` table's
+  validation verdict for its relocated copy (finalize was 44.8 s of the link).
+- Codegen treats every raw-pointer unsafe intrinsic result as
+  raw (Windows `os.path.abspath` crash, see Known failures).
 
 CI: run 38375711981 (`0f6fa1d9`): every Stage1 job hit the 2400 s deadline, no
 compile failures. Run 38391246598 (`510ed001`): see its page; the three
-worker-prior gates (Linux x86_64, Windows, macOS) failed again.
+worker-prior gates (Linux x86_64, Windows, macOS) failed again. Run 38405592470
+(`3a2530be`): Linux aarch64 Stage1 missed the cap by about 5 s (codegen ended at
+2117 s; the link was killed in finalize), so no Stage2 data; macOS
+`Build current pcc1` timed out at 2400 s with ~70 of 460 modules done (3-core
+runner, `indexed-sidecar` route); worker-prior gates: strict closure timed out
+(aarch64, x86_64) or hit the memory cap (macOS), Windows width case crashed.
 
 ## Stage1 within 2400 s (goal 1 / platform qualification)
 
@@ -53,6 +65,15 @@ Levers: IR reduction in codegen (blocked, see decisions), x86 structured
 emission, x86 use of the native stack-map planner. Measured link
 micro-optimizations were below 5% and are parked in the archive.
 
+The aarch64 Stage1 link is a pure serial tail (all four worker slots stay busy
+until the last module, 90 idle slot-seconds in the whole run):
+`artifact_link` 286.6 s = stage inputs 89.9 + select 1.8 + classify 15.5 +
+allocate 2.6 + resolve/relocate 129.8 + finalize 44.8 + verify 1.6. Finalize
+was a second full validation of every input's stack-map table; `1c980956`
+removes it (0.295 s -> 0.009 s on 190 runtime objects), which should give about
+40 s of margin. The remaining tail is in the SHA-pinned `elf_x86_64.py`
+(decision 3).
+
 ## Stage2 / pcc1 throughput (goal 1, goal 6)
 
 - Keyword/default calls to known callees went through the runtime signature
@@ -77,17 +98,29 @@ micro-optimizations were below 5% and are parked in the archive.
 2. `tests/fixtures/native/worker_size_priors.py` peer-wait deadline 6 s -> 15 s
    for the Linux x86_64 GC4 growth gate. This test change was committed by
    mistake inside the documentation commit `4a3e9246` without review and is
-   restored to 6 s in the following commit; the proposal itself stays open.
+   restored to 6 s in `28ce3e92`; the proposal itself stays open. Evidence:
+   with 15 s the x86_64 native-pcc0 gate passed in runs 38400558239 and
+   38405592470; with 6 s it failed in 3 of 5 earlier runs and again in
+   38411293966 ("missing worker marker", growth case).
 3. Source-pinned files: `tests/test_elf_*_source_controls.py` SHA-pin
    `pcc/backend/elf_x86_64.py`; any link-loop change needs the preimages updated.
-4. A Windows unhandled-exception reporter (code, image offset, stack scan) to
-   locate the native-pcc0 `0xC0000005` would change `pcc_windows_start`, whose
-   model test (`test_owned_windows_exit.py`) needs a new double.
+4. A Windows unhandled-exception reporter (code, image offset, stack scan)
+   would change `pcc_windows_start`, whose model test
+   (`test_owned_windows_exit.py`) needs a new double. No longer needed for the
+   `abspath` crash: cross-compiling for Windows and running under Wine with
+   `WINEDEBUG=+relay,+seh` located it (archive README).
 
 ## Known failures
 
 - Windows native-pcc0 width case: `0xC0000005` inside `os.path.abspath`
-  (phase witness `abspath` in runs 38273917206 and 38375711981).
+  (phase witness `abspath` in runs 38273917206, 38375711981, 38405592470).
+  Root cause found and fixed (commit after `1c980956`): `_path_abspath_build`'s
+  `windows_full_path(...) if ... else null()` was lowered as an owned managed
+  value (retained, rooted) because codegen's `_UNSAFE_RAW_POINTER_RETURNS`
+  lacked 14 raw-pointer intrinsics; after `free(buffer)` the exit path released
+  the freed buffer. Reproduced and verified locally by cross-compiling for
+  `x86_64-pc-windows-msvc` and running under Wine 8.0 in an amd64 container
+  (archive README, "Windows os.path.abspath").
 - GC4 (`docs/investigations/gc-backend4-forwarding-retirement-starvation.md`):
   explicit `gc.collect()` never retires forwarding entries, so relocated garbage
   stays alive and its `__del__` never runs (fix parked: retirement itself
