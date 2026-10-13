@@ -159,6 +159,15 @@ def _encode(
 
 
 def _encode_str(s, buf, ensure_ascii=True) -> None:
+    # Characters 0x20..0x7E other than '"' and '\\' are emitted unchanged in
+    # both ensure_ascii modes, so such a string is appended whole instead of
+    # one character at a time.  isprintable() alone is not enough: CPython
+    # also accepts printable non-ASCII characters.
+    if s.isascii() and s.isprintable() and '"' not in s and "\\" not in s:
+        buf.append('"')
+        buf.append(s)
+        buf.append('"')
+        return
     buf.append('"')
     for c in s:
         if c == '"':
@@ -279,6 +288,12 @@ class _Decoder:
         if self.pos >= len(self.s) or self.s[self.pos] != '"':
             raise JSONDecodeError("expected string", self.s, self.pos)
         self.pos += 1
+        # Without a backslash before the closing quote the value is one slice.
+        end = self.s.find('"', self.pos)
+        if end >= 0 and self.s.find("\\", self.pos, end) < 0:
+            value = self.s[self.pos:end]
+            self.pos = end + 1
+            return value
         out: list[str] = []
         while self.pos < len(self.s):
             ch = self.s[self.pos]
@@ -308,7 +323,18 @@ class _Decoder:
                 elif esc == "u":
                     hex4 = self.s[self.pos:self.pos + 4]
                     self.pos += 4
-                    out.append(chr(int(hex4, 16)))
+                    point = int(hex4, 16)
+                    # Like CPython, an escaped UTF-16 surrogate pair spells one
+                    # code point above the BMP; a lone surrogate stays itself.
+                    if (
+                        0xD800 <= point <= 0xDBFF
+                        and self.s[self.pos:self.pos + 2] == "\\u"
+                    ):
+                        low = int(self.s[self.pos + 2:self.pos + 6], 16)
+                        if 0xDC00 <= low <= 0xDFFF:
+                            point = 0x10000 + ((point - 0xD800) << 10) + (low - 0xDC00)
+                            self.pos += 6
+                    out.append(chr(point))
                 else:
                     raise JSONDecodeError(
                         f"bad escape \\{esc}", self.s, self.pos,
