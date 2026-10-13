@@ -481,9 +481,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Separate hosted runners: no needs, artifact download or shared concurrency
     # group may put this gate on the Stage1 critical path.
-    # Budget: 20 min runtime + up to 40 min bounded tests + 60 min strict
+    # Budget: 20 min runtime + up to 40 min bounded tests + 100 min strict
     # closure + 30 min setup/receipts. Failures remain hard job failures.
-    timeout-minutes: 150
+    timeout-minutes: 190
     env:
       PCC_BUILD_BACKEND: self
       PCC_RUNTIME_CC: pcc

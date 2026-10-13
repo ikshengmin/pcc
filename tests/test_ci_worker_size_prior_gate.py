@@ -836,7 +836,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         assert "needs:" not in body and "actions/download-artifact" not in body
         assert "--phase stage1" not in body and "--phase pcc1" not in body
     assert "fail-fast: false" in preflight
-    assert "timeout-minutes: 150" in preflight
+    assert "timeout-minutes: 190" in preflight
     for platform, runner in (("macos-arm64", "macos-15"), ("linux-x86_64", "ubuntu-24.04"),
                              ("linux-aarch64", "ubuntu-24.04-arm"), ("windows-x86_64", "windows-2022")):
         assert "- { platform: " + platform + ", runner: " + runner + " }" in preflight
