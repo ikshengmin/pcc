@@ -5,6 +5,8 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolLit, DynType, Expr, For, FuncDef, If, Import, ImportFrom, IntLit, IntType, ListExpr, Name, Stmt, Try, Type, TupleExpr, UnaryOp, While, With
+from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.import_lowering import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty
 from pcc.frontends.python.py_ast import assignment_storage_annotation
@@ -809,6 +811,28 @@ class ModuleGlobalLoweringMixin:
         if is_cpy_value or raw_pointer or not isinstance(value.type, ir.PointerType):
             self.builder.store(value, gv)
             self._mark_module_global_initialized(gv)
+            return
+        if declared_ty is not None and not isinstance(gv.value_type, ir.PointerType):
+            # A scalar module cell (an i64 global of a raw-int module) can
+            # receive a boxed result, e.g. ``global n; n += 1`` whose add took
+            # the tagged/bignum object path. Store its native value; rooting
+            # the pointer would put object bits in the scalar cell.
+            self._gc_pin(value)
+            native = marshal.marshal_from_object(
+                self.builder, self.module, self.runtime, value, declared_ty,
+            )
+            # An int beyond the cell's lane raises OverflowError here.
+            self._emit_post_call_err_check()
+            self._gc_unpin(value)
+            if not self._ir_type_matches(native.type, gv.value_type):
+                raise L1CodegenError(
+                    "module global " + gv.name + " stores " + str(gv.value_type)
+                    + " but its boxed value unboxes to " + str(native.type)
+                )
+            self.builder.store(native, gv)
+            self._mark_module_global_initialized(gv)
+            if value_is_owned:
+                self._gc_release(value, self._release_context_label("module_store_tmp"))
             return
         old_value = self.builder.load(
             gv,
