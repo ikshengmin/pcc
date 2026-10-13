@@ -48,6 +48,20 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 - `98ee6010` comprehension targets at module scope and in native lambdas are
   registered roots (`[w.upper() for w in words]` at module scope did not
   compile; the targets were not GC roots there).
+- `e06cd523` the errno-only EACCES retry of the worker RSS publication applies
+  only to pcc's native runtime on Windows; CPython keeps the winerror retry.
+- `aea09dca` a float-typed result of an object call (`sqrt(9)` after
+  `from math import sqrt`) is unboxed before `int()`, int conversion and unary
+  minus (self IR verifier failure; also fixes the alignment `import_math_alias`
+  case: fails on the `e06cd523` snapshot, passes with the fix).
+- `ddb5fa70` "PE rel32 out of range" names the symbol, sections, RVAs, addend,
+  displacement and the section layout.
+- `aa643fb7` the process-tree sampler readmits a reused PID through its owned
+  kernel parent (macOS Stage1 abort, CI section).
+- `7cc98b33` the tar oracle reads the current IR printer; strict closure CI
+  budget 6000 s (CI section).
+- `984cb2d4` canary compile workers re-raise after their report
+  (`PCC_DEBUG_WORKER_RERAISE`), so a failure prints its file and line.
 
 ## CI (follow each pushed commit)
 
@@ -59,9 +73,36 @@ is unchanged as a definition and runs by manual `workflow_dispatch` with
 The workflow still has no `continue-on-error`. Stage1 watchdog 6000 s on all
 platforms (projections below), macOS job 180 min, its 45-minute target
 recorded as `darwin_target` instead of asserted. Worker-prior strict closure
-3600 s (Linux projections ~2400-2500 s from its progress receipts), not run on
-macOS (needs ~8.6 GB, runner admits ~3.1 GB). Fixture peer wait 15 s
-(decision 2, applied).
+6000 s since `7cc98b33` (was 3600 s; see below), not run on macOS (needs
+~8.6 GB, runner admits ~3.1 GB). Fixture peer wait 15 s (decision 2, applied).
+
+- Runs 38436916173 (`263d12af`) and 38437580834 (`85825b40`), Linux aarch64:
+  Stage1 2396 s and 2384 s. The GC0 and GC1 native canaries pass; the GC3
+  canary compile fails in a pcc1 codegen worker after `direct indexed emit`
+  with `RuntimeError: slot-call owned-result lease failed` in both runs (GC2
+  and GC4 were cancelled after it). `pcc_gc_foreign_lease_acquire` returns -1
+  only when the published object's node is marked freeing, or for a managed
+  non-leaf object without a node, which only GC3/GC4 reject. No local pcc1
+  is newer than the lease code (`1a59d09d`, 2026-10-02); `984cb2d4` makes the
+  next failure print its location.
+- Windows (both runs): Stage1 compiles every module (codegen done at ~4600 s in
+  run 38437580834) and the COFF link fails with "PE rel32 out of range";
+  `ddb5fa70` reports the reference and layout. macOS pcc1 is ~674 MB
+  (`__TEXT` 626 MB), so the image size alone does not explain a 2 GB distance.
+- macOS native pcc1 job (`263d12af`): Stage1 aborted at 3804 s with
+  `active_missing`: macOS gave a new worker PID 7199, which an earlier worker
+  had used, and the sampler excluded every reused PID, so the worker never
+  entered the tree state. Fixed in `aa643fb7`. macOS worker-prior passes at
+  `85825b40` and `e06cd523`; Windows RSS publication passes at `e06cd523`.
+- Strict closure: with 3600 s it reached the tar oracle for the first time
+  (aarch64 at 2916 s, module 27/34; x86_64 at 3395 s) and failed there: the
+  oracle could not read typed calls (`call ptr (ptr) @f`), bitcast root slots,
+  retained table loads and literals held in constant item arrays. Fixed in
+  `7cc98b33` (all six modules pass on a local closure). Module verify+emit
+  runs at ~2.4-2.5 s per IR MB, so all 34 modules project to ~3200 s
+  (aarch64) and ~3700 s (x86_64): over 3600 s, hence the 6000 s budget.
+- Linux x86_64 wheels of both runs were still in Stage1 after 85 min (slow
+  runners).
 
 Stage1 projections (`stage1_projection.py` in the archive: per-module times
 scaled against the complete `1c980956` runs): Linux aarch64 2338-2362 s
@@ -100,12 +141,8 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
 - Run 38423410429 (`a21fa121`): Stage1 completed modules at the 2400 s cap:
   Linux x86_64 73 (slow runner again), Windows 91, macOS 80 (average 1.33
   workers). Linux aarch64 above.
-- The 2400 s Stage1 cap is ours, not GitHub's: `scripts/ci_worker_size_prior_gate.py`
-  passes `--timeout 2400` to `bootstrap_platform.py` (Linux/Windows) and sets
-  `PCC_BOOTSTRAP_STAGE_TIMEOUT=2400` on macOS (also in
-  `.github/workflows/pcc1-package-parity.yml`). GitHub's own limit is 6 h per
-  job on hosted runners; the native wheel job already uses `timeout-minutes: 360`
-  for Stage1 plus the five-GC Stage2/Stage3 chains.
+- The former 2400 s Stage1 cap was ours, not GitHub's (6 h per hosted job);
+  `263d12af` raised it to 6000 s.
 - Worker-prior gates: strict closure times out (aarch64, x86_64) or hits the
   memory cap (macOS); Windows now passes default-xdist (2023), windows-exit and
   the native width cases; the GC4 growth case fails intermittently on Windows
@@ -224,10 +261,19 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
   fails since `2a3ad7ff` (2026-10-11): it pins the macOS evidence upload paths,
   and that commit added the worker-prior-gate paths.
 - `test_python_cpython_alignment.py` at `a21fa121`: `super_call` ("slot-call
-  operand has no authoritative source or owned result: Call") and
-  `import_math_alias` (self IR verifier: an extern call that expects a double
-  receives the boxed `call.slot.take` result of `sqrt(9)`; only in the full
-  multi-module compile, the single-module IR passes the unboxed float).
+  operand has no authoritative source or owned result: Call"). The
+  `import_math_alias` case (boxed `sqrt(9)` result passed where a double was
+  expected) is fixed in `aea09dca`.
+- Also failing on the `e06cd523` snapshot (A/B of `aea09dca`, identical with
+  and without it): `test_boolean_float_conversion.py::test_integer_power_bool_inputs_never_use_bigint_payload`
+  (4 cases, `NameError: _int_shift_sign` at `py_int_ops.py:312`; the helper
+  came with `6f87072c`), `test_int_builtin_object_projection.py` (3 tests:
+  program traceback and `py_int_from_cstr_or_raise` IR-shape expectations),
+  `test_int_of_float_exact.py::test_raw_lane_int_of_float_raises_instead_of_garbage[pcc0]`
+  (error text "... to C int64" expected), and
+  `test_worker_memory_budget_selection.py::test_mac_ci_final_guard_reselects_after_startup_and_records_final_observation[3113851289-0]`
+  (the test replaces the shared `subprocess.run` for its guard double, and the
+  guard's termination path runs `ps` through it: `list.index` ValueError).
 - `test_runtime_iterator_roots.py`: every model case fails with
   `NameError: _TUPLE_ITER_START` since `75b2ddd1`; its loader
   (`test_runtime_getter_roots._GetterMemory.load`) execs only the function
@@ -266,6 +312,10 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
 # Per-phase Stage1 totals from a CI artifact
 python3 /Users/jiamo/pcc-recovery-archive/2026-10-13/scripts/phase_breakdown.py \
   <artifact>/bootstrap-<platform>/platform-qualification/shared/stage1.log
+# Tar oracle on a local strict closure (parallel frontend, ~380 s), then on
+# the saved per-module sections in ~12 s
+uv run python /Users/jiamo/pcc-recovery-archive/2026-10-13/scripts/oracle_closure.py OUT_DIR
+uv run python /Users/jiamo/pcc-recovery-archive/2026-10-13/scripts/oracle_sections.py OUT_DIR
 # Static keyword binding (host IR shape + five-GC native)
 env -u LC_ALL PCC_NO_AUTO_PCC1=1 uv run pytest -x -n0 tests/python/test_static_keyword_binding.py
 env -u LC_ALL PCC_NO_AUTO_PCC1=1 uv run pytest -x -n0 -m integration tests/python/test_static_keyword_binding.py
