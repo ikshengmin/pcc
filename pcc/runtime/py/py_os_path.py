@@ -45,6 +45,7 @@ from pcc.unsafe import (
     unlinkat,
     stat_size,
     is_symlink,
+    strlen,
 )
 
 
@@ -99,6 +100,10 @@ pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_incref = extern("py_incref", (c_ptr,), c_void)
+py_os_error_new = extern("py_os_error_new", (c_int64, c_ptr), c_ptr)
+pcc_errno_get = extern("pcc_errno_get", (), c_int32)
+pcc_errno_message_into = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_int32)
 
 _FS_PATH = 0
 _FS_NORMALIZED = 1
@@ -116,6 +121,20 @@ define_global_i32("pcc_os_path_abspath_frame_map", 3)
 define_global_i32("pcc_os_path_normpath_frame_map", 2)
 define_global_i32("pcc_os_path_relpath_frame_map", 4)
 define_global_i32("pcc_os_path_compare_frame_map", 4)
+
+# Owned slots while an errno failure of os.replace/unlink/rmdir becomes the
+# CPython OSError: the path copies, errno, strerror, args, the exception and
+# the pending-exception swap that survives slot release.
+_OSE_FIRST = 0
+_OSE_SECOND = 1
+_OSE_NUMBER = 2
+_OSE_MESSAGE = 3
+_OSE_ARGS = 4
+_OSE_ERROR = 5
+_OSE_PENDING = 6
+_OSE_COUNT = 7
+define_global_i32("pcc_os_errno_owned_map", _OSE_COUNT)
+define_global_i32("pcc_os_errno_borrowed_map", -2)
 
 
 def _path_clear_root_prefix(slots, pins, count: int) -> None:
@@ -385,6 +404,113 @@ def py_os_makedirs(path, mode: int, exist_ok: int):
     return global_load_ptr("py_None")
 
 
+def _os_failure_errno(result: int) -> int:
+    # Darwin libc calls return -1 and set errno; the Linux syscalls, the
+    # Windows layer and the normalized Darwin rename return the negated errno.
+    # Read errno before anything else can run.
+    if result == -1 and load_i8(target_sys_platform(), 0) == 100:
+        return pcc_errno_get()
+    return 0 - result if result < 0 else result
+
+
+def _os_errno_fail(kind: int, message) -> int:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(kind, message))
+    return -1
+
+
+def _os_errno_adopt(slots, tokens, index: int) -> int:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(slot, 0)):
+        return _os_errno_fail(19, cstr("os error could not allocate its fields"))
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    store_i64(tokens, index * C_POINTER_SIZE, token)
+    if token < 0:
+        return _os_errno_fail(19, cstr("os error could not lease an owner"))
+    return 0
+
+
+def _os_errno_drop(slots, tokens, index: int) -> None:
+    slot = ptr_add(slots, index * C_POINTER_SIZE)
+    token: int = load_i64(tokens, index * C_POINTER_SIZE)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(slot, token) < 0:
+            pcc_platform_abort()
+            return
+    store_i64(tokens, index * C_POINTER_SIZE, -1)
+    pcc_gc_store_root(slot, null())
+
+
+def _os_errno_body(slots, tokens, borrowed, number: int, paths: int) -> int:
+    # Copy the caller's path owners before any allocation can move them.
+    index: int = 0
+    while index < paths:
+        token: int = pcc_gc_root_copy_borrowed_lease(
+            ptr_add(slots, (_OSE_FIRST + index) * C_POINTER_SIZE),
+            ptr_add(borrowed, index * C_POINTER_SIZE))
+        store_i64(tokens, (_OSE_FIRST + index) * C_POINTER_SIZE, token)
+        if token < 0:
+            return _os_errno_fail(7, cstr("os error could not retain its path"))
+        index = index + 1
+    message = stack_alloc(256)
+    pcc_errno_message_into(number, message, 256)
+    store_ptr(slots, _OSE_NUMBER * C_POINTER_SIZE, py_int_from_i64(number))
+    if _os_errno_adopt(slots, tokens, _OSE_NUMBER) != 0:
+        return -1
+    store_ptr(slots, _OSE_MESSAGE * C_POINTER_SIZE, py_str_new(message, strlen(message)))
+    if _os_errno_adopt(slots, tokens, _OSE_MESSAGE) != 0:
+        return -1
+    # OSError(errno, strerror, filename[, winerror, filename2]) selects the
+    # errno subclass and keeps args == (errno, strerror), as CPython's.
+    store_ptr(slots, _OSE_ARGS * C_POINTER_SIZE, py_tuple_new(5 if paths == 2 else 3))
+    if _os_errno_adopt(slots, tokens, _OSE_ARGS) != 0:
+        return -1
+    args = load_ptr(slots, _OSE_ARGS * C_POINTER_SIZE)
+    py_tuple_set_item(args, 0, load_ptr(slots, _OSE_NUMBER * C_POINTER_SIZE))
+    py_tuple_set_item(args, 1, load_ptr(slots, _OSE_MESSAGE * C_POINTER_SIZE))
+    py_tuple_set_item(args, 2, load_ptr(slots, _OSE_FIRST * C_POINTER_SIZE))
+    if paths == 2:
+        py_tuple_set_item(args, 3, global_load_ptr("py_None"))
+        py_tuple_set_item(args, 4, load_ptr(slots, _OSE_SECOND * C_POINTER_SIZE))
+    if py_err_occurred():
+        return -1
+    store_ptr(slots, _OSE_ERROR * C_POINTER_SIZE,
+              py_os_error_new(14, load_ptr(slots, _OSE_ARGS * C_POINTER_SIZE)))
+    if _os_errno_adopt(slots, tokens, _OSE_ERROR) != 0:
+        return -1
+    error = load_ptr(slots, _OSE_ERROR * C_POINTER_SIZE)
+    py_incref(error)
+    py_raise_owned(error)
+    return -1
+
+
+def _os_raise_errno(number: int, first, second) -> None:
+    """Raise CPython's OSError subclass for ``number`` naming the path(s)."""
+    borrowed = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(borrowed, 0, first)
+    store_ptr(borrowed, C_POINTER_SIZE, second)
+    pcc_gc_frame_enter(global_addr("pcc_os_errno_borrowed_map"), borrowed)
+    slots = stack_alloc(_OSE_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_OSE_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _OSE_COUNT * C_POINTER_SIZE)
+    index: int = 0
+    while index < _OSE_COUNT:
+        store_i64(tokens, index * C_POINTER_SIZE, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_os_errno_owned_map"), slots)
+    _os_errno_body(slots, tokens, borrowed, number, 1 if ptr_is_null(second) else 2)
+    # Hold the raised exception while releasing the field owners.
+    py_tls_exc_swap_slot(ptr_add(slots, _OSE_PENDING * C_POINTER_SIZE))
+    index = _OSE_ERROR
+    while index >= _OSE_FIRST:
+        _os_errno_drop(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(ptr_add(slots, _OSE_PENDING * C_POINTER_SIZE))
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave(borrowed)
+
+
 @c_abi_export("py_os_unlink")
 def py_os_unlink(path):
     item, owned = _coerce_path_str(path)
@@ -393,9 +519,10 @@ def py_os_unlink(path):
         py_raise_owned(py_exc_new(3, cstr("path must be string-like")))
         return null()
     result: int = unlinkat(py_str_utf8(item), 0)
+    number: int = 0 if result == 0 else _os_failure_errno(result)
     py_decref(owned)
     if result != 0:
-        py_raise_owned(py_exc_new(14, cstr("could not unlink path")))
+        _os_raise_errno(number, path, null())
         return null()
     return global_load_ptr("py_None")
 
@@ -408,9 +535,10 @@ def py_os_rmdir(path):
         py_raise_owned(py_exc_new(3, cstr("path must be string-like")))
         return null()
     result: int = unlinkat(py_str_utf8(item), 1)
+    number: int = 0 if result == 0 else _os_failure_errno(result)
     py_decref(owned)
     if result != 0:
-        py_raise_owned(py_exc_new(14, cstr("could not remove directory")))
+        _os_raise_errno(number, path, null())
         return null()
     return global_load_ptr("py_None")
 
@@ -427,10 +555,11 @@ def py_os_replace(source, destination):
     result: int = rename_file(
         py_str_utf8(source_item), py_str_utf8(destination_item)
     )
+    number: int = 0 if result == 0 else _os_failure_errno(result)
     py_decref(source_owned)
     py_decref(destination_owned)
     if result != 0:
-        py_raise_owned(py_exc_new(14, cstr("could not replace path")))
+        _os_raise_errno(number, source, destination)
         return null()
     return global_load_ptr("py_None")
 

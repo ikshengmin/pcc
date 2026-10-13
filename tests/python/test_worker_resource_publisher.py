@@ -334,7 +334,9 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
     assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                    and node.func.id == "_replace_worker_resource" for node in ast.walk(write))
     assert "deadline = time.monotonic() + 1.0" in source
-    assert 'getattr(error, "winerror", 0) not in (5, 32)' in source
+    assert 'winerror = getattr(error, "winerror", None)' in source
+    assert "retryable = winerror in (5, 32)" in source
+    assert 'retryable = execution_runtime.platform == "win32" and error.errno == 13' in source
 
 
 def _native_import_control(policy, events, *, platform="linux", pending=False, call_error=None):

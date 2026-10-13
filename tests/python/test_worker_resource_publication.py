@@ -225,3 +225,29 @@ def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
     assert "needs:" not in bootstrap + publication
     assert text.count('      - "tests/python/test_worker_resource_publication.py"') == 2
     assert text.count('      - "tests/python/test_worker_resource_publisher.py"') == 2
+
+
+@pytest.mark.parametrize("platform_name,retried", (("win32", True), ("linux", False)))
+def test_errno_only_denial_retries_only_on_windows(report, monkeypatch, platform_name, retried):
+    """The pcc runtime reports a Windows sharing violation as EACCES, no winerror."""
+    import sys
+
+    attempts = []
+
+    def replace(source, destination):
+        attempts.append(source)
+        if len(attempts) == 1:
+            raise PermissionError(errno.EACCES, "Permission denied")
+        os.replace(source, destination)
+
+    monkeypatch.setattr(policy, "_replace_worker_resource", replace)
+    monkeypatch.setattr(sys, "platform", platform_name)
+    if retried:
+        policy.publish_worker_resource("complete")
+        assert len(attempts) == 2
+        assert report.read_text().splitlines()[2] == "complete"
+    else:
+        with pytest.raises(PermissionError):
+            policy.publish_worker_resource("complete")
+        assert len(attempts) == 1
+        assert report.read_text().splitlines()[2] == "allocated"
