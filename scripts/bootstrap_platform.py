@@ -364,6 +364,10 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                 executable.unlink(missing_ok=True)
                 smoke_env = environment.copy()
                 smoke_env["PCC_HOST_PYTHON"] = str(out_dir / "forbidden-host-python")
+                # A failing native worker otherwise reports only "Type: message".
+                # Re-raising after its report lets the process handler add the
+                # file and line to the canary log; success is unaffected.
+                smoke_env["PCC_DEBUG_WORKER_RERAISE"] = "1"
                 canary_compile = guarded(
                     compiler + [str(canary), "-o", str(executable), "--backend", "self", "--python-libpython", "off"],
                     cwd=ROOT, env=smoke_env, log_path=out_dir / f"canary{stage}-compile.log",
