@@ -204,6 +204,37 @@ def run_export_worker(
             gc.enable()
 
 
+def _retain_stage2_export_result(module_name: str, result_path: str) -> None:
+    """Preserve the actual EXPORT row after its ordinary result write."""
+    try:
+        directory = str(os.environ.get("PCC_STAGE2_EXPORT_EVIDENCE_DIR", "") or "")
+        if (
+            not directory
+            or module_name != "pcc.frontends.c.parse.c_parsetab"
+        ):
+            return
+        # Bind the copy to the exact manifest claimed by this coordinator.
+        # Reading two header lines does not deserialize or shrink its module table.
+        with open(os.path.join(directory, "selected.manifest"), "r", encoding="utf-8") as stream:
+            stream.readline()
+            selected_result = stream.readline().rstrip("\r\n")
+        if selected_result != result_path:
+            return
+        destination = os.path.join(directory, "result.tsv")
+        if os.path.exists(destination):
+            return
+        with open(result_path, "rb") as stream:
+            payload: bytes = stream.read()
+        with open(destination + ".pending", "wb") as stream:
+            if stream.write(payload) != len(payload):
+                return
+            stream.flush()
+        os.replace(destination + ".pending", destination)
+    except Exception:
+        # Compilation and its existing result/error protocol remain authoritative.
+        return
+
+
 def _run_export_worker(
     manifest,
     *,
@@ -286,6 +317,8 @@ def _run_export_worker(
             total_ms = int((time.monotonic() - total_started) * 1000)
             line += "\t" + str(total_ms)
         stream.write(line + "\n")
+    if worker_timing and len(subset_names) == 1:
+        _retain_stage2_export_result(str(subset_names[0]), result_path)
     return 0
 
 

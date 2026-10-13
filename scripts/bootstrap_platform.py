@@ -173,6 +173,7 @@ def _stage_environment(gc_backend, jobs=1, rss_limit=17179869184):
     """Qualification always completes compilation in the supervised process."""
     environment = os.environ.copy()
     environment.pop("LC_ALL", None)
+    environment.pop("PCC_STAGE2_EXPORT_EVIDENCE_DIR", None)
     environment.update({
         "PCC_GC_BACKEND": str(gc_backend), "PCC_SELF_LINK": "pcc", "PCC_SELF_OBJ": "pcc",
         "PCC_IR_TO_OBJ_EMITTER": "pcc", "PCC_RUNTIME_CC": "pcc", "PCC_RUNTIME_HIGH": "py",
@@ -194,6 +195,21 @@ def _runtime_identity_matches(runtime, identity):
         if key in identity and _digest(str(runtime) + suffix) != identity[key]:
             return False
     return True
+
+
+def _stage_compiler_environment(environment, out_dir, stage, gc_backend):
+    stage_env = environment.copy()
+    stage_env.pop("PCC_STAGE2_EXPORT_EVIDENCE_DIR", None)
+    if stage > 1:
+        stage_env["PCC_HOST_PYTHON"] = str(out_dir / "forbidden-host-python")
+    if (
+        stage == 2
+        and str(gc_backend) == "0"
+        and str(stage_env.get("PCC_PY_FRONTEND_WORKER_TIMING", "")).strip().lower()
+        in ("1", "true", "yes", "on")
+    ):
+        stage_env["PCC_STAGE2_EXPORT_EVIDENCE_DIR"] = str(out_dir / "stage2-export-evidence")
+    return stage_env
 
 
 def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
@@ -284,9 +300,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                     raise RuntimeError("runtime archive changed before stage " + str(stage))
                 compiler_digest = _digest(compiler[0])
                 output = out_dir / ("pcc" + str(stage) + suffix)
-                stage_env = environment.copy()
-                if stage > 1:
-                    stage_env["PCC_HOST_PYTHON"] = str(out_dir / "forbidden-host-python")
+                stage_env = _stage_compiler_environment(environment, out_dir, stage, gc_backend)
                 command = compiler + ["--backend", "self", "--python-libpython", "off",
                                       "--ir-scaffold=on", str(ROOT / "pcc" / "__main__.py"), "-o", str(output)]
                 print(f"GC{gc_backend} stage{stage}: {' '.join(command)}", flush=True)

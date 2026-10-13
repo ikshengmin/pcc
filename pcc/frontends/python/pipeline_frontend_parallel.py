@@ -384,6 +384,32 @@ def _summary_worker_parallelism(max_parallel: int, worker_prefix) -> int:
     return _compiled_native_summary_jobs(requested)
 
 
+def _retain_stage2_export_manifest(manifest_path: str, module_names, chunk, worker_prefix) -> None:
+    """Best-effort copy of one normal native export's unmodified input."""
+    try:
+        directory = str(os.environ.get("PCC_STAGE2_EXPORT_EVIDENCE_DIR", "") or "")
+        if (
+            not directory
+            or len(worker_prefix) != 1
+            or len(chunk) != 1
+            or module_names[chunk[0]] != "pcc.frontends.c.parse.c_parsetab"
+        ):
+            return
+        # A previous claim, including an incomplete one, must not be replaced.
+        os.makedirs(directory, exist_ok=False)
+        destination = os.path.join(directory, "selected.manifest")
+        with open(manifest_path, "rb") as reader:
+            payload: bytes = reader.read()
+        with open(destination + ".pending", "wb") as writer:
+            if writer.write(payload) != len(payload):
+                return
+            writer.flush()
+        os.replace(destination + ".pending", destination)
+    except Exception:
+        # Evidence I/O must not replace a worker/compilation failure.
+        return
+
+
 def build_shared_exports(
     tmp: str,
     src_paths,
@@ -459,6 +485,7 @@ def build_shared_exports(
             verbose=verbose,
             job_kind="export",
         )
+        _retain_stage2_export_manifest(manifest_path, module_names, chunk, worker_prefix)
         result_paths.append(result_path)
         command_parts = [shell_quote_arg(part) for part in worker_prefix]
         command_parts.append(shell_quote_arg(worker_arg))

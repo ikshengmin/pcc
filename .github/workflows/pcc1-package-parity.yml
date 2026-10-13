@@ -16,6 +16,7 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_stage2_export_capture.py"
       - "tests/python/test_worker_guard_cadence.py"
       - "tests/python/test_worker_current_rss.py"
       - "tests/python/test_worker_tree_recovery_guard.py"
@@ -162,6 +163,7 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_stage2_export_capture.py"
       - "tests/python/test_worker_guard_cadence.py"
       - "tests/python/test_worker_current_rss.py"
       - "tests/python/test_worker_tree_recovery_guard.py"
@@ -586,6 +588,9 @@ jobs:
       - name: Install locked development dependencies
         run: uv sync --frozen --dev --python 3.13
 
+      - name: Verify Stage2 export evidence retention contracts
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py
+
       - name: Qualify all five GC self-host chains and Stage1 admission metrics
         env:
           # Explicit marker opts in only this push commit and Linux ARM Stage1.
@@ -608,6 +613,8 @@ jobs:
             build/platform-qualification/**/*.log
             build/platform-qualification/**/*.json
             build/platform-qualification/**/*.jsonl
+            build/platform-qualification/gc0/stage2-export-evidence/selected.manifest
+            build/platform-qualification/gc0/stage2-export-evidence/result.tsv
             build/worker-prior-gate/**/*.json
             build/worker-prior-gate/**/*.jsonl
             build/worker-prior-gate/**/*.log
