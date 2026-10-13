@@ -542,6 +542,8 @@ def _runtime_signatures_part_7():
     "py_str_repeat": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_str_slice": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_str_index": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    "py_str_char_at_byte": (_PYOBJ, [_PYOBJ, _I64], False),
+    "py_str_codepoint_byte_len": (_I64, [_PYOBJ, _I64], False),
     "py_str_codepoint_at": (_I64, [_PYOBJ, _I64], False),
     "py_str_contains_codepoint": (_I64, [_PYOBJ, _I64], False),
     "py_str_eq": (_I64, [_PYOBJ, _PYOBJ], False),

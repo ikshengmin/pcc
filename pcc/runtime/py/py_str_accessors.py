@@ -2041,7 +2041,20 @@ def py_str_index(s, idx_obj):
     if real < 0:
         py_raise_owned(py_exc_new(5, cstr("string index out of range")))  # PY_EXC_INDEXERROR
         return null()
-    bo: int = _utf8_byte_offset_for_codepoint(s, real)
+    return py_str_char_at_byte(s, _utf8_byte_offset_for_codepoint(s, real))
+
+
+@c_abi_export("py_str_char_at_byte")
+def py_str_char_at_byte(s, bo: int):
+    """The one-character str starting at byte offset ``bo``, a codepoint start.
+
+    A caller walking a str in order keeps the byte offset itself, so a step
+    costs the character's width instead of a rescan of a non-ASCII string
+    from its first byte.  A str subclass instance is read through its payload,
+    as ``py_str_byte_len`` does for the bound of such a walk.
+    """
+    if ptr_is_null(s) == 0 and _type_of(s) != PY_TYPE_STR:
+        s = py_str_payload(s)
     w: int = _utf8_codepoint_byte_len(s, bo)
     if w == 1:
         c: int = load_i8(s, PYSTROBJECT_DATA_OFFSET + bo) & 0xFF
@@ -2053,6 +2066,14 @@ def py_str_index(s, idx_obj):
     if ptr_is_null(out) == 0:
         store_i64(out, PYSTROBJECT_CP_LEN_OFFSET, 1)
     return out
+
+
+@c_abi_export("py_str_codepoint_byte_len")
+def py_str_codepoint_byte_len(s, bo: int) -> int:
+    """UTF-8 width of the character starting at byte offset ``bo`` (0 past the end)."""
+    if ptr_is_null(s) == 0 and _type_of(s) != PY_TYPE_STR:
+        s = py_str_payload(s)
+    return _utf8_codepoint_byte_len(s, bo)
 
 
 @c_abi_export("py_str_codepoint_at")

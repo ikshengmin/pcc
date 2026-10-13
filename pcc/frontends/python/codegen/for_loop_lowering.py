@@ -1738,8 +1738,13 @@ class ForLoopLoweringMixin:
             )
 
     def _emit_for_str_chars(self, stmt: For, iter_val: ir.Value) -> None:
-        """StrType for-loop: iterate codepoints via ``py_str_slice(s, i, i+1, 1)``.
-        Target binds to a 1-char StrType slice each iteration."""
+        """StrType for-loop over codepoints with a byte cursor.
+
+        The loop index is the byte offset of the next character: the target
+        binds ``py_str_char_at_byte(s, offset)`` and the step adds that
+        character's UTF-8 width.  Slicing by codepoint index rescanned a
+        non-ASCII string from its first byte on every iteration.
+        """
         fn = self.current_function
         source_owned = self._owned_release_needed(iter_val, stmt.iter)
         if not source_owned:
@@ -1751,7 +1756,7 @@ class ForLoopLoweringMixin:
         source_err = fn.append_basic_block(name=self._fresh("for.str.source.error"))
         self._try_err_block = source_err
         n_val = self.builder.call(
-            self.runtime["py_str_len"],
+            self.runtime["py_str_byte_len"],
             [iter_val],
             name=self._fresh("for.str.len"),
         )
@@ -1782,28 +1787,11 @@ class ForLoopLoweringMixin:
         self.builder.cbranch(cond, body_bb, end_bb)
 
         self.builder.position_at_end(body_bb)
-        lo_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh("for.str.lo"),
-        )
-        hi = self.builder.add(
-            cur,
-            ir.Constant(_I64, 1),
-            name=self._fresh("for.str.hi.i64"),
-        )
-        hi_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [hi],
-            name=self._fresh("for.str.hi"),
-        )
         ch = self.builder.call(
-            self.runtime["py_str_slice"],
-            [self.builder.load(source_slot[0], name=self._fresh("for.str.source.current")), lo_box, hi_box, ir.Constant(_CSTR, None)],
+            self.runtime["py_str_char_at_byte"],
+            [self.builder.load(source_slot[0], name=self._fresh("for.str.source.current")), cur],
             name=self._fresh("for.str.ch"),
         )
-        self._gc_release(lo_box, self._release_context_label("for-str-lo"))
-        self._gc_release(hi_box, self._release_context_label("for-str-hi"))
         self._emit_post_call_err_check(stmt.span)
         _for_store_owned_target(self, target_ident, slot, ch)
         self.loop_stack.append((step_bb, end_bb, self._loop_finally_base()))
@@ -1815,9 +1803,14 @@ class ForLoopLoweringMixin:
 
         self.builder.position_at_end(step_bb)
         cur2 = self.builder.load(idx_slot, name=self._fresh("for.str.idx2"))
+        width = self.builder.call(
+            self.runtime["py_str_codepoint_byte_len"],
+            [self.builder.load(source_slot[0], name=self._fresh("for.str.source.step")), cur2],
+            name=self._fresh("for.str.width"),
+        )
         nxt = self.builder.add(
             cur2,
-            ir.Constant(_I64, 1),
+            width,
             name=self._fresh("for.str.next"),
         )
         self.builder.store(nxt, idx_slot)

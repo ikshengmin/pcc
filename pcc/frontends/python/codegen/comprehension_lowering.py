@@ -1414,27 +1414,33 @@ class ComprehensionLoweringMixin:
         key_expr,
         val_expr,
     ) -> None:
-        """StrType comprehension iter: slice each char."""
+        """StrType comprehension iter over codepoints with a byte cursor.
+
+        Ownership follows ``_emit_comprehension_indexed`` (rooted source,
+        owned target slot, cleanup on both exits); the loop index is the
+        byte offset of the next character, as in ``_emit_for_str_chars``.
+        Slicing by codepoint index rescanned a non-ASCII string from its
+        first byte on every iteration, and the bare target store left the
+        target without a registered root for calls on it.
+        """
         fn = self.current_function
+        source_owned = self._owned_release_needed(iter_val, generators[idx][1])
+        source_root = self._enter_container_temp_root(iter_val, self._fresh("comp.str.source"))
+        outer_error = self._current_try_err_block()
+        outer_cpy_error = getattr(self, "_cpy_operand_cleanup_block", None)
+        cleanup_bb = fn.append_basic_block(self._fresh("comp.str.error"))
+        self._try_err_block = cleanup_bb
+        self._cpy_operand_cleanup_block = cleanup_bb
         n_val = self.builder.call(
-            self.runtime["py_str_len"],
+            self.runtime["py_str_byte_len"],
             [iter_val],
             name=self._fresh("comp.str.len"),
         )
         idx_slot = self._alloca_in_entry(_I64, name="comp.str.idx.addr")
         self.builder.store(ir.Constant(_I64, 0), idx_slot)
-        one_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [ir.Constant(_I64, 1)],
-            name=self._fresh("comp.str.step"),
-        )
-        tgt_name = target.ident
-        if tgt_name not in self.env:
-            alloca = self._alloca_in_entry(
-                _CSTR,
-                name=f"{tgt_name}.addr",
-            )
-            self.env[tgt_name] = (alloca, _CSTR, StrType(name="str"))
+        target_ident = target.ident
+        target_slot = _for_prepare_owned_object_target(self, target_ident, StrType(name="str"))
+        alloca = target_slot[0]
 
         cond_bb = fn.append_basic_block(name=self._fresh("comp.str.cond"))
         body_bb = fn.append_basic_block(name=self._fresh("comp.str.body"))
@@ -1453,28 +1459,13 @@ class ComprehensionLoweringMixin:
         self.builder.cbranch(cond, body_bb, end_bb)
 
         self.builder.position_at_end(body_bb)
-        lo_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh("comp.str.lo"),
-        )
-        hi = self.builder.add(
-            cur,
-            ir.Constant(_I64, 1),
-            name=self._fresh("comp.str.hi.i64"),
-        )
-        hi_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [hi],
-            name=self._fresh("comp.str.hi"),
-        )
         ch = self.builder.call(
-            self.runtime["py_str_slice"],
-            [iter_val, lo_box, hi_box, one_box],
+            self.runtime["py_str_char_at_byte"],
+            [iter_val, cur],
             name=self._fresh("comp.str.ch"),
         )
-        alloca, _, _ = self.env[tgt_name]
-        self.builder.store(ch, alloca)
+        self._emit_post_call_err_check(None)
+        _for_store_owned_target(self, target_ident, target_slot, ch)
         self._emit_comprehension_after_bind(
             kind,
             container,
@@ -1490,12 +1481,27 @@ class ComprehensionLoweringMixin:
 
         self.builder.position_at_end(step_bb)
         cur2 = self.builder.load(idx_slot, name=self._fresh("comp.str.idx2"))
+        width = self.builder.call(
+            self.runtime["py_str_codepoint_byte_len"],
+            [iter_val, cur2],
+            name=self._fresh("comp.str.width"),
+        )
         nxt = self.builder.add(
             cur2,
-            ir.Constant(_I64, 1),
+            width,
             name=self._fresh("comp.str.next"),
         )
         self.builder.store(nxt, idx_slot)
         self.builder.branch(cond_bb)
-
+        self._try_err_block = outer_error
+        self._cpy_operand_cleanup_block = outer_cpy_error
+        self.builder.position_at_end(cleanup_bb)
+        self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(alloca), ir.Constant(_CSTR, None)])
+        flag = self._ensure_owned_local_flag(target_ident, alloca)
+        self.builder.store(ir.Constant(_I1, 0), flag)
+        self._release_rooted_pcc_lifetimes(((source_root, source_owned),))
+        self.builder.branch(outer_error if outer_error is not None else self._ensure_fn_err_exit())
         self.builder.position_at_end(end_bb)
+        self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(alloca), ir.Constant(_CSTR, None)])
+        self.builder.store(ir.Constant(_I1, 0), flag)
+        self._release_rooted_pcc_lifetimes(((source_root, source_owned),))

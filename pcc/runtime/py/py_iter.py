@@ -68,7 +68,9 @@ py_list_append   = extern("py_list_append",   (c_ptr, c_ptr),           c_void)
 py_tuple_len     = extern("py_tuple_len",     (c_ptr,),                 c_int64)
 py_tuple_get     = extern("py_tuple_get",     (c_ptr, c_int64),         c_ptr)
 py_str_len       = extern("py_str_len",       (c_ptr,),                 c_int64)
-py_str_index     = extern("py_str_index",     (c_ptr, c_ptr),           c_ptr)
+py_str_byte_len  = extern("py_str_byte_len",  (c_ptr,),                 c_int64)
+py_str_char_at_byte = extern("py_str_char_at_byte", (c_ptr, c_int64), c_ptr)
+py_str_codepoint_byte_len = extern("py_str_codepoint_byte_len", (c_ptr, c_int64), c_int64)
 py_bytes_len     = extern("py_bytes_len",     (c_ptr,),                 c_int64)
 py_bytes_getitem = extern("py_bytes_getitem", (c_ptr, c_ptr),           c_ptr)
 py_int_from_i64  = extern("py_int_from_i64",  (c_int64,),               c_ptr)
@@ -519,6 +521,7 @@ def py_obj_next(it_obj):
     seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
     tag: int = _type_of(seq)
     n: int = 0
+    step: int = 1
     item = null()
     if tag == PY_TYPE_LIST:
         n = py_list_len(seq)
@@ -541,24 +544,19 @@ def py_obj_next(it_obj):
         seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
         item = py_tuple_get(seq, index)
     elif tag == PY_TYPE_STR:
-        n = py_str_len(seq)
+        # A str iterator's index is the byte offset of its next character.
+        # Fetching by codepoint index rescanned a non-ASCII string from its
+        # first byte for every item, which made iteration quadratic.
+        n = py_str_byte_len(seq)
         if index >= n:
             _iter_finish_moving_root(it_handle)
             exc = py_exc_new(8, null())
             py_raise_owned(exc)
             return null()
-        idx = py_int_from_i64(index)
-        if ptr_is_null(idx):
-            _iter_finish_moving_root(it_handle)
-            return _require_result(
-                null(),
-                cstr("py_int_from_i64"),
-                cstr("string iterator could not allocate its index"),
-            )
         it_obj = _iter_reload_moving_root(it_slot, it_handle)
         seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
-        item = py_str_index(seq, idx)
-        py_decref(idx)
+        step = py_str_codepoint_byte_len(seq, index)
+        item = py_str_char_at_byte(seq, index)
     elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY or tag == PY_TYPE_MEMORYVIEW:
         n = py_bytes_len(seq)
         if index >= n:
@@ -599,7 +597,7 @@ def py_obj_next(it_obj):
         _iter_finish_moving_root(it_handle)
         return null()
     it_obj = _iter_reload_moving_root(it_slot, it_handle)
-    store_i64(it_obj, 24, index + 1)
+    store_i64(it_obj, 24, index + step)
     return _iter_finish_owned_root(item_slot, item_handle, it_handle)
 
 
