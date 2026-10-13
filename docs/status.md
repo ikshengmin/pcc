@@ -111,10 +111,10 @@ recorded as `darwin_target` instead of asserted. Worker-prior strict closure
   "slot-call owned-result lease failed". Fixed in `c5363d80` (a no-node
   immortal outside the nursery/zpage gets the leaf mode guard; model cases for
   GC0-4 in `test_foreign_address_leases.py`, five-GC native test
-  `test_immortal_stream_operand_lease.py`, GC3/4 raised before). A/B at commit
-  time: 16 of 17 files passed with no regression; in the alignment file 65
-  cases passed and `super_call` failed on both sides (pre-existing); its
-  remaining cases had not finished. CI for `c5363d80` validates the canary.
+  `test_immortal_stream_operand_lease.py`, GC3/4 raised before). A/B over 17
+  lease/ownership/five-GC files and the CPython alignment suite: no regression
+  (`super_call` fails on both sides, pre-existing). CI for `c5363d80` (run
+  38453713062) validates the canary.
 - Run 38449385286 (`984cb2d4`): the four macOS pcc0/worker-prior jobs and
   Windows RSS publication pass; Linux/Windows Stage1, strict closure and the
   Windows PE diagnostic were still running at 19:17 UTC. Without the lease fix
