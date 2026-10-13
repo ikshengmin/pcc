@@ -1,5 +1,6 @@
 """Pure fake source/IR controls; no compiler, FFI or native execution."""
 
+import re
 import textwrap
 
 import pytest
@@ -305,3 +306,66 @@ def test_new_oracle_does_not_change_previous_module_requirements():
 def test_original_symbol_oracle_still_rejects_notimplemented_stub():
     with pytest.raises(AssertionError):
         require_definition(_function('old_symbol', '  call ptr @py_exc_new(i64 11, ptr null)\n'), 'old_symbol')
+
+
+def _current_printer(section, *, holder='constant', alias='bitcast', retained='%value'):
+    """Rewrite a fixture into the shapes the current IR printer emits.
+
+    Calls carry their function type, module roots are stored through a
+    bitcast slot, consumers retain the loaded table before using it and
+    literal objects reach their users through constant static item arrays.
+    """
+    count = iter(range(1_000_000))
+
+    def store(match):
+        index = next(count)
+        cast = (f'bitcast ptr {match[1]} to ptr' if alias == 'bitcast'
+                else f'getelementptr inbounds ptr, ptr {match[1]}, i64 1')
+        return (f'%root.slot{index} = {cast}\n'
+                f'  call void @pcc_gc_store_root(ptr %root.slot{index}, ptr {match[2]})')
+
+    section = re.sub(r'call void @pcc_gc_store_root\(ptr (@"[^"]+"), ptr (%\w+)\)', store, section)
+    section = section.replace(
+        'call i64 @py_obj_contains(ptr %value, ptr %key)',
+        f'%retained = call ptr @pcc_gc_retain(ptr {retained})\n'
+        '  call i64 @py_obj_contains(ptr %retained, ptr %key)')
+    items = []
+
+    def literal(match):
+        index = next(count)
+        items.append(f'@".static.items.{index}" = internal {holder} [1 x ptr] [ptr bitcast (ptr {match[1]} to ptr)]\n')
+        return f'%items{index} = getelementptr inbounds [1 x ptr], ptr @".static.items.{index}", i32 0, i32 0'
+
+    section = re.sub(r'call void @literal_use\(ptr (@"\.literal\.\d+")\)', literal, section)
+    section = re.sub(r'\bcall (\w+) @', r'call \1 (ptr) @', section)
+    return ''.join(items) + section
+
+
+def _current_fixture(name, **shape):
+    section, remaining = _fixture(name)
+    return (_current_printer(section, **shape),
+            {key: _current_printer(value, **shape) for key, value in remaining.items()})
+
+
+@pytest.mark.parametrize('name', oracle.TAR_COMPILER_MODULES)
+def test_strict_modules_accept_the_current_printer_shapes(name):
+    section, remaining = _current_fixture(name)
+    assert '@pcc_gc_retain(' in section or name in (oracle.CONSTANT_ONLY_MODULE, oracle._FREESTANDING)
+    required = oracle.require_tar_attribute_module(name, _source(), section, remaining, require_definition)
+    assert bool(required) == (name != oracle._FREESTANDING)
+
+
+@pytest.mark.parametrize('name,damage', (
+    (oracle._FREESTANDING, 'mutable_holder'),
+    (oracle._UNSAFE, 'mutable_holder'),
+    (oracle.CONSTANT_ONLY_MODULE, 'offset_alias'),
+    (oracle.TAR_COMPILER_MODULES[5], 'offset_alias'),
+    (oracle.TAR_COMPILER_MODULES[0], 'retained_other'),
+    (oracle._WINDOWS, 'retained_other'),
+))
+def test_current_printer_shapes_still_reject_unbound_tables_and_literals(name, damage):
+    shape = {'mutable_holder': {'holder': 'global'}, 'offset_alias': {'alias': 'offset'},
+             'retained_other': {'retained': '%unrelated'}}[damage]
+    section, remaining = _current_fixture(name, **shape)
+    with pytest.raises(AssertionError):
+        oracle.require_tar_attribute_module(name, _source(), section, remaining, require_definition)

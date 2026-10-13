@@ -517,18 +517,19 @@ jobs:
         run: uv sync --frozen --dev --python 3.13
 
       # fa62fbd9 receipts: compile alone took 189-278s; the 634 MB whole
-      # parse was still incomplete at 300s. a21fa121 receipts (Linux): the
-      # whole-closure phases end at 1400-1580 s, then 34 module emits take
-      # 24-32 s each, ~2400-2500 s in all; 1800 s always timed out. 3600 s
-      # is the CI budget. macOS records the strict closure as not run: its
-      # ~8.6 GB peak exceeds the 7 GB runner. Local default stays 300s.
+      # parse was still incomplete at 300s. 85825b40 receipts (Linux): the
+      # whole-closure phases end at 1640 s (aarch64) and 2040 s (x86_64);
+      # module verify+emit runs at ~2.4-2.5 s per IR MB, so all 34 modules
+      # project to ~3200 s and ~3700 s. 6000 s is the CI budget, as for
+      # Stage1. macOS records the strict closure as not run: its ~8.6 GB peak
+      # exceeds the 7 GB runner. Local default stays 300s.
       - name: Validate macOS default xdist, native prior workers, and changed-module emission
         if: matrix.platform == 'macos-arm64'
-        run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 3600
+        run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 6000
 
       - name: Validate other-platform default xdist, native prior workers, and changed-module emission
         if: matrix.platform != 'macos-arm64'
-        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 3600
+        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-preflight --phase preflight --strict-closure-timeout 6000
 
       - name: Preserve independent preflight evidence
         if: always()

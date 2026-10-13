@@ -90,7 +90,18 @@ def _literal_symbols(section, value):
 
 def _literal(section, body, value):
     symbols = _literal_symbols(section, value)
-    assert any(re.search(_reference(symbol[1:]), body) for symbol in symbols), value
+    # Static item arrays (constant tuple/aggregate tables the body builds
+    # from) may hold the literal object. Only immutable constants qualify.
+    constants = [('@' + match.group('symbol').strip('"'), match.group('value'))
+                 for match in _GLOBAL.finditer(section)
+                 if re.match(r'(?:\w+\s+)*constant\b', match.group('value'))]
+    holders, pending = set(symbols), set(symbols)
+    while pending:
+        found = {symbol for symbol, value_text in constants if symbol not in holders
+                 and any(re.search(_reference(held[1:]), value_text) for held in pending)}
+        holders |= found
+        pending = found
+    assert any(re.search(_reference(symbol[1:]), body) for symbol in holders), value
     return symbols
 
 
@@ -128,17 +139,23 @@ class _Flow:
     """
     def __init__(self, body):
         self.calls, self.edges = [], {}
+        casts = []
         for line in body.splitlines():
             assigned = re.match(r'\s*(%[^=]+?)\s*=\s*(.*)', line)
             result = next(iter(_tokens(assigned[1])), None) if assigned else None
             instruction = assigned[2] if assigned else line.strip()
-            call = re.search(r'\bcall\s+(?:\w+\s+)*(@(?:"[^"]+"|[\w.$]+))\((.*)\)', instruction)
+            # The callee may follow an explicit function type: call ptr (ptr) @f(...).
+            call = re.search(
+                r'\bcall\s+(?:\w+\s+)*(?:\([^()]*\)\s*)?(@(?:"[^"]+"|[\w.$]+))\((.*)\)', instruction,
+            )
             if call:
                 callee = call[1][1:].strip('"')
                 args = _arguments(call[2])
                 self.calls.append((result, callee, args, instruction))
             if result and re.match(r'(?:getelementptr|bitcast)\b', instruction):
                 self._edge(result, _tokens(instruction))
+                if instruction.startswith('bitcast '):
+                    casts.append((result, _tokens(instruction)))
             if result and instruction.startswith('load ptr, ptr '):
                 self._edge(result, {'*' + token for token in _tokens(instruction)})
             store = re.match(r'store ptr (.*), ptr (.*)', instruction)
@@ -157,12 +174,20 @@ class _Flow:
                 self._edge(result, {'*' + token for token in _tokens(args[1])})
             elif callee == 'pcc_gc_take_pinned_slot' and len(args) == 2 and result:
                 self._edge(result, {'*' + token for token in _tokens(args[0])})
+            elif callee == 'pcc_gc_retain' and len(args) == 1 and result:
+                # An owned reference to the same object: incref, return the argument.
+                self._edge(result, _tokens(args[0]))
         # Address aliases also name the same root contents.
         for destination, sources in tuple(self.edges.items()):
             if not destination.startswith('*'):
                 for source in sources:
                     if not source.startswith('*'):
                         self._edge('*' + destination, {'*' + source})
+        # A bitcast is the same address, so a root stored through it is the
+        # source's content as well. Offsetting GEPs stay one-directional.
+        for destination, sources in casts:
+            for source in sources:
+                self._edge('*' + source, {'*' + destination})
 
     def _edge(self, destination, sources):
         self.edges.setdefault(destination, set()).update(sources)
