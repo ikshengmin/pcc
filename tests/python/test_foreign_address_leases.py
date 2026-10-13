@@ -131,6 +131,25 @@ def test_valid_no_node_nonmoving_owner_has_mode_guard(backend):
     assert m.release(slot,2) == 0 and m.active() == 0
 
 
+@pytest.mark.parametrize("backend",range(5))
+@pytest.mark.parametrize("tag",[abi.PY_TYPE_FILE,abi.PY_TYPE_CLASS])
+def test_no_node_heap_immortal_nonleaf_has_mode_guard(backend,tag):
+    # The malloc'd standard streams and object class root: immortal, outside
+    # the object graph. GC3/4 rejected them, so passing sys.stdout as an
+    # argument raised "slot-call owned-result lease failed".
+    m=Model(backend); slot=m.object(node=False,flags=1|262144,tag=tag)
+    assert m.acquire(slot) == 2
+    assert m.active() == 1
+    assert m.release(slot,2) == 0 and m.active() == 0
+
+
+@pytest.mark.parametrize("backend",(3,4))
+@pytest.mark.parametrize("flags",[1|4096,1|65536,1|524288])
+def test_no_node_immortal_in_a_moving_or_dying_state_fails_closed(backend,flags):
+    m=Model(backend); slot=m.object(node=False,flags=flags,tag=abi.PY_TYPE_FILE)
+    assert m.acquire(slot) == -1 and m.active() == 0
+
+
 @pytest.mark.parametrize("flags,tag,proven",[(0,4,False),(4096,4,True),(65536,4,True),(0,5,True),(524288,4,True)])
 def test_unknown_or_potentially_moving_no_node_fails_closed(flags,tag,proven):
     m=Model(); slot=m.object(node=False,flags=flags,tag=tag,proven=proven)

@@ -205,6 +205,9 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
             tag: i64 = load_i32(obj, 8)
             # GC0/1/2 never move. GC3/4 no-node malloc graph leaves are
             # intentionally refcount-only; nursery/zpage owners are not.
+            # A no-node immortal (the malloc'd standard streams and object
+            # class roots) is stable storage outside the object graph, so
+            # GC3/4 never move it either.
             if backend >= 0 and backend <= 2:
                 status = 2
             elif (backend == 3 or backend == 4) and (flags & (4096 | 65536)) == 0:
@@ -218,6 +221,7 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
                     or tag == PY_TYPE_BYTES
                     or tag == PY_TYPE_BYTEARRAY
                     or tag == PY_TYPE_CPY_HANDLE
+                    or (flags & 1) != 0
                 ):
                     status = 2
     if status > 0:
