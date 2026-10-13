@@ -119,6 +119,22 @@ def _import_data(names, base_rva):
     return payload, slots, directory
 
 
+def _rel32_range_error(symbol, source_section, place, target, target_section,
+                       addend, value, sections) -> str:
+    """Name the reference and the image layout of a REL32 that cannot reach."""
+    if target_section is None:
+        target_name = "import"
+    else:
+        target_name = sections[target_section][0]
+    layout = []
+    for name, address, payload, _flags in sections:
+        layout.append(name + "@" + hex(address) + "+" + hex(len(payload)))
+    return ("PE rel32 out of range: " + symbol + " from " + source_section
+            + " at rva " + hex(place) + " to rva " + hex(target) + " (" + target_name
+            + ") addend " + str(addend) + " displacement " + str(value)
+            + "; sections " + ", ".join(layout))
+
+
 def link_executable(objects, *, archives=(), entry="pcc_windows_start",
                     image_base=0x140000000) -> bytes:
     objects = list(objects)
@@ -262,7 +278,9 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
                     raise CoffError("unhandled PE relocation")
                 if signed:
                     if value < -(1 << 31) or value >= 1 << 31:
-                        raise CoffError("PE rel32 out of range")
+                        raise CoffError(_rel32_range_error(
+                            objects[oi].symbols[reloc.symbol].name, source.name, place,
+                            target, target_section, addend, value, sections))
                 elif value < 0 or value >= 1 << (width * 8):
                     raise CoffError("PE relocation overflow")
                 output[2][patch:patch + width] = (value & ((1 << (width * 8)) - 1)).to_bytes(width, "little")
