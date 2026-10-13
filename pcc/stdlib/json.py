@@ -282,6 +282,17 @@ class _Decoder:
         if ch == "n" and self.s.startswith("null", self.pos):
             self.pos += 4
             return None
+        # The encoder spells non-finite floats like CPython (allow_nan), and
+        # CPython's decoder reads them back by default.
+        if ch == "N" and self.s.startswith("NaN", self.pos):
+            self.pos += 3
+            return float("nan")
+        if ch == "I" and self.s.startswith("Infinity", self.pos):
+            self.pos += 8
+            return _INF
+        if ch == "-" and self.s.startswith("-Infinity", self.pos):
+            self.pos += 9
+            return -_INF
         return self._parse_number()
 
     def _parse_string(self) -> str:
