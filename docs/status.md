@@ -1,22 +1,109 @@
 # PCC current status
 
-Updated 2026-10-07 at 15:12 UTC. Captured compiler: `b0a661035abb5714b73081315f40ddf878f1f8c54deeefbd53d1033beb4b2cb0`. Canonical source now combines valueclass rebinding ownership, annotated variadic carriers, dynamic mapping construction, guarded live imported dictionary methods, Path text-helper newline defaults, and actual bytes/text-family strip dispatch. All ten goals remain open.
+Updated 2026-10-13. Source: `ikshengmin/pcc` master (`shenming` remote).
+Durable receipts for this period (patches, profiles, A/B scripts, repros):
+`/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`. The 2026-10-07 status
+(source preservation, the remote agent's backups) is in git history at
+`38357808:docs/status.md`. All ten goals below remain open.
 
-## Source preservation and local baseline
+## Recent source changes
 
-The verified local baseline remains PCC `dce4f3c7d3b8803b0ba1771e33103fdaad6fcb7d`, gateway `05fe10b57897dfcff19a75b41b7c9630436b32d8`, and GUI `16c6ecfca3e576b5bef302071325c0f8dd8bc549`. No source packet after that baseline is reported as locally synchronized. The original six-path Library item `libfile_1a32885e3c14819199bc4f026536d419` v0 remains blocked by official local GET 403 failures. The later nine-path e6 recovery backup `libfile_7d2c1b8d1bdc81919b5590ed0e321ea4` v0 remains immutable. No access recovery, local retry, commit or baseline promotion is implied by this new backup.
+- `0f6fa1d9` function-local from-import aliases follow control flow.
+- `bbe27219` merged Mach-O `__text` splits at input boundaries (32 MiB chunks)
+  so AArch64 thunk islands interleave.
+- `510ed001` compile-time-only from-imports (typing, abc, ...) no longer get a
+  runtime module global; `TypeAliasType(...)` metadata no longer raises NameError.
+- `e62cef29` raw i64 module globals updated through `global n; n += ...` store
+  the unboxed value instead of rooting a boxed pointer in the i64 cell.
+- `97f3d52f` `self.__class__(kw=..., **mapping)` keeps the parser's operand
+  order, so the constructor-unpack path compiles it.
 
-Exact cumulative changed bytes, preimages, modes and complete inventories are preserved outside the repositories in `pcc-protocol-source-backup-20261007T1530Z/pcc-forward-delta/receipts/`. Unchanged vendor files use verified immutable baseline references. Separate source/evidence backups cover mapping (`libfile_ef104b89b8f48191b794a59153fe0fb9` v1), imported dictionary guards (`libfile_3598ed9cb0708191b88cae48232a2f3e` v1), Path defaults (`libfile_7847a1c4d62881918af28f42379966db` v1), and bytes-strip dispatch (`libfile_dc186bcc00d88191b504e8281c428ad1` v0). Reservation, encoder and checkpoint optimizations remain private and unintegrated.
+CI: run 38375711981 (`0f6fa1d9`): every Stage1 job hit the 2400 s deadline, no
+compile failures. Run 38391246598 (`510ed001`): see its page; the three
+worker-prior gates (Linux x86_64, Windows, macOS) failed again.
 
-## Current repairs and exact execution limits
+## Stage1 within 2400 s (goal 1 / platform qualification)
 
-Live imported Dyn dictionary methods now enter the existing type guard before generic callable lookup. Path.read_text/write_text use the standard `newline=None` default and preserve explicitly supplied values. Dynamic strip/lstrip/rstrip choose the bytes or text helper from the actual receiver, with ordinary method lookup, argument order, exceptions and owning slots preserved. The corresponding formal regression files are captured without relaxing assertions.
+From run 38375711981 (`pcc indexed phase totals` in each
+`platform-qualification/shared/stage1.log`):
 
-The original d526/f37 Stage1 produced 456 objects and linked an owned pcc1, then failed the maintained native smoke compile. Subsequent mixed-codegen diagnostics crossed the mapping boundary using replacement 132, the imported-get boundary using consumers 17, 86, 89, 99 and 134, and the newline-default boundary using provider 413. These are dated causal witnesses rather than a fresh current-source compiler qualification.
+- Linux aarch64 compiled all 460 modules; codegen workers ended at 2117.8 s,
+  then the coordinator-only ELF link ran 282 s until the kill (stage inputs
+  90 s, resolve/relocate 130 s for 39.6 M relocations, finalize unfinished).
+- Linux x86_64 finished 72/460 modules, Windows 83/460. On the same 72 modules
+  x86_64 used 8758 s of worker time vs 4385 s on aarch64: identical CPython
+  phases run ~2x slower on that runner, and the x86 route assembles text
+  (`object_assemble` 2710 s vs 94 s). The structured native-sections route is
+  aarch64-only.
+- IR volume dominates: in `pcc.backend.macho_link` ~37% of IR lines are error
+  and cleanup paths; GC bookkeeping calls (frame leave, store_root, status
+  reports, leases) far outnumber work calls.
 
-The next original failure was archive bytes.rstrip returning str before decode. The repaired complete native binary-header/strip/decode chain and protocol passed, and original consumer 217 re-emitted successfully. The eight-object diagnostic image linked, but the original native smoke reached its outer diagnostic guard at 15:06:10 UTC after 240.110 seconds (return code 124; peak 639,938,560 bytes). Its worker completed 989 owned records with zero fallback, then the downstream main process published no ELF and reported no exception or ownership fault. Emitted smoke execution and Stage2 remain unrun. The 240-second outer guard is a diagnostic limit, not a performance acceptance threshold or evidence of deadlock; the maintained barrier has no per-smoke timeout. The fourth original smoke boundary is not established by this timeout. Changed compiler owners 21, 123, 267, 287, 297 and 311 are not replaced in that diagnostic. A successful consumer diagnostic cannot imply that its native compiler implements all new compiler-source changes.
+Levers: IR reduction in codegen (blocked, see decisions), x86 structured
+emission, x86 use of the native stack-map planner. Measured link
+micro-optimizations were below 5% and are parked in the archive.
 
-No matching b0 runtime or fresh b0 Stage1 has been qualified. Standard admission of the older f37 runtime against changed codegen remains rejected; explicitly identified mixed diagnostics stay separate. Current native regression fixtures, complete sixteen async nodes and 410 gateway nodes execution, original smoke execution, Stage2/Stage3 and platform/performance acceptance remain open or unrun. Earlier annotation-reflection and explicit-newline limitations retain their original source identities. This backup records exact-source host execution and collection separately, preserves failures and unrun nodes, and does not treat source preservation as a pass gate.
+## Stage2 / pcc1 throughput (goal 1, goal 6)
+
+- Keyword/default calls to known callees went through the runtime signature
+  binder (~50x slower than a direct call). Static binding is implemented but
+  uncommitted (archive `patches/static_keyword_binding.patch`, test
+  `tests/python/test_static_keyword_binding.py`): five-GC output equals CPython,
+  default-object identity preserved, IR 5.6-21% smaller on real modules.
+- Since `168e4d06` every call through a module-level native from-import is a
+  live module-namespace lookup plus a dynamic call. The live semantics are
+  required (`tests/python/test_live_import_namespace_rebinding.py`); a fast path
+  needs an identity guard or a namespace watcher. Not started.
+
+## Open decisions for the maintainer
+
+1. Shape tests that pin the slow lowering. Static keyword binding conflicts
+   with tests asserting keyword/default calls use `py_obj_call_slots`
+   (e.g. `test_shared_call_binding.py::test_ordinary_binding_classifier_is_pure`,
+   `test_binder_contract_matrix.py`, `test_kwargs_method_call_loaded.py`); the
+   full list is in the archive. Proposed rule: update such shape assertions only
+   when native five-GC execution against CPython covers the behavior, keeping
+   what the test meant to check on a shape that still needs the binder.
+2. `tests/fixtures/native/worker_size_priors.py` peer-wait deadline 6 s -> 15 s
+   (staged, not committed) for the Linux x86_64 GC4 growth gate.
+3. Source-pinned files: `tests/test_elf_*_source_controls.py` SHA-pin
+   `pcc/backend/elf_x86_64.py`; any link-loop change needs the preimages updated.
+4. A Windows unhandled-exception reporter (code, image offset, stack scan) to
+   locate the native-pcc0 `0xC0000005` would change `pcc_windows_start`, whose
+   model test (`test_owned_windows_exit.py`) needs a new double.
+
+## Known failures
+
+- Windows native-pcc0 width case: `0xC0000005` inside `os.path.abspath`
+  (phase witness `abspath` in runs 38273917206 and 38375711981).
+- GC4 (`docs/investigations/gc-backend4-forwarding-retirement-starvation.md`):
+  explicit `gc.collect()` never retires forwarding entries, so relocated garbage
+  stays alive and its `__del__` never runs (fix parked: retirement itself
+  over-releases a live replacement, `test_gc_relocation_sweep_verdict.py` code 23
+  pre-existing); `tuple(list of finalizable instances)` + collect aborts with
+  `BAD_INCREF`; `test_gc_backend4_production.py` fails a source-text assertion.
+- Host tests failing on a clean HEAD snapshot (pre-existing), among others:
+  `test_py_multi_file_compile.py` (borrowed-rebind IR shape, raw-int scalar slot
+  count, mock of the removed `_link_with_clang`, static-export constructor arg
+  vs live imports, CPython fallback IR for relative imports; the other 41 pass),
+  `test_intent_constraints.py` (coverage dropped: TestCrossBackendDeterminism),
+  `test_fallback_baseline.py` (340 cli_bootstrap fallbacks),
+  `test_hoist_global_cell_boundaries.py`, `test_unsafe_atomic_global_store.py`,
+  `test_native_module_global_raw_pointer.py`.
+
+## Repro commands
+
+```bash
+# Per-phase Stage1 totals from a CI artifact
+python3 /Users/jiamo/pcc-recovery-archive/2026-10-13/scripts/phase_breakdown.py \
+  <artifact>/bootstrap-<platform>/platform-qualification/shared/stage1.log
+# Static keyword binding (host IR shape + five-GC native)
+env -u LC_ALL PCC_NO_AUTO_PCC1=1 uv run pytest -x -n0 tests/python/test_static_keyword_binding.py
+env -u LC_ALL PCC_NO_AUTO_PCC1=1 uv run pytest -x -n0 -m integration tests/python/test_static_keyword_binding.py
+```
+
+Broad pytest sweeps must set `PCC_NO_AUTO_PCC1=1`: `pcc_gate` fixtures otherwise
+start an unguarded Stage1 build to provision pcc1.
 
 ## Ten-goal acceptance remains open
 
@@ -30,5 +117,3 @@ No matching b0 runtime or fresh b0 Stage1 has been qualified. Standard admission
 8. Gateway: qualify actual native network/TLS and structured concurrency, then establish performance beyond asyncio.
 9. Optimization: qualify tail-call, MADD, peephole, scaffold identity and thread-logging behavior and performance.
 10. GUI: complete native app, five-GC, HTTP/TLS, Loader/HMR, typed FFI, interaction and pixel equivalence against Harness 47f943859bef60e4160492346772ded9b24f765a. The existing 160 host passes and 7,412 verified reference blobs do not establish native or pixel completion.
-
-Push and the future CI repair loop require both the ten-goal prerequisite and an explicit instruction to start. Detailed historical runs, failed attempts and restoration instructions stay in durable archives outside the repositories.

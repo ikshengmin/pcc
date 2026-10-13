@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1630 confirmations across 482 investigations.
+1631 confirmations across 482 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -925,6 +925,7 @@ code and matching execution before adopting a cause. Read only relevant hits.
 ## [Investigation: backend 4 forwarding entries never retire once the relocation set keeps a residue](../investigations/gc-backend4-forwarding-retirement-starvation.md)
 
 - Test [CONFIRMED] — Measured 2026-09-08 with standalone C probes against the C runtime.
+- [CONFIRMED] explicit collect never retired forwarding entries — Telemetry (`pcc_gc_telemetry` 15/24/25) on the 4096-byte variant under GC4:
 
 ## [Investigation: Backend #4 forwarding table must be read under graph lock](../investigations/gc-backend4-forwarding-table-concurrency.md)
 

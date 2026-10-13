@@ -183,6 +183,75 @@ Whether the object-granular API should exist at all is the design question
 underneath: it looks like a pre-page-evacuation remnant. Answering that is a
 larger change than this investigation's stall.
 
+## 2026-10-13: user-visible retention at source e62cef29
+Observed on macOS arm64, host pcc compile (`compile_python(..., backend="self",
+libpython_mode="off")`, `PCC_PYTHON_IR_PASSES=off`), current runtime archive.
+Program: one function builds two lists of 1000 instances whose class has
+`__del__` (and a 4096-byte bytes field), returns, then `gc.collect()` three times.
+
+- GC0-GC3: all 2000 finalizers run; retained heap 266 KB.
+- GC4: 314 of 2000 finalizers run and the heap stays at +9448 KB after the
+  collections, so the objects are still treated as reachable rather than freed
+  without finalization. In a shorter variant, further collections never raised
+  the count (6x `gc.collect()` stayed at 166 of 2000); a second identical batch
+  in the same process was finalized completely. Creating a weakref to every
+  item made GC4 finalize all 2000.
+- Separately, `tests/python/test_class_init_argument_ownership.py::
+  test_classmethod_constructor_consumes_temporary_tuples` (now compilable)
+  aborts with `[BAD_INCREF]` (rc 134) under GC4 only.
+
+Repro programs: `/Users/jiamo/pcc-recovery-archive/2026-10-13/gc4/`.
+
+### [CONFIRMED] explicit collect never retired forwarding entries
+Telemetry (`pcc_gc_telemetry` 15/24/25) on the 4096-byte variant under GC4:
+after `run()`, 1747 relocation forwards, relocation set 0, 1688 forwarding
+entries; 312 = 2000 - 1688 finalized; three `gc.collect()` calls changed
+nothing. Calling `pcc_gc_backend4_remap_and_retire_stopped_world()` twice from
+the program (returns 1, then 1688) and collecting again finalized all 2000.
+`pcc_gc_step`'s backend-4 explicit-collect branch (`pcc_gc_explicit_collect_active`)
+only drained promotion and ran tracing cycles; remap/retirement existed only on
+the background branch when a step was idle. The relocation-set residue starvation
+described above is a separate stall.
+
+### [PARKED] retiring inside the explicit collect
+Calling remap/retirement from the explicit branch when tracing is idle makes
+the retention program finalize all 2000 with 0 entries left on all five GCs
+(patch and five-GC test in the archive:
+`patches/gc4_explicit_collect_retire_forwarding.patch`,
+`patches/test_gc_explicit_collect_retires_forwarding.py`). With it, the GC4
+relocation test files run here passed (relocating, exit-list UAF, long-run exit
+UAF, leaf roots, forwarding/relocation unit files); `test_gc_backend4_production.py`
+and `test_gc_relocation_sweep_verdict.py` failed, and both fail identically
+without the patch on a freshly built runtime, so they are pre-existing.
+
+The patch is parked because retirement itself over-releases a live
+replacement. `test_gc_relocation_sweep_verdict.py::
+test_relocation_copy_clears_stale_sweep_verdict_backend4[pcc_python]` fails
+with code 23 `finalizer-ran-on-live-copy` on the unpatched runtime. Instrumented
+probe (`/Users/jiamo/pcc-recovery-archive/2026-10-13/gc4/sweep_verdict_probe_instrumented.c`):
+before the explicit collect root=source, copy rc 2, source rc 1, 1 forwarding
+entry; after it the root is healed to the copy, yet copy rc is 0, the entry is
+gone, and `__del__` ran on both the live copy and the old shell (`del_other=1`).
+That collect reached retirement through another remap caller. Retiring at
+every explicit collect would widen exposure to this over-release, so fix it
+first.
+
+### [OPEN] BAD_INCREF while freeing during the sweep
+`tuple([...1000 instances with __del__...])` in a function, then
+`gc.collect()`, aborts under GC4 only (before and after the fix above):
+
+    py_decref <- pcc_gc_forwarding_finish_detached
+      <- pcc_gc_backend4_finish_remap_retirement <- pcc_gc_note_object_freeing
+      <- pcc_gc_free_object_memory <- py_instance_dealloc
+      <- pcc_gc_tracing_finalize_unreachable <- pcc_gc_tracing_sweep_unreachable
+      <- pcc_gc_collect_tracing <- pcc_gc_collect
+
+Freeing a forwarding *source* moves its entry to the detached list, whose
+finish decrefs the entry's target; freeing a *target* moves its entry to
+`dead_targets` (no decref). The abort means a detached entry's target was
+already invalid. Not yet established which free path missed
+`_forwarding_remove_target` for that target.
+
 ## What this investigation does not claim
 `owns_stw=1` was observed on the sole thread of a single-threaded probe before
 any `pcc_stop_the_world` call of its own. That may be trivially true when there
