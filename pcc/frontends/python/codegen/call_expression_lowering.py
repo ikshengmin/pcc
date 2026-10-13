@@ -695,6 +695,9 @@ class CallExpressionLoweringMixin:
                 ),
                 args=expr.args,
                 kwargs=expr.kwargs,
+                # ``**`` operands live in args; the constructor-unpack path
+                # needs the source interleaving with explicit keywords.
+                operand_order=expr.operand_order,
             )
         )
 
