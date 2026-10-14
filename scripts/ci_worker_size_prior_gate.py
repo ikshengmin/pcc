@@ -225,6 +225,7 @@ TWO_ROOT_CLEANUP_INPUTS = (
     "tests/python/owned_regression_support.py",
     "tests/python/process_timeout.py",
 )
+RUNTIME_ABI_CHUNK_TEST = "tests/python/test_runtime_abi_chunking.py"
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -253,10 +254,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               MACHO_ARCHIVE_SYMBOL_STATE_TEST, MACHO_SECTION_PLACEMENT_TEST,
               MACHO_ARCHIVE_FRAMING_TEST, MACHO_WINDOWED_PREPARE_TEST,
               MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
-              *TWO_ROOT_CLEANUP_TESTS)
+              *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST)
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43)
+HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -74,9 +74,13 @@ def test_default_command_retains_project_xdist(tmp_path):
                                   gate.MACHO_WINDOWED_PREPARE_TEST,
                                   gate.MACHO_WINDOWED_PARITY_TEST,
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
-    assert gate.HOST_FILES[53:] == gate.TWO_ROOT_CLEANUP_TESTS
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 57
-    assert sum(gate.HOST_COUNTS) == 2417 and sum(gate.HOST_COUNTS[:53]) == 2304
+    assert gate.HOST_FILES[53:57] == gate.TWO_ROOT_CLEANUP_TESTS
+    assert gate.HOST_FILES[57:] == (gate.RUNTIME_ABI_CHUNK_TEST,)
+    assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
+        '      - "tests/python/test_runtime_abi_chunking.py"') == 2
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 58
+    assert sum(gate.HOST_COUNTS) == 2421 and sum(gate.HOST_COUNTS[:57]) == 2417
+    assert sum(gate.HOST_COUNTS[:53]) == 2304
     assert sum(gate.HOST_COUNTS[:52]) == 2279
     assert sum(gate.HOST_COUNTS[:51]) == 2252
     assert sum(gate.HOST_COUNTS[:50]) == 2239 and sum(gate.HOST_COUNTS[:49]) == 2193
@@ -1289,7 +1293,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
