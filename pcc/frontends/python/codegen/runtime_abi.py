@@ -1282,6 +1282,7 @@ def _runtime_signatures_part_18():
     "py_class_new_from_objects": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_class_mark_slots_only": (_VOID, [_PYOBJ], False),
     "py_class_mark_dict_subclass": (_VOID, [_PYOBJ], False),
+    "py_class_mark_exception_subclass": (_VOID, [_PYOBJ], False),
     "py_class_add_method": (_VOID, [_PYOBJ, _CSTR, _PYOBJ], False),
     "py_class_set_metaclass": (_VOID, [_PYOBJ, _PYOBJ], False),
     "py_class_lookup": (_PYOBJ, [_PYOBJ, _CSTR], False),

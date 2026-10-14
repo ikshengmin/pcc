@@ -5511,6 +5511,8 @@ class ClassLowering:
             builder.call(runtime["py_class_mark_slots_only"], [cls_ptr])
         if self._class_subclasses_dict(info):
             builder.call(runtime["py_class_mark_dict_subclass"], [cls_ptr])
+        if self._class_subclasses_exception(info):
+            builder.call(runtime["py_class_mark_exception_subclass"], [cls_ptr])
         # CPython's class body namespace starts with ``__module__`` and
         # ``__qualname__``; ``repr(cls)``, ``object.__repr__`` and pickling
         # read them.  The entry module is ``__main__`` as for ``__name__``.
@@ -8003,6 +8005,23 @@ class ClassLowering:
         dict-subclass user class is also a dict-subclass. Works for both local
         classes (AST bases) and extern/cross-module classes (exports registry
         ``base_names``) via :meth:`_class_declared_base_names`."""
+        return "dict" in self._class_ancestor_names(info)
+
+    def _class_subclasses_exception(self, info) -> bool:
+        """True if ``info`` (transitively) subclasses a builtin exception
+        class. Such a class is marked with ``py_class_mark_exception_subclass``
+        so a runtime class call keeps its constructor arguments as ``args``,
+        as BaseException.__new__ does."""
+        for name in self._class_ancestor_names(info):
+            if _builtin_exception_tag_for_base_name(name) is not None:
+                return True
+        return False
+
+    def _class_ancestor_names(self, info) -> list:
+        """Every base-class name reachable from ``info``: local classes through
+        their declared bases, other modules' classes through the exports
+        registry's ``base_names``."""
+        names: list[str] = []
         visited: set[str] = set()
         queue: list[str] = list(self._class_declared_base_names(info))
         native_table = getattr(self.parent, "_native_module_exports", None) or {}
@@ -8011,8 +8030,7 @@ class ClassLowering:
             if name in visited:
                 continue
             visited.add(name)
-            if name == "dict":
-                return True
+            names.append(name)
             base_info = self.classes.get(name)
             if base_info is not None:
                 for pname in self._class_declared_base_names(base_info):
@@ -8026,7 +8044,7 @@ class ClassLowering:
                     for pname in rem_info.get("base_names", ()):
                         queue.append(pname)
                     break
-        return False
+        return names
 
     def emit_instantiate(self, class_name: str, arg_exprs, parent, *, kwargs=()) -> ir.Value:
         """Emit ``MyClass(args)``.

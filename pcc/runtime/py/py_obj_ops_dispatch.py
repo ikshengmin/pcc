@@ -3663,19 +3663,8 @@ def _descriptor_call_body(slots, tokens, tag: int) -> int:
     return 0
 
 
-def _class_derives_from_base_exception(cls) -> int:
-    base = py_exc_builtin_class(0)  # PY_EXC_BASE
-    if ptr_is_null(base) != 0:
-        return 0
-    n_mro: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
-    mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
-    index: int = 0
-    while index < n_mro:
-        if ptr_eq(pcc_gc_load_ptr(cls, ptr_add(mro, index * C_POINTER_SIZE)), base) != 0:
-            return 1
-        index = index + 1
-    return 0
-
+# Mirrors py_class.py: set by py_class_mark_exception_subclass.
+_EXCEPTION_SUBCLASS_CLASS_FLAG = 16777216
 
 _EXC_NEW_RECEIVER = 0
 _EXC_NEW_BASE = 1
@@ -3686,34 +3675,45 @@ _EXC_NEW_SLOT_COUNT = 4
 define_global_i32("pcc_exception_new_borrowed_map", -4)
 
 
-def _exception_new_args(inst, args) -> int:
-    # BaseException.__new__ keeps the constructor arguments as ``args`` before
-    # any __init__ runs; an __init__ calling super().__init__ replaces them.
-    # Keywords belong to __init__, so __new__ passes none. The initializer
-    # copies from registered roots, so the borrowed inputs form one frame.
+def _exception_new_args(inst, args):
+    """Return the owned instance after storing ``args``, or NULL on error.
+
+    BaseException.__new__ keeps the constructor arguments as ``args`` before
+    any __init__ runs; an __init__ calling super().__init__ replaces them.
+    Keywords belong to __init__, so __new__ passes none. The initializer
+    copies from registered roots, so the borrowed inputs form one frame, and
+    the instance is read back from that frame: the initializer can relocate
+    it. On error the instance's reference is released.
+    """
     slots = stack_alloc(_EXC_NEW_SLOT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _EXC_NEW_SLOT_COUNT * C_POINTER_SIZE)
     store_ptr(slots, _EXC_NEW_RECEIVER * C_POINTER_SIZE, inst)
     store_ptr(slots, _EXC_NEW_BASE * C_POINTER_SIZE, py_exc_builtin_class(0))  # PY_EXC_BASE
-    empty = null()
-    if ptr_is_null(args) != 0:
-        empty = py_tuple_new(0)
-        if ptr_is_null(empty) != 0:
-            return -1
-        store_ptr(slots, _EXC_NEW_ARGS * C_POINTER_SIZE, empty)
-    else:
-        store_ptr(slots, _EXC_NEW_ARGS * C_POINTER_SIZE, args)
     pcc_gc_frame_enter(global_addr("pcc_exception_new_borrowed_map"), slots)
-    status: int = py_exception_subclass_init_slots(
-        ptr_add(slots, _EXC_NEW_RECEIVER * C_POINTER_SIZE),
-        ptr_add(slots, _EXC_NEW_BASE * C_POINTER_SIZE),
-        ptr_add(slots, _EXC_NEW_ARGS * C_POINTER_SIZE),
-        ptr_add(slots, _EXC_NEW_KWARGS * C_POINTER_SIZE),
-    )
+    status: int = 0
+    if ptr_is_null(args) != 0:
+        store_ptr(slots, _EXC_NEW_ARGS * C_POINTER_SIZE, py_tuple_new(0))
+        if ptr_is_null(load_ptr(slots, _EXC_NEW_ARGS * C_POINTER_SIZE)) != 0:
+            status = -1
+    else:
+        py_incref(args)
+        store_ptr(slots, _EXC_NEW_ARGS * C_POINTER_SIZE, args)
+    if status == 0:
+        status = py_exception_subclass_init_slots(
+            ptr_add(slots, _EXC_NEW_RECEIVER * C_POINTER_SIZE),
+            ptr_add(slots, _EXC_NEW_BASE * C_POINTER_SIZE),
+            ptr_add(slots, _EXC_NEW_ARGS * C_POINTER_SIZE),
+            ptr_add(slots, _EXC_NEW_KWARGS * C_POINTER_SIZE),
+        )
+    owned_args = load_ptr(slots, _EXC_NEW_ARGS * C_POINTER_SIZE)
+    if ptr_is_null(owned_args) == 0:
+        py_decref(owned_args)
+    result = load_ptr(slots, _EXC_NEW_RECEIVER * C_POINTER_SIZE)
     pcc_gc_frame_leave(slots)
-    if ptr_is_null(empty) == 0:
-        py_decref(empty)
-    return status
+    if status != 0:
+        py_decref(result)
+        return null()
+    return result
 
 
 def _type_object_call(args, nargs: int, nkwargs: int):
@@ -4063,9 +4063,13 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
             # ``__new__`` returned something else; CPython skips ``__init__``
             # and hands that object back untouched.
             return inst
-        if _class_derives_from_base_exception(callable) != 0:
-            if _exception_new_args(inst, args) != 0:
-                py_decref(inst)
+        # py_class_mark_exception_subclass set this bit when the class was
+        # created. A per-call MRO walk here (read barriers on every class
+        # call) left test_classmethod_constructor_consumes_temporary_tuples
+        # with undestroyed objects under GC4.
+        if (load_i32(callable, PYOBJECTHEADER_FLAGS_OFFSET) & _EXCEPTION_SUBCLASS_CLASS_FLAG) != 0:
+            inst = _exception_new_args(inst, args)
+            if ptr_is_null(inst) != 0:
                 return null()
         init_method = py_class_lookup(callable, cstr("__init__"))
         if ptr_is_null(init_method) == 0:

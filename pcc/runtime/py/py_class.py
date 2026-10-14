@@ -4208,6 +4208,20 @@ def py_class_mark_slots_only(cls) -> None:
     store_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET, flags | 2)
 
 
+# Set once at class creation on a class whose ancestors include a builtin
+# exception class; the class call then keeps its constructor arguments as
+# ``args`` (BaseException.__new__) by testing this bit. Bit 24 is a function
+# role elsewhere and free on classes. Mirrored in py_obj_ops_dispatch.py.
+_EXCEPTION_SUBCLASS_CLASS_FLAG = 16777216
+
+
+@c_abi_export("py_class_mark_exception_subclass")
+def py_class_mark_exception_subclass(cls) -> None:
+    if ptr_is_null(cls) != 0:
+        return
+    atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, _EXCEPTION_SUBCLASS_CLASS_FLAG, "relaxed")
+
+
 @c_abi_export("py_class_mark_dict_subclass")
 def py_class_mark_dict_subclass(cls) -> None:
     # Set PY_CLASS_FLAG_DICT_SUBCLASS (bit 2, value 4): this class subclasses
