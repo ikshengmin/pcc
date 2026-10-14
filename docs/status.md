@@ -31,23 +31,28 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   these changes (failures there are the pre-existing ones below, plus pcc1
   cells without a provisioned pcc1); `test_valueclass_aggregate_ownership_native.py`
   (only `**extras` added) was stopped unfinished.
-- Worktree, not committed: decorators run once at definition (a call loads
-  the published binding; each call used to re-apply them) and a call to a
-  module function is accepted as a decorator factory. The last edit evaluates
-  decorator expressions top to bottom before applying them; it needs a
-  runtime rebuild and `tests/python/test_decorator_application.py` natively.
+- `b085f161`: decorators run once at definition (a call loads the published
+  binding; each call used to re-apply them) and a call to a module function
+  is accepted as a decorator factory. Its last edit (decorator expressions
+  evaluated top to bottom before they are applied) has not run natively yet:
+  `tests/python/test_decorator_application.py` with a rebuilt runtime.
 - Open, found here: a dynamic `.append()` result passed to a direct call keeps
   one extra reference (positional calls too, so pre-existing; the binder path
   is correct). Repro: `DIRECT_PROGRAM` in
   `tests/python/test_slot_call_dynamic_append_result.py`, pcc0, GC0. The
   no-sink case of `_emit_dyn_list_method_with_runtime_guard` returns a raw PHI
-  of a borrowed None and an owned method result; it needs the result-root
-  path that `dyn.index` uses.
-- Pre-existing host failures (fail without these changes):
-  `test_bytes_decode_result_roots.py` (models the decoder body that
-  `c21f5a09` replaced with `_bytes_decode_body`),
-  `test_lambda_constructor_roots.py[ordinary_assignment]`,
-  `test_owned_os_descriptors.py`, `test_string_method_result_roots.py`.
+  of a borrowed None and an owned method result, and
+  `_emit_generic_dyn_method_call_on_value` never releases the bound method
+  from `py_obj_getattr`. A fix (result root for append as `list.extend` has,
+  the other methods' join recorded as owned, the method released) and
+  `tests/python/test_dynamic_method_result_ownership.py` are in the worktree,
+  waiting for native GC0-GC4 runs.
+- Pre-existing host failures: `test_lambda_constructor_roots.py`,
+  `test_owned_os_descriptors.py` and `test_string_method_result_roots.py`
+  are fixed in `17f1819a` (stale shapes; macOS ran the Linux-target model
+  with host open flags). Still failing: `test_bytes_decode_result_roots.py`,
+  which models the decoder body that `c21f5a09` replaced with
+  `_bytes_decode_body` and `py_text_decode`; it needs a model of the new body.
 - Assigning `__defaults__`/`__kwdefaults__` does not affect calls, through the
   binder as well; the static default fill matches that, and both need a guard
   when the assignment becomes live.
