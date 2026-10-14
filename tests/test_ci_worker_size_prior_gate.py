@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 279, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -69,24 +69,24 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[43:45] == (gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST)
     assert gate.HOST_FILES[45:] == (gate.HOME_SUMMARY_CI_TEST,)
     assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 46
-    assert sum(gate.HOST_COUNTS) == 2063 and sum(gate.HOST_COUNTS[:43]) == 2009
-    assert sum(gate.HOST_COUNTS[:42]) == 1914
-    assert sum(gate.HOST_COUNTS[:40]) == 1905
-    assert sum(gate.HOST_COUNTS[:38]) == 1895
-    assert sum(gate.HOST_COUNTS[:36]) == 1886
-    assert sum(gate.HOST_COUNTS[:34]) == 1868
-    assert sum(gate.HOST_COUNTS[:32]) == 1833
-    assert sum(gate.HOST_COUNTS[:30]) == 1699
-    assert sum(gate.HOST_COUNTS[:28]) == 1603
-    assert sum(gate.HOST_COUNTS[:27]) == 1548
-    assert sum(gate.HOST_COUNTS[:25]) == 1448
-    assert sum(gate.HOST_COUNTS[:23]) == 1293
-    assert sum(gate.HOST_COUNTS[:22]) == 1277
-    assert sum(gate.HOST_COUNTS[:21]) == 1222
-    assert sum(gate.HOST_COUNTS[:20]) == 1133
-    assert sum(gate.HOST_COUNTS[:18]) == 1096
-    assert sum(gate.HOST_COUNTS[:17]) == 1029 and sum(gate.HOST_COUNTS[:16]) == 969
-    assert sum(gate.HOST_COUNTS[:14]) == 960
+    assert sum(gate.HOST_COUNTS) == 2071 and sum(gate.HOST_COUNTS[:43]) == 2017
+    assert sum(gate.HOST_COUNTS[:42]) == 1922
+    assert sum(gate.HOST_COUNTS[:40]) == 1913
+    assert sum(gate.HOST_COUNTS[:38]) == 1903
+    assert sum(gate.HOST_COUNTS[:36]) == 1894
+    assert sum(gate.HOST_COUNTS[:34]) == 1876
+    assert sum(gate.HOST_COUNTS[:32]) == 1841
+    assert sum(gate.HOST_COUNTS[:30]) == 1707
+    assert sum(gate.HOST_COUNTS[:28]) == 1611
+    assert sum(gate.HOST_COUNTS[:27]) == 1556
+    assert sum(gate.HOST_COUNTS[:25]) == 1456
+    assert sum(gate.HOST_COUNTS[:23]) == 1301
+    assert sum(gate.HOST_COUNTS[:22]) == 1285
+    assert sum(gate.HOST_COUNTS[:21]) == 1230
+    assert sum(gate.HOST_COUNTS[:20]) == 1141
+    assert sum(gate.HOST_COUNTS[:18]) == 1104
+    assert sum(gate.HOST_COUNTS[:17]) == 1037 and sum(gate.HOST_COUNTS[:16]) == 977
+    assert sum(gate.HOST_COUNTS[:14]) == 968
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
@@ -1027,7 +1027,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 279, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

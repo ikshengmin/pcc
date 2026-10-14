@@ -623,7 +623,27 @@ def test_stage1_wiring_is_opt_in_surgical_and_uses_existing_report_boundary():
     assert '"result_present": profile_installed and (profile_directory / "result.json").is_file()' in source
     assert '"installation_status_present": profile_fresh and ' in source
     assert "profile_installed = profiled_env is not stage_env" in source
-    assert 'timeout=timeout, rss_limit=rss_limit, native=stage > 1)' in source
+    # Exercise the actual guarded-call expressions instead of requiring a
+    # source spelling that predates the separate host Stage1 deadline.
+    calls = [node for node in ast.walk(ast.parse(source))
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+             and node.func.id == "guarded" and node.args
+             and isinstance(node.args[0], ast.Name) and node.args[0].id == "command"]
+    assert len(calls) == 1
+    options = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+    expressions = {name: compile(ast.Expression(options[name]), "bootstrap guard", "eval")
+                   for name in ("timeout", "rss_limit", "native", "env")}
+    stage_env = {"PCC_HOST_ASSEMBLY_PROFILE": "1"}
+    for stage in (1, 2, 3):
+        for stage1_timeout in (None, 7200):
+            context = {"stage": stage, "stage1_timeout": stage1_timeout,
+                       "timeout": 6000, "rss_limit": 17179869184, "stage_env": stage_env}
+            actual = {name: eval(expression, {"__builtins__": {}}, context)
+                      for name, expression in expressions.items()}
+            assert actual["timeout"] == (7200 if stage == 1 and stage1_timeout is not None else 6000)
+            assert actual["rss_limit"] == 17179869184
+            assert actual["native"] is (stage > 1)
+            assert actual["env"] is stage_env
     worker = (root / "pcc/frontends/python/pipeline_frontend_worker_execution.py").read_text()
     assert worker.index("codegen_ms = int((time.monotonic() - codegen_started)") < worker.index("phase_timing.report(sys.stderr, phase_timing_complete)")
     workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
