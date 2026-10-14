@@ -604,9 +604,9 @@ class Graph:
 def _validate_minos(value):
     return value
 def prepare_executable_object(objects, *, archives, semantic_manifest, _consume_inputs,
-                              _source_view=False):
+                              _source_view=False, archive_selections=None):
     return Graph()
-def _prepare_executable_image(merged, *, entry, minos, identifier):
+def _prepare_executable_image(merged, *, entry, minos, identifier, link_receipt=None):
     return (b"prepared", identifier)
 def _finish_executable_image(plan, identifier, phase_callback):
     gc.collect()
