@@ -297,7 +297,10 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
             objects, definitions, imports, boundary_names, entry, image_base, compact_budget,
         )
     except PreciseStackMapError as exc:
-        raise CoffError("PE compact stack-map budget rejected: " + str(exc)) from exc
+        sizes = getattr(compact_budget, "last_rejection", "")
+        raise CoffError(
+            "PE compact stack-map budget rejected: " + str(exc) + ("; " + sizes if sizes else "")
+        ) from exc
     finally:
         if budget_prepared:
             compact_budget.finish()

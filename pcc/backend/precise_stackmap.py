@@ -139,6 +139,9 @@ class CompactStackMapBudget:
         self.record_visit_limit = record_visit_limit
         self.record_visits = 0
         self.retained_bytes = 0
+        # The sizes behind the last refused check; callers add them to their
+        # link error so a CI log shows how far an estimate was over.
+        self.last_rejection = ""
         self.set_header_bytes = set_header_bytes
         self.set_entry_bytes = set_entry_bytes
         self.integer_bytes = integer_bytes
@@ -186,14 +189,25 @@ class CompactStackMapBudget:
         # This check is before potentially large integer products or a set
         # capacity walk, including malformed caller-supplied counts.
         if raw_bytes > self.limit_bytes or records > self.limit_bytes // self.integer_bytes:
+            self._note_rejection(label, raw_bytes, records, entries, -1)
             raise PreciseStackMapError("compact stack-map byte budget exceeded: " + label)
         if entries > self.limit_bytes // self.metadata_entry_bytes:
+            self._note_rejection(label, raw_bytes, records, entries, -1)
             raise PreciseStackMapError("compact stack-map metadata budget exceeded: " + label)
         estimate = raw_bytes + entries * self.metadata_entry_bytes
         if records:
             estimate += self._set_bytes(records)
         if estimate > self.limit_bytes:
+            self._note_rejection(label, raw_bytes, records, entries, estimate)
             raise PreciseStackMapError("compact stack-map byte budget exceeded: " + label)
+
+    def _note_rejection(self, label, raw_bytes, records, entries, estimate):
+        self.last_rejection = (
+            "label=" + label + " estimate=" + str(estimate)
+            + " raw=" + str(raw_bytes) + " records=" + str(records)
+            + " entries=" + str(entries) + " retained=" + str(self.retained_bytes)
+            + " limit=" + str(self.limit_bytes)
+        )
 
     def charge_records(self, count):
         if type(count) is not int or count < 0 or count > self.record_visit_limit - self.record_visits:

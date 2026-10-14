@@ -348,7 +348,10 @@ def _check_compact_copy_peak(compact_budget, raw_bytes: int, label: str) -> None
     try:
         compact_budget.check_peak(raw_bytes, label=label)
     except PreciseStackMapError as exc:
-        raise LinkError(f"Mach-O compact stack-map budget rejected: {exc}") from exc
+        sizes = getattr(compact_budget, "last_rejection", "")
+        raise LinkError(
+            f"Mach-O compact stack-map budget rejected: {exc}" + ("; " + sizes if sizes else "")
+        ) from exc
 
 
 def _external_symbol_state(

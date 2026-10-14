@@ -999,7 +999,11 @@ def link_relocatable_native(
                             )
                         )
                 except PreciseStackMapError as exc:
-                    raise LinkError(f"input stack-map section is malformed: {exc}") from exc
+                    sizes = getattr(compact_budget, "last_rejection", "")
+                    raise LinkError(
+                        f"input stack-map section is malformed: {exc}"
+                        + ("; " + sizes if sizes else "")
+                    ) from exc
                 stack_relocations = _read_relocations(
                     obj, sec, symbols, local_rename,
                     symbol_names=relocation_symbol_names,
