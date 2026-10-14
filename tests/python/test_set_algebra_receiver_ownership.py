@@ -40,7 +40,7 @@ def test_shared_update_static_host_signatures_include_slot_owners():
 @pytest.mark.parametrize('site', ('argument', 'default', 'return'))
 def test_algebra_publishes_into_caller_sink(method, annotation, site):
     expression = 'receiver.' + method + '(source)'
-    prefix = 'def take(*, value):\n    return value\n'
+    prefix = 'def take(*, value, **extras):\n    return value\n'
     if site == 'default':
         body = '    def saved(value=' + expression + '):\n        return value\n    return saved()\n'
     elif site == 'return':

@@ -29,7 +29,7 @@ from tests.python.owned_regression_support import (
 @pytest.mark.parametrize('site', ('return', 'argument', 'default', 'binary'))
 def test_dict_get_branches_publish_same_caller_owner(annotation, arguments, site, tmp_path):
     expression = 'mapping.get(' + arguments + ')'
-    prefix = 'def take(*, value):\n    return value\n'
+    prefix = 'def take(*, value, **extras):\n    return value\n'
     if site == 'return':
         body = '    return ' + expression + '\n'
     elif site == 'default':
@@ -160,7 +160,7 @@ PROGRAM = textwrap.dedent('''\
         gc.collect()
         return value
 
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
 

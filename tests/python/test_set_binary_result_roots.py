@@ -197,7 +197,7 @@ def test_unqualified_algebra_operation_is_rejected():
 
 @pytest.mark.parametrize('site', ('argument', 'return', 'default'))
 def test_set_subtraction_uses_actual_generic_new_result(site):
-    prefix = 'def take(*, value):\n    return value\n'
+    prefix = 'def take(*, value, **extras):\n    return value\n'
     if site == 'argument':
         body = '    return take(value=left - right)\n'
     elif site == 'default':
@@ -228,7 +228,7 @@ class BadKey:
         gc.collect()
         raise ValueError('equality-error')
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 

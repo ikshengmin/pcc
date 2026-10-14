@@ -35,7 +35,7 @@ def test_getattr_result_reaches_owned_context(site, name, defaulted):
         'discarded': '    ' + expression + '\n',
         'later-error': '    return take(value=' + expression + ', later=fail())\n',
     }[site]
-    text = _emit('def take(*, value, later=None):\n    return value\n'
+    text = _emit('def take(*, value, later=None, **extras):\n    return value\n'
                  'def fail():\n    raise ValueError("later")\n'
                  'def probe(receiver, name, fallback):\n' + body)
     _assert_immediate_publication(text, 'py_obj_getattr')
@@ -110,7 +110,7 @@ class Receiver:
         raise ValueError('lookup failed')
 def dynamic_name():
     return ''.join(('er', 'ror'))
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     return value
 def later():
     raise AssertionError('later operand evaluated')
@@ -177,7 +177,7 @@ class Receiver:
 def name():
     gc.collect()
     return ''.join(('val', 'ue'))
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 def fail():

@@ -13,7 +13,7 @@ from pathlib import Path
 from os import open as open_fd, fdopen as adopt, close as close_fd
 from tempfile import NamedTemporaryFile as make
 
-def consume(*, stream):
+def consume(*, stream, **extras):
     gc.collect()
     return stream.write('lease\n')
 

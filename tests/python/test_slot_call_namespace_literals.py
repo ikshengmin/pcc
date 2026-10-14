@@ -25,7 +25,7 @@ def _probe(text):
 
 @pytest.mark.parametrize('name', ('__file__', '__name__', '__package__', '__doc__'))
 def test_namespace_string_operand_has_an_owner(name):
-    body = _probe(_emit('"module documentation"\ndef take(*, value):\n    return value\n'
+    body = _probe(_emit('"module documentation"\ndef take(*, value, **extras):\n    return value\n'
                         'def probe():\n    return take(value=' + name + ')\n'))
     assert '@py_obj_call_slots(' in body
     assert '@pcc_gc_foreign_lease_acquire(' in body
@@ -37,7 +37,7 @@ def test_namespace_string_operand_has_an_owner(name):
 def test_shadowed_namespace_uses_authoritative_slot(name, scope):
     prefix = name + ' = {}\n' if scope == 'global' else ''
     parameter = name if scope == 'local' else ''
-    body = _probe(_emit(prefix + 'def take(*, value):\n    return value\n'
+    body = _probe(_emit(prefix + 'def take(*, value, **extras):\n    return value\n'
                         'def probe(' + parameter + '):\n    return take(value=' + name + ')\n'))
     assert re.search(r'@pcc_gc_root_copy_(?:borrowed_)?lease\(', body)
 
@@ -45,7 +45,7 @@ def test_shadowed_namespace_uses_authoritative_slot(name, scope):
 PROGRAM = textwrap.dedent('''\
     "module documentation"
     import gc
-    def take(*, value):
+    def take(*, value, **extras):
         gc.collect()
         return value
     def predefined():
@@ -79,7 +79,7 @@ GLOBAL_SHADOW_PROGRAM = textwrap.dedent('''\
     __name__ = {'name': 2}
     __package__ = {'package': 3}
     __doc__ = {'doc': 4}
-    def take(*, value):
+    def take(*, value, **extras):
         gc.collect()
         return value
     assert take(value=__file__) == {'file': 1}

@@ -34,7 +34,7 @@ EXPRESSIONS = (
 @pytest.mark.parametrize('expression', EXPRESSIONS)
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'discard', 'later-error'))
 def test_zip_publication_contexts(expression, site):
-    prefix = ('def take(*, value, later=None):\n    return value\n'
+    prefix = ('def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def saved(item=' + expression + '):\n        return item\n    return saved()\n'
@@ -65,7 +65,7 @@ def test_zip_success_and_error_paths_have_balanced_root_stacks(expression):
     from pcc.backend.self_backend_prepare import prepare_module_for_target
     from pcc.backend.self_backend_precise_stackmaps import build_stack_map_plans
     from pcc.backend.self_backend_x86_64_linux import _aggregate_returned_indirect
-    source = ('def take(*, value, later):\n    return value\n'
+    source = ('def take(*, value, later, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n'
               'def probe(first, second, mapping: dict, rows):\n    try:\n'
               '        return take(value=' + expression + ', later=fail())\n'

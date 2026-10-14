@@ -266,7 +266,7 @@ class SetSubclass(set):
     def __xor__(self, other):
         return 'sub-xor'
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 

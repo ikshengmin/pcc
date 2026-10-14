@@ -60,7 +60,7 @@ def test_dynamic_floor_division_publishes_before_error_poll_and_operand_cleanup(
 
 @pytest.mark.parametrize("site", ("argument", "default", "return", "later-error"))
 def test_dynamic_floor_division_rooted_contexts(site):
-    source = "def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError('later')\n"
+    source = "def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError('later')\n"
     if site == "default":
         body = "    def target(value=left // right):\n        return value\n    return target()\n"
     elif site == "return":
@@ -136,7 +136,7 @@ class Raising:
 def divide(left, right):
     return left // right
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     events.append('take')
     return value

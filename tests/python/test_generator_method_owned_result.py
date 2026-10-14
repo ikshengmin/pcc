@@ -211,8 +211,9 @@ def closing():
         yield 0
     except GeneratorExit:
         return [73]
-def take(first, second, third=None):
-    # Omitting the optional formal selects the runtime binder's owning sink.
+def take(first, second, third="omitted"):
+    # Omitting the optional formal selects the runtime binder's owning sink:
+    # a str default's identity belongs to the function, not the call site.
     return first
 def later():
     gc.collect()

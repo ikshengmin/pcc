@@ -56,7 +56,7 @@ def test_generic_bitwise_has_immediate_output_owner(operator, annotation, shape,
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error'))
 def test_bitwise_owner_contexts(operator, site):
     expression = 'left ' + operator + ' right'
-    source = "def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError('later')\n"
+    source = "def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError('later')\n"
     if site == 'default':
         body = '    def target(value=' + expression + '):\n        return value\n    return target()\n'
     elif site == 'return':
@@ -100,7 +100,7 @@ def consume(flags):
 
 
 def test_ast_integer_field_bitwise_value_uses_the_object_protocol():
-    source = 'class IntLit:\n    def __init__(self, value: int):\n        self.value = value\ndef combine(lhs: IntLit, rhs: IntLit):\n    return IntLit(value=lhs.value | rhs.value)\n'
+    source = 'class IntLit:\n    def __init__(self, value: int, **extras):\n        self.value = value\ndef combine(lhs: IntLit, rhs: IntLit):\n    return IntLit(value=lhs.value | rhs.value)\n'
     assert_bitwise_publication(emit_binding(source), '|')
 
 
@@ -145,7 +145,7 @@ def bit_or(left, right):
 def bit_xor(left, right):
     return left ^ right
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     events.append('take')
     return value

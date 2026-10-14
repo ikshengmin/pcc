@@ -13,7 +13,7 @@ CASES = {
         free = value
     return tuple(sorted(free))
 ''',
-    'call_argument': '''def take(*, value):
+    'call_argument': '''def take(*, value, **extras):
     return value
 def probe(value):
     def replace(other):

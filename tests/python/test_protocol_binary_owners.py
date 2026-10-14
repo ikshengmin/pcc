@@ -375,7 +375,7 @@ PROGRAM = textwrap.dedent('''\
         def __add__(self, other):
             gc.collect()
             raise ValueError('binary-callback')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def later():

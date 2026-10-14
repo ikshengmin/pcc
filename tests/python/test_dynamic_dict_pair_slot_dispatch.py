@@ -36,7 +36,7 @@ def test_dynamic_protocol_dispatch_uses_existing_slot_transaction(annotation, ex
     '    try:\n        yield dict(source)\n    except Exception:\n        yield None\n',
 ))
 def test_pair_branch_preserves_caller_and_generator_frame_balance(body):
-    source = ('def consume(*, value, later):\n    return value\n'
+    source = ('def consume(*, value, later, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n'
               'def probe(source):\n' + body)
     _codegen, text = emit_roots(source)

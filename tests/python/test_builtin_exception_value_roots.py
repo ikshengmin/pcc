@@ -20,7 +20,7 @@ from tests.python.owned_regression_support import (
     '    return (ValueError, TypeError)\n',
 ))
 def test_exception_value_is_copied_from_its_real_cache_slot(body):
-    text = _emit('def take(*, value):\n    return value\ndef probe():\n' + body)
+    text = _emit('def take(*, value, **extras):\n    return value\ndef probe():\n' + body)
     checked = 0
     for _name, function in function_bodies(text):
         aliases = pointer_bitcast_aliases(function)
@@ -38,7 +38,7 @@ def test_exception_value_is_copied_from_its_real_cache_slot(body):
     'ValueError = "shadow"\ndef probe():\n    return take(value=ValueError)\n',
 ))
 def test_shadowed_exception_spelling_uses_its_actual_binding(source):
-    text = _emit('def take(*, value):\n    return value\n' + source)
+    text = _emit('def take(*, value, **extras):\n    return value\n' + source)
     body = next(body for name, body in function_bodies(text) if name == 'user_binding_probe')
     assert not re.search(r'\bcall [^\n]*@py_subs_exc_cache_slot\(', body)
     assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy(?:_borrowed)?_lease\(', body)

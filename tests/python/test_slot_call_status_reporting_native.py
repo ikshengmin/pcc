@@ -176,7 +176,7 @@ def fails(*, value):
     assert value == [1, 2, 3]
     raise original
 
-def takes(*, value):
+def takes(*, value, **extras):
     gc.collect()
     return value[0]
 

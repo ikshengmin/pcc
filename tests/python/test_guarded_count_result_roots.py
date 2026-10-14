@@ -20,7 +20,7 @@ CONTEXTS = {
 
 @pytest.mark.parametrize('context', CONTEXTS)
 def test_guarded_count_publishes_both_results_before_cleanup(context):
-    text = emit('def take(*, value):\n    return value\ndef make(value):\n    return value\ndef probe(value, item):\n' + CONTEXTS[context])
+    text = emit('def take(*, value, **extras):\n    return value\ndef make(value):\n    return value\ndef probe(value, item):\n' + CONTEXTS[context])
     bodies = re.findall(r'^define[^\n]*\{\n.*?^}', text, re.M | re.S)
     selected = [body for body in bodies if re.search(r'\bcall[^\n]*@py_list_count\(', body)]
     assert selected

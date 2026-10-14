@@ -22,7 +22,7 @@ from tests.python.owned_regression_support import assert_owned_program, explicit
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error'))
 def test_format_producer_contexts(expression, runtime, site):
     prefix = ('from pcc.unsafe import null\n'
-              'def take(*, value, later=None):\n    return value\n'
+              'def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def target(value=' + expression + '):\n        return value\n    return target()\n'
@@ -256,7 +256,7 @@ PROGRAM = textwrap.dedent('''\
         def __str__(self):
             gc.collect()
             raise ValueError('str-error')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def returned(value):

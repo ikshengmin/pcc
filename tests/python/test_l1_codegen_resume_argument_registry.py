@@ -37,7 +37,11 @@ def probe(codegen: L1CodeGen, value, error_target, args_target, output):
     declaration = re.search(r"declare [^\n]*@" + symbol + r"\(([^\n]*)\)", text)
     assert declaration is not None
     assert len(declaration.group(1).split(",")) == 5
-    # Keywords use the owned callable binder; the declaration it binds must
-    # include the real helper's resumable-argument parameter.
-    assert "@py_obj_call_slots(" in body
+    # Keywords in formal order bind statically: the caller passes all five
+    # formals to the declared helper, so the declaration must include the
+    # real helper's resumable-argument parameter.
+    call = re.search(r"\bcall [^\n]*@" + symbol + r"\(([^\n]*)\)", body)
+    assert call is not None
+    assert len(call.group(1).split(", ")) == 5
+    assert "@py_obj_call_slots(" not in body
     assert "@py_cpy_" not in body

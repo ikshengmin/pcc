@@ -97,7 +97,7 @@ class ClassType(Type):
 
 
 def test_class_scope_lookup_does_not_capture_method_parameter():
-    text = _emit('''def consume(*, value):
+    text = _emit('''def consume(*, value, **extras):
     return value
 class Holder:
     fields = ('class',)

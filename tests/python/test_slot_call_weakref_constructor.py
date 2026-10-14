@@ -40,7 +40,7 @@ def test_weakref_result_is_published_before_operand_cleanup(expression, site):
         "def callback(reference):\n    return None\n"
         "def callback_factory():\n    return callback\n"
         "def fail():\n    raise ValueError('later')\n"
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
     )
     if site == "return":
         body = "    return " + expression + "\n"

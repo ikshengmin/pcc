@@ -15,7 +15,7 @@ class Record:
     number: int
     value: FIELD
 
-def take(*, value):
+def take(*, value, **extras):
     return value
 '''
 
@@ -54,7 +54,7 @@ class Leaf:
 class Record:
     leaf: Leaf
     trailer: list
-def take(*, value):
+def take(*, value, **extras):
     return value
 def probe(record: Record):
     boxed = take(value=record)

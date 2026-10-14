@@ -993,7 +993,7 @@ CONSTRUCTOR_ATTRIBUTE_PROGRAM = """import pcc
 class Record:
     value: list
 
-def take(*, value):
+def take(*, value, **extras):
     return value
 def probe():
     return take(value=Record([1]).value)

@@ -22,7 +22,7 @@ from tests.python.test_shared_call_binding import _emit, _function
 ))
 def test_sequence_index_publishes_native_and_user_method_results(body):
     text = _emit(
-        'def take(*, value, later=None):\n    return value\n'
+        'def take(*, value, later=None, **extras):\n    return value\n'
         "def fail():\n    raise ValueError('later')\n"
         'def probe(sequence, item):\n' + body
     )
@@ -77,7 +77,7 @@ PROGRAM = textwrap.dedent('''\
             return other == 'match'
     def index(sequence, item):
         return sequence.index(item)
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def fail():

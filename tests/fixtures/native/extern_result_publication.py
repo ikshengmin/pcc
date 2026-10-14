@@ -33,7 +33,7 @@ def fail():
     gc.collect()
     raise ValueError('later')
 
-def take(*, value, other=None):
+def take(*, value, other=None, **extras):
     gc.collect()
     return value
 

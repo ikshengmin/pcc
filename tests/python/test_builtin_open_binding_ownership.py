@@ -119,7 +119,7 @@ def test_shadowed_callable_or_module_uses_actual_parameter(name):
 def test_open_publishes_before_leases_tls_or_operand_disposal():
     text = _emit("import builtins\ndef path_value():\n    return 'x'\n"
         "def mode_value():\n    return 'rb'\n"
-        "def consume(*, value):\n    return value\n"
+        "def consume(*, value, **extras):\n    return value\n"
         "def read_file():\n"
         "    return consume(value=builtins.open(path_value(), mode_value()))\n")
     body = _body(text)

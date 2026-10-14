@@ -17,7 +17,7 @@ def operand(label, value):
     events.append(label)
     return value
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 

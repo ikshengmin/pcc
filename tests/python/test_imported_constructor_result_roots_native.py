@@ -45,7 +45,7 @@ class Empty:
 
 ENTRY_SOURCE = '''import gc
 import result_provider as provider
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 def mark(events, name, value):

@@ -18,7 +18,7 @@ from tests.python.test_builtin_open_binding_ownership import _emit, _body
     "    with tempfile.TemporaryDirectory(prefix='ctx') as directory:\n        return directory\n",
     "from contextlib import contextmanager\n@contextmanager\n"
     "def managed(value):\n    yield value\n"
-    "def take(*, value):\n    return value\n"
+    "def take(*, value, **extras):\n    return value\n"
     "def read_file(value):\n    with managed(value) as selected:\n"
     "        return take(value=selected)\n",
 ))

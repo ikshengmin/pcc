@@ -56,7 +56,7 @@ def test_os_new_results_publish_before_parking(producer, runtime, site):
     }
     source = (
         "import os\nimport platform\n"
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
         "def probe(path: str, start: str):\n" + bodies[site]
     )
@@ -77,7 +77,7 @@ def test_uname_field_publishes_tuple_and_retained_field(field, site):
         "default": "    def selected(value=" + producer + "):\n        return value\n    return selected()\n",
     }[site]
     text = _emit(
-        "import os as system\ndef take(*, value):\n    return value\n"
+        "import os as system\ndef take(*, value, **extras):\n    return value\n"
         "def probe():\n" + body
     )
     _assert_immediate_publication(text, "py_os_uname")
@@ -230,7 +230,7 @@ PROGRAM = textwrap.dedent('''\
             return self.value
         def __del__(self):
             events.append('drop:' + self.value)
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def part(value):

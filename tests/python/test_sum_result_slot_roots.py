@@ -26,7 +26,7 @@ EXPRESSIONS = (
 
 
 def _source(expression, site='argument', annotation='list'):
-    prefix = ('def take(*, value, later=None):\n    return value\n'
+    prefix = ('def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def saved(item=' + expression + '):\n        return item\n    return saved()\n'
@@ -206,7 +206,7 @@ PROGRAM = textwrap.dedent('''\
         def __next__(self):
             gc.collect()
             raise ValueError('iterator-failed')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def mark(label, value: int) -> int:

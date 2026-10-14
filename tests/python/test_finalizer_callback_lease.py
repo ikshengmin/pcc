@@ -169,9 +169,9 @@ PROGRAM = textwrap.dedent('''\
             events.append(self.name)
             rescued.append(self)
             gc.collect()
-    def drop(*, value):
+    def drop(*, value, **extras):
         references.append(weakref.ref(value))
-    def take(*, value):
+    def take(*, value, **extras):
         gc.collect()
         return value
     def rhs(value):

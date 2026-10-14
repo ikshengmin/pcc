@@ -23,7 +23,7 @@ from tests.python.test_slot_call_subscript_producers import _assert_immediate_pu
 ))
 @pytest.mark.parametrize('site', ('return', 'argument', 'default', 'attribute', 'later-error'))
 def test_buffer_constructor_immediate_publication(expression, runtime, site):
-    prefix = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    prefix = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     if site == 'return':
         body = '    return ' + expression + '\n'
     elif site == 'default':
@@ -76,7 +76,7 @@ PROGRAM = textwrap.dedent('''\
         gc.collect()
         events.append('later')
         return None
-    def take(*, value, other=None):
+    def take(*, value, other=None, **extras):
         gc.collect()
         return value
     def returned(value):

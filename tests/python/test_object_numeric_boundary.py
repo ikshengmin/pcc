@@ -49,7 +49,7 @@ def test_ordinary_numeric_operand_projection_uses_runtime_kind(operator, annotat
 @pytest.mark.parametrize('operator', ('%', '/', '//'))
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error'))
 def test_ordinary_numeric_consumer_owner_and_error_paths(operator, site):
-    prefix = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    prefix = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     expression = 'left ' + operator + ' right'
     if site == 'default':
         body = '    def target(value=' + expression + '):\n        return value\n    return target()\n'

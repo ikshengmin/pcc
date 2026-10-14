@@ -18,7 +18,7 @@ from tests.python.owned_regression_support import assert_owned_program, explicit
 ))
 @pytest.mark.parametrize('site', ('return', 'argument', 'default', 'attribute', 'later-error'))
 def test_set_constructor_publishes_before_cleanup(expression, runtime, site):
-    prefix = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    prefix = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     if site == 'return':
         body = '    return ' + expression + '\n'
     elif site == 'default':
@@ -261,7 +261,7 @@ PROGRAM = textwrap.dedent('''\
             gc.collect()
             raise ValueError('iter-error')
 
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
 

@@ -51,7 +51,7 @@ def test_explicit_raw_field_can_cross_its_native_return_abi():
 
 @pytest.mark.parametrize("operand", ("view", "view.address"))
 def test_raw_payload_or_field_cannot_be_published_as_a_managed_operand(operand):
-    source = PREFIX + "def take(*, value):\n    return value\ndef probe(view: RawView):\n    return take(value=" + operand + ")\n"
+    source = PREFIX + "def take(*, value, **extras):\n    return value\ndef probe(view: RawView):\n    return take(value=" + operand + ")\n"
     with pytest.raises(L1CodegenError, match="raw"):
         _emit(source)
 

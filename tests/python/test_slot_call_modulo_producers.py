@@ -61,7 +61,7 @@ def test_generic_modulo_and_percent_formats_publish_before_cleanup(expression, c
 
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error'))
 def test_generic_modulo_contexts(site):
-    source = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    source = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     if site == 'default':
         body = '    def target(value=left % right):\n        return value\n    return target()\n'
     elif site == 'return':
@@ -156,7 +156,7 @@ class Raising:
         raise KeyError('bytes-conversion')
 
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     events.append('take')
     return value

@@ -81,7 +81,7 @@ def test_multiplication_passes_owning_operand_and_output_slots(expression, count
 
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error', 'index', 'lambda'))
 def test_multiplication_contexts_use_the_same_slot_producer(site):
-    prefix = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    prefix = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     if site == 'default':
         body = '    def saved(value=left * right):\n        return value\n    return saved()\n'
     elif site == 'return':
@@ -201,7 +201,7 @@ def multiply(left, right):
     return left * right
 
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 

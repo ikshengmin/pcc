@@ -12,7 +12,7 @@ from tests.python.owned_regression_support import assert_owned_program, explicit
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error', 'concatenation', 'discard'))
 def test_text_conversion_publishes_before_cleanup(builtin, site):
     prefix = ('from pcc.unsafe import null\n'
-              'def take(*, value, later=None):\n    return value\n'
+              'def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     expression = builtin + '(item)'
     if site == 'default':
@@ -69,7 +69,7 @@ def test_shadowed_base_conversion_preserves_user_callable(builtin, binding):
 @pytest.mark.parametrize('builtin', ('bin', 'hex', 'oct'))
 def test_base_conversion_roots_temporary_argument_before_runtime(builtin):
     text = _function(_emit('def number():\n    return 1 << 100\n'
-                 'def take(*, value):\n    return value\n'
+                 'def take(*, value, **extras):\n    return value\n'
                  'def probe():\n    return take(value=' + builtin + '(number()))\n'))
     _assert_immediate_publication(text, 'user_binding_number')
     _assert_immediate_publication(text, 'py_builtin_' + builtin)
@@ -89,7 +89,7 @@ PROGRAM = textwrap.dedent('''\
         def __repr__(self):
             gc.collect()
             raise ValueError('representation')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def later():
@@ -141,7 +141,7 @@ BASE_FORMAT_PROGRAM = textwrap.dedent('''\
         def __del__(self):
             gc.collect()
             events.append('disposed')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def later():

@@ -31,7 +31,7 @@ def test_file_read_publishes_before_error_checks(method, runtime, site):
         "later-error": "return take(value=" + expression + ", later=fail())",
     }[site]
     text = _emit(
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
         "def probe(path: str):\n    with open(path) as stream:\n        " + body + "\n"
     )
@@ -59,7 +59,7 @@ def test_regex_result_publishes_before_operand_cleanup(expression, runtime, site
         "later-error": "    return take(value=" + expression + ", later=fail())\n",
     }[site]
     text = _emit(
-        "import re\ndef take(*, value, later=None):\n    return value\n"
+        "import re\ndef take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
         "def probe(pattern: str, text: str, flags: int):\n" + body
     )
@@ -76,7 +76,7 @@ def test_regex_result_publishes_before_operand_cleanup(expression, runtime, site
     ("from re import findall as find_words", "find_words(pattern, text)", "py_re_findall_flags"),
 ))
 def test_regex_import_alias_keeps_result_sink(imports, expression, runtime):
-    text = _emit(imports + "\ndef take(*, value):\n    return value\n"
+    text = _emit(imports + "\ndef take(*, value, **extras):\n    return value\n"
                  "def probe(pattern: str, text: str):\n    return take(value=" + expression + ")\n")
     _assert_immediate_publication(text, runtime)
 
@@ -124,7 +124,7 @@ PROGRAM = textwrap.dedent('''\
         events.append(label)
         gc.collect()
         return value
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def fail():
@@ -191,7 +191,7 @@ def test_legacy_compiled_pattern_alias_findall_keeps_result_sink(scope):
     # This valid Python pattern takes the existing legacy alias branch;
     # the native engine reports its unsupported subset at runtime.
     statement = "pattern = re.compile('a(?i:b)')\n"
-    prefix = "import re\ndef take(*, value):\n    return value\n"
+    prefix = "import re\ndef take(*, value, **extras):\n    return value\n"
     if scope == "global":
         source = prefix + statement + "text = 'ab'\nresult = take(value=pattern.findall(text))\n"
     else:
@@ -228,7 +228,7 @@ def test_imported_re_module_alias_flags_use_scalar_constant():
 
 
 def test_ordinary_compiled_pattern_uses_managed_callable_binding():
-    text = _emit("import re\ndef take(*, value):\n    return value\n"
+    text = _emit("import re\ndef take(*, value, **extras):\n    return value\n"
                  "def probe(text: str):\n    pattern = re.compile('[a-z]+')\n"
                  "    return take(value=pattern.findall(text))\n")
     _assert_immediate_publication(text, "py_re_compile_obj")

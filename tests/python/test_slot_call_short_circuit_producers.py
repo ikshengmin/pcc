@@ -36,7 +36,7 @@ def test_short_circuit_moves_owner_without_retesting_selected_operand(expression
 def test_short_circuit_producer_contexts(operation, site):
     expression = 'left ' + operation + ' right'
     prefix = ('from pcc.unsafe import null\n'
-              'def take(*, value, later=None):\n    return value\n'
+              'def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def target(value=' + expression + '):\n        return value\n    return target()\n'
@@ -69,7 +69,7 @@ PROGRAM = textwrap.dedent('''\
         def __bool__(self):
             gc.collect()
             raise ValueError('truth-error')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def rhs(value):

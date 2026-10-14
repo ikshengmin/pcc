@@ -49,7 +49,7 @@ def test_complex_literal_operand_publishes_actual_new_result(expression, count):
 @pytest.mark.parametrize("site", ("argument", "default", "return", "later-error", "module"))
 def test_complex_literal_producer_context_matrix(site):
     prelude = (
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
     )
     if site == "default":

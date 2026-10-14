@@ -21,7 +21,7 @@ from tests.python.test_slot_call_subscript_producers import _assert_immediate_pu
 def test_sequence_constructor_publishes_before_fill_and_cleanup(constructor, argument, site):
     expression = constructor + "(" + argument + ")"
     prefix = (
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
     )
     if site == "return":
@@ -79,7 +79,7 @@ def test_sequence_evaluates_source_before_constructing_output():
 def test_specialized_map_filter_uses_same_result_transaction(expression):
     text = _emit(
         "def identity(value):\n    return value\n"
-        "def take(*, value):\n    return value\n"
+        "def take(*, value, **extras):\n    return value\n"
         "def probe(item):\n    return take(value=" + expression + ")\n"
     )
     _assert_immediate_publication(text, "py_list_new")
@@ -96,7 +96,7 @@ PROGRAM = textwrap.dedent('''\
             self.label = label
         def __del__(self):
             events.append(self.label)
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def fail():

@@ -32,7 +32,7 @@ def test_split_abs_result_is_published_and_inputs_are_leased(parameter, expressi
         tail = '    return take(value=(' + expression + ',))\n'
     else:
         tail = '    return ' + expression + '\n'
-    text = emit('def take(*, value):\n    return value\ndef make(value):\n    return value\ndef make_bytes(value: bytes) -> bytes:\n    return value\ndef fail():\n    raise ValueError("later argument")\ndef probe(' + parameter + '):\n' + tail)
+    text = emit('def take(*, value, **extras):\n    return value\ndef make(value):\n    return value\ndef make_bytes(value: bytes) -> bytes:\n    return value\ndef fail():\n    raise ValueError("later argument")\ndef probe(' + parameter + '):\n' + tail)
     assert immediate_store(text, runtime) >= 1
     body = physical_body(next(body for body in re.findall(r'^define[^\n]*\{\n.*?^}', text, re.M | re.S)
                               if '@user_lambda_owned_probe(' in body.splitlines()[0]))

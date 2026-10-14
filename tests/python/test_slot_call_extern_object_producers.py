@@ -51,7 +51,7 @@ def test_raw_integer_argument_cleanup_preserves_owned_extern_result(site, annota
     text = _emit("from pcc.extern import extern, c_ptr, c_obj, c_int64\n"
                  "from pcc.unsafe import stack_alloc\n"
                  "make_bytes = extern('py_bytes_new', (c_ptr, c_int64), c_obj)\n"
-                 "def take(*, value, later=None):\n    return value\n"
+                 "def take(*, value, later=None, **extras):\n    return value\n"
                  "def fail():\n    raise ValueError('later')\n"
                  "def probe(count" + annotation + "):\n    storage = stack_alloc(32)\n" + body)
     _published_slots(text, "py_bytes_new")
@@ -63,7 +63,7 @@ def test_raw_integer_argument_cleanup_preserves_owned_extern_result(site, annota
 def test_managed_arguments_publish_owned_alias_before_cleanup(signature, arguments):
     text = _emit("from pcc.extern import extern, c_obj, c_str\n"
                  "identity = extern('owned_identity', (" + signature + ",), c_obj)\n"
-                 "def take(*, value):\n    return value\n"
+                 "def take(*, value, **extras):\n    return value\n"
                  "def probe(value):\n    return take(value=identity(" + arguments + "))\n")
     _published_slots(text, "owned_identity")
 
@@ -72,7 +72,7 @@ def test_nested_externs_do_not_publish_into_the_enclosing_call_sink():
     text = _emit("from pcc.extern import extern, c_obj\n"
                  "inner = extern('owned_inner', (c_obj,), c_obj)\n"
                  "outer = extern('owned_outer', (c_obj,), c_obj)\n"
-                 "def take(*, value):\n    return value\n"
+                 "def take(*, value, **extras):\n    return value\n"
                  "def probe(value):\n    return take(value=outer(inner(value)))\n")
     inner = _published_slots(text, "owned_inner")
     outer = _published_slots(text, "owned_outer")

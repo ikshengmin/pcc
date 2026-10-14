@@ -44,7 +44,7 @@ def test_bytes_decode_publishes_before_error_check_and_cleanup(case):
     tail='    return take(value='+expression+')\n'
     if case=='default_consumer':
         tail='    def kept(value='+expression+'):\n        return value\n    return kept\n'
-    text=emit('def take(*, value):\n    return value\ndef make(value):\n    return value\ndef fail():\n    raise ValueError("later decoder argument")\ndef probe('+parameter+'):\n'+tail)
+    text=emit('def take(*, value, **extras):\n    return value\ndef make(value):\n    return value\ndef fail():\n    raise ValueError("later decoder argument")\ndef probe('+parameter+'):\n'+tail)
     body=next(body for body in re.findall(r'^define[^\n]*\{\n.*?^}',text,re.M|re.S) if '@user_lambda_owned_probe(' in body.splitlines()[0])
     body=physical_body(body)
     call=re.search(r'(%[-\w.]+) = call ptr[^\n]*@py_bytes_decode_with_encoding\([^\n]*\n([^\n]+)',body)

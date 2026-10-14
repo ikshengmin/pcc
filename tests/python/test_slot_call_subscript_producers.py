@@ -56,7 +56,7 @@ def test_subscript_object_operand_publishes_immediately(receiver, key):
 @pytest.mark.parametrize('producer', ('__file__', 'values[index]', 'make()'))
 def test_name_subscript_call_producer_context_matrix(site, producer):
     prelude = ('def make():\n    return {"result": 42}\n'
-               'def take(*, value, later=None):\n    return value\n'
+               'def take(*, value, later=None, **extras):\n    return value\n'
                'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def target(value=' + producer + '):\n        return value\n    return target()\n'
@@ -77,7 +77,7 @@ def test_name_subscript_call_producer_context_matrix(site, producer):
 PROGRAMS = {
     'containers': textwrap.dedent('''\
         import gc
-        def take(*, value):
+        def take(*, value, **extras):
             gc.collect()
             return value
         def main():
@@ -123,7 +123,7 @@ PROGRAMS = {
             gc.collect()
             events.append('key')
             return 'ok'
-        def take(*, value, later=None):
+        def take(*, value, later=None, **extras):
             gc.collect()
             return value
         def later():

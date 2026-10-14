@@ -26,7 +26,7 @@ def test_scaffold_object_result_is_published_at_return(tmp_path, monkeypatch, ex
     provider = Path(__file__).resolve().parents[2] / "pcc/ir/ir.py"
     source = tmp_path / "probe.py"
     source.write_text("from pcc.ir.compat import ir\n"
-                      "def take(*, value):\n    return value\n"
+                      "def take(*, value, **extras):\n    return value\n"
                       "def probe(operand):\n    builder = ir.IRBuilder()\n"
                       "    return take(value=" + expression + ")\n")
     paths = [str(provider), str(source)] if contextual else [str(source)]
@@ -81,7 +81,7 @@ def test_scaffold_rejects_provider_raw_or_manual_pointer_result(tmp_path, monkey
                         + ":\n    return int_to_ptr(width)\n")
     entry = tmp_path / "probe.py"
     entry.write_text("from pcc.ir.compat import ir\n"
-                    "def take(*, value):\n    return value\n"
+                    "def take(*, value, **extras):\n    return value\n"
                     "def probe():\n    return take(value=ir.IntType(64))\n")
     modules, exports, derived = build_closed_world_context(
         [str(provider), str(entry)], ["pcc.ir.ir", "probe"])

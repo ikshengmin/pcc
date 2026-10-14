@@ -248,14 +248,20 @@ def test_binder_contract_owned_ir(tmp_path, monkeypatch, cell_id):
         kw = body.group(0).index("@user_binder_entry_step_kw(")
         expansion = body.group(0).index("@py_list_extend(")
         assert (kw < expansion) is (case == "sole_star_iteration_late")
-    if case == "required_mixed":
+    if case in ("required_mixed", "reordered_evaluation"):
         owner = "binder_provider" if surface.startswith("imported_") else "binder_entry"
         suffix = ("Box___init__" if surface.endswith("_constructor") else
                   "Holder_target" if surface.endswith("_method") else "target")
         target = "user_" + owner + "_" + suffix
-        assert len(re.findall(r"\bcall [^\n]*@py_obj_call_slots\(", body.group(0))) == 1
-        assert not re.search(r"\bcall [^\n]*@" + target + r"\(", body.group(0))
-        assert "@pcc_gc_root_copy_lease(" in body.group(0) or "@pcc_gc_foreign_lease_acquire(" in body.group(0)
+        binder_calls = len(re.findall(r"\bcall [^\n]*@py_obj_call_slots\(", body.group(0)))
+        direct_calls = len(re.findall(r"\bcall [^\n]*@" + target + r"\(", body.group(0)))
+        # Keywords in formal order bind statically wherever the target's
+        # signature is known; reordered keywords always use the binder.
+        if case == "required_mixed" and surface != "imported_constructor":
+            assert (binder_calls, direct_calls) == (0, 1), cell_id
+        else:
+            assert (binder_calls, direct_calls) == (1, 0), cell_id
+            assert "@pcc_gc_root_copy_lease(" in body.group(0) or "@pcc_gc_foreign_lease_acquire(" in body.group(0)
 
 
 @pytest.mark.integration

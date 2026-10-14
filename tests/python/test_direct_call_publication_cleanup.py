@@ -37,7 +37,7 @@ def test_publication_edges_release_arguments_once(arguments, owned_count, handle
     monkeypatch.setattr(L1CodeGen, '_call_user', observe_call)
     monkeypatch.setattr(L1CodeGen, '_publish_slot_call_owned', observe_publication)
     source = ('def callee(left, right):\n    return right\n'
-              'def take(*, value):\n    return value\n'
+              'def take(*, value, **extras):\n    return value\n'
               'def probe(value):\n')
     statement = 'return take(value=callee(' + arguments + '))\n'
     if handled:

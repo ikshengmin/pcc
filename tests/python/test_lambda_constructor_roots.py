@@ -9,32 +9,32 @@ from pcc.frontends.python.type_infer import infer_module
 
 
 CASES = {
-    'identity': '''def take(*, value):
+    'identity': '''def take(*, value, **extras):
     return value
 def probe():
     return take(value=lambda x: x)
 ''',
-    'subscript': '''def take(*, value):
+    'subscript': '''def take(*, value, **extras):
     return value
 def probe():
     return take(value=lambda x: x[0])
 ''',
-    'negative': '''def take(*, value):
+    'negative': '''def take(*, value, **extras):
     return value
 def probe():
     return take(value=lambda x: -x)
 ''',
-    'capture': '''def take(*, value):
+    'capture': '''def take(*, value, **extras):
     return value
 def probe(kept):
     return take(value=lambda x: (x, kept))
 ''',
-    'indexed_default': '''def take(*, value):
+    'indexed_default': '''def take(*, value, **extras):
     return value
 def probe(values):
     return take(value=lambda x=values[0]: x)
 ''',
-    'late_default_error': '''def take(*, value):
+    'late_default_error': '''def take(*, value, **extras):
     return value
 def make():
     return []
@@ -50,7 +50,7 @@ def probe():
     'direct_return': '''def probe(kept):
     return lambda x: (x, kept)
 ''',
-    'nested_lambda': '''def take(*, value):
+    'nested_lambda': '''def take(*, value, **extras):
     return value
 def probe(kept):
     return take(value=lambda x: (lambda y: (x, y, kept)))

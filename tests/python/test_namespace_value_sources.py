@@ -248,7 +248,7 @@ def test_ply_dir_getattr_original_comprehension_has_owned_names(mode):
 
 @pytest.mark.parametrize("site", ("argument", "return", "default", "later-error", "discard"))
 def test_dir_result_uses_registered_output_slot_at_every_consumer(site):
-    prefix = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    prefix = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     if site == "default":
         body = '    def inner(value=dir(module)):\n        return value\n    return inner()\n'
     elif site == "argument":

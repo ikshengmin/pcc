@@ -16,7 +16,7 @@ from tests.python.owned_regression_support import (
 ))
 @pytest.mark.parametrize('site', ('return', 'callee', 'argument', 'default', 'later-error'))
 def test_namespace_factory_keeps_callable_options_and_output_owned(call, site):
-    prefix = ('def take(*, value, later=None):\n    return value\n'
+    prefix = ('def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'return':
         statement = '    return ' + call + '\n'
@@ -75,7 +75,7 @@ PROGRAM = textwrap.dedent('''\
     def construct(first=None, second=None, default=shared):
         gc.collect()
         return Decorator(first, second, default)
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         return value
     def fail():
         raise ValueError('later')

@@ -185,7 +185,7 @@ CONSTRUCTOR_RESULTS = r'''import gc
 def accessor(value):
     return value
 
-def take(*, value):
+def take(*, value, **extras):
     gc.collect()
     return value
 

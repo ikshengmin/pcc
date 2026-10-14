@@ -40,7 +40,7 @@ def test_builtin_call_operand_publishes_actual_object_producer(expression, helpe
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error'))
 @pytest.mark.parametrize('producer', ('len(values)', 'bool(values)', 'int(text)'))
 def test_boxed_call_producer_context_matrix(site, producer):
-    prelude = ('def take(*, value, later=None):\n    return value\n'
+    prelude = ('def take(*, value, later=None, **extras):\n    return value\n'
                'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def target(value=' + producer + '):\n        return value\n    return target()\n'
@@ -83,7 +83,7 @@ PROGRAM = textwrap.dedent('''\
         return None
     def failing_length(value):
         return take(value=len(value), later=mark())
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def later():

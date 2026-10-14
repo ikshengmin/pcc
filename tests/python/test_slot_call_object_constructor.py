@@ -23,7 +23,7 @@ RUNTIME = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
     '    return take(value=object().__class__)\n',
 ))
 def test_object_constructor_publishes_actual_new_result_before_cleanup(body):
-    text = _emit('def take(*, value):\n    return value\ndef probe():\n' + body)
+    text = _emit('def take(*, value, **extras):\n    return value\ndef probe():\n' + body)
     assert 'object.sentinel' not in text
     assert '@py_builtin_type_for_tag(i64 -1)' in text
     assert re.search(r'(%[^ ]+) = call [^\n]*@py_instance_new\([^\n]*\)\n\s+store ptr \1, ptr ', text)
@@ -90,7 +90,7 @@ PROGRAM = textwrap.dedent('''\
     import weakref
     class Child(object):
         pass
-    def take(*, value):
+    def take(*, value, **extras):
         gc.collect()
         return value
     def main():

@@ -26,7 +26,7 @@ EXPRESSIONS = (
 @pytest.mark.parametrize('expression', EXPRESSIONS)
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'discard', 'later-error'))
 def test_dict_producer_contexts_publish_immediately(expression, site):
-    prefix = ('def take(*, value, later=None):\n    return value\n'
+    prefix = ('def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def saved(item=' + expression + '):\n        return item\n    return saved()\n'
@@ -57,7 +57,7 @@ def test_dict_constructor_exception_edges_balance_roots(expression):
     from pcc.backend.self_backend_prepare import prepare_module_for_target
     from pcc.backend.self_backend_precise_stackmaps import build_stack_map_plans
     from pcc.backend.self_backend_x86_64_linux import _aggregate_returned_indirect
-    source = ('def take(*, value, later):\n    return value\n'
+    source = ('def take(*, value, later, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n'
               'def probe(source, value):\n    try:\n'
               '        return take(value=' + expression + ', later=fail())\n'

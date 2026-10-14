@@ -17,7 +17,7 @@ def _emit(source):
 
 @pytest.mark.parametrize("expression", ("sys.modules", "sys.modules[name]", "sys.modules['known']"))
 def test_live_module_cache_provider_has_immediate_output_owner(expression):
-    text = _emit("import sys\ndef take(*, value):\n    return value\ndef probe(name):\n    return take(value=" + expression + ")\n")
+    text = _emit("import sys\ndef take(*, value, **extras):\n    return value\ndef probe(name):\n    return take(value=" + expression + ")\n")
     calls = list(re.finditer(r'^  (%[^ ]+) = call [^\n]*@py_sys_modules\(\)\n', text, re.M))
     assert len(calls) == 1
     call = calls[0]
@@ -67,7 +67,7 @@ def test_local_and_from_import_cache_bindings_are_real_native_values(source):
 
 @pytest.mark.parametrize("arguments", ("name", "name, None, None, ()", "name, None, None, (), 0"))
 def test_dynamic_import_publishes_new_cache_value_before_cleanup(arguments):
-    text = _emit("def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError('later')\ndef probe(name):\n    return take(value=__import__(" + arguments + "), later=fail())\n")
+    text = _emit("def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError('later')\ndef probe(name):\n    return take(value=__import__(" + arguments + "), later=fail())\n")
     calls = list(re.finditer(r'^  (%[^ ]+) = call [^\n]*@py_builtin_import\([^\n]*\)\n', text, re.M))
     assert len(calls) == 1
     call = calls[0]

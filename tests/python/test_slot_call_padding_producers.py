@@ -22,7 +22,7 @@ def test_padding_result_and_arguments_have_owning_slots(method, annotation, site
     prefix = ("def width():\n    return 8\n"
               "def fill():\n    return b'_'\n"
               "def later():\n    raise ValueError('later')\n"
-              "def take(*, value, later=None):\n    return value\n")
+              "def take(*, value, later=None, **extras):\n    return value\n")
     if site == "return":
         body = "    return " + expression + "\n"
     elif site == "default":
@@ -59,7 +59,7 @@ def test_archive_padding_retains_dynamic_encode_result():
 
 
 def test_section_padding_retains_dynamic_chained_receiver():
-    text = _emit('''def take(*, value):
+    text = _emit('''def take(*, value, **extras):
     return value
 def probe(sections):
     result = []
@@ -114,7 +114,7 @@ PROGRAM = textwrap.dedent('''\
     def fail():
         gc.collect()
         raise ValueError('later')
-    def take(*, value, other=None):
+    def take(*, value, other=None, **extras):
         gc.collect()
         return value
     def main():

@@ -18,7 +18,7 @@ def test_fdopen_binding_stays_native(binding,site,tmp_path):
     bodies={'with':'    with '+producer+' as stream:\n        consume(value=stream)\n',
             'assignment':'    stream = '+producer+'\n    return consume(value=stream)\n',
             'return':'    return '+producer+'\n'}
-    text=_emit(imports[binding]+'def consume(*, value):\n    return value\n'
+    text=_emit(imports[binding]+'def consume(*, value, **extras):\n    return value\n'
                +'def probe(fd):\n'+bodies[site])
     (tmp_path/'program.ll').write_text(text)
     assert '@py_obj_call_slots(' in _function(text)

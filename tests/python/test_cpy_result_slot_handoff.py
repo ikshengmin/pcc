@@ -71,8 +71,10 @@ def test_cpython_call_result_is_published_into_argument_sink(tmp_path, call, con
 
 
 def test_default_binding_uses_the_same_cpython_result_sink(tmp_path):
+    # A str default's identity belongs to the function, so the omitted
+    # default keeps this call with the signature binder.
     text = _emit("""from compatibility_provider import make
-def consume(value, default=None):
+def consume(value, default='unused'):
     return value
 def probe(value):
     return consume(make(value))

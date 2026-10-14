@@ -95,7 +95,7 @@ PROGRAM = textwrap.dedent('''\
         return min(values)
     def maximum(values):
         return max(values)
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def fail_later():

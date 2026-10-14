@@ -49,7 +49,7 @@ def _published(text, runtime):
 @pytest.mark.parametrize('site', ['argument', 'return', 'default', 'later-error'])
 def test_foreign_format_result_uses_shared_output_slot(tmp_path, expression, site):
     prefix = ('from compatibility_provider import make_value, make_spec\n'
-              'def take(*, value, later=None):\n    return value\n'
+              'def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     setup = '    item = make_value()\n    spec = make_spec()\n'
     if site == 'return':

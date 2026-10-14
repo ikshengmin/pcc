@@ -119,7 +119,7 @@ def test_pop_owned_result_and_operand_lifetimes(case):
     from tests.python.test_lambda_constructor_roots import emit, immediate_store
 
     text = emit("import copy\ndef fail():\n    raise ValueError('later')\n"
-                "def take(*, first, later):\n    return first\n" + _POP_OWNED_CASES[case])
+                "def take(*, first, later, **extras):\n    return first\n" + _POP_OWNED_CASES[case])
     bodies = re.findall(r"^define[^\n]*\{\n.*?^}", text, re.M | re.S)
     bodies = [body for body in bodies if re.search(r"\bcall[^\n]*@py_list_pop\(", body)]
     assert bodies
@@ -242,7 +242,7 @@ def later():
     raise ValueError('later')
 
 
-def take(*, first, second):
+def take(*, first, second, **extras):
     return first
 
 

@@ -9,7 +9,7 @@ import pytest
 
 PROGRAM = '''import gc
 from pcc.ir.compat import ir
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 def mark(events, name, value):

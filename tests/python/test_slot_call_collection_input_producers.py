@@ -25,7 +25,7 @@ from tests.python.test_shared_call_binding import _emit, _function
 ))
 @pytest.mark.parametrize('site', ('return', 'argument', 'default', 'attribute', 'later-error'))
 def test_collection_input_result_is_published_before_any_cleanup(expression, runtime, site):
-    prefix = ('import os\ndef take(*, value, later=None):\n    return value\n'
+    prefix = ('import os\ndef take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'return':
         body = '    return ' + expression + '\n'
@@ -62,7 +62,7 @@ def test_dynamic_dictionary_view_preserves_override_dispatch(method):
 ))
 @pytest.mark.parametrize('site', ('return', 'argument', 'default', 'later-error'))
 def test_generic_method_input_retains_original_call_result_sink(expression, site):
-    prefix = ('def take(*, value, later=None):\n    return value\n'
+    prefix = ('def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'return':
         body = '    return ' + expression + '\n'
@@ -105,7 +105,7 @@ PROGRAM = textwrap.dedent('''\
         def items(self):
             gc.collect()
             return [(3, 4), (1, 2)]
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def fail():

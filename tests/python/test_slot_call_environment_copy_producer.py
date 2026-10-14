@@ -24,7 +24,7 @@ def test_environment_snapshot_has_an_authoritative_native_owner(producer, site):
         "later-error": "    return take(env=PRODUCER, later=fail())\n",
     }
     text = _emit(
-        "import os\ndef take(*, env, later=None):\n    return env\n"
+        "import os\ndef take(*, env, later=None, **extras):\n    return env\n"
         "def fail():\n    raise ValueError('later')\n"
         "def probe():\n" + bodies[site].replace("PRODUCER", producer)
     )
@@ -52,7 +52,7 @@ PROGRAM = textwrap.dedent('''\
     class Marker:
         def __del__(self):
             events.append('released')
-    def take(*, env, later=None):
+    def take(*, env, later=None, **extras):
         gc.collect()
         return env
     def fail():

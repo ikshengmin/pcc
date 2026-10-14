@@ -38,7 +38,7 @@ class Packet:
     leaf: Leaf
     flag: bool
 
-def receive(*, value):
+def receive(*, value, **extras):
     gc.collect()
     return value
 
@@ -46,7 +46,7 @@ def fail_later():
     gc.collect()
     raise ValueError('later argument')
 
-def accept(*, value, other):
+def accept(*, value, other, **extras):
     raise AssertionError('later argument did not raise')
 
 def check_pair(pair: Pair):

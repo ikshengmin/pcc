@@ -11,18 +11,27 @@ from pcc.frontends.python.py_lift import parse_and_lift
 from pcc.frontends.python.type_infer import infer_module
 
 
+# Keywords in formal order and omitted None/bool/small-int defaults bind
+# directly (they bind exactly as the published binder would). Reordered
+# keywords, defaults whose object identity belongs to the function (str, heap
+# int), keyword use of a positional-only formal and every TypeError shape stay
+# with the binder.
 @pytest.mark.parametrize("signature, arguments, runtime", [
     ("a, b", "1, 2", False),
     ("a, /, b", "1, 2", False),
     ("a=1", "2", False),
-    ("a=1", "", True),
+    ("a=1", "", False),
+    ("a, b", "1, b=2", False),
+    ("a, *, b", "1, b=2", False),
+    ("a, *, b=2", "1", False),
+    ("a='x'", "", True),
+    ("a=4611686018427387904", "", True),
+    ("a, /, b", "a=1, b=2", True),
     ("a, b", "1", True),
     ("a", "1, 2", True),
-    ("a, b", "1, b=2", True),
     ("a, b", "b=2, a=1", True),
     ("a, /, **extras", "1, a=2", True),
     ("a, *, b", "1, 2", True),
-    ("a, *, b=2", "1", True),
     ("*items", "1, 2", True),
     ("**extras", "", True),
     ("a, b", "*(1, 2)", True),
@@ -55,8 +64,9 @@ def _emit(source):
 
 @pytest.mark.parametrize("annotation,value", [("int", "7"), ("float", "1.25"), ("bool", "True")])
 def test_runtime_binding_preserves_return_projection(annotation, value):
-    text = _emit("def target(x: " + annotation + ") -> " + annotation + ":\n"
-                 "    return x\ndef probe():\n    return target(x=" + value + ")\n")
+    # Reordered keywords keep the call with the signature binder.
+    text = _emit("def target(x: " + annotation + ", y: int = 0) -> " + annotation + ":\n"
+                 "    return x\ndef probe():\n    return target(y=0, x=" + value + ")\n")
     body = re.search(r"^define [^\n]*@user_binding_probe\([^\n]*\).*?^}", text, re.M | re.S)
     assert body is not None
     assert len(re.findall(r"\bcall [^\n]*@py_obj_call_slots\(", body.group(0))) == 1
@@ -84,10 +94,12 @@ def test_exact_positional_call_keeps_proven_direct_abi():
 ])
 def test_method_descriptor_routes_keep_original_call(kind, formal, receiver):
     decorator = "    @" + kind + "\n" if kind else ""
-    args = "value=7"
+    # Reordered keywords need the signature binder, which binds the
+    # descriptor through a runtime getattr of the original receiver.
+    args = "extra=0, value=7"
     if not kind and receiver == "Holder":
-        args = "receiver, value=7"
-    source = ("class Holder:\n" + decorator + "    def target(" + formal + "):\n"
+        args = "receiver, extra=0, value=7"
+    source = ("class Holder:\n" + decorator + "    def target(" + formal + ", extra=0):\n"
               "        return value\nreceiver = Holder()\ndef probe():\n"
               "    return " + receiver + ".target(" + args + ")\n")
     body = _function(_emit(source))
@@ -188,6 +200,8 @@ def test_shared_call_method_registry_matches_live_signatures():
         assert tuple(item["name"] for item in static[name]["call_sig"]) == tuple(signature(getattr(L1CodeGen, name)).parameters)
 
 
+# The str default keeps target() with the signature binder, whose slot-call
+# operand path owns the conditional branch result.
 CONDITIONAL_PROGRAM = """events = []
 def choose(flag):
     events.append('condition')
@@ -198,7 +212,7 @@ def left(value):
 def right(value):
     events.append('right')
     return value
-def target(value):
+def target(value, tag='binder'):
     events.append('body')
     return value
 def probe(flag, first, second):
@@ -253,7 +267,7 @@ def test_descriptor_constructor_result_reaches_owned_boundaries(kind):
 
     source = """def accessor(value):
     return value
-def take(*, value):
+def take(*, value, **extras):
     return value
 class Holder:
     value = CONSTRUCTOR(accessor)

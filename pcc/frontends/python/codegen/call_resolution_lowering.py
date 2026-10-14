@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pcc.frontends.python.py_ast import (
+    BoolLit,
     Call,
     DictExpr,
     DictType,
@@ -24,6 +25,7 @@ from pcc.frontends.python.py_ast import (
     Subscript,
     TupleExpr,
     TupleType,
+    UnaryOp,
     ValueArrayType,
 )
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -45,15 +47,92 @@ def _call_kwargs_merge(span, operands):
     )
 
 
+# The tagged small-int lane, as LiteralLoweringMixin._STATIC_TAGGED_INT_MIN
+# and _MAX: py_int_from_i64 encodes these values without allocating.
+_TAGGED_INT_MIN = -4611686018427387904
+_TAGGED_INT_MAX = 4611686018427387903
+
+
+def _static_default_literal(expr) -> bool:
+    """A default the call site can rebuild as the very object it binds.
+
+    Python evaluates a default once and binds that same object on every
+    call. None, a bool and a tagged small int are one object wherever they
+    are produced. A str, float, bytes, tuple or heap int literal is a
+    separate object per producer, so its identity belongs to the binder.
+    """
+    if isinstance(expr, (NoneLit, BoolLit)):
+        return True
+    value = None
+    if isinstance(expr, IntLit):
+        value = int(expr.value)
+    elif (isinstance(expr, UnaryOp) and expr.op in ("-", "+")
+            and isinstance(expr.operand, IntLit)):
+        value = int(expr.operand.value)
+        if expr.op == "-":
+            value = -value
+    if value is None:
+        return False
+    return _TAGGED_INT_MIN <= value <= _TAGGED_INT_MAX
+
+
+def _statically_bindable_call(args, kwargs, formals, skip_self) -> bool:
+    """True when a keyword/default call binds exactly as the runtime binder.
+
+    Each keyword names a distinct formal that accepts a keyword, keywords
+    appear in formal order (so direct formal-order evaluation keeps Python's
+    left-to-right argument order), and every unbound formal has a default
+    that ``_static_default_literal`` accepts. Anything else, including calls
+    that raise TypeError, stays with the published callable's binder.
+    """
+    params = []
+    for index, formal in enumerate(formals):
+        if skip_self and index == 0 or formal.name == "":
+            continue
+        if formal.kind not in ("pos", "pos_only", "kw_only"):
+            return False
+        params.append(formal)
+    positional = 0
+    for formal in params:
+        if formal.kind == "kw_only":
+            break
+        positional += 1
+    if len(args) > positional:
+        return False
+    bound = [False] * len(params)
+    for index in range(len(args)):
+        bound[index] = True
+    previous = len(args) - 1
+    for name, _value in kwargs:
+        target = -1
+        for index, formal in enumerate(params):
+            if formal.name == name and formal.kind != "pos_only":
+                target = index
+                break
+        if target < 0 or bound[target] or target < previous:
+            return False
+        bound[target] = True
+        previous = target
+    for index, formal in enumerate(params):
+        if bound[index]:
+            continue
+        if not formal.has_default or formal.default is None:
+            return False
+        if not _static_default_literal(formal.default):
+            return False
+    return True
+
+
 class CallResolutionLoweringMixin:
     def _ordinary_call_needs_runtime_binding(self, expr, fd, skip_self=False, require_object_result=False):
         """Classify before emitting anything or rearranging the original Call.
 
-        A direct ordinary-Python ABI call is admitted only when every runtime
-        formal is supplied by one exact positional operand. All other shapes
-        belong to the published callable's signature binder, including calls
-        that will raise TypeError. An annotation is never an arity proof.
-        Explicit low-level/value boundaries retain their separate ABI.
+        A direct ordinary-Python ABI call is admitted only when
+        ``_statically_bindable_call`` proves it binds exactly as the published
+        callable's signature binder would. All other shapes belong to that
+        binder, including calls that will raise TypeError. An annotation is
+        never an arity proof. Explicit low-level/value boundaries retain their
+        separate ABI.
         """
         if (self._freestanding_module or self._runtime_port_module
                 or self._module_has_c_abi_export or fd is None
@@ -80,18 +159,11 @@ class CallResolutionLoweringMixin:
             # cleanup. An object-operand consumer requires publication into
             # its pre-registered output slot at the actual return boundary.
             return True
-        if expr.kwargs or self._has_starred_unpack(expr.args):
+        if self._has_starred_unpack(expr.args):
             return True
         if self._split_starstar_kwargs_unpack(expr.args) is not None:
             return True
-        count = 0
-        for index, formal in enumerate(fd.args):
-            if skip_self and index == 0 or formal.name == "":
-                continue
-            if formal.kind not in ("pos", "pos_only"):
-                return True
-            count += 1
-        return len(expr.args) != count
+        return not _statically_bindable_call(expr.args, expr.kwargs, fd.args, skip_self)
 
     def _call_resolution_span_or_none(self, node):
         try:

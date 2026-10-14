@@ -29,7 +29,7 @@ from tests.python.test_slot_call_subscript_producers import _assert_immediate_pu
 def test_environment_lookup_publishes_before_cleanup(lookup, body):
     source = (
         "import os\n"
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
         "def probe(key, default):\n    " + body.replace("LOOKUP", lookup) + "\n"
     )

@@ -39,7 +39,7 @@ def test_copy_producer_publishes_to_the_original_call_sink(kind, binding, site, 
     }
     text = _emit(
         imports[binding]
-        + "def take(*, value, later=None):\n    return value\n"
+        + "def take(*, value, later=None, **extras):\n    return value\n"
         + "def fail():\n    raise ValueError('later')\n"
         + "def probe(holder):\n" + bodies[site].replace("PRODUCER", call)
     )
@@ -59,7 +59,7 @@ def test_copy_producer_publishes_to_the_original_call_sink(kind, binding, site, 
 def test_copy_producer_owns_a_temporary_operand(kind):
     body = _function(_emit(
         "import copy\ndef make():\n    return [[7]]\n"
-        "def take(*, value):\n    return value\n"
+        "def take(*, value, **extras):\n    return value\n"
         "def probe():\n    return take(value=copy." + kind + "(make()))\n"
     ))
     _assert_immediate_publication(body, "py_copy_" + kind)
@@ -115,7 +115,7 @@ PROGRAM = textwrap.dedent('''\
         def __deepcopy__(self, memo):
             gc.collect()
             raise ValueError('copy hook')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def make():

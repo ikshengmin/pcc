@@ -14,7 +14,7 @@ PREFIX = '''import pcc
 class Record:
     value: FIELD
 
-def take(*, value):
+def take(*, value, **extras):
     return value
 '''
 
@@ -50,7 +50,7 @@ class Leaf:
 class Outer:
     leaf: Leaf
     number: int
-def take(*, value):
+def take(*, value, **extras):
     return value
 def probe(record: Outer):
     return take(value=record.leaf.values)
@@ -70,7 +70,7 @@ class Leaf:
 @pcc.valueclass
 class Outer:
     leaf: Leaf
-def take(*, value):
+def take(*, value, **extras):
     return value
 def probe(record: Outer):
     return take(value=record.leaf)

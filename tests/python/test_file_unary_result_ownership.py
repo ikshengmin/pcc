@@ -23,7 +23,7 @@ def test_file_unary_producer_publishes_before_cleanup(method, site, tmp_path):
         "statement": "stream.PRODUCER()",
     }
     text = _emit(
-        "def take(*, value, later=None):\n    return value\n"
+        "def take(*, value, later=None, **extras):\n    return value\n"
         "def fail():\n    raise ValueError('later')\n"
         "def probe(path):\n    with open(path, 'w+') as stream:\n        "
         + sites[site].replace("PRODUCER", method) + "\n"
@@ -59,7 +59,7 @@ def test_effectful_receiver_is_evaluated_once_with_dynamic_dispatch(method):
 PROGRAM = '''import gc
 import os
 events = []
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     events.append('take')
     gc.collect()
     return value

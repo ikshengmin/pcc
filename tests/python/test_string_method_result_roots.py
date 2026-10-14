@@ -30,7 +30,7 @@ CASES = {
 @pytest.mark.parametrize('case', CASES)
 def test_string_result_publishes_before_all_operand_cleanup(case):
     expression, runtime = CASES[case]
-    text = emit('''def take(*, value):
+    text = emit('''def take(*, value, **extras):
     return value
 def make(value):
     return value
@@ -78,7 +78,7 @@ def test_string_result_module_lambda_normal_and_error_frames_balance(expression)
 
 @pytest.mark.parametrize('expression,runtime', [('" A ".strip()', 'py_str_strip'), ('"a,b".split(",", 1)', 'py_str_split_maxsplit'), ('"aba".replace("a", "x", 1)', 'py_str_replace_count')])
 def test_static_string_literals_use_the_same_owner_contract(expression, runtime):
-    text = emit('def take(*, value):\n    return value\ndef probe():\n    return take(value=' + expression + ')\n')
+    text = emit('def take(*, value, **extras):\n    return value\ndef probe():\n    return take(value=' + expression + ')\n')
     call = re.search(r'(%[-\w.]+) = call ptr[^\n]*@' + runtime + r'\([^\n]*\n([^\n]+)', text)
     assert call is not None
     assert 'store ptr ' + call.group(1) in call.group(2)

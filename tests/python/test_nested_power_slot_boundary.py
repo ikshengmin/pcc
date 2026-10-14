@@ -111,7 +111,7 @@ def test_supported_power_values_keep_their_owned_route(expression, powers, expec
 def test_real_consumers_reject_before_their_integer_power_path(expression, consumer):
     from tests.python.test_lambda_constructor_roots import emit
 
-    prefix = "def take(*, value):\n    return value\n"
+    prefix = "def take(*, value, **extras):\n    return value\n"
     bodies = {
         "return": "    return " + expression + "\n",
         "assignment": "    value = " + expression + "\n    return value\n",
@@ -260,7 +260,7 @@ def test_augmented_power_preserves_actual_float_target_route(target):
 def test_dynamic_peer_does_not_hide_visible_power_provenance(expression, consumer):
     from tests.python.test_lambda_constructor_roots import emit
 
-    prefix = "def take(*, value):\n    return value\n"
+    prefix = "def take(*, value, **extras):\n    return value\n"
     bodies = {
         "return": "    return " + expression + "\n",
         "assignment": "    result = " + expression + "\n    return result\n",

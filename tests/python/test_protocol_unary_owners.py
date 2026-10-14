@@ -573,7 +573,7 @@ PROGRAM = textwrap.dedent('''\
         def __abs__(self):
             gc.collect()
             raise ValueError('unary-callback')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def later():

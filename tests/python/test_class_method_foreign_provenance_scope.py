@@ -31,7 +31,7 @@ def test_prior_method_foreign_local_does_not_taint_native_parameter(decorator):
     prefix = "" if "staticmethod" in decorator else ("cls, " if "classmethod" in decorator else "self, ")
     module, codegen = _codegen(
         "from decimal import Decimal\n"
-        "def consume(*, value):\n    return value\n"
+        "def consume(*, value, **extras):\n    return value\n"
         "class Probe:\n"
         "    def read_foreign(self):\n"
         "        signature = Decimal('1')\n"
@@ -120,7 +120,7 @@ def test_method_restores_enclosing_foreign_metadata(monkeypatch, fail):
 def test_generator_method_does_not_inherit_prior_foreign_local():
     module, codegen = _codegen(
         "from decimal import Decimal\n"
-        "def consume(*, value):\n    return value\n"
+        "def consume(*, value, **extras):\n    return value\n"
         "class Probe:\n"
         "    def read_foreign(self):\n"
         "        signature = Decimal('1')\n"

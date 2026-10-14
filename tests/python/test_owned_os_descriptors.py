@@ -39,7 +39,7 @@ def test_os_open_fdopen_original_owner_shape_lowers(aliases,tmp_path):
     if aliases:
         imports+='from os import open as create, fdopen as adopt, O_WRONLY, O_CREAT, O_EXCL\n'
         create='create';adopt='adopt';flag='O_WRONLY | O_CREAT | O_EXCL'
-    text=_emit(imports+'def consume(*, stream):\n    return stream\n'
+    text=_emit(imports+'def consume(*, stream, **extras):\n    return stream\n'
         +'def probe(path):\n    fd = '+create+'(path, '+flag+', 0o600)\n'
         +'    with '+adopt+'(fd, "w", encoding="utf-8") as stream:\n'
         +'        consume(stream=stream)\n        stream.write("value")\n')

@@ -393,7 +393,7 @@ PROGRAM = textwrap.dedent('''\
     def fail():
         raise selected
 
-    def consume(*, value, later):
+    def consume(*, value, later, **extras):
         raise AssertionError("entered callee")
 
     def main():

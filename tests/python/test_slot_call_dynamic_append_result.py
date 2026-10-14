@@ -49,6 +49,8 @@ def test_dynamic_append_binds_the_generic_method_before_arguments():
     assert "dyn.list.result" not in text
 
 
+# take()'s **extras keeps the call with the signature binder, so the append
+# result is a slot-call operand. DIRECT_PROGRAM binds take() statically.
 PROGRAM = textwrap.dedent('''\
     import gc
     import weakref
@@ -67,7 +69,7 @@ PROGRAM = textwrap.dedent('''\
         def append(self, value):
             gc.collect()
             raise selected
-    def take(*, value):
+    def take(*, value, **extras):
         gc.collect()
         return value
     def invoke(receiver, item):
@@ -104,10 +106,23 @@ PROGRAM = textwrap.dedent('''\
 ''')
 
 
+DIRECT_PROGRAM = PROGRAM.replace("def take(*, value, **extras):", "def take(*, value):")
+
+
 def test_dynamic_append_owned_result_and_error_program_emits_without_fallback():
     text = _emit(PROGRAM)
     assert "@py_obj_call_slots(" in text
     assert "list.append.invoke" in text
+    assert "@py_list_append(" in text
+    assert "strict.nolib.stub" not in text
+
+
+def test_dynamic_append_result_reaches_a_statically_bound_keyword_call():
+    assert DIRECT_PROGRAM != PROGRAM
+    text = _emit(DIRECT_PROGRAM)
+    invoke = re.search(r"^define [^\n]*@user_binding_invoke\([^\n]*\).*?^}", text, re.M | re.S)
+    assert invoke is not None
+    assert len(re.findall(r"\bcall [^\n]*@user_binding_take\(", invoke.group(0))) == 1
     assert "@py_list_append(" in text
     assert "strict.nolib.stub" not in text
 

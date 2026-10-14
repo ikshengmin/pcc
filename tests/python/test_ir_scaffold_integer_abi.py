@@ -107,7 +107,7 @@ def test_scaffold_constant_adapts_raw_value_with_imprecise_semantic_type_once(tm
     provider = Path(__file__).resolve().parents[2] / 'pcc/ir/ir.py'
     source = tmp_path / 'probe.py'
     source.write_text('from typing import Any\nfrom pcc.unsafe import null\nfrom pcc.ir.compat import ir\n'
-                      'def take(*, value):\n    return value\n'
+                      'def take(*, value, **extras):\n    return value\n'
                       'def probe(operand: Any, values: list[int]):\n'
                       '    return ' + ('take(value=' if caller_sink else '') + ('[' if nested else '')
                       + 'ir.Constant(operand, len(values))' + (']' if nested else '')
@@ -181,7 +181,7 @@ def test_imprecise_constant_rejects_raw_or_manual_provider_result(tmp_path, monk
                         + ":\n    return int_to_ptr(value)\n")
     entry = tmp_path / "probe.py"
     entry.write_text("from pcc.ir.compat import ir\n"
-                     "def take(*, value):\n    return value\n"
+                     "def take(*, value, **extras):\n    return value\n"
                      "def probe(operand, values: list[int]):\n"
                      "    return take(value=ir.Constant(operand, len(values)))\n")
     modules, exports, derived = build_closed_world_context(

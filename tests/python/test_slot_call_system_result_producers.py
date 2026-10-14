@@ -30,7 +30,7 @@ def test_system_result_publication_precedes_all_cleanup(producer, runtime, site)
     }
     text = _emit(
         'import shlex\nimport subprocess\n'
-        'def take(*, value, later=None):\n    return value\n'
+        'def take(*, value, later=None, **extras):\n    return value\n'
         "def fail():\n    raise ValueError('later')\n"
         'def probe(value):\n' + bodies[site].replace('PRODUCER', producer)
     )
@@ -46,7 +46,7 @@ PROGRAM = textwrap.dedent('''\
     import shlex
     import subprocess
     events = []
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def command():

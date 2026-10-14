@@ -30,7 +30,7 @@ def managed(value, label):
     finally:
         events.append("exit-" + label)
         gc.collect()
-def take(*, value):
+def take(*, value, **extras):
     return value
 def early(value):
     selected = Previous()

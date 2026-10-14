@@ -14,7 +14,7 @@ from tests.python.owned_regression_support import assert_owned_program, explicit
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error', 'attribute'))
 def test_native_type_result_publishes_before_operand_cleanup(site):
     prefix = ('from pcc.unsafe import null\n'
-              'def take(*, value, later=None):\n    return value\n'
+              'def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if site == 'default':
         body = '    def target(value=type(item)):\n        return value\n    return target()\n'
@@ -51,7 +51,7 @@ PROGRAM = textwrap.dedent('''\
             raise AssertionError('type used a __class__ property')
         def __getattribute__(self, name):
             raise AssertionError('type used an attribute override')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def returned(value):

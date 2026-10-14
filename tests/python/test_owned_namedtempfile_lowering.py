@@ -18,7 +18,7 @@ def test_namedtempfile_binding_stays_native(binding,site,tmp_path):
     bodies={'with':'    with '+producer+' as stream:\n        consume(value=stream.name)\n        stream.write("value")\n',
             'assignment':'    stream = '+producer+'\n    return consume(value=stream.name)\n',
             'return':'    return '+producer+'\n'}
-    text=_emit(imports[binding]+'def consume(*, value):\n    return value\n'
+    text=_emit(imports[binding]+'def consume(*, value, **extras):\n    return value\n'
                +'def probe(path):\n'+bodies[site])
     (tmp_path/'program.ll').write_text(text)
     assert '@py_obj_call_slots(' in _function(text)

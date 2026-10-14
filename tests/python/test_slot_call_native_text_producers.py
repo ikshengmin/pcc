@@ -30,7 +30,7 @@ from tests.python.test_slot_call_subscript_producers import _assert_immediate_pu
 ))
 @pytest.mark.parametrize("site", ("return", "argument", "later-error", "default"))
 def test_native_text_immediate_publication(expression, runtime, site):
-    prefix = ("import re\ndef take(*, value, later=None):\n    return value\n"
+    prefix = ("import re\ndef take(*, value, later=None, **extras):\n    return value\n"
               "def fail():\n    raise ValueError('later')\n")
     if site == "return":
         body = "    return " + expression + "\n"
@@ -94,7 +94,7 @@ PROGRAMS = {
             events.append('later')
             gc.collect()
             return None
-        def take(*, value, other=None):
+        def take(*, value, other=None, **extras):
             gc.collect()
             return value
         def replacement(match):
@@ -147,7 +147,7 @@ PROGRAMS = {
             events.append('later')
             gc.collect()
             return None
-        def take(*, value, other=None):
+        def take(*, value, other=None, **extras):
             gc.collect()
             return value
         def fail():
@@ -201,7 +201,7 @@ PROGRAMS = {
             events.append('later')
             gc.collect()
             return None
-        def take(*, value, other=None):
+        def take(*, value, other=None, **extras):
             gc.collect()
             return value
         def fail():
@@ -255,7 +255,7 @@ PROGRAMS = {
             events.append('later')
             gc.collect()
             return None
-        def take(*, value, other=None):
+        def take(*, value, other=None, **extras):
             gc.collect()
             return value
         def fail():
@@ -368,7 +368,7 @@ def test_regex_sub_helper_native_export_and_caller_signature():
     ("from re import sub as replace", "replace(pattern, '_', text)"),
 ))
 def test_regex_sub_import_dispatch_preserves_result_sink(imports, expression):
-    text = _emit(imports + "\ndef take(*, value):\n    return value\n"
+    text = _emit(imports + "\ndef take(*, value, **extras):\n    return value\n"
                  "def probe(pattern: str, text: str):\n    return take(value=" + expression + ")\n")
     _assert_immediate_publication(text, "py_re_engine_sub")
     assert "strict.nolib.stub" not in text

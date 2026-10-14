@@ -35,7 +35,7 @@ def _owned_object(text):
     '    try:\n        return range(count)\n    except ValueError:\n        return []\n',
 ], ids=['scheduler-sorted-lambda', 'assigned', 'negative-step', 'empty', 'argument', 'handler'])
 def test_range_item_frame_survives_backedge(body):
-    source = 'def take(*, values):\n    return values\n'
+    source = 'def take(*, values, **extras):\n    return values\n'
     source += 'def probe(commands, sizes, count):\n' + body
     codegen, text = _emit(source, 'range_root')
     prepared = prepare_module_for_target(
@@ -48,7 +48,7 @@ def test_range_item_frame_survives_backedge(body):
 
 @pytest.mark.parametrize('expression', ['reversed(commands)', 'reversed([])', 'reversed({"a": 1, "b": 2})', 'take(values=reversed(commands))'])
 def test_reversed_item_frames_survive_backedge(expression):
-    source = 'def take(*, values):\n    return values\n'
+    source = 'def take(*, values, **extras):\n    return values\n'
     source += 'def probe(commands):\n    return ' + expression + '\n'
     _codegen, text = _emit(source, 'reversed_root')
     prepared = prepare_module_for_target(text, aggregate_returned_indirect=_aggregate_returned_indirect)
@@ -58,7 +58,7 @@ def test_reversed_item_frames_survive_backedge(expression):
 
 _RANGE_REVERSED_BEHAVIOR_PROGRAM = """import gc
 
-def take(*, values):
+def take(*, values, **extras):
     return values
 
 def probe(commands, sizes, count):

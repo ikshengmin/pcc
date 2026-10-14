@@ -22,7 +22,7 @@ from tests.python.test_shared_call_binding import _emit, _function
 def test_sorted_publishes_to_authoritative_caller_slot(expression, site):
     prefix = (
         'def rank(item):\n    return item\n'
-        'def take(*, value, later=None):\n    return value\n'
+        'def take(*, value, later=None, **extras):\n    return value\n'
         'def fail():\n    raise ValueError("later")\n'
     )
     if site == 'return':
@@ -92,7 +92,7 @@ PROGRAM = textwrap.dedent('''\
     def identity(item):
         gc.collect()
         return item
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         gc.collect()
         return value
     def fail():

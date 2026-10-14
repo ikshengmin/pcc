@@ -7,7 +7,7 @@ class Payload:
     pass
 
 
-def consume(*, seconds, zone):
+def consume(*, seconds, zone, **extras):
     gc.collect()
     return seconds, zone
 

@@ -19,7 +19,7 @@ def test_literal_attribute_mutation_publishes_none_before_operand_cleanup(operat
         tail = '    def kept(value=' + expression + '):\n        return value\n    return kept\n'
     else:
         tail = '    return (' + expression + ',)\n'
-    text = emit('def take(*, value):\n    return value\ndef probe(item, new_expr):\n' + tail)
+    text = emit('def take(*, value, **extras):\n    return value\ndef probe(item, new_expr):\n' + tail)
     callee = re.search(r'^define[^\n]*@(user_lambda_owned__native_lambda_\d+|user_lambda_owned_probe)\([^\n]*\).*?^}', text, re.M | re.S)
     bodies = re.findall(r'^define[^\n]*\([^\n]*\).*?^}', text, re.M | re.S)
     body = next(body for body in bodies if re.search(r'\bcall[^\n]*@'+runtime+r'\(', body))

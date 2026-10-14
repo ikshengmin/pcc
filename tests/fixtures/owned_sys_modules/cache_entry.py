@@ -7,7 +7,7 @@ import cache_cycle_peer
 from cache_state import events
 
 
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     gc.collect()
     return value
 

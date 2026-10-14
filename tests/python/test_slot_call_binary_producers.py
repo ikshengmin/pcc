@@ -72,7 +72,7 @@ def test_binary_operand_producer_publishes_immediately(expression, count):
 
 @pytest.mark.parametrize("site", ("argument", "default", "return", "later-error"))
 def test_binary_producer_context_matrix(site):
-    prelude = ("def take(*, value, later=None):\n    return value\n"
+    prelude = ("def take(*, value, later=None, **extras):\n    return value\n"
                "def fail():\n    raise ValueError('later')\n")
     if site == "default":
         body = "    def target(value=left + right):\n        return value\n    return target()\n"
@@ -138,7 +138,7 @@ def test_global_scaffold_does_not_make_ordinary_addition_a_machine_operation():
 PROGRAMS = {
     "builtins": textwrap.dedent('''\
         import gc
-        def take(*, value):
+        def take(*, value, **extras):
             gc.collect()
             return value
         def add(left, right):
@@ -206,7 +206,7 @@ PROGRAMS = {
             gc.collect()
             events.append('later')
             raise ValueError('later')
-        def take(*, value, later=None):
+        def take(*, value, later=None, **extras):
             gc.collect()
             return value
         def main():
@@ -292,7 +292,7 @@ PROGRAMS["error_cleanup"] = textwrap.dedent("""\
         gc.collect()
         events.append('later')
         raise ValueError('later')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         raise AssertionError('call must not execute')
     def main():
         try:
@@ -320,7 +320,7 @@ PROGRAMS["ordinary_integer_annotations"] = textwrap.dedent("""\
         def __radd__(self, other):
             gc.collect()
             return marker
-    def take(*, value):
+    def take(*, value, **extras):
         gc.collect()
         return value
     def forward(value: int):

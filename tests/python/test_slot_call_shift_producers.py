@@ -57,7 +57,7 @@ def test_shift_operands_keep_full_integer_count_and_publish_output(operator, exp
 @pytest.mark.parametrize('operator', ('<<', '>>'))
 @pytest.mark.parametrize('site', ('default', 'return', 'later-error'))
 def test_shift_default_return_and_error_cleanup(operator, site):
-    source = 'def take(*, value, later=None):\n    return value\ndef fail():\n    raise ValueError("later")\n'
+    source = 'def take(*, value, later=None, **extras):\n    return value\ndef fail():\n    raise ValueError("later")\n'
     expression = 'left ' + operator + ' right'
     if site == 'default':
         body = '    def target(value=' + expression + '):\n        return value\n    return target()\n'

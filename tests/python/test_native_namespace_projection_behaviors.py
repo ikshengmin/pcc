@@ -123,7 +123,7 @@ def take(value, *, after=None):
     gc.collect()
     return value
 
-def take_keyword(*, value, after=None):
+def take_keyword(*, value, after=None, **extras):
     return take(value, after=after)
 
 def main():
@@ -167,7 +167,7 @@ class Receiver:
     def __init__(self, implementation):
         self.implementation = implementation
 
-def take(*, value):
+def take(*, value, **extras):
     gc.collect()
     return value
 
@@ -215,7 +215,7 @@ class Receiver:
     def __init__(self, implementation):
         self.implementation = implementation
 
-def take(*, value):
+def take(*, value, **extras):
     gc.collect()
     return value
 
@@ -292,7 +292,7 @@ class Implementation:
         self.name_value = name
         self.tag_value = tag
 
-def take(*, value):
+def take(*, value, **extras):
     gc.collect()
     return value
 

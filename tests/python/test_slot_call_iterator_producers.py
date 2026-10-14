@@ -23,7 +23,7 @@ from tests.python.test_shared_call_binding import _emit, _function
 def test_iterator_results_publish_before_cleanup(expression, site):
     result = expression if site == 'return' else 'take(value=' + expression + ')'
     text = _emit(
-        'def take(*, value):\n    return value\n'
+        'def take(*, value, **extras):\n    return value\n'
         'def probe(item, producer, sentinel):\n    return ' + result + '\n'
     )
     body = _function(text)
@@ -165,7 +165,7 @@ PROGRAMS = {
                 gc.collect()
         def direct():
             return next(iter([Item('live')]), Item('unused'))
-        def take(*, value, later=None):
+        def take(*, value, later=None, **extras):
             gc.collect()
             return value
         def later():

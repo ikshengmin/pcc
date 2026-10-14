@@ -322,7 +322,7 @@ def parameter(dir, value):
     return dir(value)
 def replacement(value):
     return ["replacement"]
-def take(*, value, later=None):
+def take(*, value, later=None, **extras):
     return value
 def later_error():
     gc.collect()

@@ -15,7 +15,7 @@ from tests.python.owned_regression_support import (
 ))
 @pytest.mark.parametrize('context', ('return', 'argument', 'default', 'later-error'))
 def test_computed_callable_uses_rooted_dispatch(expression, context):
-    prefix = ('def take(*, value, later=None):\n    return value\n'
+    prefix = ('def take(*, value, later=None, **extras):\n    return value\n'
               'def fail():\n    raise ValueError("later")\n')
     if context == 'return':
         body = '    return ' + expression + '\n'
@@ -67,7 +67,7 @@ PROGRAM = textwrap.dedent('''\
         events.append('operand')
         gc.collect()
         return Payload('value')
-    def take(*, value, later=None):
+    def take(*, value, later=None, **extras):
         return value
     def fail():
         events.append('fail')

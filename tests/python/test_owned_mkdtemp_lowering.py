@@ -23,7 +23,7 @@ def test_mkdtemp_uses_native_callable_and_slot_result(binding,site,tmp_path):
         'nested':'    return take(value='+producer+')\n',
         'return':'    return '+producer+'\n',
     }
-    text=_emit(imports[binding]+'def take(*, value):\n    return value\n'
+    text=_emit(imports[binding]+'def take(*, value, **extras):\n    return value\n'
                +'def probe(root):\n'+bodies[site])
     (tmp_path/'program.ll').write_text(text)
     body=_function(text)
