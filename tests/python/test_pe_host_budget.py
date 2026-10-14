@@ -344,6 +344,25 @@ def test_buffer_ledger_is_cumulative_and_resize_reserves_old_and_new_storage():
     assert value.retained_bytes == 17
 
 
+def test_buffer_ledger_keeps_exact_owner_alive_until_release():
+    value = budget()
+    payload = bytes(bytearray(b"immutable retained payload"))
+    references = sys.getrefcount(payload)
+    value.retain(payload)
+    assert sys.getrefcount(payload) == references + 1
+    assert value._buffers[id(payload)][0] is payload
+    assert value.unretained_payload_bytes(payload) == 0
+    mutable = bytearray(payload)
+    value.retain(mutable)
+    assert value.unretained_payload_bytes(mutable) == len(mutable)
+    value.release(payload)
+    assert sys.getrefcount(payload) == references
+    assert value.unretained_payload_bytes(payload) == len(payload)
+    assert value.retained_bytes == sys.getsizeof(mutable)
+    value.release(mutable)
+    assert value.retained_bytes == 0 and not value._buffers
+
+
 def test_final_snapshot_counts_both_copies_with_all_sections_retained():
     value = budget()
     value.prepare((), ())
@@ -664,6 +683,87 @@ def _validation_payload(function_roots):
     return wire.encode_stack_map(wire.PreciseStackMap(
         arch=wire.ARCH_X86_64, functions=tuple(functions),
     ))
+
+
+@pytest.mark.parametrize("roots", ((), (-8,)))
+@pytest.mark.parametrize("final_image", (False, True))
+def test_retained_validation_payload_has_one_owner_at_exact_budget_boundary(roots, final_image):
+    from pcc.backend import precise_stackmap as wire
+
+    count = 128
+    payload = bytearray(_validation_payload(((16, (roots,) * count),)))
+    if final_image:
+        struct.pack_into("<Q", payload, wire.HEADER_SIZE + 8, 0x140001000)
+    payload = bytes(payload)
+    value = budget(work=2 * count)
+    value.retained_bytes = 17
+    value.prepare((), ())
+    other = bytearray(b"separately retained output section")
+    value.retain(other)
+    value.retain(payload)
+    retained = value.retained_bytes
+    peak = retained + value._set_bytes(count) + value.metadata_entry_bytes
+    if roots:
+        peak += value._validation_cache_bytes(1, sys.getsizeof(set()))
+        peak += value._list_bytes(1) + value.integer_bytes
+    value.limit_bytes = peak
+    wire.validate_stack_map_payload(payload, final_image=final_image, compact_budget=value)
+    assert value.retained_bytes == retained and value.record_visits == 2 * count
+
+    value.record_visit_limit += 2 * count
+    value.limit_bytes -= 1
+    label = "validation cache" if roots else "validation"
+    with pytest.raises(PreciseStackMapError, match="byte budget exceeded: " + label):
+        wire.validate_stack_map_payload(payload, final_image=final_image, compact_budget=value)
+    assert value.retained_bytes == retained
+    value.release(payload)
+    assert value.retained_bytes == retained - sys.getsizeof(payload)
+    value.finish()
+    assert value.retained_bytes == 17 and not value._buffers
+
+
+def test_equal_unretained_payload_is_still_charged_as_a_separate_owner():
+    from pcc.backend import precise_stackmap as wire
+
+    payload = _validation_payload(((0, ((),) * 128),))
+    equal_payload = bytes(bytearray(payload))
+    assert equal_payload == payload and equal_payload is not payload
+    value = budget(work=512)
+    value.retain(payload)
+    value.limit_bytes = value.retained_bytes + value._set_bytes(128) + value.metadata_entry_bytes
+    wire.validate_stack_map_payload(payload, compact_budget=value)
+    with pytest.raises(PreciseStackMapError, match="byte budget exceeded: input"):
+        wire.validate_stack_map_payload(equal_payload, compact_budget=value)
+    assert value.record_visits == 256
+    assert "raw=" + str(value.retained_bytes + len(equal_payload)) in value.last_rejection
+    generic = wire.CompactStackMapBudget(value.limit_bytes, 512, **PROFILE)
+    generic.retained_bytes = value.retained_bytes
+    with pytest.raises(PreciseStackMapError, match="byte budget exceeded: input"):
+        wire.validate_stack_map_payload(payload, compact_budget=generic)
+    assert generic.record_visits == 0
+
+
+@pytest.mark.parametrize("malformation,message", (
+    ("frame", "exceeds frame size 0"),
+    ("address", "final-image function address is unresolved"),
+    ("reserved", "non-zero reserved stack-map field"),
+))
+def test_retained_payload_preserves_semantic_and_final_address_checks(malformation, message):
+    from pcc.backend import precise_stackmap as wire
+
+    payload = bytearray(_validation_payload(((16, ((-8,),)),)))
+    if malformation == "frame":
+        struct.pack_into("<I", payload, wire.HEADER_SIZE + 20, 0)
+    elif malformation == "reserved":
+        struct.pack_into("<H", payload, wire.HEADER_SIZE + wire.FUNCTION_SIZE + 22, 1)
+    payload = bytes(payload)
+    value = budget()
+    value.retain(payload)
+    with pytest.raises(PreciseStackMapError, match=message):
+        wire.validate_stack_map_payload(payload, final_image=malformation == "address",
+                                        compact_budget=value)
+    assert value.retained_bytes == sys.getsizeof(payload)
+    assert value.record_visits > 0
 
 
 def test_validation_cache_admits_real_tuple_shapes_inside_unchanged_small_limit():

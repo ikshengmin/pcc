@@ -404,7 +404,7 @@ class PEHostBudget(CompactStackMapBudget):
         scratch_bytes = self._list_bytes(locations) + locations * self.integer_bytes
         try:
             self.check_peak(
-                len(payload) + cache_bytes + scratch_bytes,
+                self.unretained_payload_bytes(payload) + cache_bytes + scratch_bytes,
                 records=records, entries=functions, label="validation cache",
             )
         except PreciseStackMapError as exc:
@@ -428,14 +428,29 @@ class PEHostBudget(CompactStackMapBudget):
     def retain(self, value, label="PE retained buffer"):
         key = id(value)
         size = sys.getsizeof(value)
-        old = self._buffers.get(key, 0)
+        retained = self._buffers.get(key)
+        old = retained[1] if retained is not None else 0
         if size > old:
             self.check_peak(size - old, label=label)
         self.retained_bytes += size - old
-        self._buffers[key] = size
+        # Keep the object itself: an ID alone could be reused after the last
+        # external reference is dropped. The metadata reservation covers this
+        # dictionary entry and its short owner/size tuple.
+        self._buffers[key] = (value, size)
 
     def release(self, value):
-        self.retained_bytes -= self._buffers.pop(id(value), 0)
+        retained = self._buffers.pop(id(value), None)
+        if retained is not None:
+            self.retained_bytes -= retained[1]
+
+    def unretained_payload_bytes(self, payload):
+        retained = self._buffers.get(id(payload))
+        # Validation reads immutable bytes without copying them. Their full
+        # allocated size, including the header, is already in retained_bytes.
+        # Equal contents/lengths and mutable buffers cannot establish that.
+        if type(payload) is bytes and retained is not None and retained[0] is payload:
+            return 0
+        return len(payload)
 
     def check_growth(self, value, following_size, *, temporary_bytes=0, label="PE buffer growth"):
         self.retain(value)

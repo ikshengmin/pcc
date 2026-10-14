@@ -131,6 +131,47 @@ def _stack_table(image):
     return rva, data[:cursor + locations * wire.LOCATION_SIZE]
 
 
+def test_pe_link_validates_retained_merged_and_final_payloads_without_extra_copy(monkeypatch):
+    import sys
+
+    objects = [_object("pcc_windows_start", ordinary=b"ordinary output stays live")]
+    expected = pe.link_executable(objects)
+    budget = _pe_budget()
+    budget.retained_bytes = 19
+    original = wire.validate_stack_map_payload
+    validations = []
+
+    def checked(payload, *, expected_arch=None, final_image=False, compact_budget=None):
+        retained = compact_budget._buffers.get(id(payload)) if compact_budget is not None else None
+        if retained is None:
+            return original(payload, expected_arch=expected_arch, final_image=final_image,
+                            compact_budget=compact_budget)
+        assert retained[0] is payload and retained[1] == sys.getsizeof(payload)
+        if final_image:
+            # The original merged bytes and output section remain distinct
+            # owners alongside the immutable address-bound snapshot.
+            assert sum(type(row[0]) is bytes for row in budget._buffers.values()) == 2
+            assert any(isinstance(row[0], bytearray) and wire.MAGIC in row[0]
+                       for row in budget._buffers.values())
+        validations.append(final_image)
+        peak = budget.retained_bytes + budget._set_bytes(2) + budget.metadata_entry_bytes
+        peak += budget._validation_cache_bytes(1, sys.getsizeof(set()))
+        peak += budget._list_bytes(3) + 3 * budget.integer_bytes
+        previous_limit = budget.limit_bytes
+        budget.limit_bytes = peak
+        try:
+            original(payload, expected_arch=expected_arch, final_image=final_image,
+                     compact_budget=compact_budget)
+        finally:
+            budget.limit_bytes = previous_limit
+
+    monkeypatch.setattr(wire, "validate_stack_map_payload", checked)
+    assert pe.link_executable(objects, compact_budget=budget) == expected
+    assert validations == [False, True]
+    assert budget.retained_bytes == 19 and not budget._buffers
+    assert budget.record_visits == 14
+
+
 def _dir64_sites(image):
     optional, sections = _sections(image)
     rva, size = struct.unpack_from("<II", image, optional + 112 + 5 * 8)

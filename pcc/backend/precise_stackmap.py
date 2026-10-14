@@ -214,9 +214,14 @@ class CompactStackMapBudget:
             raise PreciseStackMapError("compact stack-map record work budget exceeded")
         self.record_visits += count
 
+    def unretained_payload_bytes(self, payload):
+        # Generic callers do not prove ownership of any particular buffer.
+        # A host ledger may override this only for an exact retained owner.
+        return len(payload)
+
     def check_validation_cache(self, payload, records, functions, cache, locations):
         self.check_peak(
-            len(payload) + locations * self.integer_bytes,
+            self.unretained_payload_bytes(payload) + locations * self.integer_bytes,
             records=records, entries=functions + len(cache) + 1,
             label="validation cache",
         )
@@ -1152,7 +1157,10 @@ def validate_stack_map_payload(
     if table_count > MAX_LOCATIONS:
         raise PreciseStackMapError("too many stack-map locations")
     if compact_budget is not None:
-        compact_budget.check_peak(len(payload), entries=function_count, label="input")
+        compact_budget.check_peak(
+            compact_budget.unretained_payload_bytes(payload),
+            entries=function_count, label="input",
+        )
 
     # Complete the fail-closed structural pass first. Semantic
     # validation below may then index the shared table without turning a
@@ -1207,8 +1215,10 @@ def validate_stack_map_payload(
         raise PreciseStackMapError("trailing bytes after pcc stack-map payload")
 
     if compact_budget is not None:
-        compact_budget.check_peak(len(payload), records=total_records,
-                                  entries=function_count, label="validation")
+        compact_budget.check_peak(
+            compact_budget.unretained_payload_bytes(payload),
+            records=total_records, entries=function_count, label="validation",
+        )
     cursor = _HEADER.size
     previous_function_id = -1
     seen_safepoints: set[int] = set()
