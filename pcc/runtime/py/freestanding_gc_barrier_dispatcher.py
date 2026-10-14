@@ -152,6 +152,20 @@ def pcc_gc_step(budget: i64) -> i64:
                 processed = processed + pcc_gc_tracing_step_cycle(
                     budget - processed
                 )
+            # Forwarding edges own a reference to each replacement. An idle
+            # explicit collect must advance the same remap/retirement epochs
+            # as background steps, or that hold outlives the last real owner.
+            # Do not retire across an unfinished mark or pending sweep. The
+            # existing helper preserves root healing, source quarantine and
+            # the one release for each detached forwarding edge.
+            if (
+                processed == 0
+                and _tracing_work_pending() == 0
+                and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+            ):
+                processed = processed + (
+                    pcc_gc_backend4_remap_and_retire_stopped_world()
+                )
         else:
             processed = processed + pcc_gc_backend4_step_remembered_roots(
                 budget - processed

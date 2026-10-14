@@ -40,6 +40,9 @@ pcc_gc_tracing_clear_unreachable = extern(
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
 )
+pcc_gc_forwarding_index_find = extern(
+    "pcc_gc_forwarding_index_find", (c_ptr,), c_ptr
+)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
 py_user_del_dispatch = extern("py_user_del_dispatch", (c_ptr,), c_void)
@@ -206,13 +209,24 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
     # before any referent is cleared.
     pcc_gc_seed_roots()
     pcc_gc_drain_all_gray_unlocked()
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     node = global_load_ptr("pcc_gc_object_head")
     while ptr_is_null(node) == 0:
         nxt = load_ptr(node, 16)
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
-            if (flags & 1024) != 0 and (flags & 8) == 0:
+            # A GC4 forwarding source is a physical shell, not another
+            # finalizable object. Its payload and forwarding reference belong
+            # to remap retirement. Test the edge, not the candidate flag: a
+            # selected object that has not moved still needs ordinary sweeping.
+            if (flags & 1024) != 0 and (
+                (flags & 8) == 0
+                or (
+                    backend == 4
+                    and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+                )
+            ):
                 store_i32(obj, 12, flags & ~1024)
         node = nxt
 

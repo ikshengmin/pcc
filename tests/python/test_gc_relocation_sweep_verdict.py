@@ -24,21 +24,22 @@ source before oldify can copy it, which is the runtime consuming a verdict
 correctly, not the inheritance defect. The backend-3 hardening is exercised
 by the five-backend production contract instead.
 
+The forwarding source remains a physical shell until remap retirement. It
+must never run an independent finalizer, either while the replacement is
+rooted or when its last real owner is released. This also guards the logical
+object against duplicate finalization through the old address.
+
 Nonclaims: this probe does not exercise the concurrent-stepping window
-itself (the overlap probes own that), and it records but does not assert
-finalizations of the immortal forwarding shell -- shell visibility to a
-legitimately-cut sweep is a separate question from stale-verdict
-inheritance.
+itself (the overlap probes own that).
 """
 from pathlib import Path
+import json
 import os
-import subprocess
 
 import pytest
 
-from tests.runtime_build_cache import (
-    cached_threaded_pcc_python_runtime,
-)
+from tests.owned_runtime_c_fixture import admitted_runtime, link_c_harness
+from tests.python.process_timeout import run_process_group_timeout
 
 PROBE_SOURCE = r"""
 #include "py_internal.h"
@@ -173,6 +174,8 @@ int main(void) {
     /* The capture's consumer: an explicit collect consumes pending
      * candidates verbatim. The live copy must survive untouched. */
     (void)pcc_gc_collect(0);
+    if (del_other != 0)
+        return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);
     if ((flags_of(copy) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0)
         return fail_state(22, "collect-recut-live-copy", source, copy);
     if (del_on_copy != 0)
@@ -196,6 +199,9 @@ int main(void) {
         return fail_state(26, "dead-copy-still-known", source, copy);
     }
 
+    if (del_other != 0)
+        return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);
+
     printf(
         "ok backend=%d del_other=%ld\n",
         backend,
@@ -206,30 +212,23 @@ int main(void) {
 """
 
 
-def _runtime_archive(kind: str) -> Path:
-    return cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-
-
 def _compile_probe(tmp_path: Path, kind: str, backend: int) -> Path:
-    runtime_dir = _runtime_archive(kind).parent
+    archive = admitted_runtime()
+    manifest = json.loads(Path(str(archive) + ".provenance.json").read_text(encoding="utf-8"))
+    assert manifest["members"]
+    assert all(member["runtime_build_config"]["threads"] is True
+               and member["runtime_build_config"]["refcount"] == "atomic"
+               for member in manifest["members"])
+    runtime_dir = Path(__file__).resolve().parents[2] / "pcc/runtime"
     stem = f"sweep_verdict_gc{backend}_{kind}"
     source = tmp_path / f"{stem}.c"
     executable = tmp_path / stem
     source.write_text(
         PROBE_SOURCE.replace("@BACKEND@", str(backend)), encoding="utf-8"
     )
-    command = [
-        os.environ.get("CC", "cc"),
-        "-std=c11",
-        f"-I{runtime_dir / 'include'}",
-        f"-I{runtime_dir / 'src'}",
-        str(source),
-        str(_runtime_archive(kind)),
-        "-lm",
-        "-o",
-        str(executable),
-    ]
-    build = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    build = link_c_harness(
+        source, executable, extra_include_dirs=(str(runtime_dir / "src"),),
+    )
     assert build.returncode == 0, build.stdout + build.stderr
     return executable
 
@@ -242,12 +241,8 @@ def test_relocation_copy_clears_stale_sweep_verdict_backend4(
     executable = _compile_probe(tmp_path, kind, backend=4)
     run_env = {**os.environ}
     run_env.pop("PCC_REFCOUNT_STRATEGY", None)
-    run = subprocess.run(
-        [str(executable)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=run_env,
+    run = run_process_group_timeout(
+        [str(executable)], timeout=120, env=run_env,
     )
     assert run.returncode == 0, (
         f"{kind} gc4 sweep-verdict relocation probe returned "

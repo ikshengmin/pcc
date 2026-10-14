@@ -86,7 +86,7 @@ def object_symbols(path: Path, *, undefined: bool = False):
     return SimpleNamespace(returncode=0, stdout="\n".join(rows), stderr="")
 
 
-def link_c_harness(harness: Path, output: Path, *, defines=()):
+def link_c_harness(harness: Path, output: Path, *, defines=(), extra_include_dirs=()):
     """Original C text -> owned frontend/emitter/linker -> real runtime closure."""
     archive = admitted_runtime()
     target = host_target_triple()
@@ -97,7 +97,8 @@ def link_c_harness(harness: Path, output: Path, *, defines=()):
         units = evaluator.compile_translation_units(
             [TranslationUnit(harness.name, str(harness), harness.read_text())],
             use_system_cpp=False, use_compile_cache=False,
-            include_dirs=[str(ROOT / "pcc/runtime/include"), str(ROOT / "utils/fake_libc_include")],
+            include_dirs=[str(ROOT / "pcc/runtime/include"),
+                          *extra_include_dirs, str(ROOT / "utils/fake_libc_include")],
             cpp_args=["-D" + value for value in defines],
         )
         # Darwin also needs the explicit runtime archive. Linux's implicit
