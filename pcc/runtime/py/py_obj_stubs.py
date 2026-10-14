@@ -3642,6 +3642,36 @@ def _default_object_repr(o, tag: int):
     return _cat_take(_cat_take(out, _identity_hex(o)), _str_lit1(62))  # '>'
 
 
+def _exception_instance_repr(o):
+    """BaseException.__repr__ for a user exception subclass instance with no
+    __repr__: the class name, then repr(args[0]) in parentheses for one
+    argument, else repr(args)."""
+    cls = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
+    if ptr_is_null(cls):
+        return null()
+    name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
+    if ptr_is_null(name):
+        name = cstr("?")
+    head = py_str_new(name, strlen(name))
+    args = py_instance_getattr(o, cstr("args"))
+    if ptr_is_null(args):
+        if py_err_occurred() != 0:
+            py_clear_exception()
+        return _cat_take(head, py_str_new(cstr("()"), 2))
+    if _type_of(args) == PY_TYPE_TUPLE and py_tuple_len(args) != 1:
+        body = py_obj_repr(args)
+        py_decref(args)
+        return _cat_take(head, body)
+    shown = args
+    if _type_of(args) == PY_TYPE_TUPLE:
+        shown = py_tuple_get(args, 0)
+        py_decref(args)
+    body = py_obj_repr(shown)
+    py_decref(shown)
+    out = _cat_take(head, _str_lit1(40))  # '('
+    return _cat_take(_cat_take(out, body), _str_lit1(41))  # ')'
+
+
 @c_abi_export("py_obj_repr")
 def py_obj_repr(o):
     if ptr_is_null(o):
@@ -3676,6 +3706,10 @@ def py_obj_repr(o):
         py_decref(exact)
         pcc_gc_unpin(result)
         return result
+    exc_base = py_exc_builtin_class(0)  # PY_EXC_BASE
+    if not ptr_is_null(exc_base):
+        if py_isinstance(o, exc_base) != 0:
+            return _exception_instance_repr(o)
     return _default_object_repr(o, tag)
 
 
@@ -3752,13 +3786,24 @@ def py_obj_str(o):
                 if py_err_occurred() != 0:
                     py_clear_exception()
                 return py_str_new(cstr(""), 0)
+            text = null()
             if _type_of(args) == PY_TYPE_TUPLE:  # PY_TYPE_TUPLE
                 n: int = py_tuple_len(args)
                 if n == 0:
-                    return py_str_new(cstr(""), 0)
-                if n == 1:
-                    return py_obj_str(py_tuple_get(args, 0))
-                return py_obj_repr(args)
-            return py_obj_str(args)
+                    text = py_str_new(cstr(""), 0)
+                elif n == 1:
+                    item = py_tuple_get(args, 0)
+                    # KeyError.__str__ shows one key as repr(key).
+                    if py_isinstance(o, py_exc_builtin_class(4)) != 0:  # PY_EXC_KEYERROR
+                        text = py_obj_repr(item)
+                    else:
+                        text = py_obj_str(item)
+                    py_decref(item)
+                else:
+                    text = py_obj_repr(args)
+            else:
+                text = py_obj_str(args)
+            py_decref(args)
+            return text
     # No user __str__: object.__str__ falls back to __repr__.
     return py_obj_repr(o)
