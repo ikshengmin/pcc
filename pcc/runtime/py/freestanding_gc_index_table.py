@@ -101,6 +101,18 @@ define_global_i64("pcc_py_gc_zpage_page_cap", 0)
 define_global_i64("pcc_py_gc_zpage_page_count", 0)
 define_global_i64("pcc_py_gc_zpage_page_used", 0)
 
+# Key-only filter of objects that joined the GC4 relocation set. The set is a
+# singly-linked list and every backend-4 free removes its object from it, so
+# a selected cycle made each free walk the whole set. Entries are added where
+# an object joins the set and dropped once a walk or an empty set proves it is
+# gone; a stale entry costs only that walk. A failed insertion marks the
+# filter incomplete, which keeps every walk until the set is empty again.
+define_global_ptr_null("pcc_py_gc_relocation_member_slots")
+define_global_i64("pcc_py_gc_relocation_member_cap", 0)
+define_global_i64("pcc_py_gc_relocation_member_count", 0)
+define_global_i64("pcc_py_gc_relocation_member_used", 0)
+define_global_i64("pcc_py_gc_relocation_member_incomplete", 0)
+
 
 @c_abi_export("pcc_gc_index_py_hash_ptr")
 def pcc_gc_index_py_hash_ptr(key: c_ptr) -> i64:
@@ -1479,6 +1491,64 @@ def pcc_gc_zpage_page_index_clear() -> None:
         global_addr("pcc_py_gc_zpage_page_count"),
         global_addr("pcc_py_gc_zpage_page_used"),
     )
+
+
+@c_abi_export("pcc_gc_relocation_member_note")
+def pcc_gc_relocation_member_note(obj: c_ptr) -> None:
+    # Callers hold the GC graph lock, as for every index instance.
+    inserted: i64 = pcc_gc_index_py_insert(
+        global_addr("pcc_py_gc_relocation_member_slots"),
+        global_addr("pcc_py_gc_relocation_member_cap"),
+        global_addr("pcc_py_gc_relocation_member_count"),
+        global_addr("pcc_py_gc_relocation_member_used"),
+        obj,
+        obj,
+        1,
+        0,
+        256,
+    )
+    if inserted < 0:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+
+
+@c_abi_export("pcc_gc_relocation_member_maybe")
+def pcc_gc_relocation_member_maybe(obj: c_ptr) -> i64:
+    """0 only when obj is certainly outside the relocation set."""
+    if load_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0) != 0:
+        return 1
+    if load_i64(global_addr("pcc_py_gc_relocation_member_count"), 0) <= 0:
+        return 0
+    found = pcc_gc_index_py_find(
+        global_addr("pcc_py_gc_relocation_member_slots"),
+        global_addr("pcc_py_gc_relocation_member_cap"),
+        obj,
+        1,
+    )
+    return 0 if ptr_is_null(found) != 0 else 1
+
+
+@c_abi_export("pcc_gc_relocation_member_forget")
+def pcc_gc_relocation_member_forget(obj: c_ptr) -> None:
+    pcc_gc_index_py_remove(
+        global_addr("pcc_py_gc_relocation_member_slots"),
+        global_addr("pcc_py_gc_relocation_member_cap"),
+        global_addr("pcc_py_gc_relocation_member_count"),
+        global_addr("pcc_py_gc_relocation_member_used"),
+        obj,
+        1,
+    )
+
+
+@c_abi_export("pcc_gc_relocation_member_clear")
+def pcc_gc_relocation_member_clear() -> None:
+    # Only for an empty relocation set: no object can be a member.
+    pcc_gc_index_py_clear(
+        global_addr("pcc_py_gc_relocation_member_slots"),
+        global_addr("pcc_py_gc_relocation_member_cap"),
+        global_addr("pcc_py_gc_relocation_member_count"),
+        global_addr("pcc_py_gc_relocation_member_used"),
+    )
+    store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 0)
 
 
 @c_abi_export("pcc_gc_ptr_index_tls_pool_drain")

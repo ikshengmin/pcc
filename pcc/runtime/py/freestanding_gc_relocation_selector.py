@@ -59,6 +59,7 @@ pcc_gc_backend4_zpage_clear_active_page = extern(
     "pcc_gc_backend4_zpage_clear_active_page", (c_ptr,), c_void
 )
 pcc_gc_forwarding_find = extern("pcc_gc_forwarding_find", (c_ptr,), c_ptr)
+pcc_gc_relocation_member_note = extern("pcc_gc_relocation_member_note", (c_ptr,), c_void)
 pcc_gc_forwarding_target_exists = extern(
     "pcc_gc_forwarding_target_exists", (c_ptr,), c_int64
 )
@@ -387,6 +388,7 @@ def _backend4_add_candidate_node(node, allow_large_pages: i64, plan) -> i64:
         global_load_ptr("pcc_gc_relocation_set_head"),
     )
     global_store_ptr("pcc_gc_relocation_set_head", relocation_node)
+    pcc_gc_relocation_member_note(obj)
     relocation_revision: i64 = load_i64(
         global_addr("pcc_gc_backend4_reseed_relocation_revision"), 0
     )

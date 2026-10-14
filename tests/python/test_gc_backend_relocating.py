@@ -1556,6 +1556,102 @@ def test_colored_relocating_stable_id_survives_forwarding(tmp_path):
     ]
 
 
+def test_colored_relocating_member_filter_tracks_the_relocation_set(tmp_path):
+    # Every backend-4 free removes its object from the relocation set. A
+    # key-only member filter lets a non-member skip that list walk, so it
+    # must never miss a member and must forget an object once it is gone.
+    exe = _compile_probe(
+        tmp_path,
+        """
+        from pcc.extern import extern, c_int32, c_int64, c_rawptr, c_void
+
+        pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_rawptr)
+        pcc_gc_release = extern("pcc_gc_release", (c_rawptr,), c_void)
+        pcc_gc_publish_initialized = extern("pcc_gc_publish_initialized", (c_rawptr,), c_void)
+        pcc_gc_reset_relocation_set = extern("pcc_gc_reset_relocation_set", (), c_void)
+        relocation_add = extern("pcc_gc_backend4_relocation_set_add", (c_rawptr,), c_int64)
+        relocation_contains = extern("pcc_gc_relocation_set_contains", (c_rawptr,), c_int64)
+        relocation_size = extern("pcc_gc_relocation_set_size", (), c_int64)
+        member_maybe = extern("pcc_gc_relocation_member_maybe", (c_rawptr,), c_int64)
+
+        def main() -> None:
+            pcc_gc_reset_relocation_set()
+            a = pcc_gc_alloc(64, 5, 0)
+            b = pcc_gc_alloc(64, 5, 0)
+            c = pcc_gc_alloc(64, 5, 0)
+            pcc_gc_publish_initialized(a)
+            pcc_gc_publish_initialized(b)
+            pcc_gc_publish_initialized(c)
+            print(relocation_add(a), relocation_add(c))
+            print(member_maybe(a), member_maybe(b), member_maybe(c))
+            size = relocation_size()
+            pcc_gc_release(b)
+            print(size - relocation_size())
+            pcc_gc_release(a)
+            print(size - relocation_size(), relocation_contains(c))
+            pcc_gc_reset_relocation_set()
+            print(relocation_size())
+            pcc_gc_release(c)
+            print(member_maybe(c))
+
+        if __name__ == "__main__":
+            main()
+        """,
+    )
+    result = _run_backend_four(exe)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines() == ["1 1", "1 0 1", "0", "1 1", "0", "0"]
+
+
+def test_colored_relocating_page_selection_takes_every_page_candidate(tmp_path):
+    # Page selection works in 16-object batches. Later batches continue the
+    # page from its own owner list instead of rescanning the whole heap;
+    # every candidate on every selected page must still be taken.
+    exe = _compile_probe(
+        tmp_path,
+        """
+        from pcc.extern import extern, c_int32, c_int64, c_rawptr, c_void
+        from pcc.unsafe import free, load_ptr, malloc, store_ptr
+
+        pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_rawptr)
+        pcc_gc_release = extern("pcc_gc_release", (c_rawptr,), c_void)
+        pcc_gc_publish_initialized = extern("pcc_gc_publish_initialized", (c_rawptr,), c_void)
+        pcc_gc_reset_relocation_set = extern("pcc_gc_reset_relocation_set", (), c_void)
+        select_pages = extern("pcc_gc_backend4_select_relocation_pages", (c_int64,), c_int64)
+        relocation_contains = extern("pcc_gc_relocation_set_contains", (c_rawptr,), c_int64)
+
+        def main() -> None:
+            table = malloc(48 * 8)
+            index = 0
+            while index < 48:
+                item = pcc_gc_alloc(64, 5, 0)
+                pcc_gc_publish_initialized(item)
+                store_ptr(table, index * 8, item)
+                index = index + 1
+            pcc_gc_reset_relocation_set()
+            select_pages(100000)
+            taken = 0
+            index = 0
+            while index < 48:
+                taken = taken + relocation_contains(load_ptr(table, index * 8))
+                index = index + 1
+            print(taken)
+            pcc_gc_reset_relocation_set()
+            index = 0
+            while index < 48:
+                pcc_gc_release(load_ptr(table, index * 8))
+                index = index + 1
+            free(table)
+
+        if __name__ == "__main__":
+            main()
+        """,
+    )
+    result = _run_backend_four(exe)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines() == ["48"]
+
+
 def test_colored_relocating_selects_unpinned_relocation_set(tmp_path):
     exe = _compile_probe(
         tmp_path,

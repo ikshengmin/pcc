@@ -367,6 +367,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - Backend #4 now has forwarding, stable IDs, and an object-level relocation set,
 - [gc-backend4-relocation-mutator-quiescence.md](gc-backend4-relocation-mutator-quiescence.md) — **Backend 4 relocation lacks a mutator-quiescent payload phase**
   - Backend 4 can copy, remap, and retire pointer-bearing object payloads while
+- [gc-backend4-relocation-set-free-walk.md](gc-backend4-relocation-set-free-walk.md) — **GC4 frees walk the whole relocation set**
+  - active — 2026-10-14. The free-path walk is fixed by a member filter; the
 - [gc-backend4-relocation-set.md](gc-backend4-relocation-set.md) — **Backend #4 needs a relocation set**
   - Backend #4 is meant to model a ZGC-style colored relocating collector.
 - [gc-backend4-relocation-shared-slot-contract.md](gc-backend4-relocation-shared-slot-contract.md) — **backend-4 relocation duplicates the shared object-slot contract**

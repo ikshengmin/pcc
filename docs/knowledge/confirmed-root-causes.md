@@ -8,7 +8,7 @@ Extraction can include hypotheses, test status and superseded conclusions.
 Check the original experiment, revision and later updates against current
 code and matching execution before adopting a cause. Read only relevant hits.
 
-1631 confirmations across 482 investigations.
+1634 confirmations across 483 investigations.
 
 ## [Investigation: direct AArch64 instruction capture order and lifetime](../investigations/aarch64-direct-instruction-capture-order.md)
 
@@ -1002,6 +1002,12 @@ code and matching execution before adopting a cause. Read only relevant hits.
 - CONFIRMED Proposal No.23 — C and strict dict set now share `py_dict_rooted_op` / `_dict_rooted_op` with
 - CONFIRMED Proposal No.24 — C `py_dict_del_rooted_slot` and strict `_dict_del_rooted_slot` publish the
 - Test [CONFIRMED] — Two halves, both green on 2026-09-08.
+
+## [Investigation: GC4 frees walk the whole relocation set](../investigations/gc-backend4-relocation-set-free-walk.md)
+
+- Test [CONFIRMED] — Churn time at `ca703ae0`: GC0 0.6 s, GC3 1.6 s, GC4 186 s. With depth 7
+- No.1 skip the relocation-set walk for a non-member free [CONFIRMED]
+- No.1 skip the relocation-set walk for a non-member free [CONFIRMED] — `pcc_gc_note_object_freeing` calls `_relocation_set_remove(o)` for every
 
 ## [Investigation: Backend #4 needs a relocation set](../investigations/gc-backend4-relocation-set.md)
 

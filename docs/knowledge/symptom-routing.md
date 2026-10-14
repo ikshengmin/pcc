@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-590 investigations.
+591 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -561,6 +561,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `py_decref` · `PCC_BOOTSTRAP_FULL_REBUILD=1 ... test_pcc_bootstrap_full_gc1.py` · `PCC_BOOTSTRAP_FULL_REBUILD=1 ... test_pcc_bootstrap_full_gc2.py` · `PCC_BOOTSTRAP_FULL_REBUILD=1 ... gc0/gc3/gc4` · `tests/python/gc_production_contract` · `pcc1 -> pcc2`
 - [Investigation: GC4 bootstrap pcc-Python GC config fast path](../investigations/gc4-bootstrap-config-fastpath-2026-06-05.md) — **resolved for the focused backend #4 full bootstrap gate; five-GC matrix still**
   - `pcc1 -> pcc2 -> pcc3` · `pcc2 == pcc3` · `compile_python_total` · `multi_frontend_codegen_parallel` · `parse_and_lift` · `cli_bootstrap.py`
+- [Investigation: GC4 frees walk the whole relocation set](../investigations/gc-backend4-relocation-set-free-walk.md) — **active — 2026-10-14. The free-path walk is fixed by a member filter; the**
+  - `PCC_GC_BACKEND=4` · `pcc.unsafe` · `PCC_PYTHON_IR_PASSES=off` · `Node(kind, value, children)` · `live_heap_bench*.py` · `pcc_gc_relocation_set_size()`
 - [Investigation: GC4-only stack overflow — trashcan fails to defer the `__del__`-chain dealloc cascade (test_gc_trashcan segfaults under PCC_GC_BACKEND=4)](../investigations/gc4-trashcan-del-chain-dealloc-recursion-overflow.md) — **resolved (crash) — root cause found and fixed 2026-08-07 late session: the**
   - `__del__` · `(header.flags & 0x10000) != 0` · `_trash_enqueue` · `py_obj_dealloc.pcc_dealloc_with_trash` · `tests/python/test_gc_trashcan.py` · `PCC_GC_BACKEND=4`
 - [Investigation: generated type-tag alias loads crash current pcc1 during frontend module initialization](../investigations/pcc1-generated-type-tag-alias-module-init-pin.md) — **active**

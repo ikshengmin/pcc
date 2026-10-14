@@ -71,6 +71,10 @@ pcc_py_gc_defer_tripwire = extern(
 )
 
 pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
+pcc_gc_relocation_member_note = extern("pcc_gc_relocation_member_note", (c_ptr,), c_void)
+pcc_gc_relocation_member_maybe = extern("pcc_gc_relocation_member_maybe", (c_ptr,), c_int64)
+pcc_gc_relocation_member_forget = extern("pcc_gc_relocation_member_forget", (c_ptr,), c_void)
+pcc_gc_relocation_member_clear = extern("pcc_gc_relocation_member_clear", (), c_void)
 
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
@@ -1085,6 +1089,8 @@ def _set_evacuation_page_head(head) -> None:
 def _relocation_set_find(obj):
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return null()
+    if pcc_gc_relocation_member_maybe(obj) == 0:
+        return null()
     node = _relocation_set_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), obj) != 0:
@@ -1116,6 +1122,7 @@ def _relocation_set_add(obj) -> int:
     store_ptr(node, 0, obj)
     store_ptr(node, 8, _relocation_set_head())
     _set_relocation_set_head(node)
+    pcc_gc_relocation_member_note(obj)
     revision: int = load_i64(
         global_addr("pcc_gc_backend4_reseed_relocation_revision"), 0
     )
@@ -1132,6 +1139,15 @@ def _relocation_set_add(obj) -> int:
 def _relocation_set_remove(obj) -> None:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return
+    if ptr_is_null(_relocation_set_head()) != 0:
+        # Nodes also leave by drain/copy/reset pops; an empty set retires
+        # every stale filter entry at once.
+        pcc_gc_relocation_member_clear()
+        return
+    if pcc_gc_relocation_member_maybe(obj) == 0:
+        return
+    # The walk below proves obj absent (or unlinks its node) either way.
+    pcc_gc_relocation_member_forget(obj)
     prev = null()
     node = _relocation_set_head()
     while ptr_is_null(node) == 0:

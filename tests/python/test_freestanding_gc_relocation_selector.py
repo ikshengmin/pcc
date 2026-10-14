@@ -50,6 +50,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_config_ensure",
     "pcc_gc_forwarding_find",
     "pcc_gc_forwarding_target_exists",
+    "pcc_gc_relocation_member_note",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
     "pcc_thread_safepoint",

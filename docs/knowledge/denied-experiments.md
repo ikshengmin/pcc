@@ -9,7 +9,7 @@ Search by symbol/symptom; inspect the matching experiment and its updates.
 Verify current code, source revision and artifacts before reusing a verdict.
 Do not repeat a matching failed experiment without identifying new evidence.
 
-667 verdicts across 142 investigations.
+669 verdicts across 143 investigations.
 
 ## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
 
@@ -242,6 +242,11 @@ Do not repeat a matching failed experiment without identifying new evidence.
 - `[DENIED]` shapes were not retried: fake C-extension `tp_hash` and ordinary
 - `[DENIED]` for this slice: the strict `#if PCC_PROBE_STRICT` carve-out drafted
 - Both `[DENIED]` fresh-admission verdicts above are superseded by measurement.
+
+## [Investigation: GC4 frees walk the whole relocation set](../investigations/gc-backend4-relocation-set-free-walk.md)
+
+- No.2 continue a selected page from its own owner list [DENIED]
+- No.2 continue a selected page from its own owner list [DENIED] — `pcc_gc_backend4_select_relocation_pages` selects a page in 16-object
 
 ## [GC4 retained zpage free fallback and malloc-origin fast path](../investigations/gc-backend4-retained-zpage-free-fallback.md)
 
