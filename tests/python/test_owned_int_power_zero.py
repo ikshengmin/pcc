@@ -97,7 +97,7 @@ def test_zero_nonnegative_power_keeps_ordinary_result(base_kind, exponent):
     assert errors == []
 
 
-@pytest.mark.parametrize("base,exponent", ((2, -2), (-2, -3), (1, -10), (3, -2)))
+@pytest.mark.parametrize("base,exponent", ((2, -1), (2, -2), (-2, -3), (1, -10), (3, -2)))
 def test_nonzero_negative_power_preserves_float_result(base, exponent):
     power, _yes, _no, events, errors = runtime_model()
     result = power(Integer("tagged", base), Integer("tagged", exponent))

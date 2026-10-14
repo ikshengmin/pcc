@@ -439,15 +439,48 @@ def test_generic_unary_uses_owned_dispatch_without_literal_integer_proof(source)
     assert not _calls(text, "py_int_to_i64_lane")
 
 
-def test_numeric_slot_provenance_rejects_negative_power():
-    for source in (
-        "def probe():\n    return slot_operand_probe(2 ** -1)\n",
-        "def probe():\n    return slot_operand_probe((2 ** -1) + 1)\n",
-    ):
-        with pytest.raises(L1CodegenError, match="proven literal-derived integer tree"):
-            _emit(source)
-    # The restriction is on arithmetic provenance; direct names still copy
-    # their independently authoritative source root.
+@pytest.mark.parametrize("expression,helper,expected", (
+    ("2 ** -1", None, 0.5),
+    ("(2 ** -1) + 1", "py_obj_add", 1.5),
+    ("1 + (2 ** -1)", "py_obj_add", 1.5),
+    ("-(2 ** -1)", "py_obj_neg", -0.5),
+))
+def test_numeric_slot_negative_power_preserves_boxed_result(expression, helper, expected):
+    from tests.python.test_dynamic_power_comparison_boundary import assert_rooted_power
+    from tests.owned_ir_validation import verify_ir_text
+
+    source = "def probe():\n    return slot_operand_probe(" + expression + ")\n"
+    module = type_infer.infer_module(parse_and_lift(source, "slot_operand.py", "slot_operand"))
+    operand = module.body[0].body[0].value.args[0]
+    codegen = SlotProbeCodegen(module, ir_scaffold_mode="on")
+    # A negative power is still not a proven integer tree. The generic
+    # object-boundary producer now publishes the runtime's actual float
+    # owner, so the former blanket compilation rejection is obsolete.
+    assert codegen._slot_call_literal_integer_kind(operand) == 0
+    with pytest.raises(L1CodegenError, match="integer producer requires literal provenance"):
+        codegen._emit_slot_call_literal_integer(operand, "unproven.negative.power")
+
+    text = _emit(source)
+    verify_ir_text(text)
+    body = _probe_function(text)
+    assert len(assert_rooted_power(body)) == 1
+    if helper is not None:
+        produced = re.search(r"(%[^ ]+) = call ptr[^\n]*@" + helper
+                             + r"\([^\n]*\n([^\n]+)", body)
+        assert produced is not None
+        assert produced.group(2).lstrip().startswith("store ptr " + produced.group(1) + ",")
+    assert not _calls(body, "py_int_add")
+    # This is the Python reference for the exact emitted source, not native
+    # execution. The runtime source-body model separately checks 2 ** -1.
+    namespace = {"slot_operand_probe": lambda value: value}
+    exec(source, namespace)
+    result = namespace["probe"]()
+    assert type(result) is float and result == expected
+
+
+def test_numeric_slot_direct_name_copies_authoritative_source_root():
+    # Direct names copy their independently authoritative source root;
+    # their numeric annotation is not a proof of an exact runtime kind.
     direct = _emit("def probe(value: int):\n    return slot_operand_probe(value)\n")
     direct = _probe_function(direct)
     owned = re.search(r"%value\.owned[^ ]* = alloca i1", direct) is not None
