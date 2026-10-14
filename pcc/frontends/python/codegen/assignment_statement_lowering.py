@@ -23,6 +23,7 @@ from pcc.frontends.python.py_ast import (
     BytesType,
     Call,
     ClassType,
+    ComplexType,
     DictExpr,
     DictType,
     DynType,
@@ -179,6 +180,9 @@ def _emit_live_import_augassign(host, stmt, op):
                   and isinstance(stmt.value.ty, (SetType, DynType))
                   and op in ("|", "&", "-", "^"))
     if code is None and not set_update:
+        if (op == "**" and not isinstance(stmt.target.ty, (FloatType, ComplexType))
+                and not isinstance(stmt.value.ty, (FloatType, ComplexType))):
+            host._guard_integer_power_operand_provenance(stmt.target, stmt.value)
         combined = BinOp(span=stmt.span, ty=DynType(name="dyn"), op=op,
                          lhs=stmt.target, rhs=stmt.value)
         result = host._emit_slot_call_operand(combined, "import.augassign.result")
@@ -2044,6 +2048,13 @@ class AssignmentStatementLoweringMixin:
                     alloca,
                     name=self._fresh(stmt.target.ident),
                 )
+            # Match the types actually passed to the numeric dispatcher;
+            # a float/complex RHS selects that route even for an int target.
+            if (op_bare == "**" and not isinstance(declared_ty, (FloatType, ComplexType))
+                    and not isinstance(stmt.value.ty, (FloatType, ComplexType))
+                    and not self._expr_looks_cpython(stmt.target)
+                    and not self._expr_looks_cpython(stmt.value)):
+                self._guard_integer_power_operand_provenance(stmt.target, stmt.value)
             # If the augassign target holds a CPython value (e.g. ``a`` after
             # ``a = np.ones(3)``), the freshly loaded ``cur`` is a new SSA value
             # that is not in ``_cpy_values`` even though the variable is cpy
@@ -2133,6 +2144,10 @@ class AssignmentStatementLoweringMixin:
             )
             return
         if isinstance(stmt.target, Subscript):
+            # These branches erase both operand types to dyn before their
+            # numeric dispatcher, regardless of the inferred element type.
+            if op_bare == "**":
+                self._guard_integer_power_operand_provenance(stmt.target, stmt.value)
             # ``d[k] += rhs`` → d[k] = d[k] <op> rhs
             obj_val = self._emit_expr(stmt.target.obj)
             obj_ty = stmt.target.obj.ty
@@ -2287,11 +2302,18 @@ class AssignmentStatementLoweringMixin:
             # slots, and generic ``py_obj_getattr`` cannot recover those slots
             # by name.  The old dynamic-only path made L1CodeGen's inherited
             # ``self._tmp_counter += 1`` load NULL inside pcc1.
-            if (
+            typed_self = (
                 isinstance(target.obj, Name)
                 and target.obj.ident == "self"
                 and isinstance(target.ty, (IntType, FloatType))
-            ):
+            )
+            # Only the typed-self branch keeps these numeric types. Other
+            # attribute branches pass dyn/dyn, including float annotations.
+            if op_bare == "**" and (not typed_self or (
+                    not isinstance(target.ty, (FloatType, ComplexType))
+                    and not isinstance(stmt.value.ty, (FloatType, ComplexType)))):
+                self._guard_integer_power_operand_provenance(target, stmt.value)
+            if typed_self:
                 cur = self._emit_attr(target)
                 rhs = self._emit_expr(stmt.value)
                 result = self._emit_binop_value(

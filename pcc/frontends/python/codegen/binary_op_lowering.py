@@ -4,6 +4,8 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
+    BinOp,
+    BoolExpr,
     BoolType,
     ByteArrayType,
     BytesType,
@@ -15,6 +17,7 @@ from pcc.frontends.python.py_ast import (
     Expr,
     FloatType,
     FuncType,
+    IfExpr,
     IntType,
     ListType,
     MemoryViewType,
@@ -22,6 +25,7 @@ from pcc.frontends.python.py_ast import (
     StrType,
     TupleType,
     Type,
+    UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -92,6 +96,7 @@ class BinaryOpLoweringMixin:
             if (object_boundary and isinstance(expr.ty, IntType)
                     and isinstance(expr.lhs.ty, (IntType, BoolType))
                     and isinstance(expr.rhs.ty, (IntType, BoolType))):
+                self._guard_integer_power_operand_provenance(expr.lhs, expr.rhs)
                 return "py_int_pow"
             return None
         if expr.op in ("&", "|", "^"):
@@ -153,6 +158,81 @@ class BinaryOpLoweringMixin:
                 return None
             return "py_obj_sub"
         return "py_obj_add"
+
+    def _slot_call_power_provenance_expr(self, expr):
+        """Normalize builtin power syntax inside the literal proof grammar."""
+        if isinstance(expr, Call):
+            power = self._slot_call_builtin_power_expr(expr)
+            if power is None:
+                return expr
+            expr = power
+        if isinstance(expr, BinOp) and expr.op in (
+                "+", "-", "*", "//", "%", "**", "&", "|", "^", "<<", ">>"):
+            lhs = self._slot_call_power_provenance_expr(expr.lhs)
+            rhs = self._slot_call_power_provenance_expr(expr.rhs)
+            if lhs is not expr.lhs or rhs is not expr.rhs:
+                return BinOp(span=expr.span, ty=expr.ty, op=expr.op, lhs=lhs, rhs=rhs)
+        elif isinstance(expr, UnaryOp) and expr.op in ("+", "-", "~"):
+            operand = self._slot_call_power_provenance_expr(expr.operand)
+            if operand is not expr.operand:
+                return UnaryOp(span=expr.span, ty=expr.ty, op=expr.op, operand=operand)
+        return expr
+
+    def _guard_integer_power_operand_provenance(self, lhs, rhs):
+        """Reject visible float-capable power values before an int kernel.
+
+        Inference keeps int ** int typed as int even when a negative exponent
+        returns a float. This bounded value-producer walk reuses the literal
+        integer proof; it never evaluates arbitrary powers on the host.
+        Names, aliases and arbitrary calls can hide the same provenance and
+        still need an actual runtime-tag power dispatcher.
+        """
+        if (getattr(self, "_freestanding_module", False)
+                or getattr(self, "_runtime_port_module", False)):
+            return
+        function = self.current_function
+        if function is not None and (
+                function.name in getattr(self, "_manual_pointer_abi_functions", ())
+                or function.name in getattr(self, "_c_abi_export_symbols", ())):
+            return
+        for operand in (lhs, rhs):
+            if isinstance(operand.ty, IntType) and (
+                    operand.ty.name != "int" or operand.ty.width != 64 or not operand.ty.signed):
+                return
+        pending = [lhs, rhs]
+        while pending:
+            operand = pending.pop()
+            if isinstance(operand, Call):
+                operand = self._slot_call_builtin_power_expr(operand)
+                if operand is None:
+                    continue
+            if isinstance(operand, BinOp):
+                if operand.op == "**":
+                    proof = self._slot_call_power_provenance_expr(operand)
+                    if not self._slot_call_literal_integer_kind(proof):
+                        raise L1CodegenError(
+                            "power operand may be non-integer after a nested power; "
+                            "generic power dispatch is not yet supported"
+                        )
+                    continue
+                if operand.op in ("+", "-", "*", "//", "%"):
+                    pending.extend((operand.lhs, operand.rhs))
+            elif isinstance(operand, UnaryOp) and operand.op in ("+", "-"):
+                pending.append(operand.operand)
+            elif isinstance(operand, IfExpr):
+                known = self._static_bool_condition(operand.cond)
+                if known is None:
+                    pending.extend((operand.then_e, operand.else_e))
+                else:
+                    pending.append(operand.then_e if known else operand.else_e)
+            elif isinstance(operand, BoolExpr):
+                known = self._static_bool_condition(operand.left)
+                if known is None:
+                    pending.extend((operand.left, operand.right))
+                elif operand.op == "and":
+                    pending.append(operand.right if known else operand.left)
+                else:
+                    pending.append(operand.left if known else operand.right)
 
     def _emit_slot_call_binary(self, expr, label, runtime_name):
         """Publish the NEW binary result before checking or releasing inputs.

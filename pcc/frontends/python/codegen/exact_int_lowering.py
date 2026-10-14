@@ -621,6 +621,8 @@ class ExactIntLoweringMixin:
                 and isinstance(expr.rhs.ty, (IntType, BoolType))
             ):
                 return None
+            if expr.op == "**":
+                self._guard_integer_power_operand_provenance(expr.lhs, expr.rhs)
             lhs = self._emit_exact_int_operand_object(expr.lhs)
             lhs_owned = (
                 isinstance(lhs.type, ir.PointerType)

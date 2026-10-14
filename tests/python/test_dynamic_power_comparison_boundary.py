@@ -204,6 +204,9 @@ def test_power_admission_rejects_shadowed_and_machine_routes(monkeypatch):
     owner._expr_looks_cpython = lambda expr: False
     owner._expr_returns_unsafe_raw_pointer = lambda expr: False
     route = BinaryOpLoweringMixin._slot_call_binary_runtime
+    owner._guard_integer_power_operand_provenance = (
+        lambda lhs, rhs: BinaryOpLoweringMixin._guard_integer_power_operand_provenance(owner, lhs, rhs)
+    )
     power = BinOp(span=None, ty=integer, op="**", lhs=literal, rhs=argument)
     assert route(owner, power, object_boundary=True) == "py_int_pow"
     assert route(owner, power, object_boundary=False) is None

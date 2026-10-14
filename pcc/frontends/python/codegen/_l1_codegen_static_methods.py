@@ -715,6 +715,11 @@ def _part_60(out):
     _append_method(out, '_slot_call_status_report_helper', (('self', 'pos', False),))
 
 
+def _part_61(out):
+    _append_method(out, '_guard_integer_power_operand_provenance', (('self', 'pos', False), ('lhs', 'pos', False), ('rhs', 'pos', False)))
+    _append_method(out, '_slot_call_power_provenance_expr', (('self', 'pos', False), ('expr', 'pos', False)))
+
+
 def _build_static_methods():
     out = []
     _part_0(out)
@@ -778,6 +783,7 @@ def _build_static_methods():
     _part_58(out)
     _part_59(out)
     _part_60(out)
+    _part_61(out)
     return tuple(out)
 
 L1_CODEGEN_STATIC_METHODS = _build_static_methods()

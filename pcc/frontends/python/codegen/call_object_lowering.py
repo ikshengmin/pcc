@@ -981,6 +981,14 @@ class CallObjectLoweringMixin:
         """Move the selected operand owner, preserving identity and order."""
         if expr.op not in ("and", "or"):
             raise L1CodegenError("unsupported slot-call boolean operation: " + expr.op)
+        known = self._static_bool_condition(expr.left)
+        if known is not None and ((expr.op == "and" and not known)
+                                  or (expr.op == "or" and known)):
+            # The left operand is the result. Preserve its actual owner and
+            # do not lower a statically unreachable RHS, which may contain
+            # an unsupported operation that Python would never evaluate.
+            left = self._emit_slot_call_operand(expr.left, label + ".left")
+            return left, ir.Constant(_I1, known) if need_truth else None
         output = self._new_slot_call_root(label + ".boolean")
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()

@@ -740,6 +740,8 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_rooted_valueclass_indexed_loop",
     "_emit_direct_method_receiver",
     "_slot_call_status_report_helper",
+    "_guard_integer_power_operand_provenance",
+    "_slot_call_power_provenance_expr",
 )
 
 

@@ -1370,6 +1370,8 @@ class CallExpressionLoweringMixin:
             if result is not None:
                 return result
         if name == "pow" and not expr.kwargs and len(expr.args) == 2:
+            if not isinstance(expr.ty, FloatType):
+                self._guard_integer_power_operand_provenance(expr.args[0], expr.args[1])
             lhs = self._emit_expr(expr.args[0])
             rhs = self._emit_expr(expr.args[1])
             if isinstance(expr.ty, FloatType):

@@ -3,7 +3,36 @@ from __future__ import annotations
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BinOp, BoolExpr, BoolLit, BoolType, BytesLit, Call, ClassType, Compare, ComplexLit, DictExpr, DynType, Expr, FloatLit, FloatType, IfExpr, IntType, IntLit, Lambda, ListExpr, Name, NoneLit, Slice, StrLit, Subscript, TupleExpr, UnaryOp
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BinOp,
+    BoolExpr,
+    BoolLit,
+    BoolType,
+    BytesLit,
+    Call,
+    ClassType,
+    Compare,
+    ComplexLit,
+    ComplexType,
+    DictExpr,
+    DynType,
+    Expr,
+    FloatLit,
+    FloatType,
+    IfExpr,
+    IntType,
+    IntLit,
+    Lambda,
+    ListExpr,
+    Name,
+    NoneLit,
+    Slice,
+    StrLit,
+    Subscript,
+    TupleExpr,
+    UnaryOp,
+)
 from pcc.frontends.python.codegen.layer1_support import _as_native_float
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.closure_cell_lowering import emit_closure_cell_expr
@@ -515,6 +544,15 @@ class ExprDispatchLoweringMixin:
                 # generically by py_obj_truediv in _emit_binop_value below: a
                 # DynType may box a number at runtime, so it must not route to
                 # the __truediv__ dunder (a tagged int has no such attribute).
+            # Class/reflected protocols above have already selected their
+            # own owner. The remaining integer/dyn fallback must not unbox
+            # a visible float-capable power merely because its peer is dyn.
+            if (expr.op == "**"
+                    and not isinstance(expr.lhs.ty, (FloatType, ComplexType))
+                    and not isinstance(expr.rhs.ty, (FloatType, ComplexType))
+                    and not isinstance(expr.ty, ComplexType)
+                    and not self._expr_looks_cpython(expr)):
+                self._guard_integer_power_operand_provenance(expr.lhs, expr.rhs)
             if self._int_expr_needs_exact_object_boundary(expr):
                 exact_result = self._maybe_emit_exact_int_object(expr)
                 if exact_result is not None:
