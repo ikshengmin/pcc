@@ -133,6 +133,24 @@ def test_default_stage_execution_is_memory_guarded_and_bounded(tmp_path):
     assert command[-2:] == ["--", "compiler"]
 
 
+def test_two_hour_ci_stage_deadline_preserves_local_default_and_memory_guard(tmp_path):
+    assert bootstrap.Options({}).stage_timeout == 1800
+    assert bootstrap.SAFE_MAX_STAGE_TIMEOUT == 7200
+    options = _options(
+        tmp_path, PCC_BOOTSTRAP_STAGE_TIMEOUT="7200",
+        PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES="4294967296",
+    )
+    command = bootstrap._posix_guard_command(options.out_dir / "guard", options, ["compiler"])
+    assert command[command.index("--timeout") + 1] == "7200"
+    assert command[command.index("--max-tree-rss-bytes") + 1] == "4294967296"
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1", "7201"))
+def test_ci_stage_deadline_remains_positive_and_capped(tmp_path, timeout):
+    with pytest.raises(bootstrap.BootstrapError, match="PCC_BOOTSTRAP_STAGE_TIMEOUT"):
+        _options(tmp_path, PCC_BOOTSTRAP_STAGE_TIMEOUT=timeout)
+
+
 def test_stage_smoke_uses_an_explicit_runtime_archive(tmp_path, monkeypatch):
     """A compiled stage cannot rebuild the runtime archive, so hand it one.
 

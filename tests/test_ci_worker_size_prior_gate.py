@@ -616,6 +616,54 @@ def test_explicit_runtime_cli_reaches_existing_matrix_owner(tmp_path, monkeypatc
                  "--runtime-archive", "source-matched.a", "--inside-matrix", "--lock-held"])
     assert calls[0][1]["runtime_archive"] == "source-matched.a"
     assert calls[0][1]["timeout"] == 2400 and calls[0][1]["rss_limit"] == 17179869184
+    assert calls[0][1]["stage1_timeout"] is None
+
+
+def test_platform_stage1_cli_keeps_the_native_compile_deadline(tmp_path, monkeypatch):
+    module = load_platform(monkeypatch)
+    calls = []
+    monkeypatch.setattr(module, "run_matrix", lambda *args, **kwargs: calls.append((args, kwargs)))
+    module.main(["--gc", "all", "--stage", "1", "--out-dir", str(tmp_path),
+                 "--timeout", "6000", "--stage1-timeout", "7200", "--inside-matrix", "--lock-held"])
+    assert calls[0][0][0] == ("0", "1", "2", "3", "4")
+    assert calls[0][1]["stage1_timeout"] == 7200
+    assert calls[0][1]["timeout"] == 6000
+    assert calls[0][1]["rss_limit"] == 17179869184
+
+
+@pytest.mark.parametrize("gc,timeout,stage1_timeout,expected", (
+    ("all", 6000, 7200, 49500),
+    ("0", 6000, 7200, 25500),
+    ("0", 2400, None, 9900),
+    ("0", 6000, 3000, 24300),
+))
+def test_platform_parent_adds_only_the_extra_stage1_allowance(
+    tmp_path, monkeypatch, gc, timeout, stage1_timeout, expected,
+):
+    module = load_platform(monkeypatch)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda command, **kwargs: calls.append((command, kwargs)))
+    arguments = ["--gc", gc, "--stage", "1", "--out-dir", str(tmp_path / "out"),
+                 "--timeout", str(timeout)]
+    if stage1_timeout is not None:
+        arguments += ["--stage1-timeout", str(stage1_timeout)]
+    module.main(arguments)
+    assert len(calls) == 1
+    command, options = calls[0]
+    assert command[2:] == [*arguments, "--inside-matrix", "--lock-held"]
+    assert options["timeout"] == expected
+    assert options["rss_limit"] == 17179869184
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1"))
+def test_platform_rejects_nonpositive_stage1_deadline_before_launch(tmp_path, monkeypatch, timeout):
+    module = load_platform(monkeypatch)
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: pytest.fail("invalid deadline launched a child"))
+    monkeypatch.setattr(module, "run_matrix", lambda *args, **kwargs: pytest.fail("invalid deadline launched a matrix"))
+    with pytest.raises(SystemExit) as caught:
+        module.main(["--out-dir", str(tmp_path), "--stage1-timeout", timeout])
+    assert caught.value.code == 2
 
 
 def test_live_exclusive_has_one_existing_format_diagnostic():
@@ -820,7 +868,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
     for path in (gate.RSS_PUBLICATION_TEST, gate.RSS_READER_TEST, gate.RSS_PUBLISHER_TEST):
         assert path in publication
-    assert "timeout-minutes: 360" in other and "timeout-minutes: 180" in mac
+    assert "timeout-minutes: 360" in other and "timeout-minutes: 200" in mac
     assert other.count("- { platform:") == 3
     assert "uv sync --frozen --dev --python 3.13" in other
     assert "uv sync --frozen --dev\n" in mac
@@ -858,7 +906,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body
         assert "ci_worker_size_prior_gate.py" not in body and "needs:" not in body
-    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"' in mac
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in mac
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
     # A push qualifies Stage1 plus the five-collector canary; the full
     # Stage2/Stage3 chain is a manual dispatch input, never a soft failure.
@@ -877,7 +925,20 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once():
     stage = elements[[getattr(item, "value", None) for item in elements].index("--stage") + 1]
     assert isinstance(stage, ast.Name) and stage.id == "stage_limit"
     assert "--runtime-archive" in constants and "17179869184" in constants
-    assert gate.STAGE1_TIMEOUT_S == 6000
+    assert gate.STAGE1_TIMEOUT_S == 7200
+    assert gate.PLATFORM_COMPILE_TIMEOUT_S == 6000
+    assert "--stage1-timeout" in constants
+
+
+def test_stage1_extension_preserves_other_job_budgets_and_hosted_ceiling():
+    text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    job_minutes = [int(value) for value in re.findall(r"(?m)^    timeout-minutes: (\d+)$", text)]
+    assert job_minutes == [25, 25, 25, 190, 10, 360, 200]
+    assert max(job_minutes) <= 360
+    # Preserve the previous 60-minute allowance outside runtime and Stage1.
+    assert 200 * 60 - 1200 - gate.STAGE1_TIMEOUT_S == 60 * 60
+    preflight = workflow_job(text, "worker-prior-preflight")
+    assert preflight.count("--strict-closure-timeout 6000") == 2
 
 
 @pytest.mark.parametrize("target,machine,failing", [
@@ -2381,14 +2442,14 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
         if target == "darwin":
             assert command == ["chosen-python", "scripts/bootstrap.py", "--backend", "self", "--stage", "1", "--out-dir", str(destination)]
             assert env["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "1"
-            assert env["PCC_BOOTSTRAP_STAGE_TIMEOUT"] == "6000"
+            assert env["PCC_BOOTSTRAP_STAGE_TIMEOUT"] == "7200"
             assert env["PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES"] == "4294967296"
             assert env["PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES"] == "2147483648"
             assert env["PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES"] == "536870912"
             gate.save(out / "profile/stage1.result.json", {"compile_wall_ms": 1000, "returncode": 0,
                                                            "publish_barrier_returncode": 0})
             gate.save(destination / "stage1.process.test/result.json", {
-                "status": "COMPLETE", "returncode": 0, "timeout_s": 6000,
+                "status": "COMPLETE", "returncode": 0, "timeout_s": 7200,
                 "max_tree_rss_bytes": 3221225472, "peak_tree_rss_bytes": 2147483648,
                 "darwin_preflight_reserve_bytes": 536870912,
             })
@@ -2398,7 +2459,8 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
             assert command == ["chosen-python", "scripts/bootstrap_platform.py", "--gc", "all",
                                "--stage", "3" if full_chain else "1",
                                "--out-dir", str(destination), "--runtime-archive", str(archive),
-                               "--timeout", "6000", "--rss-limit", "17179869184", "--cpu-budget", "4"]
+                               "--timeout", "6000", "--stage1-timeout", "7200",
+                               "--rss-limit", "17179869184", "--cpu-budget", "4"]
             assert env["PCC_HOST_INDEXED_PROCESS_SPLIT"] == "0"
             gate.save(destination / "shared/receipt.json", {"stages": [{"seconds": 1}]})
             (destination / "shared/stage1.log").write_text("original diagnostics")

@@ -22,7 +22,7 @@ def _fake_platform(tmp_path, monkeypatch):
 
     def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel=None):
         with lock:
-            events.append((list(command), dict(env), rss_limit, native))
+            events.append((list(command), dict(env), rss_limit, native, timeout))
         log_path = Path(log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if "pcc.frontends.python.owned_runtime_build" in command:
@@ -67,6 +67,41 @@ def test_separate_gc_gates_reuse_one_shared_preparation(tmp_path, monkeypatch):
     for backend in ("0", "1"):
         assert platform.run_from_shared(backend, tmp_path / ("gc" + backend))["qualified"]
     assert sum("pcc.frontends.python.owned_runtime_build" in event[0] for event in events) == 1
+
+
+@pytest.mark.parametrize("stage_limit", (1, 2, 3))
+@pytest.mark.parametrize("stage1_timeout", (None, 7200))
+def test_stage1_deadline_does_not_extend_runtime_later_stages_or_canaries(
+    tmp_path, monkeypatch, stage_limit, stage1_timeout,
+):
+    events = _fake_platform(tmp_path, monkeypatch)
+    receipt = platform.run_matrix(
+        ("0", "1", "2", "3", "4"), tmp_path / "matrix",
+        stage_limit=stage_limit, timeout=6000, stage1_timeout=stage1_timeout,
+    )
+    assert receipt["gc_backends"] == ["0", "1", "2", "3", "4"]
+    assert receipt["aggregate_rss_limit"] == 17179869184
+    assert receipt["parallel_chains"] == 2
+    host_builds = canary_runs = 0
+    for command, _environment, _rss, native, deadline in events:
+        if "--ir-scaffold=on" in command and "-m" in command:
+            host_builds += 1
+            assert not native
+            assert deadline == (6000 if stage1_timeout is None else stage1_timeout)
+        elif "-o" in command or "pcc.frontends.python.owned_runtime_build" in command:
+            assert deadline == 6000
+        else:
+            canary_runs += 1
+            assert native and deadline == 60
+    assert host_builds == 1
+    assert canary_runs == 1 + 5 * stage_limit
+
+
+def test_stage1_deadline_survives_run_chain_lock_recursion(tmp_path, monkeypatch):
+    events = _fake_platform(tmp_path, monkeypatch)
+    platform.run_chain("0", tmp_path / "chain", stage_limit=1,
+                       timeout=6000, stage1_timeout=7200)
+    assert [event[4] for event in events] == [6000, 7200, 6000, 60]
 
 
 def test_same_integration_run_peers_wait_and_reuse_the_common_build(tmp_path, monkeypatch):

@@ -20,8 +20,10 @@ sys.path.insert(0, str(ROOT))
 # (docs/status.md, 2026-10-14): Linux aarch64 ~2360 s; Linux x86_64
 # ~2600 s on fast runners and ~4900 s on slow ones (1.8-1.9x per module);
 # Windows x86_64 ~3850-4500 s; macOS arm64 ~4500-5000 s at the 1.3-1.7
-# workers its memory admission allows. 6000 s leaves ~20% over the slowest.
-STAGE1_TIMEOUT_S = 6000
+# workers its memory admission allows. Stage1 now has an explicit two-hour
+# allowance; this does not extend native canaries or later-stage compiles.
+STAGE1_TIMEOUT_S = 7200
+PLATFORM_COMPILE_TIMEOUT_S = 6000
 # The 45-minute macOS job target. Recorded in the Stage1 receipt; not met
 # while memory admission keeps the 3-core runner near one worker.
 DARWIN_TARGET_WALL_S = 1800
@@ -571,7 +573,9 @@ def run(out, phase, *, strict_closure_timeout=300, full_chain=False):
                     stage_limit = "3" if full_chain else "1"
                     command = [sys.executable, "scripts/bootstrap_platform.py", "--gc", "all", "--stage", stage_limit,
                                "--out-dir", str(destination), "--runtime-archive", str(archive),
-                               "--timeout", str(STAGE1_TIMEOUT_S), "--rss-limit", "17179869184", "--cpu-budget", "4"]
+                               "--timeout", str(PLATFORM_COMPILE_TIMEOUT_S),
+                               "--stage1-timeout", str(STAGE1_TIMEOUT_S),
+                               "--rss-limit", "17179869184", "--cpu-budget", "4"]
                     binary = destination / "shared" / ("pcc1.exe" if sys.platform == "win32" else "pcc1")
                 # The original bootstrap owns its own lock and tree watchdog.
                 # Do not hold an outer copy of that same lock around this call.

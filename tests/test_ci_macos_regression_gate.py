@@ -145,8 +145,8 @@ def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     assert "--darwin-preflight-reserve-bytes 536870912" in smoke
     assert "path: build/macos-regressions/evidence/" in smoke
     assert "actions/download-artifact" not in smoke + stage1
-    assert "timeout-minutes: 180" in stage1
-    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"' in stage1
+    assert "timeout-minutes: 200" in stage1
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in stage1
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in stage1
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in stage1
     assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in stage1
@@ -559,8 +559,8 @@ def test_indexed_split_workflow_is_independent_of_macos_stage1_opt_in():
     assert ('      - name: Build current pcc1\n        env:\n'
             '          # Opt in only this Stage1 build; the bridge gate runs independently.\n'
             '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n        run: uv run') in stage1
-    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"' in stage1
-    assert "timeout-minutes: 180" in stage1
+    assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in stage1
+    assert "timeout-minutes: 200" in stage1
     assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in other
     assert "needs:" not in other
     for name in ("indexed-split", "indexed-handoff-closure"):

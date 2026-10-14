@@ -67,9 +67,9 @@ _GIB = 1024 * 1024 * 1024
 SAFE_MAX_JOBS = 2
 SAFE_MAX_LINK_JOBS = 8
 SAFE_MAX_TREE_RSS_BYTES = 16 * _GIB
-# CI Stage1 needs up to ~5000 s on slow x86_64/Windows runners and on the
-# memory-limited 3-core macOS runner (scripts/ci_worker_size_prior_gate.py).
-SAFE_MAX_STAGE_TIMEOUT = 6000
+# Permit the explicit two-hour CI Stage1 allowance without changing the
+# local default or any memory limit (scripts/ci_worker_size_prior_gate.py).
+SAFE_MAX_STAGE_TIMEOUT = 7200
 SAFE_MAX_HOST_MEMORY_RESERVE_BYTES = 8 * _GIB
 
 _USAGE = __doc__ or ""

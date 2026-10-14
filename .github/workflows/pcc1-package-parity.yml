@@ -546,8 +546,9 @@ jobs:
       # parse was still incomplete at 300s. 85825b40 receipts (Linux): the
       # whole-closure phases end at 1640 s (aarch64) and 2040 s (x86_64);
       # module verify+emit runs at ~2.4-2.5 s per IR MB, so all 34 modules
-      # project to ~3200 s and ~3700 s. 6000 s is the CI budget, as for
-      # Stage1. macOS records the strict closure as not run: its ~8.6 GB peak
+      # project to ~3200 s and ~3700 s. Its CI budget stays at 6000 s;
+      # Stage1 has a separate 7200 s allowance. macOS records the strict
+      # closure as not run: its ~8.6 GB peak
       # exceeds the 7 GB runner. Local default stays 300s.
       - name: Validate macOS default xdist, native prior workers, and changed-module emission
         if: matrix.platform == 'macos-arm64'
@@ -791,9 +792,9 @@ jobs:
   pcc1-package-parity:
     name: macOS arm64 native pcc1 and installed wheel
     runs-on: macos-15
-    # 20 min runtime + up to 100 min Stage1 + setup, native checks, wheel and
-    # receipts. This outer allowance does not change the 6000s Stage1 watchdog.
-    timeout-minutes: 180
+    # 20 min runtime + up to 120 min Stage1 + the existing 60 min allowance
+    # for setup, native checks, wheel and receipts. Hosted jobs stay below 6 h.
+    timeout-minutes: 200
     env:
       PCC_REQUIRE_CURRENT_PCC1: "1"
       PCC_BOOTSTRAP_OUT_DIR: "${{ github.workspace }}/build/bootstrap"
@@ -807,8 +808,8 @@ jobs:
       PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"
       PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"
       PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"
-      # Three M1 cores near one admitted worker: projected ~4500-5000 s.
-      PCC_BOOTSTRAP_STAGE_TIMEOUT: "6000"
+      # Two-hour Stage1 allowance; memory admission remains unchanged.
+      PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"
       # Keep phase/module timing in the retained process stderr on timeout.
       PCC_PY_FRONTEND_WORKER_TIMING: "1"
     steps:

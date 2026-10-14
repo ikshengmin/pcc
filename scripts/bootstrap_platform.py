@@ -212,12 +212,13 @@ def _stage_compiler_environment(environment, out_dir, stage, gc_backend):
     return stage_env
 
 
-def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
+def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeout=None,
               rss_limit=17179869184, allow_dirty=False, shared=None, jobs=1, lock_held=False, cancel=None,
               runtime_archive=None):
     if not lock_held:
         with performance_lock():
             return run_chain(gc_backend, out_dir, stage_limit=stage_limit, timeout=timeout,
+                             stage1_timeout=stage1_timeout,
                              rss_limit=rss_limit, allow_dirty=allow_dirty, shared=shared,
                              jobs=jobs, lock_held=True, cancel=cancel, runtime_archive=runtime_archive)
     def guarded(command, **options):
@@ -336,7 +337,8 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                         stage_env = profiled_env
                     output.unlink(missing_ok=True)
                     record = guarded(command, cwd=ROOT, env=stage_env, log_path=out_dir / f"stage{stage}.log",
-                                 timeout=timeout, rss_limit=rss_limit, native=stage > 1)
+                                 timeout=stage1_timeout if stage == 1 and stage1_timeout is not None else timeout,
+                                 rss_limit=rss_limit, native=stage > 1)
                     if profile_directory is not None:
                         # A killed worker may have claimed the sole attempt but
                         # left no terminal stats. Never call this baseline data.
@@ -472,7 +474,7 @@ def run_from_shared(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                          jobs=2, lock_held=True)
 
 
-def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400,
+def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400, stage1_timeout=None,
                rss_limit=17179869184, allow_dirty=False, cpu_budget=4, lock_held=False,
                runtime_archive=None):
     """One immutable runtime/Stage1, then resource-bounded native chains."""
@@ -484,6 +486,7 @@ def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400,
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "matrix-receipt.json").unlink(missing_ok=True)
         shared = run_chain("0", out_dir / "shared", stage_limit=1, timeout=timeout,
+                           stage1_timeout=stage1_timeout,
                            rss_limit=rss_limit, allow_dirty=allow_dirty,
                            jobs=shared_stage1_jobs(cpu_budget, rss_limit), lock_held=True,
                            runtime_archive=runtime_archive)
@@ -492,7 +495,8 @@ def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400,
             if cancelled.is_set():
                 raise RuntimeError("qualification cancelled after a peer failure")
             return run_chain(backend, out_dir / ("gc" + backend), stage_limit=stage_limit,
-                             timeout=timeout, rss_limit=chain_rss, allow_dirty=allow_dirty,
+                             timeout=timeout, stage1_timeout=stage1_timeout,
+                             rss_limit=chain_rss, allow_dirty=allow_dirty,
                              shared=shared, jobs=jobs, lock_held=True, cancel=cancelled)
         pool = ThreadPoolExecutor(max_workers=slots)
         futures = {pool.submit(execute, backend): backend for backend in backends}
@@ -524,7 +528,10 @@ def main(argv=None):
     parser.add_argument("--gc", default="all", choices=("all", "0", "1", "2", "3", "4"))
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--stage", type=int, default=3, choices=(1, 2, 3))
-    parser.add_argument("--timeout", type=int, default=2400)
+    parser.add_argument("--timeout", type=int, default=2400,
+                        help="per-compile deadline, including runtime, later stages and native canaries")
+    parser.add_argument("--stage1-timeout", type=int,
+                        help="host Stage1 build deadline only (default: --timeout)")
     parser.add_argument("--rss-limit", type=int, default=17179869184)
     parser.add_argument("--cpu-budget", type=int, default=4)
     parser.add_argument("--allow-dirty", action="store_true")
@@ -532,7 +539,8 @@ def main(argv=None):
     parser.add_argument("--inside-matrix", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.timeout <= 0 or args.rss_limit <= 0 or args.cpu_budget <= 0:
+    if (args.timeout <= 0 or (args.stage1_timeout is not None and args.stage1_timeout <= 0)
+            or args.rss_limit <= 0 or args.cpu_budget <= 0):
         parser.error("timeout, CPU budget and RSS limit must be positive")
     backends = ("0", "1", "2", "3", "4") if args.gc == "all" else (args.gc,)
     if not args.inside_matrix:
@@ -542,9 +550,12 @@ def main(argv=None):
             child_args = list(sys.argv[1:] if argv is None else argv)
             command = [sys.executable, str(Path(__file__).resolve()), *child_args, "--inside-matrix", "--lock-held"]
             rounds = (len(backends) + 1) // 2
+            extra_stage1_time = max(0, args.stage1_timeout - args.timeout) if args.stage1_timeout is not None else 0
             return run(command, cwd=ROOT, env=os.environ.copy(), log_path=out_dir / "matrix.log",
-                       timeout=args.timeout * (2 + 2 * rounds) + 300, rss_limit=args.rss_limit)
+                       timeout=args.timeout * (2 + 2 * rounds) + extra_stage1_time + 300,
+                       rss_limit=args.rss_limit)
     return run_matrix(backends, args.out_dir, stage_limit=args.stage, timeout=args.timeout,
+                      stage1_timeout=args.stage1_timeout,
                       rss_limit=args.rss_limit, allow_dirty=args.allow_dirty, cpu_budget=args.cpu_budget,
                       lock_held=args.lock_held, runtime_archive=args.runtime_archive)
 
