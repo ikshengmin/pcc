@@ -135,6 +135,74 @@ def _rel32_range_error(symbol, source_section, place, target, target_section,
             + "; sections " + ", ".join(layout))
 
 
+def _merge_stack_maps(objects):
+    """Intern root-set shapes across COFF inputs without renaming functions.
+
+    Ordinary section concatenation repeats every object's location table.
+    Keep address targets as original object/symbol indices: local symbols
+    belong to their input and must not be resolved by an unqualified name.
+    The existing wire merger preserves records and reindexes shared shapes.
+    Its existing record/location caps, and the caller's RSS guard, remain.
+    """
+    from .precise_stackmap import (
+        ARCH_X86_64, PreciseStackMapError, _scan_stack_map_payload,
+        function_id, merge_stack_map_payloads, validate_stack_map_payload,
+    )
+
+    payloads = []
+    targets = {}
+    for oi, obj in enumerate(objects):
+        for si, section in enumerate(obj.sections, 1):
+            if section.name != ".pcc_stackmaps":
+                continue
+            if (section.flags & 0xE00000E0 != 0x40000040
+                    or section.align < 8 or section.align > 4096
+                    or section.align & (section.align - 1)):
+                raise CoffError("PE stack-map section must be aligned read-only data")
+            if any(symbol.section == si for symbol in obj.symbols):
+                raise CoffError("PE stack-map section must not define symbols")
+            try:
+                validate_stack_map_payload(section.data, expected_arch=ARCH_X86_64)
+                _count, functions, _start, _locations = _scan_stack_map_payload(section.data)
+            except PreciseStackMapError as exc:
+                raise CoffError("invalid PE stack-map input: " + str(exc)) from exc
+            relocations = {rel.offset: rel for rel in section.relocations}
+            offsets = {start + 8 for _fid, start, _end in functions}
+            if (len(relocations) != len(section.relocations)
+                    or set(relocations) != offsets):
+                raise CoffError("every PE stack-map function needs exactly one relocation")
+            for fid, start, _end in functions:
+                offset = start + 8
+                relocation = relocations[offset]
+                if (relocation.kind != ADDR64
+                        or section.data[offset:offset + 8] != b"\0" * 8):
+                    raise CoffError("PE stack-map address needs a zero-addend ADDR64 relocation")
+                if not 0 <= relocation.symbol < len(obj.symbols):
+                    raise CoffError("PE stack-map relocation symbol is out of range")
+                symbol = obj.symbols[relocation.symbol]
+                if not 0 < symbol.section <= len(obj.sections):
+                    raise CoffError("PE stack-map function must be section-defined")
+                code = obj.sections[symbol.section - 1]
+                code_size = struct.unpack_from("<I", section.data, start + 16)[0]
+                if (not code.flags & 0x20000000 or symbol.value < 0
+                        or symbol.value + code_size > len(code.data)):
+                    raise CoffError("PE stack-map function range is outside executable data")
+                if fid != function_id(symbol.name):
+                    raise CoffError("PE stack-map function id does not match its relocation symbol")
+                if fid in targets:
+                    raise CoffError("duplicate PE stack-map function id")
+                targets[fid] = (oi, relocation.symbol)
+            payloads.append(section.data)
+    if not payloads:
+        return b"", ()
+    try:
+        payload, offsets = merge_stack_map_payloads(tuple(payloads))
+        validate_stack_map_payload(payload, expected_arch=ARCH_X86_64)
+    except PreciseStackMapError as exc:
+        raise CoffError("invalid merged PE stack map: " + str(exc)) from exc
+    return payload, tuple((offset, *targets[fid]) for fid, offset in offsets)
+
+
 def link_executable(objects, *, archives=(), entry="pcc_windows_start",
                     image_base=0x140000000) -> bytes:
     objects = list(objects)
@@ -170,14 +238,17 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     for name in imports:
         system_dll(name)
 
+    stack_payload, stack_targets = _merge_stack_maps(objects)
+    stack_size = len(stack_payload)
+    stack_placement = None
     # Merge sections by PE name, sorting COFF $ suffixes before concatenation.
     groups = {}
     for oi, obj in enumerate(objects):
         for si, sec in enumerate(obj.sections, 1):
-            if sec.name in (".note.GNU-stack", ".comment"):
+            if sec.name in (".note.GNU-stack", ".comment", ".pcc_stackmaps"):
                 continue
             base = sec.name.split("$", 1)[0]
-            if base.startswith(".rodata") or base == ".pcc_stackmaps":
+            if base.startswith(".rodata"):
                 base = ".rdata"
             if len(base.encode()) > 8:
                 raise CoffError("PE section name exceeds eight bytes: " + base)
@@ -185,6 +256,11 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     groups.setdefault(".text", [])
     groups.setdefault(".idata", [])
     groups.setdefault(".rdata", [])
+    if stack_payload:
+        # The negative index is private to this synthetic section; all
+        # address relocations retain the original nonnegative input index.
+        groups[".rdata"].append((".pcc_stackmaps", -1, 0,
+                                CoffSection(".pcc_stackmaps", stack_payload, 0x40000040, 8)))
     sections = []
     placements = {}
     rva = 0x1000
@@ -202,7 +278,10 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
             if sec.align > 4096:
                 raise CoffError("PE section alignment above page size is unsupported")
             payload.extend(b"\0" * ((-len(payload)) & (sec.align - 1)))
-            placements[(oi, si)] = (len(sections), len(payload))
+            if oi < 0:
+                stack_placement = (len(sections), len(payload))
+            else:
+                placements[(oi, si)] = (len(sections), len(payload))
             payload.extend(sec.data)
             flags |= sec.flags & 0xE00000E0
         if name == ".text":
@@ -284,6 +363,24 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
                 elif value < 0 or value >= 1 << (width * 8):
                     raise CoffError("PE relocation overflow")
                 output[2][patch:patch + width] = (value & ((1 << (width * 8)) - 1)).to_bytes(width, "little")
+    if stack_placement is not None:
+        from .precise_stackmap import ARCH_X86_64, validate_stack_map_payload
+
+        section_index, base = stack_placement
+        output = sections[section_index]
+        for offset, oi, si in stack_targets:
+            target, _target_section = resolve(oi, si)
+            value = image_base + target
+            if not 0 < value < 1 << 64:
+                raise CoffError("PE stack-map function address overflows uint64")
+            struct.pack_into("<Q", output[2], base + offset, value)
+            fixups.append(output[1] + base + offset)
+        # Validate the final address-bound table, excluding ordinary .rodata
+        # that follows it. No input table or caller-owned object was mutated.
+        validate_stack_map_payload(
+            bytes(output[2][base:base + stack_size]),
+            expected_arch=ARCH_X86_64, final_image=True,
+        )
     for name, address in text_thunks.items():
         text = sections[0]
         struct.pack_into("<i", text[2], address - text[1] + 2, import_slots[name] - address - 6)
