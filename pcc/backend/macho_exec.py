@@ -599,11 +599,13 @@ def link_prepared_executable(
         plan = _prepare_executable_image(merged, entry=entry, minos=minos,
                                          identifier=identifier)
         return _finish_executable_image(plan, identifier, phase_callback)
-    retained_source_bytes = _compact_source_raw_bytes(merged)
     plan = _prepare_executable_image(
         merged, entry=entry, minos=minos, identifier=identifier,
         compact_budget=compact_budget,
     )
+    # An owned source view retires its payloads while the image is prepared,
+    # so measure what the source still keeps alive afterwards.
+    retained_source_bytes = _compact_source_raw_bytes(merged)
     return _finish_executable_image(
         plan, identifier, phase_callback, compact_budget=compact_budget,
         retained_source_bytes=retained_source_bytes,
@@ -800,7 +802,9 @@ def _prepare_executable_image(
                 "Mach-O mutable section output",
             )
         if source_view:
-            payload = OwnedMergedSourceView.section_data(obj, sec)
+            # The owned view is single-use: retire each source payload once
+            # it is copied, so the image is not held twice at its peak.
+            payload = OwnedMergedSourceView.take_section_data(obj, sec)
         else:
             payload = obj.section_data(sec)
         out = _Out(
@@ -808,6 +812,9 @@ def _prepare_executable_image(
             bytearray() if is_zf
             else bytearray(payload),
         )
+        if source_view and not is_zf:
+            source_raw_bytes -= min(source_raw_bytes, len(payload))
+        payload = None
         out.zerofill_size = sec["size"] if is_zf else 0
         if segname == "__TEXT":
             text_out.append(out)

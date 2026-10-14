@@ -550,6 +550,10 @@ def test_final_publication_forwards_budget_and_restores_retained_storage(
     # legacy cap. Address relocation and final-image preparation remain real.
     view = _owned_stackmap_source()
     source_bytes = macho_exec._compact_source_raw_bytes(view)
+    # Preparation copies each payload into the image and retires it from the
+    # single-use view; its relocation rows stay until the image is finished.
+    row_bytes = sum(len(rows) for rows in view._raw_relocations)
+    assert 0 < row_bytes < source_bytes
     monkeypatch.setattr(wire, "MAX_RECORDS", 2)
     budget = _budget()
     budget.retained_bytes = 17
@@ -563,7 +567,7 @@ def test_final_publication_forwards_budget_and_restores_retained_storage(
         assert compact_budget is budget
         assert final_image is True
         assert expected_arch == wire.ARCH_AARCH64
-        assert compact_budget.retained_bytes > 17 + source_bytes
+        assert compact_budget.retained_bytes > 17 + row_bytes
         assert struct.unpack_from("<Q", payload, wire.HEADER_SIZE + 8)[0] != 0
         validation_calls.append(compact_budget.retained_bytes)
         if inject_validation_error:
@@ -581,7 +585,7 @@ def test_final_publication_forwards_budget_and_restores_retained_storage(
     ):
         assert compact_budget is budget
         assert compact_budget.retained_bytes == 17
-        assert retained_source_bytes == source_bytes > 0
+        assert retained_source_bytes == row_bytes > 0
         assert identifier == b"compact-budget-test"
         assert phase_callback is None
         assert plan[1]  # Real output regions were prepared without an image.
@@ -600,7 +604,8 @@ def test_final_publication_forwards_budget_and_restores_retained_storage(
         assert macho_exec.link_prepared_executable(
             view, identifier=b"compact-budget-test", compact_budget=budget,
         ) == b"prepared-budget-sentinel"
-        assert finish_calls == [source_bytes]
+        assert finish_calls == [row_bytes]
+        assert all(len(payload) == 0 for payload in view._payloads)
         assert budget.record_visits == 6
     assert len(validation_calls) == 1
     assert budget.retained_bytes == 17

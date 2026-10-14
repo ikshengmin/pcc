@@ -1505,6 +1505,17 @@ class OwnedMergedSourceView:
             raise NativeObjectError("section does not belong to this source view")
         return self._payloads[index]
 
+    def take_section_data(self, section):
+        """Return a section's payload and retire it from this view.
+
+        The owned final link copies each payload into its mutable output once
+        and never reads the source again; retiring it there keeps one copy of
+        the image resident instead of two. A view is single-use afterwards.
+        """
+        payload = self.section_data(section)
+        self._payloads[section["_pcc_source_index"]] = b""
+        return payload
+
     def iter_relocations(self, section, *, ordered=True):
         index = section.get("_pcc_source_index")
         if not isinstance(index, int) or not 0 <= index < len(self._raw_relocations):

@@ -366,6 +366,11 @@ _S_THREAD_LOCAL_ZEROFILL = 0x12
 # middle out of reach of every island. Keep this below the executable
 # linker's island span.
 _TEXT_KEY = ("__TEXT", "__text")
+
+
+def _is_text_chunk_key(key: tuple[str, str]) -> bool:
+    """__TEXT,__text and the numbered chunks it is split into."""
+    return key[0] == "__TEXT" and key[1].startswith("__text")
 _TEXT_CHUNK_BYTES = 32 * 1024 * 1024
 
 
@@ -856,6 +861,10 @@ def link_relocatable_native(
     stack_map_payloads: list[bytes] = []
     stack_map_snapshot_bytes = 0
     input_raw_bytes = 0
+    # Merged bytes that do not share an input buffer: alignment padding and
+    # patched or sliced copies. A payload view of an input is already inside
+    # input_raw_bytes, so charging it again would count the inputs twice.
+    merged_private_bytes = 0
     if compact_budget is not None:
         input_raw_bytes = sum(_link_input_size_hint(value) for value in objects)
     stack_map_symbol_by_function_id: dict[int, str] = {}
@@ -979,8 +988,7 @@ def link_relocatable_native(
                         # Keep the source, any temporary payload and the new
                         # immutable snapshot in the known-buffer estimate.
                         compact_budget.check_peak(
-                            input_raw_bytes
-                            + sum(part.data_size for part in merged.values())
+                            input_raw_bytes + merged_private_bytes
                             + stack_map_snapshot_bytes + 2 * sec_size,
                             entries=len(stack_map_symbol_by_function_id),
                             label="Mach-O input stack-map snapshot",
@@ -1115,10 +1123,16 @@ def link_relocatable_native(
                     ))
                 if padding:
                     target.data_parts.append(b"\0" * padding)
+                    merged_private_bytes += padding
                 payload = _section_payload(
                     obj, sec, sec_index, section_addrs,
                 )
                 target.data_parts.append(payload)
+                # A memoryview, or a native section's own bytes, shares the
+                # input buffer; a bytearray or a bytes slice is a copy.
+                if not (isinstance(payload, memoryview)
+                        or (is_native and not isinstance(payload, bytearray))):
+                    merged_private_bytes += len(payload)
                 target.data_size = base + len(payload)
                 # Decode checked each record against this payload: shifted by
                 # base it stays inside the merged payload, inside the signed
@@ -1216,14 +1230,38 @@ def link_relocatable_native(
             ))
             defined[name] = merged_key
 
+    if _consume_inputs:
+        # The merge loop was the inputs' last use; only the payload views in
+        # data_parts still hold their buffers. Retire every other reference
+        # now, so each input's buffer is freed by the join that copies its
+        # last view instead of surviving until the merged object is built.
+        # Borrowed API inputs keep their existing lifetime and contents.
+        objects.clear()
+        indexed_objects.clear()
+        inspected_inputs.clear()
+        parsed_objects.clear()
+        symbol_tables.clear()
+        relocation_target_indices.clear()
+        obj = None
+        sections = None
+        symbols = None
+        sec = None
+
     # Keep each input payload once while calculating offsets. Growing the
     # merged bytearray for every object copies an ever-larger prefix in the
     # native runtime. Keep the joined bytes immutable until an actual section
     # rebase needs a write, so unchanged text is not copied into a bytearray
-    # here and back into bytes at the output boundary.
-    for section in merged.values():
+    # here and back into bytes at the output boundary. Every input spreads its
+    # payloads over the data sections but over at most a few consecutive text
+    # chunks, so joining the data sections first lets each text chunk's join
+    # free the inputs whose text ends in it: the peak is about one copy of the
+    # inputs plus one chunk, not two copies.
+    for key in sorted(merged, key=_is_text_chunk_key):
+        section = merged[key]
         section.data = b"".join(section.data_parts)
         section.data_parts.clear()
+    if _consume_inputs:
+        input_raw_bytes = 0
 
     if stack_map_payloads:
         try:
@@ -1349,21 +1387,6 @@ def link_relocatable_native(
     defined = None
     referenced = None
     local_renames = None
-    if _consume_inputs:
-        # Payloads and source records have been copied into private merge
-        # buffers. Retire the transferred inputs and inspection projections
-        # before constructing the final object. Borrowed API inputs keep
-        # their existing lifetime and contents.
-        objects.clear()
-        indexed_objects.clear()
-        inspected_inputs.clear()
-        parsed_objects.clear()
-        symbol_tables.clear()
-        relocation_target_indices.clear()
-        obj = None
-        sections = None
-        symbols = None
-        sec = None
 
     out_sections = []
     proven_relocations = []
@@ -1376,9 +1399,13 @@ def link_relocatable_native(
         else:
             proven_relocations.append(m.proven_relocations)
         zero = m.zerofill_size if not m.data else 0
+        payload = bytes(m.data)
+        # A rebased section was a bytearray; bytes() copied it, so drop the
+        # bytearray now instead of keeping both until every section is built.
+        m.data = b""
         out_sections.append(Section(
             sectname=m.sectname, segname=m.segname,
-            data=bytes(m.data),
+            data=payload,
             align_log2=m.align_log2, flags=m.flags,
             symbols=tuple(sorted(m.symbols, key=lambda s: s.offset)),
             # This is a fresh merge buffer, independent of every caller input.
