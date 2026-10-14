@@ -70,6 +70,23 @@ def _align(value, alignment):
     return (value + alignment - 1) & -alignment
 
 
+def _check_image_size(size, sections=(), *, stack_map_bytes=0):
+    # Microsoft documents a 2 GiB PE32+ image maximum without specifying
+    # equality behavior. Reject sizes above it; passing this range check
+    # is not a claim that a Windows loader has qualified the image.
+    # https://learn.microsoft.com/windows/win32/debug/pe-format
+    if size <= 0x80000000:
+        return
+    layout = []
+    for name, address, payload, _flags in sections:
+        layout.append(name + "@" + hex(address) + " bytes=" + str(len(payload)))
+    raise CoffError(
+        "PE32+ image size " + str(size) + " bytes (" + hex(size)
+        + ") exceeds documented 2 GiB limit; merged_stack_map_bytes="
+        + str(stack_map_bytes) + "; sections " + ", ".join(layout)
+    )
+
+
 def _symbols(objects):
     defined = {}
     needed = set()
@@ -417,6 +434,7 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     if reloc_data:
         sections.append([".reloc", rva, reloc_data, 0x42000040])
         rva = _align(rva + len(reloc_data), 4096)
+    _check_image_size(rva, sections, stack_map_bytes=stack_size)
     headers = _align(128 + 4 + 20 + 240 + len(sections) * 40, 512)
     image = bytearray(b"\0" * headers)
     image[:2] = b"MZ"
