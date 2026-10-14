@@ -150,6 +150,10 @@ on:
       - "tests/python/test_native_float_callback_movement.py"
       - "tests/python/test_owned_fdopen_provider.py"
       - "tests/python/owned_regression_support.py"
+      - "tests/python/test_object_type_identity.py"
+      - "tests/python/test_super_call_result_roots.py"
+      - "tests/test_ci_native_object_regressions.py"
+      - "scripts/ci_native_object_regressions.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
       - "tests/python/test_gc_relocation_sweep_verdict.py"
@@ -313,6 +317,10 @@ on:
       - "tests/python/test_native_float_callback_movement.py"
       - "tests/python/test_owned_fdopen_provider.py"
       - "tests/python/owned_regression_support.py"
+      - "tests/python/test_object_type_identity.py"
+      - "tests/python/test_super_call_result_roots.py"
+      - "tests/test_ci_native_object_regressions.py"
+      - "scripts/ci_native_object_regressions.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
       - "tests/python/test_gc_relocation_sweep_verdict.py"
@@ -633,7 +641,7 @@ jobs:
         run: uv sync --frozen --dev --python 3.13
 
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
-        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py
 
       # A push qualifies Stage1 and the native canary under all five
       # collectors. Stage2 codegen alone needs ~66k-116k pcc1 task-s today
@@ -766,6 +774,21 @@ jobs:
                "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"],
               os.environ.copy(), integration=True, timeout=300,
           )
+
+      - name: Verify object identity and super results with the existing runtime
+        # A terminal Stage1 attempt is enough to reuse its admitted runtime.
+        # Missing admission is a hard failure in this separate pcc0 gate.
+        if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
+        timeout-minutes: 6
+        env:
+          PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
+          PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+          PCC_NO_AUTO_PCC1: "1"
+          PCC_WITH_THREADS: "0"
+          PCC_REFCOUNT_KIND: "atomic"
+          PCC_PYTEST_AUTO_CLEAN: "0"
+          UV_PYTHON_DOWNLOADS: "never"
+        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_native_object_regressions.py --out-dir build/worker-prior-gate
 
       - name: Verify the new pcc1 on native prior worker shapes
         run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1

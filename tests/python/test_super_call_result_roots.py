@@ -5,7 +5,6 @@ and moving-collector behavior are covered separately by the integration test.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -18,6 +17,10 @@ from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.py_lift import parse_and_lift
 from pcc.frontends.python.type_infer import infer_module
 from tests.owned_ir_validation import verify_ir_text
+from tests.python.owned_regression_support import (
+    assert_owned_program,
+    explicit_owned_runtime,
+)
 from tests.python.root_slot_contract import RootSlotContract
 
 
@@ -243,26 +246,17 @@ def test_super_result_cpython_reference(tmp_path):
 
 
 @pytest.mark.integration
-def test_super_result_native_matches_cpython_under_five_collectors(tmp_path, pcc_runtime_archive):
+def test_super_result_native_matches_cpython_under_five_collectors(
+    tmp_path, explicit_owned_runtime, capfd,
+):
     from pcc.frontends.python.pipeline import compile_python
 
     # Original arithmetic regression plus borrowed-object identity, keyword
     # binding and an exception raised by the base method.
 
-    path = tmp_path / "super_result.py"
-    path.write_text(NATIVE_SOURCE, encoding="utf-8")
-    expected = subprocess.run([sys.executable, str(path)], capture_output=True,
-                              text=True, timeout=20)
-    assert expected.returncode == 0, expected.stderr
-    output = tmp_path / "super_result.out"
-    compile_python(str(path), str(output), backend="self", libpython_mode="off",
-                   ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
-        environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",
-                           PCC_HOST_PCC="/usr/bin/false", PCC_GC_BACKEND=str(backend))
-        environment.pop("LC_ALL", None)
-        actual = subprocess.run([str(output)], env=environment, capture_output=True,
-                                text=True, timeout=20)
-        assert (actual.returncode, actual.stdout, actual.stderr) == (
-            expected.returncode, expected.stdout, expected.stderr
-        ), (backend, actual.stdout, actual.stderr)
+    # Reuse explicit source/codegen admission and durable per-collector
+    # execution receipts. This fixture cannot provision a runtime or pcc1.
+    assert_owned_program(
+        NATIVE_SOURCE, "5\nTrue\ncaught\n", tmp_path,
+        compile_python, "pcc0", explicit_owned_runtime, capfd,
+    )
