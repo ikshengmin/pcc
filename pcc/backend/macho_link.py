@@ -379,6 +379,68 @@ def _align_up(value: int, align_log2: int) -> int:
     return (value + mask) & ~mask
 
 
+def _place_merged_section(
+    merged: dict[tuple[str, str], _MergedSection],
+    order: list[tuple[str, str]],
+    key: tuple[str, str],
+    flags: int,
+    align_log2: int,
+    size: int,
+    text_chunk_index: int,
+    text_chunk_key: tuple[str, str],
+) -> tuple[tuple[str, str], _MergedSection, int, int, int, tuple[str, str]]:
+    """Place one input section using metadata, without retaining its payload.
+
+    The text-chunk decision precedes alignment, exactly as in the merge.
+    Zerofill commits its VM size here. For ordinary data, the caller commits
+    ``data_size`` after reading the actual payload; a failed or short read
+    must not be replaced by a declared-size advance.
+    """
+    zerofill = (flags & spec.SECTION_TYPE) in (
+        spec.S_ZEROFILL, _S_THREAD_LOCAL_ZEROFILL,
+    )
+    merged_key = key
+    if key == _TEXT_KEY and not zerofill:
+        current = merged.get(text_chunk_key)
+        if (
+            current is not None
+            and current.data_size > 0
+            and current.data_size + size > _TEXT_CHUNK_BYTES
+        ):
+            text_chunk_index += 1
+            text_chunk_key = ("__TEXT", "__text" + str(text_chunk_index))
+        merged_key = text_chunk_key
+    if merged_key not in merged:
+        merged[merged_key] = _MergedSection(merged_key[0], merged_key[1], flags)
+        order.append(merged_key)
+    target = merged[merged_key]
+    if (target.flags & spec.SECTION_TYPE) != (flags & spec.SECTION_TYPE):
+        raise LinkError(
+            f"{key} has conflicting section TYPES across inputs "
+            f"({target.flags:#x} vs {flags:#x})"
+        )
+    # Attributes are a union, not an identity: an input whose __text
+    # happens to contain no branch targets omits SOME_INSTRUCTIONS.
+    target.flags |= flags & spec.SECTION_ATTRIBUTES
+    target.align_log2 = max(target.align_log2, align_log2)
+    padding = 0
+    if zerofill:
+        base = _align_up(target.zerofill_size, align_log2)
+        target.zerofill_size = base + size
+    else:
+        base = _align_up(target.data_size, align_log2)
+        padding = base - target.data_size
+        if padding and target.data_size % 4 != 0 and (
+            target.flags & spec.S_ATTR_PURE_INSTRUCTIONS
+        ):
+            # An odd-sized inline-data tail needs data padding, not a
+            # partial AArch64 instruction, before the next text atom.
+            target.data_in_code.append(DataInCodeRegion(
+                offset=target.data_size, length=padding, kind=spec.DICE_KIND_DATA,
+            ))
+    return merged_key, target, base, padding, text_chunk_index, text_chunk_key
+
+
 def _relocation_symbol_name(
     symbols,
     symbol_index: int,
@@ -1073,54 +1135,17 @@ def link_relocatable_native(
                 if compact_budget is not None:
                     stack_map_snapshot_bytes += len(payload)
                 continue
-            merged_key = key
-            if key == _TEXT_KEY and not _is_zerofill(sec):
-                current = merged.get(text_chunk_key)
-                if (
-                    current is not None
-                    and current.data_size > 0
-                    and current.data_size + sec_size > _TEXT_CHUNK_BYTES
-                ):
-                    text_chunk_index += 1
-                    text_chunk_key = ("__TEXT", "__text" + str(text_chunk_index))
-                merged_key = text_chunk_key
+            (
+                merged_key, target, base, padding,
+                text_chunk_index, text_chunk_key,
+            ) = _place_merged_section(
+                merged, order, key, sec_flags, sec_align, sec_size,
+                text_chunk_index, text_chunk_key,
+            )
             input_merged_key[key] = merged_key
-            if merged_key not in merged:
-                merged[merged_key] = _MergedSection(merged_key[0], merged_key[1], sec_flags)
-                order.append(merged_key)
-            target = merged[merged_key]
-            if (target.flags & spec.SECTION_TYPE) != (sec_flags & spec.SECTION_TYPE):
-                raise LinkError(
-                    f"{key} has conflicting section TYPES across inputs "
-                    f"({target.flags:#x} vs {sec_flags:#x})"
-                )
-            # Attributes are a union, not an identity: an input whose __text
-            # happens to contain no branch targets omits SOME_INSTRUCTIONS,
-            # and ld merges the attribute sets rather than refusing. The
-            # section TYPE (low byte) must still agree.
-            target.flags |= sec_flags & spec.SECTION_ATTRIBUTES
-            target.align_log2 = max(target.align_log2, sec_align)
             input_is_code = bool(sec_flags & spec.S_ATTR_PURE_INSTRUCTIONS)
             relocations_proven = isinstance(obj, PackedNativeObject)
-            if _is_zerofill(sec):
-                # No file payload: only the size accumulates. Symbols still
-                # need an offset, so the running vm size is the base.
-                base = _align_up(target.zerofill_size, sec_align)
-                target.zerofill_size = base + sec_size
-            else:
-                base = _align_up(target.data_size, sec_align)
-                padding = base - target.data_size
-                if padding and target.data_size % 4 != 0 and (
-                    target.flags & spec.S_ATTR_PURE_INSTRUCTIONS
-                ):
-                    # A preceding input may end in an odd-sized inline-data
-                    # tail.  The zeros needed to align the next text atom are
-                    # data as well, not a partial AArch64 instruction.
-                    target.data_in_code.append(DataInCodeRegion(
-                        offset=target.data_size,
-                        length=padding,
-                        kind=spec.DICE_KIND_DATA,
-                    ))
+            if not _is_zerofill(sec):
                 if padding:
                     target.data_parts.append(b"\0" * padding)
                     merged_private_bytes += padding
