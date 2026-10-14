@@ -730,8 +730,16 @@ class MethodCallLoweringMixin:
         method_name: str,
         arg_exprs: tuple[Expr, ...],
         kwargs: tuple = (),
+        result_slot=None,
     ) -> ir.Value:
         ast_fd = self.class_lowering._find_method_def(info.name, method_name)
+        if result_slot is not None and (
+            method_fn.name in self._manual_pointer_abi_functions
+            or ast_fd is not None and isinstance(ast_fd.return_ty, RawPointerType)
+        ):
+            raise L1CodegenError(
+                "raw-pointer method ABI cannot publish into a managed operand root"
+            )
         if ast_fd is not None:
             arg_exprs = tuple(
                 self._resolve_call_kwargs(
@@ -773,8 +781,11 @@ class MethodCallLoweringMixin:
             root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
             aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
             pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
+            result_slot=result_slot,
         )
         _method_release_arg_provenance(self, arg_provenance)
+        if result_slot is not None and isinstance(ret_ty, ir.PointerType):
+            return self.builder.load(result_slot, name=self._fresh("super.result.current"))
         return result
 
     def _emit_direct_method_ptr_call(
@@ -786,9 +797,17 @@ class MethodCallLoweringMixin:
         method_name: str,
         arg_exprs: tuple[Expr, ...],
         kwargs: tuple = (),
+        result_slot=None,
     ) -> ir.Value:
         args_ir: list[ir.Value] = [self_val]
         ast_fd = self.class_lowering._find_method_def(info.name, method_name)
+        if result_slot is not None and (
+            method_fn.name in self._manual_pointer_abi_functions
+            or ast_fd is not None and isinstance(ast_fd.return_ty, RawPointerType)
+        ):
+            raise L1CodegenError(
+                "raw-pointer method ABI cannot publish into a managed operand root"
+            )
         if ast_fd is not None:
             arg_exprs = tuple(
                 self._resolve_call_kwargs(
@@ -901,20 +920,50 @@ class MethodCallLoweringMixin:
                 if isinstance(ret_ty, ir.VoidType)
                 else self._fresh(f"{slot_prefix}.ret")
             )
-            if kwargs_obj is None:
-                func_result = self.builder.call(
-                    self.runtime["py_func_call"],
-                    [method_ptr, full_args],
-                    name=func_ret_name,
+            publication_roots = ()
+            previous = self._current_try_err_block()
+            saved_cpy = self._cpy_operand_cleanup_block
+            if result_slot is not None and isinstance(ret_ty, ir.PointerType):
+                # The runtime callable and raw method branches share the
+                # consumer's already-registered result root. Keep the temporary
+                # binder inputs pinned until that NEW result is published.
+                args_root = self._enter_container_temp_root(full_args, slot_prefix + ".args")
+                publication_roots = ((full_args, args_root),)
+                if kwargs_obj is not None:
+                    kwargs_root = self._enter_container_temp_root(kwargs_obj, slot_prefix + ".kwargs")
+                    publication_roots = ((kwargs_obj, kwargs_root),) + publication_roots
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                self._try_err_block = self._make_cpy_operand_cleanup_block(
+                    (), publication_roots, target, "super.publication.arguments.cleanup",
+                    _method_pinned_arg_cleanup(arg_provenance),
                 )
+                self._cpy_operand_cleanup_block = self._try_err_block
+            try:
+                if kwargs_obj is None:
+                    func_result = self.builder.call(
+                        self.runtime["py_func_call"],
+                        [method_ptr, full_args],
+                        name=func_ret_name,
+                    )
+                else:
+                    func_result = self.builder.call(
+                        self.runtime["py_func_call_kwargs"],
+                        [method_ptr, full_args, kwargs_obj],
+                        name=func_ret_name,
+                    )
+                if result_slot is not None and isinstance(ret_ty, ir.PointerType):
+                    self._publish_slot_call_owned(result_slot, func_result, label="super call")
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            if publication_roots:
+                for value, root in publication_roots:
+                    self._leave_container_temp_root(root)
+                    self._gc_release(value)
             else:
-                func_result = self.builder.call(
-                    self.runtime["py_func_call_kwargs"],
-                    [method_ptr, full_args, kwargs_obj],
-                    name=func_ret_name,
-                )
-                self._gc_release(kwargs_obj)
-            self._gc_release(full_args)
+                if kwargs_obj is not None:
+                    self._gc_release(kwargs_obj)
+                self._gc_release(full_args)
             self._emit_post_call_err_check(
                 None,
                 pinned_release_on_error=_method_pinned_arg_cleanup(
@@ -937,8 +986,9 @@ class MethodCallLoweringMixin:
                 args_ir,
                 raw_call_name,
                 root_result=ast_fd is not None and self._is_object(ast_fd.return_ty),
-            aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
+                aggregate_result_ty=None if ast_fd is None else ast_fd.return_ty,
                 pinned_arg_temps=_method_pinned_arg_cleanup(arg_provenance),
+                result_slot=result_slot,
             )
             raw_exit = self.builder.block
             self.builder.branch(done_bb)
@@ -947,6 +997,9 @@ class MethodCallLoweringMixin:
             if isinstance(ret_ty, ir.VoidType):
                 _method_release_arg_provenance(self, arg_provenance)
                 return self._emit_none_literal()
+            if result_slot is not None:
+                _method_release_arg_provenance(self, arg_provenance)
+                return self.builder.load(result_slot, name=self._fresh("super.result.current"))
             result = self.builder.phi(
                 ret_ty,
                 name=self._fresh(f"{info.name}.{method_name}.super.ret"),

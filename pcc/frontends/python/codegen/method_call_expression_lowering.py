@@ -1210,6 +1210,7 @@ class MethodCallExpressionLoweringMixin:
                         attr.name,
                         expr.args,
                         kwargs=expr.kwargs,
+                        result_slot=self._slot_call_result_sink(expr),
                     )
                 if kind == "classmethod":
                     method_fn = parent_info.methods[attr.name]
@@ -1221,6 +1222,7 @@ class MethodCallExpressionLoweringMixin:
                         attr.name,
                         expr.args,
                         kwargs=expr.kwargs,
+                        result_slot=self._slot_call_result_sink(expr),
                     )
                 method_fn = parent_info.methods[attr.name]
                 return self._emit_direct_method_ptr_call(
@@ -1231,6 +1233,7 @@ class MethodCallExpressionLoweringMixin:
                     attr.name,
                     expr.args,
                     kwargs=expr.kwargs,
+                    result_slot=self._slot_call_result_sink(expr),
                 )
             if from_class is not None and attr.name not in ("__init__", "__new__"):
                 receiver_name = "self"
