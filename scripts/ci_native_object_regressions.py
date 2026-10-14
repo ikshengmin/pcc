@@ -137,8 +137,12 @@ def run(out):
     save(receipt_path, receipt)
     try:
         assert sys.platform.startswith("linux") or sys.platform == "win32"
-        env = environment()
+        env = dict(environment())
         env.pop("LC_ALL", None)
+        # Stage1 enables timing telemetry, but these behavioral regressions
+        # also assert quiet compilation. Keep diagnostics enabled for Stage1
+        # itself and disable only its opt-in timing in this child environment.
+        env.pop("PCC_PY_FRONTEND_WORKER_TIMING", None)
         env.update(PCC_TEST_NO_NATIVE_PROVISIONING="1", UV_PYTHON_DOWNLOADS="never")
         selected = env.get("PCC_RUNTIME_ARCHIVE")
         assert selected, "the existing Stage1 runtime must be admitted before this gate"

@@ -108,6 +108,29 @@ def test_gate_reuses_terminal_runtime_and_records_ten_executions(tmp_path, monke
     assert json.loads((tmp_path / (gate.NAME + ".json")).read_text()) == result
 
 
+def test_gate_isolates_stage1_timing_without_filtering_compiler_errors(
+    tmp_path, monkeypatch, admitted,
+):
+    _source, runtime = admitted
+    inherited = {"PCC_RUNTIME_ARCHIVE": runtime["path"],
+                 "PCC_PY_FRONTEND_WORKER_TIMING": "1",
+                 "PCC_DEBUG_WORKER_RERAISE": "1"}
+    monkeypatch.setattr(gate, "environment", lambda: inherited)
+
+    def run(out, name, nodes, env, **kwargs):
+        assert "PCC_PY_FRONTEND_WORKER_TIMING" not in env
+        assert env["PCC_DEBUG_WORKER_RERAISE"] == "1"
+        raise RuntimeError("real compiler failure")
+
+    monkeypatch.setattr(gate, "run_pytest", run)
+    with pytest.raises(RuntimeError, match="real compiler failure"):
+        gate.run(tmp_path)
+    assert inherited["PCC_PY_FRONTEND_WORKER_TIMING"] == "1"
+    result = json.loads((tmp_path / (gate.NAME + ".json")).read_text())
+    assert result["status"] == "FAIL"
+    assert "real compiler failure" in result["error"]
+
+
 @pytest.mark.parametrize("change", (
     "no-admission", "missing-archive", "missing-stage", "running-stage", "wrong-stage",
     "wrong-commit", "dirty-source", "stale-source", "wrong-host-python", "wrong-test-tools",
