@@ -39,9 +39,10 @@ def test_pe_link_checks_the_actual_size_written_to_the_optional_header(monkeypat
     checked = []
     original = pe._check_image_size
 
-    def check(size, sections=(), *, stack_map_bytes=0):
+    def check(size, sections=(), *, stack_map_bytes=0, stack_map_counts=()):
         checked.append(size)
-        original(size, sections, stack_map_bytes=stack_map_bytes)
+        original(size, sections, stack_map_bytes=stack_map_bytes,
+                 stack_map_counts=stack_map_counts)
 
     monkeypatch.setattr(pe, "_check_image_size", check)
     obj = CoffObject((CoffSection(".text", b"\xc3", 0x60000020, 16),),

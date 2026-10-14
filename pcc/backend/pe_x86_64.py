@@ -70,20 +70,87 @@ def _align(value, alignment):
     return (value + alignment - 1) & -alignment
 
 
-def _check_image_size(size, sections=(), *, stack_map_bytes=0):
+def _stack_map_size_counts(payload):
+    """Read only the header of an already validated merged v2 stack map.
+
+    Fixed-width function and location-table entries partition its byte length;
+    the remainder is exactly the safepoint records. No body scan, slice or
+    decoded map is needed. Impossible metadata leaves the diagnostic unknown
+    rather than replacing the image-size guard with another exception.
+    """
+    from .precise_stackmap import (
+        ARCH_X86_64, FUNCTION_SIZE, HEADER_SIZE, LOCATION_SIZE, MAGIC,
+        MAX_FUNCTIONS, MAX_LOCATIONS, POINTER_SIZE, RECORD_SIZE, _HEADER,
+    )
+
+    if not isinstance(payload, bytes) or len(payload) < HEADER_SIZE:
+        return ()
+    magic, version, arch, pointer_size, functions, locations, reserved = (
+        _HEADER.unpack_from(payload, 0)
+    )
+    if (magic != MAGIC or version != 2 or arch != ARCH_X86_64
+            or pointer_size != POINTER_SIZE or reserved
+            or functions > MAX_FUNCTIONS or locations > MAX_LOCATIONS):
+        return ()
+    record_bytes = (len(payload) - HEADER_SIZE - functions * FUNCTION_SIZE
+                    - locations * LOCATION_SIZE)
+    if record_bytes < 0 or record_bytes % RECORD_SIZE:
+        return ()
+    records = record_bytes // RECORD_SIZE
+    # Each validated function carries one uint32 record count. Do not impose
+    # MAX_RECORDS here: a budgeted link can validly exceed that legacy cap.
+    if records > functions * 0xFFFFFFFF:
+        return ()
+    return functions, records, locations
+
+
+def _check_image_size(size, sections=(), *, stack_map_bytes=0,
+                      stack_map_counts=()):
     # Microsoft documents a 2 GiB PE32+ image maximum without specifying
     # equality behavior. Reject sizes above it; passing this range check
     # is not a claim that a Windows loader has qualified the image.
     # https://learn.microsoft.com/windows/win32/debug/pe-format
     if size <= 0x80000000:
         return
+    valid_counts = isinstance(stack_map_counts, tuple) and len(stack_map_counts) == 3
+    if valid_counts:
+        for count in stack_map_counts:
+            if type(count) is not int or count < 0:
+                valid_counts = False
+                break
+    partition = "unavailable"
+    if stack_map_bytes == 0:
+        partition = "absent"
+    elif valid_counts:
+        from .precise_stackmap import (
+            FUNCTION_SIZE, HEADER_SIZE, LOCATION_SIZE, MAX_FUNCTIONS,
+            MAX_LOCATIONS, RECORD_SIZE,
+        )
+
+        functions, records, locations = stack_map_counts
+        function_bytes = functions * FUNCTION_SIZE
+        record_bytes = records * RECORD_SIZE
+        location_bytes = locations * LOCATION_SIZE
+        if (functions <= MAX_FUNCTIONS and locations <= MAX_LOCATIONS
+                and records <= functions * 0xFFFFFFFF
+                and HEADER_SIZE + function_bytes + record_bytes + location_bytes
+                == stack_map_bytes):
+            partition = (
+                "functions=" + str(functions) + " records=" + str(records)
+                + " location_entries=" + str(locations)
+                + " header_bytes=" + str(HEADER_SIZE)
+                + " function_bytes=" + str(function_bytes)
+                + " record_bytes=" + str(record_bytes)
+                + " location_table_bytes=" + str(location_bytes)
+            )
     layout = []
     for name, address, payload, _flags in sections:
         layout.append(name + "@" + hex(address) + " bytes=" + str(len(payload)))
     raise CoffError(
         "PE32+ image size " + str(size) + " bytes (" + hex(size)
         + ") exceeds documented 2 GiB limit; merged_stack_map_bytes="
-        + str(stack_map_bytes) + "; sections " + ", ".join(layout)
+        + str(stack_map_bytes) + "; merged_stack_map_partition=" + partition
+        + "; sections " + ", ".join(layout)
     )
 
 
@@ -310,6 +377,7 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
                            entry, image_base, compact_budget):
     stack_payload, stack_targets = _merge_stack_maps(objects, compact_budget)
     stack_size = len(stack_payload)
+    stack_counts = _stack_map_size_counts(stack_payload)
     stack_placement = None
     # Merge sections by PE name, sorting COFF $ suffixes before concatenation.
     groups = {}
@@ -522,7 +590,8 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
     if reloc_data:
         sections.append([".reloc", rva, reloc_data, 0x42000040])
         rva = _align(rva + len(reloc_data), 4096)
-    _check_image_size(rva, sections, stack_map_bytes=stack_size)
+    _check_image_size(rva, sections, stack_map_bytes=stack_size,
+                      stack_map_counts=stack_counts)
     headers = _align(128 + 4 + 20 + 240 + len(sections) * 40, 512)
     if compact_budget is not None:
         compact_budget.check_copy(headers, 2, "PE image header")

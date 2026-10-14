@@ -146,6 +146,14 @@ RSS_READER_INPUTS = (RSS_READER_TEST, RSS_PUBLICATION_TEST, RSS_PUBLISHER_TEST,
                      "pcc/frontends/python/pipeline_import_scan.py")
 STACKMAP_BUDGET_TEST = 'tests/python/test_compact_stackmap_processing_budget.py'
 STACKMAP_HOST_BUDGET_TEST = 'tests/python/test_stackmap_host_budget.py'
+PE_IMAGE_STACKMAP_PARTITION_TEST = 'tests/python/test_pe_image_stackmap_partition.py'
+PE_IMAGE_STACKMAP_PARTITION_INPUTS = (
+    PE_IMAGE_STACKMAP_PARTITION_TEST,
+    'pcc/backend/pe_x86_64.py',
+    'pcc/backend/pe_host_budget.py',
+    'pcc/backend/coff_x86_64.py',
+    'pcc/backend/precise_stackmap.py',
+)
 MACHO_HOST_RELOCATIONS_TEST = 'tests/python/test_macho_host_relocations.py'
 MACHO_ARCHIVE_SYMBOL_STATE_TEST = 'tests/python/test_macho_archive_symbol_state.py'
 MACHO_SECTION_PLACEMENT_TEST = 'tests/python/test_macho_section_placement.py'
@@ -225,10 +233,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               HOME_SUMMARY_CI_TEST, MACHO_HOST_RELOCATIONS_TEST,
               MACHO_ARCHIVE_SYMBOL_STATE_TEST, MACHO_SECTION_PLACEMENT_TEST,
               MACHO_ARCHIVE_FRAMING_TEST, MACHO_WINDOWED_PREPARE_TEST,
-              MACHO_WINDOWED_PARITY_TEST)
+              MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST)
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27)
+HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -252,6 +260,7 @@ def source_identity():
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
     value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
+                           *PE_IMAGE_STACKMAP_PARTITION_INPUTS,
                            "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
