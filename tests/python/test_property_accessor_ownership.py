@@ -6,6 +6,8 @@ import re
 
 import pytest
 
+from ir_pointer_aliases import canonical_pointer, pointer_bitcast_aliases
+
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.py_lift import parse_and_lift
 from pcc.frontends.python.type_infer import infer_module
@@ -56,15 +58,10 @@ def _property_bodies(text):
 
 
 def _owners_and_cfg(body, expected):
-    aliases = dict(re.findall(r"(%[-\w.]+) = bitcast ptr (%[-\w.]+) to ptr", body))
+    aliases = pointer_bitcast_aliases(body)
 
     def original(value):
-        seen = set()
-        while value in aliases:
-            assert value not in seen
-            seen.add(value)
-            value = aliases[value]
-        return value
+        return canonical_pointer(value, aliases)
 
     roots = {}
     for role in ("descriptor", "getter", "setter", "deleter"):
@@ -136,6 +133,17 @@ def _owners_and_cfg(body, expected):
                 root = original(clear.group(1))
                 if root in bits:
                     state &= ~bits[root]
+            # The singleton helper clears this exact caller root while
+            # preserving the pending exception. It does not retire its frame;
+            # the lease-only helper does not clear ownership at all.
+            disposed = re.fullmatch(
+                r"call void (?:\(ptr\) )?@py_cleanup_one_root_preserving_exception"
+                r"\(ptr (%[-\w.]+)\)", line,
+            )
+            if disposed:
+                root = original(disposed.group(1))
+                if root in bits:
+                    state &= ~bits[root]
             if line.startswith("br "):
                 successors.extend(re.findall(r"label %([-\w.$]+)", line))
             if line.startswith("ret "):
@@ -148,7 +156,56 @@ def _owners_and_cfg(body, expected):
         leases = re.findall(r"@pcc_gc_foreign_lease_acquire\(ptr (%[-\w.]+)\)", body)
         for root in (roots[role][stage], roots["descriptor"][stage]):
             assert any(original(slot) == root for slot in leases), (role, stage)
-    assert "property namespace publication" in body or "call.slot.report" in body
+    # Reporting is now shared by a generated helper. Check each descriptor's
+    # actual publication result and its error edge, rather than a former
+    # inline-report label or a diagnostic string outside this function body.
+    publications = {}
+    for status, value in re.findall(
+        r"^  (%[-\w.]+) = call i64 (?:\(ptr, ptr, ptr\) )?@py_class_setattr_raw"
+        r"\(ptr [^,\n]+, ptr [^,\n]+, ptr (%[-\w.]+)\)$", body, re.M,
+    ):
+        root = original(loads.get(value, value))
+        if root in roots["descriptor"]:
+            assert root not in publications, ("duplicate property publication", root)
+            publications[root] = status
+    assert set(publications) == set(roots["descriptor"]), "missing property publication"
+    reachable = {block for block, _state in seen}
+    for root, status in publications.items():
+        guards = re.findall(
+            r"^  (%[-\w.]+) = icmp slt i64 " + re.escape(status) + r", 0\n"
+            r"  br i1 \1, label %([-\w.$]+), label %([-\w.$]+)$", body, re.M,
+        )
+        assert len(guards) == 1, ("unguarded property publication", root, status)
+        condition, error, ready = guards[0]
+        guard_blocks = [name for name, lines in blocks.items()
+                        if condition + " = icmp slt i64 " + status + ", 0" in lines]
+        assert len(guard_blocks) == 1 and guard_blocks[0] in reachable, (
+            "unreachable property publication guard", root,
+        )
+        assert error != ready and error in reachable and ready in reachable, (
+            "property publication error edge", root,
+        )
+        error_lines = [line for line in blocks[error] if line]
+        assert len(error_lines) == 2 and re.fullmatch(
+            r"call void (?:\(ptr, ptr, ptr, ptr, i32, i1\) )?"
+            r"@pcc_slot_call_status_report\.\d+\(ptr [^,()]+, ptr [^,()]+, "
+            r"ptr [^,()]+, ptr [^,()]+, i32 -?\d+, i1 [01]\)", error_lines[0],
+        ), ("property publication reporter", root, error)
+        cleanup = re.fullmatch(r"br label %([-\w.$]+)", error_lines[1])
+        assert cleanup and cleanup[1] in reachable and cleanup[1] != ready, (
+            "property publication cleanup edge", root, error,
+        )
+        cleanup_pending = [cleanup[1]]
+        cleanup_seen = set()
+        while cleanup_pending:
+            block = cleanup_pending.pop()
+            assert block != ready, ("property publication resumes after failure", root)
+            if block in cleanup_seen:
+                continue
+            cleanup_seen.add(block)
+            for line in blocks[block]:
+                if line.startswith("br "):
+                    cleanup_pending.extend(re.findall(r"label %([-\w.$]+)", line))
 
 
 @pytest.mark.parametrize("accessors,failing_default", [
