@@ -243,6 +243,8 @@ class PEHostBudget(CompactStackMapBudget):
         super().__init__(limit_bytes, record_visit_limit, **profile)
         self._buffers = {}
         self.metadata_owners = {}
+        self.metadata_bytes = {}
+        self.metadata_counts = {}
         self._initial_retained = None
         self.bytearray_header = sys.getsizeof(bytearray())
         self.bytes_header = sys.getsizeof(b"")
@@ -260,7 +262,12 @@ class PEHostBudget(CompactStackMapBudget):
             raise
 
     def _reserve_metadata(self, objects, imports):
+        from .coff_x86_64 import CoffError
+
         sections = maps = functions = fixups = pdata = names = 0
+        section_bytes = pdata_bytes = 0
+        self.check_peak(0, entries=3, label="PE section group scan")
+        group_names = {".text", ".idata", ".rdata"}
         for obj in objects:
             for symbol in obj.symbols:
                 # scoped_stable_id joins a Unicode prefix and encodes UTF-8;
@@ -274,21 +281,45 @@ class PEHostBudget(CompactStackMapBudget):
                     continue
                 if section.name in (".note.GNU-stack", ".comment"):
                     continue
+                # Match the output grouping in pe_x86_64, but reserve the
+                # temporary split/encoding and growing set before allocating.
+                self.check_peak(8 * len(section.name), entries=len(group_names) + 1,
+                                label="PE section group scan")
+                base = section.name.split("$", 1)[0]
+                if base.startswith(".rodata"):
+                    base = ".rdata"
+                if len(base.encode()) > 8:
+                    raise CoffError("PE section name exceeds eight bytes: " + base)
+                group_names.add(base)
+                if section.align > 4096:
+                    raise CoffError("PE section alignment above page size is unsupported")
                 sections += 1
                 names += 4 * len(section.name)  # split head/tail combined
+                # COFF parsing has already validated positive power-of-two
+                # alignment. This also bounds every accepted PE contribution.
+                padding = max(0, section.align - 1)
+                section_bytes += len(section.data) + padding
                 fixups += sum(rel.kind == 1 for rel in section.relocations)
                 if section.name == ".pdata" or section.name.startswith(".pdata$"):
-                    # Alignment contributes at most 4095 bytes per input.
-                    pdata += (len(section.data) + 4095 + 11) // 12
+                    pdata_bytes += len(section.data) + padding
+        pdata = (pdata_bytes + 11) // 12
         fixups += functions + 3  # merged addresses and optional TLS directory
-        groups = sections + 3  # includes the three mandatory empty groups
+        groups = len(group_names)
         outputs = groups + 2  # optional TLS and relocation output sections
         import_count = len(imports)
         # Encoding plus prefix/suffix concatenation during import emission;
         # system_dll has already admitted only the finite named ABI surface.
         names += sum(3 * (len(name) + 3) for name in imports)
         names += 2 * len("KERNEL32.dll") * import_count
-        pages = fixups  # each fixup can occupy a distinct page, never more
+        # Ordinary contributions occupy one interval per output group. The
+        # .rdata interval can begin mid-page after the merged map; one extra
+        # page per group covers interval boundaries. Keep one possible page
+        # per map function: interning overlapping input location slices can
+        # expand the merged root table, so input map bytes are NOT a bound on
+        # that output's extent. TLS adds at most one fixup-bearing page.
+        pages = min(fixups, (section_bytes + 4095) // 4096 + groups + functions + 1)
+        self.metadata_counts = dict(sections=sections, groups=groups, functions=functions,
+                                    fixups=fixups, pages=pages, pdata_records=pdata)
         self.metadata_owners = {
             "map payload list and tuple": 2 * maps,
             "map targets, merged offsets and returned target tuples": 3 * functions,
@@ -302,16 +333,49 @@ class PEHostBudget(CompactStackMapBudget):
             "import name sort and three DLL sorts": 4 * import_count,
             "text thunk dictionary and name sort": 2 * import_count,
             "import directory DLL set": import_count,
-            "fixup list, dedup set, sorted list and page entries": 4 * fixups,
-            "page dictionaries, item sort rows and odd padding": 3 * pages,
+            "page dictionaries, keys and item-sort rows": 3 * pages,
             "pdata record rows, sort keys and merge scratch": 2 * pdata + (pdata + 1) // 2,
             "boundary symbols and directory rows": 4 + 5,
         }
         # Raw .pdata records are separate from their object/container headers.
         raw = names + 12 * pdata
+        # These are sequential arrays of references/integers, not four
+        # independent dictionaries with a full metadata_entry_bytes charge per
+        # fixup. Keep all owners simultaneous, including old/new list and set
+        # tables, sort scratch, new page-word ints, and per-page odd padding.
+        self.metadata_bytes = {
+            "names and pdata records": raw,
+            "fixup and sorted reference lists": 2 * self._list_bytes(fixups),
+            # All address integers predate set(fixups). _set_bytes models
+            # insertion-time ownership, so retain the complete list's ints
+            # separately even while the set is only partially populated.
+            "fixup list integer owners": fixups * self.integer_bytes,
+            "fixup dedup set": self._set_bytes(fixups),
+            "page entry integer owners": (fixups + pages) * self.integer_bytes,
+            "page entry lists": self._list_bytes(fixups + pages, lists=pages),
+        }
+        raw = sum(self.metadata_bytes.values())
         entries = sum(self.metadata_owners.values())
-        self.check_peak(raw, entries=entries, label="PE future metadata")
+        try:
+            self.check_peak(raw, entries=entries, label="PE future metadata")
+        except PreciseStackMapError as exc:
+            raise PreciseStackMapError(
+                str(exc) + "; allowance_bytes=" + str(self.limit_bytes)
+                + "; retained_bytes=" + str(self.retained_bytes)
+                + "; future_metadata_bytes=" + str(raw + entries * self.metadata_entry_bytes)
+                + "; counts=" + str(self.metadata_counts)
+            ) from exc
         self.retained_bytes += raw + entries * self.metadata_entry_bytes
+
+    def _list_bytes(self, entries, *, lists=1):
+        # CPython's n+n/8+6 growth is below 2*n+8 slots per list. Doubling
+        # that bound includes old/new allocations during resize, or the final
+        # array plus n/2 references of unkeyed-sort scratch. Round each list's
+        # allocation separately through a full extra quantum per owner.
+        word = struct.calcsize("P")
+        header = self._rounded(sys.getsizeof([]))
+        slots = 2 * entries + 8 * lists
+        return 2 * (lists * (header + self.allocation_quantum) + slots * word)
 
     def finish(self):
         if self._initial_retained is not None:

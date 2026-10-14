@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import struct
 import sys
 from types import SimpleNamespace
 
@@ -367,6 +368,210 @@ def test_prepare_failure_restores_retained_and_does_not_refund_work():
     finally:
         value.finish()
     assert value.retained_bytes == 3 and value.record_visits == 2
+
+
+def _physical_budget(limit=1_000_000, work=100):
+    profile = host._host_profile()
+    if profile is None:
+        pytest.skip("requires a supported CPython allocation profile")
+    return host.PEHostBudget(limit, work, **profile)
+
+
+def test_metadata_uses_output_groups_and_actual_pdata_alignment():
+    from pcc.backend.coff_x86_64 import CoffObject, CoffSection
+    sections = (
+        CoffSection(".text$a", b"a", 0x60000020, 16),
+        CoffSection(".text$b", b"b", 0x60000020, 16),
+        CoffSection(".rodata.long_suffix", b"c", 0x40000040, 8),
+        CoffSection(".pdata$a", b"\0" * 12, 0x40000040, 4),
+        CoffSection(".pdata$b", b"\0" * 24, 0x40000040, 4),
+    )
+    value = _physical_budget()
+    value.prepare((CoffObject(sections, ()),), ())
+    try:
+        assert value.metadata_counts["sections"] == 5
+        assert value.metadata_counts["groups"] == 4
+        assert value.metadata_counts["pdata_records"] == 4
+        assert value.metadata_owners["section groups and rows"] == 4 + 5 + 1
+        assert value.metadata_owners["output rows and buffer ledger"] == 2 * (4 + 2)
+        payload = bytearray()
+        for section in sorted(sections, key=lambda row: row.name):
+            if section.name.startswith(".pdata"):
+                payload.extend(b"\0" * ((-len(payload)) & (section.align - 1)))
+                payload.extend(section.data)
+        assert len(payload) == 36
+        assert len(payload) <= 12 * value.metadata_counts["pdata_records"] < 2 * 4095
+    finally:
+        value.finish()
+
+
+@pytest.mark.parametrize("alignment", (1, 4, 16, 4096))
+def test_pdata_record_bound_covers_padding_without_per_input_rounding(alignment):
+    from pcc.backend.coff_x86_64 import CoffObject, CoffSection
+    sections = tuple(CoffSection(".pdata$" + str(i), b"\0" * 12, 0x40000040, alignment)
+                     for i in range(8))
+    value = _physical_budget(limit=10_000_000)
+    value.prepare((CoffObject(sections, ()),), ())
+    try:
+        bound = (sum(len(s.data) + s.align - 1 for s in sections) + 11) // 12
+        assert value.metadata_counts["pdata_records"] == bound
+        size = 0
+        for section in sections:
+            size += (-size) & (section.align - 1)
+            size += len(section.data)
+        assert size <= bound * 12
+    finally:
+        value.finish()
+
+
+@pytest.mark.parametrize("stride", (8, 4096))
+def test_fixup_storage_covers_real_containers_resize_overlap_and_sort_scratch(stride):
+    value = _physical_budget(limit=10_000_000)
+    fixups = []
+    for index in range(2048):
+        old_list = sys.getsizeof(fixups)
+        address = 0x100000 + index * stride
+        fixups.append(address)
+        count = len(fixups)
+        assert old_list + sys.getsizeof(fixups) <= value._list_bytes(count)
+    # Match sorted(set(fixups)): all address integers are already retained
+    # when the insertion-only set starts, including its resize overlap.
+    seen = set()
+    integer_owners = count * value.integer_bytes
+    observed_set_peak = 0
+    for address in fixups:
+        old_set = sys.getsizeof(seen)
+        seen.add(address)
+        current_set = sys.getsizeof(seen)
+        set_storage = old_set + current_set if old_set != current_set else current_set
+        observed_set_peak = max(observed_set_peak, set_storage + integer_owners)
+        assert (set_storage + integer_owners
+                <= value._set_bytes(count) + integer_owners + value.set_header_bytes)
+    assert observed_set_peak > value._set_bytes(count) + value.set_header_bytes
+    ordered = sorted(seen)
+    pages = {}
+    for address in ordered:
+        pages.setdefault(address & -4096, []).append(0xA000 | (address & 4095))
+    page_rows = sorted(pages.items())
+    for _page, entries in page_rows:
+        if len(entries) & 1:
+            entries.append(0)
+    count, page_count = len(fixups), len(pages)
+    assert (sys.getsizeof(ordered) + (count // 2) * struct.calcsize("P")
+            <= value._list_bytes(count))
+    assert (2 * sum(sys.getsizeof(entries) for entries in pages.values())
+            <= value._list_bytes(count + page_count, lists=page_count))
+
+    visited = set()
+    def owned_bytes(item):
+        if id(item) in visited:
+            return 0
+        visited.add(id(item))
+        size = value._rounded(sys.getsizeof(item))
+        if isinstance(item, dict):
+            return size + sum(owned_bytes(k) + owned_bytes(v) for k, v in item.items())
+        if isinstance(item, (tuple, list, set)):
+            return size + sum(owned_bytes(v) for v in item)
+        return size
+    actual = sum(owned_bytes(item) for item in (fixups, seen, ordered, pages, page_rows))
+    bound = (2 * value._list_bytes(count) + count * value.integer_bytes + value._set_bytes(count)
+             + (count + page_count) * value.integer_bytes
+             + value._list_bytes(count + page_count, lists=page_count)
+             + 3 * page_count * value.metadata_entry_bytes)
+    assert actual <= bound < 7 * count * value.metadata_entry_bytes
+
+
+@pytest.mark.parametrize("with_map_tls", (False, True))
+def test_dense_absolute_fixups_link_identically_inside_the_same_small_budget(with_map_tls):
+    from pcc.backend import pe_x86_64 as pe
+    from pcc.backend import precise_stackmap as wire
+    from pcc.backend.coff_x86_64 import ADDR64, CoffObject, CoffRelocation, CoffSection, CoffSymbol
+    count = 2048
+    sections = [
+        CoffSection(".text", b"\xc3", 0x60000020, 16),
+        CoffSection(".rdata", b"\0" * (8 * count), 0x40000040, 8,
+                    tuple(CoffRelocation(8 * i, 0, ADDR64) for i in range(count))),
+    ]
+    if with_map_tls:
+        function = wire.FunctionStackMap(
+            function_id=wire.function_id("pcc_windows_start"), function_address=0,
+            code_size=1, frame_size=0, records=(wire.SafepointRecord(
+                safepoint_id=1, instruction_offset=0, kind=wire.SAFEPOINT_ENTRY, locations=(),
+            ),),
+        )
+        payload = wire.encode_stack_map(wire.PreciseStackMap(
+            arch=wire.ARCH_X86_64, functions=(function,),
+        ))
+        assert len(payload) % 4096 != 0
+        sections.extend((
+            CoffSection(".pcc_stackmaps", payload, 0x40000040, 8,
+                        (CoffRelocation(wire.HEADER_SIZE + 8, 0, ADDR64),)),
+            CoffSection(".data$more", b"\0" * 8, 0xC0000040, 8,
+                        (CoffRelocation(0, 0, ADDR64),)),
+            CoffSection(".tls", b"\0" * 8, 0xC0000040, 8),
+        ))
+    obj = CoffObject(tuple(sections), (CoffSymbol("pcc_windows_start", 1),))
+    value = _physical_budget()
+    expected = pe.link_executable((obj,))
+    image = pe.link_executable((obj,), compact_budget=value)
+    assert image == expected
+    assert 7 * (count + 3) * value.metadata_entry_bytes > value.limit_bytes
+    assert value.metadata_counts["pages"] < value.metadata_counts["fixups"] // 100
+    assert value.retained_bytes == 0 and value.record_visits == (7 if with_map_tls else 0)
+
+    header = struct.unpack_from("<I", image, 60)[0]
+    optional = header + 24
+    reloc_rva, reloc_size = struct.unpack_from("<II", image, optional + 112 + 5 * 8)
+    for index in range(struct.unpack_from("<H", image, header + 6)[0]):
+        section = optional + 240 + 40 * index
+        if image[section:section + 8].rstrip(b"\0") == b".reloc":
+            assert struct.unpack_from("<I", image, section + 12)[0] == reloc_rva
+            raw = struct.unpack_from("<I", image, section + 20)[0]
+            break
+    else:
+        pytest.fail("missing relocation output")
+    cursor = raw
+    pages = []
+    while cursor < raw + reloc_size:
+        page, size = struct.unpack_from("<II", image, cursor)
+        pages.append(page)
+        cursor += size
+    assert cursor == raw + reloc_size
+    assert len(pages) == (7 if with_map_tls else 4)
+    assert len(pages) <= value.metadata_counts["pages"]
+
+
+@pytest.mark.parametrize("name,alignment", ((".too_long", 8), (".rdata", 8192)))
+def test_invalid_section_scan_preserves_existing_retained_state(name, alignment):
+    from pcc.backend.coff_x86_64 import CoffError, CoffObject, CoffSection
+    value = _physical_budget()
+    value.retained_bytes = 17
+    value.charge_records(2)
+    with pytest.raises(CoffError):
+        value.prepare((CoffObject((CoffSection(name, b"a", 0x40000040, alignment),), ()),), ())
+    assert value.retained_bytes == 17 and value.record_visits == 2
+    assert value._initial_retained is None
+
+
+def test_metadata_failure_reports_numerical_allowance_and_charge_without_refund():
+    value = _physical_budget()
+    value.retained_bytes = 17
+    value.prepare((), ())
+    required = value.retained_bytes
+    value.finish()
+    value.limit_bytes = required
+    value.prepare((), ())
+    value.finish()
+    value.limit_bytes -= 1
+    value.charge_records(2)
+    with pytest.raises(PreciseStackMapError, match="PE future metadata") as caught:
+        value.prepare((), ())
+    message = str(caught.value)
+    assert "allowance_bytes=" + str(required - 1) in message
+    assert "retained_bytes=17" in message
+    assert "future_metadata_bytes=" + str(required - 17) in message
+    assert "'groups': 3" in message
+    assert value.retained_bytes == 17 and value.record_visits == 2
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="requires an actual Windows Job")
