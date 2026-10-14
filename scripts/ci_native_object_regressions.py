@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded host-pcc0 object regressions using the terminal Stage1 runtime.
 
-Two compiles and ten native executions, with no archive/compiler provisioning.
+Four compiles and twenty native executions, with no archive/compiler provisioning.
 This independent gate does not qualify Stage1, pcc1 or a self-host fixed point.
 """
 
@@ -33,6 +33,10 @@ NODES = (
     "tests/python/test_object_type_identity.py::test_object_identity_native_five_gc[pcc0]",
     "tests/python/test_super_call_result_roots.py::"
     "test_super_result_native_matches_cpython_under_five_collectors",
+    "tests/python/test_dict_method_result_ownership.py::"
+    "test_dict_method_result_owners_native_five_gc[pcc0-copy]",
+    "tests/python/test_dict_method_result_ownership.py::"
+    "test_dict_method_result_owners_native_five_gc[pcc0-pop]",
 )
 TEST_INPUTS = (
     *(node.split("::")[0] for node in NODES),
@@ -51,12 +55,17 @@ WINDOWS_SYSTEM_LIBRARIES = {
 
 
 def expected_programs():
+    from tests.python.test_dict_method_result_ownership import (
+        _program as dict_method_program,
+    )
     from tests.python.test_object_type_identity import PROGRAM
     from tests.python.test_super_call_result_roots import NATIVE_SOURCE
 
     return {
         "object-identity": (PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n"),
         "super-result": (NATIVE_SOURCE, "5\nTrue\ncaught\n"),
+        "dict-copy-result": (dict_method_program("copy"), "DICT_METHOD_OWNERS_OK\n"),
+        "dict-pop-result": (dict_method_program("pop"), "DICT_METHOD_OWNERS_OK\n"),
     }
 
 
@@ -79,7 +88,8 @@ def verify_native_image(binary):
 def verify_program_receipts(directory, runtime):
     expected = expected_programs()
     paths = sorted(directory.rglob("ownership-regression.json"))
-    assert len(paths) == len(NODES), "require both native execution receipts"
+    assert len(expected) == len(NODES), "native node/source manifest count differs"
+    assert len(paths) <= len(NODES), "unexpected native execution receipt count"
     results = {}
     for path in paths:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -114,7 +124,7 @@ def verify_program_receipts(directory, runtime):
                 for row in executions
             ],
         }
-    assert not expected
+    assert not expected, "missing native execution receipts: " + ", ".join(sorted(expected))
     return results
 
 

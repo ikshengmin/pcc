@@ -6,6 +6,17 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## 2026-10-15 cloud continuation
+
+- `1c1905` preserves dict/list/set copy dispatch with owned method-result roots.
+  Three native pytest nodes passed using a source-matched Linux x64 single-thread
+  owned runtime: dict copy/pop under requested GC0-GC4 (10 executions), plus
+  the 48-candidate GC4 page-selection case. No full Stage1 or performance claim.
+- CI now includes both dict pcc0 nodes in the existing 300-second admitted-runtime gate.
+- Windows PE double-charge fix `b1db` awaits CI. macOS `ce73` only fixes input
+  lifetime; the initial 3.71 GB stack-map rejection remains open.
+- Cloud evidence: `/workspace/shared/pcc-resume-native-20261014/native-v2` (outside the repository).
+
 ## 2026-10-15 evening
 
 - `c0e17b72`: the native link-lifetime test's stubs take the linker's

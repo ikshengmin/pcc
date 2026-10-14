@@ -70,7 +70,7 @@ def admitted(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
-def test_gate_reuses_terminal_runtime_and_records_ten_executions(tmp_path, monkeypatch, admitted, stage_status):
+def test_gate_reuses_terminal_runtime_and_records_twenty_executions(tmp_path, monkeypatch, admitted, stage_status):
     source, runtime = admitted
     path = tmp_path / "stage1.json"
     stage = json.loads(path.read_text())
@@ -100,8 +100,10 @@ def test_gate_reuses_terminal_runtime_and_records_ten_executions(tmp_path, monke
     assert result["source"] == result["source_after"] == source
     assert result["runtime"] == result["runtime_after"] == runtime
     assert result["stage1_status"] == stage_status
-    assert set(result["programs"]) == {"object-identity", "super-result"}
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 10
+    assert set(result["programs"]) == {
+        "object-identity", "super-result", "dict-copy-result", "dict-pop-result",
+    }
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 20
     for row in result["programs"].values():
         assert [item["requested_gc_backend"] for item in row["executions"]] == list(range(5))
         assert all("gc_backend" not in item for item in row["executions"])
@@ -200,11 +202,16 @@ def test_run_failure_or_identity_drift_is_never_a_pass(tmp_path, monkeypatch, ad
     "missing-gc", "duplicate-gc", "failed-gc", "wrong-output", "stderr", "wrong-command",
     "foreign-program", "duplicate-program",
 ))
-def test_native_evidence_requires_exact_source_and_all_five_successes(tmp_path, monkeypatch, admitted, change):
+@pytest.mark.parametrize("label", (
+    "object-identity", "super-result", "dict-copy-result", "dict-pop-result",
+))
+def test_native_evidence_requires_exact_source_and_all_five_successes(
+    tmp_path, monkeypatch, admitted, change, label,
+):
     _source, runtime = admitted
     directory = tmp_path / "receipts"
     paths = _receipts(directory, runtime)
-    path = paths[0]
+    path = next(path for path in paths if path.parent.name == label)
     record = json.loads(path.read_text())
     fields = {"failed-receipt": ("status", "FAIL"), "pcc1": ("compiler_fixture_parameter", "pcc1"),
               "routed-pcc1": ("compiler_mode", "pcc1-routed"), "llvm": ("backend", "llvm"),
@@ -231,13 +238,52 @@ def test_native_evidence_requires_exact_source_and_all_five_successes(tmp_path, 
     elif change == "foreign-program":
         (path.parent / "program.py").write_text("print('unrelated')")
     elif change == "duplicate-program":
-        other = paths[1].parent / "program.py"
+        other = next(other for other in paths if other != path).parent / "program.py"
         other.write_text((path.parent / "program.py").read_text())
     path.write_text(json.dumps(record))
     if change == "missing-receipt":
         path.unlink()
     with pytest.raises(AssertionError):
         gate.verify_program_receipts(directory, runtime)
+
+
+@pytest.mark.parametrize("missing", (
+    ("dict-copy-result",), ("dict-pop-result",),
+    ("dict-copy-result", "dict-pop-result"),
+), ids=("copy", "pop", "both"))
+def test_missing_dict_evidence_names_the_absent_program_and_fails_gate(
+    tmp_path, monkeypatch, admitted, missing,
+):
+    _source, runtime = admitted
+
+    def run(out, name, *args, **kwargs):
+        for path in _receipts(out / name, runtime):
+            if path.parent.name in missing:
+                path.unlink()
+
+    monkeypatch.setattr(gate, "run_pytest", run)
+    message = "missing native execution receipts: " + ", ".join(missing)
+    with pytest.raises(AssertionError, match=message):
+        gate.run(tmp_path)
+    receipt = json.loads((tmp_path / (gate.NAME + ".json")).read_text())
+    assert receipt["status"] == "FAIL"
+    assert receipt["error"] == "AssertionError: " + message
+
+
+def test_gate_selects_exact_dict_pcc0_nodes_and_program_sources():
+    from tests.python.test_dict_method_result_ownership import _program
+
+    assert gate.NODES[2:] == (
+        "tests/python/test_dict_method_result_ownership.py::"
+        "test_dict_method_result_owners_native_five_gc[pcc0-copy]",
+        "tests/python/test_dict_method_result_ownership.py::"
+        "test_dict_method_result_owners_native_five_gc[pcc0-pop]",
+    )
+    programs = gate.expected_programs()
+    assert programs["dict-copy-result"] == (_program("copy"), "DICT_METHOD_OWNERS_OK\n")
+    assert programs["dict-pop-result"] == (_program("pop"), "DICT_METHOD_OWNERS_OK\n")
+    assert programs["dict-copy-result"][0] != programs["dict-pop-result"][0]
+    assert "tests/python/test_dict_method_result_ownership.py" in gate.TEST_INPUTS
 
 
 @pytest.mark.parametrize("machine", (62, 183))
@@ -333,6 +379,23 @@ def test_super_regression_uses_explicit_owned_helper_without_pcc1(tmp_path, monk
     assert [ast.unparse(mark) for mark in native.decorator_list] == ["pytest.mark.integration"]
 
 
+@pytest.mark.parametrize("method", ("copy", "pop"))
+def test_dict_regressions_reuse_the_explicit_owned_helper(tmp_path, monkeypatch, method):
+    from tests.python import test_dict_method_result_ownership as probe
+
+    calls = []
+    monkeypatch.setattr(probe, "assert_owned_program", lambda *args, **kwargs: calls.append((args, kwargs)))
+    compiler, archive, capfd = object(), object(), object()
+    request = SimpleNamespace(node=SimpleNamespace(
+        callspec=SimpleNamespace(params={"python_program_compiler": "pcc0"}),
+    ))
+    probe.test_dict_method_result_owners_native_five_gc(
+        compiler, request, archive, tmp_path, capfd, method,
+    )
+    assert calls == [((probe._program(method), "DICT_METHOD_OWNERS_OK\n", tmp_path,
+                      compiler, "pcc0", archive, capfd), {"provenance_probe": "2"})]
+
+
 def test_explicit_fixture_retains_single_thread_config_and_never_requests_pcc1(tmp_path, monkeypatch):
     from pcc.tools import runtime_archive_provenance
 
@@ -388,10 +451,10 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         assert text.count('      - "' + path + '"') == 2
     for suffix in ("json", "jsonl", "stdout", "stderr", "tsv", "xml"):
         assert "build/worker-prior-gate/**/*." + suffix in other
-    assert gate.TIMEOUT_S == 300 and len(gate.NODES) == 2
+    assert gate.TIMEOUT_S == 300 and len(gate.NODES) == 4
     assert "[pcc0]" in gate.NODES[0] and all("pcc1" not in node for node in gate.NODES)
     command = prior.pytest_command(tmp_path, gate.NODES, integration=True)
-    assert command[-4:] == ["-m", "integration", *gate.NODES]
+    assert command[-6:] == ["-m", "integration", *gate.NODES]
     assert "-x" in command
     assert not any(option in command for option in ("-n", "-n0", "--dist", "-o", "--override-ini"))
     assert '-n 6 --dist=loadgroup' in (ROOT / "pyproject.toml").read_text()
