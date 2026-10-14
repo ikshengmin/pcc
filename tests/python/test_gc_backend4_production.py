@@ -9593,7 +9593,7 @@ def test_backend4_class_creation_payload_span_registration_is_mirrored_source():
         '@c_abi_export("py_class_mark_slots_only")', 1
     )[0]
     assert "pcc_gc_backend4_zpage_register_owner_payload_span(" in py_new
-    assert "n_bases * 8" in py_new
+    assert "n_bases * C_POINTER_SIZE" in py_new
     assert C_POINTER_SIZE == 8
     assert "mro_len * C_POINTER_SIZE" in py_new
     py_add_method = py_class.split("def py_class_add_method(", 1)[1].split(
