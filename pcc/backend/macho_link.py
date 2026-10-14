@@ -1246,6 +1246,10 @@ def link_relocatable_native(
         sections = None
         symbols = None
         sec = None
+        # The last ordinary section may still be a memoryview into its PCO.
+        # Drop this local too: data_parts must own every remaining view so
+        # the joins below really release the inputs before their budget credit.
+        payload = None
 
     # Keep each input payload once while calculating offsets. Growing the
     # merged bytearray for every object copies an ever-larger prefix in the
