@@ -73,6 +73,13 @@ _DROPPED_UNWIND_SECTIONS = {
     ("__LD", "__compact_unwind"),
     ("__TEXT", "__eh_frame"),
 }
+# An arm64 compact-unwind row is {function, length, encoding, personality,
+# lsda}; the last two pointers sit at these row offsets.
+_COMPACT_UNWIND_ROW_SIZE = 32
+_COMPACT_UNWIND_HANDLER_OFFSETS = (16, 24)
+# A __text span is reported on every link only once its margin to the
+# +-128 MiB branch reach falls under a quarter of that reach.
+_TEXT_SPAN_REPORT_MARGIN = 32 * 1024 * 1024
 
 DYLD_CHAINED_PTR_64_OFFSET = 6
 # dyld enforces this on __DATA_CONST: the segment is made read-only
@@ -183,6 +190,43 @@ def _write_patch_word(data: bytearray, offset: int, value: int) -> None:
         struct.pack_into("<I", data, offset, value)
         return
     store_i32(data, abi_constant("object.bytearray.data_offset") + offset, value)
+
+
+def _text_span_report_wanted(setting, margin: int) -> bool:
+    """PCC_LINK_REPORT_TEXT_SPAN: "0", "off" or "" never reports, any other
+    value always does, and unset reports only a margin under a quarter of
+    the branch reach."""
+    if setting is None:
+        return margin < _TEXT_SPAN_REPORT_MARGIN
+    return setting not in ("0", "off", "")
+
+
+def _unwind_rows_name_handlers(obj, sec, source_view: bool) -> bool:
+    """True when a compact-unwind row points at a personality routine or LSDA.
+
+    Every row pcc's backend emits describes a frame-pointer frame, which the
+    frame chain already describes, and relocates only its function address.
+    """
+    if source_view:
+        rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+        relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
+            obj, sec, ordered=False,
+        )
+    else:
+        rows = None
+        relocations = obj.iter_relocations(sec, ordered=False)
+    for r in relocations:
+        if source_view:
+            start = r * 12  # _COMPACT_RELOCATION: <IIBBBB
+            if _NATIVE_PATCH_WORDS:
+                address = load_i32(rows, abi_constant("object.bytes.data_offset") + start) & 0xFFFFFFFF
+            else:
+                address = _COMPACT_RELOCATION.unpack_from(rows, start)[0]
+        else:
+            address = r["r_address"]
+        if address % _COMPACT_UNWIND_ROW_SIZE in _COMPACT_UNWIND_HANDLER_OFFSETS:
+            return True
+    return False
 
 
 def _align(value: int, alignment: int) -> int:
@@ -729,9 +773,15 @@ def _prepare_executable_image(
         # unwinding THROUGH these frames (C++ exceptions, backtraces), which
         # LINK-P1-MACHO-LINK-DYLD already scopes out; ordinary control flow
         # and the runtime's own py_err_occurred error model are unaffected.
-        # Dropped, not silently ignored: recorded and reported.
+        # Rows that only describe frame-pointer frames (all pcc emits) lose
+        # nothing the frame chain does not keep, so their drop is quiet; a
+        # personality, LSDA or __eh_frame carries exception handling, so its
+        # drop is reported.
         if (segname, sectname) in _DROPPED_UNWIND_SECTIONS:
-            dropped_unwind.append(f"{segname},{sectname}")
+            if (segname, sectname) != ("__LD", "__compact_unwind") or (
+                _unwind_rows_name_handlers(obj, sec, source_view)
+            ):
+                dropped_unwind.append(f"{segname},{sectname}")
             continue
         stype = sec["flags"] & spec.SECTION_TYPE
         is_zf = stype in (0x1, 0x12)  # S_ZEROFILL / S_THREAD_LOCAL_ZEROFILL
@@ -897,9 +947,9 @@ def _prepare_executable_image(
     # -- before any of that work -- so a build that cannot fit says so up
     # front instead of after the whole codegen phase.
     _text_span = cursor - (spec.MACH_HEADER_64.size + sizeofcmds)
-    if os.environ.get("PCC_LINK_REPORT_TEXT_SPAN", "1") not in ("0", "off", ""):
-        _reach = 1 << 27
-        _margin = _reach - _text_span
+    _reach = 1 << 27
+    _margin = _reach - _text_span
+    if _text_span_report_wanted(os.environ.get("PCC_LINK_REPORT_TEXT_SPAN"), _margin):
         sys.stderr.write(
             "pcc link: __text span "
             + str(_text_span)
