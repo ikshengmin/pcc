@@ -29,6 +29,7 @@ class Recorder(CallObjectLoweringMixin):
         self.runtime = {name: name for name in (
             "pcc_gc_store_root", "py_clear_exception", "pcc_gc_foreign_lease_release",
             "py_cleanup_one_root_preserving_exception",
+            "py_cleanup_two_roots_preserving_exception",
             "py_cleanup_one_lease_preserving_exception",
         )}
         self._slot_call_root_records = []

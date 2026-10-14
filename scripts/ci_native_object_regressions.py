@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded host-pcc0 object regressions using the terminal Stage1 runtime.
 
-Four compiles and twenty native executions, with no archive/compiler provisioning.
+Five compiles and twenty-five native executions, with no archive/compiler provisioning.
 This independent gate does not qualify Stage1, pcc1 or a self-host fixed point.
 """
 
@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.ci_worker_size_prior_gate import (
+    TWO_ROOT_CLEANUP_INPUTS,
     environment,
     run_pytest,
     runtime_identity,
@@ -37,9 +38,12 @@ NODES = (
     "test_dict_method_result_owners_native_five_gc[pcc0-copy]",
     "tests/python/test_dict_method_result_ownership.py::"
     "test_dict_method_result_owners_native_five_gc[pcc0-pop]",
+    "tests/python/test_slot_call_exception_cleanup.py::"
+    "test_two_root_cleanup_error_path_native_five_gc[pcc0]",
 )
 TEST_INPUTS = (
     *(node.split("::")[0] for node in NODES),
+    *TWO_ROOT_CLEANUP_INPUTS,
     "tests/python/owned_regression_support.py",
     "tests/python/process_timeout.py",
     "tests/python/conftest.py",
@@ -59,6 +63,7 @@ def expected_programs():
         _program as dict_method_program,
     )
     from tests.python.test_object_type_identity import PROGRAM
+    from tests.python.test_slot_call_exception_cleanup import TWO_ROOT_PROGRAM
     from tests.python.test_super_call_result_roots import NATIVE_SOURCE
 
     return {
@@ -66,6 +71,7 @@ def expected_programs():
         "super-result": (NATIVE_SOURCE, "5\nTrue\ncaught\n"),
         "dict-copy-result": (dict_method_program("copy"), "DICT_METHOD_OWNERS_OK\n"),
         "dict-pop-result": (dict_method_program("pop"), "DICT_METHOD_OWNERS_OK\n"),
+        "two-root-cleanup": (TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n"),
     }
 
 

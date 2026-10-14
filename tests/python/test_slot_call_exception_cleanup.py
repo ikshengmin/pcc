@@ -16,6 +16,11 @@ from types import SimpleNamespace
 import pytest
 
 from pcc.frontends.python.codegen.call_object_lowering import CallObjectLoweringMixin
+from tests.python.owned_regression_support import (
+    assert_owned_program,
+    assert_reference_program,
+    explicit_owned_runtime,
+)
 from tests.python.test_foreign_address_leases import _functions
 
 
@@ -44,6 +49,7 @@ class CleanupModel(CallObjectLoweringMixin):
             "pcc_gc_store_root", "py_current_exception", "py_clear_exception",
             "pcc_gc_load_ptr", "py_raise", "pcc_gc_foreign_lease_release",
             "py_cleanup_one_root_preserving_exception",
+            "py_cleanup_two_roots_preserving_exception",
             "py_cleanup_one_lease_preserving_exception",
         )}
         self._slot_call_root_records = [(name, None, True) for name in owners]
@@ -161,7 +167,7 @@ class CleanupModel(CallObjectLoweringMixin):
         return 0
 
     def call(self, runtime, arguments, **_kwargs):
-        if runtime.startswith("py_cleanup_one_"):
+        if runtime.startswith("py_cleanup_"):
             from pcc.ir.compat import ir
             # Execute the production helper against the same moving-root model.
             namespace = dict(
@@ -218,10 +224,11 @@ class CleanupModel(CallObjectLoweringMixin):
 
 
 @pytest.mark.parametrize("owners", [
+    ("output", "argument"),
     ("output", "source", "keys"),
     ("output", "source", "keys", "key", "value"),
     ("output", "callee", "argument"),
-], ids=("dict-keys-error", "dict-item-error", "generic-call-error"))
+], ids=("two-root-error", "dict-keys-error", "dict-item-error", "generic-call-error"))
 @pytest.mark.parametrize("callback", ["weakref", "finalizer"])
 @pytest.mark.parametrize("move", [False, True])
 @pytest.mark.parametrize("pending", [False, True])
@@ -412,6 +419,144 @@ PROGRAM = textwrap.dedent('''\
 
     main()
 ''')
+
+
+TWO_ROOT_PROGRAM = textwrap.dedent('''\
+    import gc
+    import weakref
+
+    events = []
+    references = []
+    selected = ValueError("two-root selected")
+
+    class Token:
+        def __del__(self):
+            events.append("finalizer")
+            gc.collect()
+
+    def callback(reference):
+        events.append("weakref")
+        gc.collect()
+
+    def make():
+        token = Token()
+        references.append(weakref.ref(token, callback))
+        return token
+
+    def fail():
+        raise selected
+
+    def consume(*arguments):
+        raise AssertionError("entered callee")
+
+    def probe(callee):
+        return callee(make(), fail())
+
+    def main():
+        try:
+            probe(consume)
+        except ValueError as caught:
+            assert caught is selected
+            # The argument list's owner must have been released by the
+            # two-root error edge before control reaches this handler.
+            assert events == ["finalizer", "weakref"]
+            assert references[-1]() is None
+        else:
+            raise AssertionError("lost selecting exception")
+        gc.collect()
+        assert events == ["finalizer", "weakref"]
+        print("TWO_ROOT_CLEANUP_EXCEPTION_OK")
+
+    main()
+''')
+
+
+def _assert_two_root_program_error_edge():
+    from tests.python.test_owned_cleanup_helper_ir import verify_stackmaps
+    from tests.python.test_shared_call_binding import _function
+    from tests.python.test_slot_call_lexical_roots import _emit
+
+    _codegen, text = _emit(TWO_ROOT_PROGRAM, "two_root_cleanup")
+    verify_stackmaps(text)
+    body = _function(text, "user_two_root_cleanup_probe")
+    blocks = dict(re.findall(r"^([\w.]+):\n(.*?)(?=^[\w.]+:|^})", body, re.M | re.S))
+    aliases = dict(re.findall(r"(%[\w.]+) = bitcast ptr (%[\w.]+) to ptr", body))
+
+    def original(slot):
+        while slot in aliases:
+            slot = aliases[slot]
+        return slot
+
+    exact_edges = set()
+    for name, block in blocks.items():
+        call = re.search(
+            r"@py_cleanup_two_roots_preserving_exception\(ptr (%[\w.]+), ptr (%[\w.]+)\)",
+            block,
+        )
+        if call is None:
+            continue
+        roots = tuple(original(slot) for slot in call.groups())
+        if not (".args.operand." in roots[0] and ".args.list.operand." in roots[1]):
+            continue
+        leaves = re.findall(r"@pcc_gc_frame_leave_lifo\(ptr (%[\w.]+)\)", block)
+        assert tuple(original(slot) for slot in leaves) == tuple(reversed(roots))
+        assert "@py_tls_exc_swap_slot(" not in block and "@pcc_gc_store_root(" not in block
+        exact_edges.add(name)
+    assert len(exact_edges) == 1
+    failures = [name for name, block in blocks.items()
+                if re.search(r"\bcall\b[^\n]*@user_two_root_cleanup_fail\(", block)]
+    assert len(failures) == 1
+    # Follow the successful publication/lease-status checks to the pending-TLS
+    # check after fail(). A lease-failure edge alone does not witness this case.
+    name = failures[0]
+    visited = set()
+    while True:
+        assert name not in visited
+        visited.add(name)
+        block = blocks[name]
+        branch = re.search(
+            r"br i1 (%[\w.]+), label %([\w.]+), label %([\w.]+)", block,
+        )
+        assert branch is not None
+        flag = re.search(r"(%[\w.]+) = call i64 \(\) @py_err_occurred\(\)", block)
+        if flag is not None:
+            assert re.search(
+                re.escape(branch[1]) + r" = icmp ne i64 " + re.escape(flag[1]) + r", 0", block,
+            )
+            name = branch[2]
+            break
+        assert re.search(re.escape(branch[1]) + r" = icmp slt i64 %[^,]+, 0", block)
+        name = branch[3]
+    # This pending-error edge must reach the exact helper through unconditional
+    # cleanup branches, rather than merely being able to reach it in the CFG.
+    while name not in exact_edges:
+        assert name not in visited
+        visited.add(name)
+        branch = re.search(r"br label %([\w.]+)", blocks[name])
+        assert branch is not None and "br i1 " not in blocks[name]
+        name = branch[1]
+    return text
+
+
+def test_two_root_cleanup_program_reference_and_error_edge(tmp_path):
+    assert_reference_program(TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path)
+    (tmp_path / "two-root-cleanup.ll").write_text(_assert_two_root_program_error_edge())
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_two_root_cleanup_error_path_native_five_gc(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+):
+    # Native execution under all five modes is separate from the deterministic
+    # moving-root and hostile intermediate-TLS witnesses in helper-body tests.
+    (tmp_path / "two-root-cleanup.ll").write_text(_assert_two_root_program_error_edge())
+    mode = request.node.callspec.params["python_program_compiler"]
+    assert_owned_program(
+        TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path,
+        python_program_compiler, mode, explicit_owned_runtime, capfd,
+        provenance_probe="2",
+    )
 
 
 def test_cleanup_callback_program_reference(tmp_path):

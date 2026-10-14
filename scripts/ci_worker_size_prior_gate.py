@@ -206,6 +206,25 @@ TREE_RECOVERY_INPUTS = (
     'scripts/run_process_tree_sample.py',
     'scripts/run_pcc_stage1_build.py',
 )
+TWO_ROOT_CLEANUP_TESTS = (
+    "tests/python/test_owned_cleanup_helpers.py",
+    "tests/python/test_owned_cleanup_helper_ir.py",
+    "tests/python/test_slot_call_cleanup_reuse.py",
+    "tests/python/test_slot_call_exception_cleanup.py",
+)
+TWO_ROOT_CLEANUP_INPUTS = (
+    *TWO_ROOT_CLEANUP_TESTS,
+    "pcc/frontends/python/codegen/call_object_lowering.py",
+    "pcc/frontends/python/codegen/runtime_abi.py",
+    "pcc/runtime/py/py_cleanup_runtime.py",
+    "pcc/runtime/include/py_runtime.h",
+    "tests/python/test_foreign_address_leases.py",
+    "tests/python/test_slot_call_lexical_roots.py",
+    "tests/python/test_shared_call_binding.py",
+    "tests/owned_ir_validation.py",
+    "tests/python/owned_regression_support.py",
+    "tests/python/process_timeout.py",
+)
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -233,10 +252,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               HOME_SUMMARY_CI_TEST, MACHO_HOST_RELOCATIONS_TEST,
               MACHO_ARCHIVE_SYMBOL_STATE_TEST, MACHO_SECTION_PLACEMENT_TEST,
               MACHO_ARCHIVE_FRAMING_TEST, MACHO_WINDOWED_PREPARE_TEST,
-              MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST)
+              MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
+              *TWO_ROOT_CLEANUP_TESTS)
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25)
+HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -260,7 +280,7 @@ def source_identity():
     assert (pytest.__version__, xdist.__version__) == ("9.0.3", "3.8.0"), "use the frozen development lock"
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
     value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
-                           *PE_IMAGE_STACKMAP_PARTITION_INPUTS,
+                           *PE_IMAGE_STACKMAP_PARTITION_INPUTS, *TWO_ROOT_CLEANUP_INPUTS,
                            "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}

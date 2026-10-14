@@ -16,6 +16,7 @@ HELPERS = {
     "root": "py_cleanup_one_root_preserving_exception",
     "lease": "py_cleanup_one_lease_preserving_exception",
 }
+TWO_ROOT_HELPER = "py_cleanup_two_roots_preserving_exception"
 
 
 class UnusedStatus:
@@ -73,7 +74,10 @@ class CleanupModel:
             "pcc_gc_foreign_lease_release": self.release,
             "py_clear_exception": self.clear_exception,
         }
-        _functions(RUNTIME / "py_cleanup_runtime.py", set(HELPERS.values()), self.ns)
+        _functions(
+            RUNTIME / "py_cleanup_runtime.py",
+            set(HELPERS.values()) | {TWO_ROOT_HELPER}, self.ns,
+        )
 
     def allocate(self):
         self.next_address += 64
@@ -280,6 +284,97 @@ def test_empty_and_already_cleared_root_never_release_twice(pending):
     assert calls == ["finalizer"]
     assert model.references["owner"] == 0 and model.retired["owner"] == 1
     assert model.releases == []
+
+
+@pytest.mark.parametrize("pending", [False, True])
+@pytest.mark.parametrize("empty", [(), ("first",), ("second",), ("first", "second")])
+def test_two_roots_share_one_exception_scope_and_reread_moving_owners(pending, empty):
+    model = CleanupModel(pending=pending)
+    first = model.root(None if "first" in empty else "first")
+    second = model.root(None if "second" in empty else "second")
+    callbacks = []
+    moved_first = []
+
+    def second_callback():
+        assert model.pending == 0
+        assert model.memory[second] == 0
+        assert first in model.registered and second in model.registered
+        callbacks.append(("second", model.name(model.pending)))
+        model.set_exception("second-error")
+        before = model.memory[first]
+        model.collect()
+        if before:
+            assert model.memory[first] != before
+            moved_first.append(model.memory[first])
+
+    def first_callback():
+        # A chain of one-root helpers would clear second-error too early.
+        visible = None if "second" in empty else "second-error"
+        assert model.name(model.pending) == visible
+        assert model.memory[first] == model.memory[second] == 0
+        callbacks.append(("first", model.name(model.pending)))
+        model.set_exception("first-error")
+        model.collect()
+
+    model.callbacks[first] = first_callback
+    model.callbacks[second] = second_callback
+    assert model.ns[TWO_ROOT_HELPER](first, second) is None
+    model.assert_balanced(pending=pending)
+    assert len(model.allocations) == 1
+    assert model.root_stores == [
+        (second, None if "second" in empty else "second"),
+        (first, None if "first" in empty else "first"),
+    ]
+    assert callbacks == [
+        entry for name, entry in (
+            ("second", ("second", None)),
+            ("first", ("first", None if "second" in empty else "second-error")),
+        ) if name not in empty
+    ]
+    assert bool(moved_first) == (not empty)
+    for name in ("first", "second"):
+        assert model.references[name] == model.references[name + "-error"] == 0
+        assert model.retired[name] == model.retired[name + "-error"] == int(name not in empty)
+    assert model.events == [
+        "allocate", "initialize", "enter", "swap", "store-root", "store-root",
+        "clear", "swap", "leave",
+    ]
+    assert model.releases == []
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_two_root_callback_can_reenter_cleanup_before_later_owner(pending):
+    model = CleanupModel(pending=pending)
+    first, second = model.root("first"), model.root("second")
+    inner = model.root("inner")
+    seen = []
+
+    def inner_callback():
+        assert model.pending == 0
+        assert len(model.frames) == 3
+        assert model.name(model.memory[model.frames[-1]]) == "second-error"
+        model.set_exception("inner-error")
+        model.collect()
+
+    def second_callback():
+        model.set_exception("second-error")
+        model.cleanup("root", inner)
+        assert model.name(model.pending) == "second-error"
+        assert len(model.frames) == 2
+
+    def first_callback():
+        seen.append(model.name(model.pending))
+        model.set_exception("first-error")
+
+    model.callbacks.update({first: first_callback, second: second_callback, inner: inner_callback})
+    model.ns[TWO_ROOT_HELPER](first, second)
+    model.assert_balanced(pending=pending)
+    assert seen == ["second-error"]
+    assert model.root_stores == [(second, "second"), (inner, "inner"), (first, "first")]
+    assert model.left == list(reversed(model.entered))
+    assert all(model.retired[name] == 1 for name in (
+        "first", "second", "inner", "first-error", "second-error", "inner-error",
+    ))
 
 
 @pytest.mark.parametrize("token", [-1, 0, 1, 2, 37])

@@ -15,6 +15,7 @@ from tests.python.test_slot_call_lexical_roots import _emit
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_HELPER = 'py_cleanup_one_root_preserving_exception'
+TWO_ROOT_HELPER = 'py_cleanup_two_roots_preserving_exception'
 LEASE_HELPER = 'py_cleanup_one_lease_preserving_exception'
 
 
@@ -34,15 +35,22 @@ def test_actual_runtime_helper_abi_and_synchronous_body(tmp_path, monkeypatch, t
     text = output.read_text()
     verify_stackmaps(text)
     for name, signature, disposal in (
-        (ROOT_HELPER, r'ptr %slot', 'pcc_gc_store_root'),
-        (LEASE_HELPER, r'ptr %slot, i64 %acquired', 'pcc_gc_foreign_lease_release'),
+        (ROOT_HELPER, r'ptr %slot', ['pcc_gc_store_root']),
+        (TWO_ROOT_HELPER, r'ptr %first, ptr %second', ['pcc_gc_store_root'] * 2),
+        (LEASE_HELPER, r'ptr %slot, i64 %acquired', ['pcc_gc_foreign_lease_release']),
     ):
         match = re.search(r'^define[^\n]*void @' + name + r'\(' + signature + r'\)[^\n]*\{\n(.*?)^}', text, re.M | re.S)
         assert match
         body = match.group(1)
         calls = re.findall(r'\bcall\b[^\n]*?@([\w.]+)\(', body)
-        assert calls == ['pcc_gc_frame_enter_lifo', 'py_tls_exc_swap_slot', disposal,
-                         'py_clear_exception', 'py_tls_exc_swap_slot', 'pcc_gc_frame_leave_lifo']
+        assert calls == ['pcc_gc_frame_enter_lifo', 'py_tls_exc_swap_slot'] + disposal + [
+            'py_clear_exception', 'py_tls_exc_swap_slot', 'pcc_gc_frame_leave_lifo',
+        ]
+        if name == TWO_ROOT_HELPER:
+            assert re.findall(r'@pcc_gc_store_root\(ptr (%\w+), ptr null\)', body) == [
+                '%second', '%first',
+            ]
+            assert not re.search(r'load ptr, ptr %(?:first|second)\b', body)
         assert body.index('store ptr null') < body.index('@pcc_gc_frame_enter_lifo')
         assert 'alloca [8 x i8]' in body
         assert 'br ' not in body and 'Py_' not in body
@@ -65,19 +73,62 @@ def test_exact_single_shapes_have_no_caller_exception_alloca():
     assert model.events == [(LEASE_HELPER, (second, token)), ('branch', target)]
 
 
-@pytest.mark.parametrize('shape', ['multiple-roots', 'multiple-leases', 'mixed', 'flagged', 'non-lifo'])
+def test_exact_two_roots_keep_reverse_caller_retirement_visible():
+    model, first, second, target = setup_roots()
+    model._slot_call_cleanup_block((first, second), target)
+    assert model.events == [
+        (TWO_ROOT_HELPER, (first, second)),
+        ('leave', second), ('leave', first), ('branch', target),
+    ]
+
+
+@pytest.mark.parametrize('annotation,value,error_return', [
+    ('int', '17', 'ret ptr null'),
+    ('i64', '17', 'ret i64 0'),
+    ('float', '1.25', 'ret double 0x0000000000000000'),
+    ('None', 'None', 'ret void'),
+])
+def test_two_root_helper_preserves_exceptional_return_convention(annotation, value, error_return):
+    _codegen, text = _emit(
+        'from pcc import i64\n'
+        'def probe(f, x) -> ' + annotation + ':\n'
+        '    f(x)\n    return ' + value + '\n',
+    )
+    verify_stackmaps(text)
+    body = re.search(r'^define[^\n]*@user_lexical_probe\([^\n]*\).*?^}', text, re.M | re.S)[0]
+    blocks = dict(re.findall(r'^([\w.]+):\n(.*?)(?=^[\w.]+:|^})', body, re.M | re.S))
+    assert '@' + TWO_ROOT_HELPER + '(' in body
+    assert blocks['err.finish'].strip().endswith(error_return)
+
+
+@pytest.mark.parametrize('shape', [
+    'three-roots', 'multiple-leases', 'mixed', 'two-roots-with-lease',
+    'flagged', 'non-lifo', 'flagged-first', 'flagged-second',
+    'non-lifo-first', 'non-lifo-second',
+])
 def test_ineligible_shapes_keep_inline_tls_protocol(shape):
     model, first, second, target = setup_roots()
     roots, leases = (first,), ()
-    if shape == 'multiple-roots': roots = (first, second)
+    if shape == 'three-roots':
+        third = IdentityOnly()
+        model._slot_call_root_records.append((third, None, True))
+        roots = (first, second, third)
     if shape == 'multiple-leases': roots, leases = (), ((first, IdentityOnly()), (second, IdentityOnly()))
     if shape == 'mixed': leases = ((second, IdentityOnly()),)
+    if shape == 'two-roots-with-lease': roots, leases = (first, second), ((second, IdentityOnly()),)
     if shape == 'flagged': model._slot_call_root_records[0] = (first, IdentityOnly(), True)
     if shape == 'non-lifo': model._slot_call_root_records[0] = (first, None, False)
+    if shape in ('flagged-first', 'flagged-second', 'non-lifo-first', 'non-lifo-second'):
+        roots = (first, second)
+        index = int(shape.endswith('second'))
+        model._slot_call_root_records[index] = (
+            roots[index], IdentityOnly() if shape.startswith('flagged') else None,
+            shape.startswith('flagged'),
+        )
     model._slot_call_cleanup_block(roots, target, leases)
     calls = [event[0] for event in model.events]
     assert calls.count('swap') == 2
-    assert ROOT_HELPER not in calls and LEASE_HELPER not in calls
+    assert not any(helper in calls for helper in (ROOT_HELPER, TWO_ROOT_HELPER, LEASE_HELPER))
 
 
 @pytest.mark.parametrize('source', [
@@ -95,6 +146,18 @@ def test_real_caller_cleanup_root_provenance_and_stackmaps(source):
             assert '@pcc_gc_frame_leave_lifo(' in block
             assert block.index('@' + ROOT_HELPER) < block.index('@pcc_gc_frame_leave_lifo')
             assert '@py_tls_exc_swap_slot(' not in block
+        if '@' + TWO_ROOT_HELPER + '(' in block:
+            owners = re.search(
+                r'@' + TWO_ROOT_HELPER + r'\(ptr (%[\w.]+), ptr (%[\w.]+)\)', block,
+            )
+            assert owners
+            aliases = dict(re.findall(r'(%[\w.]+) = bitcast ptr (%[\w.]+) to ptr', block))
+            resolve = lambda value: aliases.get(value, value)
+            leaves = re.findall(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.]+)\)', block)
+            assert list(map(resolve, leaves)) == list(map(resolve, reversed(owners.groups())))
+            assert block.index('@' + TWO_ROOT_HELPER) < block.index('@pcc_gc_frame_leave_lifo')
+            assert '@py_tls_exc_swap_slot(' not in block
+            assert '@pcc_gc_store_root(' not in block
         if '@' + LEASE_HELPER + '(' in block:
             assert '@pcc_gc_frame_leave_lifo(' not in block
             assert '@pcc_gc_store_root(' not in block

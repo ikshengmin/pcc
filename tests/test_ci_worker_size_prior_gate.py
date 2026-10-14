@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -67,15 +67,17 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[40:42] == (gate.ELF_APPLICATION_TEST, gate.ELF_APPLICATION_SOURCE_TEST)
     assert gate.HOST_FILES[42:43] == (gate.MANAGED_DIRTY_ROWS_TEST,)
     assert gate.HOST_FILES[43:45] == (gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST)
-    assert gate.HOST_FILES[45:] == (gate.HOME_SUMMARY_CI_TEST, gate.MACHO_HOST_RELOCATIONS_TEST,
+    assert gate.HOST_FILES[45:53] == (gate.HOME_SUMMARY_CI_TEST, gate.MACHO_HOST_RELOCATIONS_TEST,
                                   gate.MACHO_ARCHIVE_SYMBOL_STATE_TEST,
                                   gate.MACHO_SECTION_PLACEMENT_TEST,
                                   gate.MACHO_ARCHIVE_FRAMING_TEST,
                                   gate.MACHO_WINDOWED_PREPARE_TEST,
                                   gate.MACHO_WINDOWED_PARITY_TEST,
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
-    assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 53
-    assert sum(gate.HOST_COUNTS) == 2304 and sum(gate.HOST_COUNTS[:52]) == 2279
+    assert gate.HOST_FILES[53:] == gate.TWO_ROOT_CLEANUP_TESTS
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 57
+    assert sum(gate.HOST_COUNTS) == 2417 and sum(gate.HOST_COUNTS[:53]) == 2304
+    assert sum(gate.HOST_COUNTS[:52]) == 2279
     assert sum(gate.HOST_COUNTS[:51]) == 2252
     assert sum(gate.HOST_COUNTS[:50]) == 2239 and sum(gate.HOST_COUNTS[:49]) == 2193
     assert sum(gate.HOST_COUNTS[:48]) == 2152
@@ -187,6 +189,56 @@ def test_default_command_retains_project_xdist(tmp_path):
     for path in exception_inputs:
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
+    assert gate.TWO_ROOT_CLEANUP_TESTS == (
+        "tests/python/test_owned_cleanup_helpers.py",
+        "tests/python/test_owned_cleanup_helper_ir.py",
+        "tests/python/test_slot_call_cleanup_reuse.py",
+        "tests/python/test_slot_call_exception_cleanup.py",
+    )
+    assert gate.TWO_ROOT_CLEANUP_INPUTS == (
+        *gate.TWO_ROOT_CLEANUP_TESTS,
+        "pcc/frontends/python/codegen/call_object_lowering.py",
+        "pcc/frontends/python/codegen/runtime_abi.py",
+        "pcc/runtime/py/py_cleanup_runtime.py",
+        "pcc/runtime/include/py_runtime.h",
+        "tests/python/test_foreign_address_leases.py",
+        "tests/python/test_slot_call_lexical_roots.py",
+        "tests/python/test_shared_call_binding.py",
+        "tests/owned_ir_validation.py",
+        "tests/python/owned_regression_support.py",
+        "tests/python/process_timeout.py",
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "TWO_ROOT_CLEANUP_INPUTS"
+               for node in ast.walk(identity))
+    for path in gate.TWO_ROOT_CLEANUP_INPUTS:
+        assert push_filters.count('      - "' + path + '"') == 1
+        assert pull_request_filters.count('      - "' + path + '"') == 1
+    for path, expected_count in zip(gate.TWO_ROOT_CLEANUP_TESTS, (43, 21, 6, 43)):
+        module = ast.parse((ROOT / path).read_text())
+        constants = {node.targets[0].id: node.value for node in module.body
+                     if isinstance(node, ast.Assign) and len(node.targets) == 1
+                     and isinstance(node.targets[0], ast.Name)}
+        counts = {False: 0, True: 0}
+        for node in module.body:
+            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+                continue
+            cases, integration = 1, False
+            for mark in node.decorator_list:
+                if ast.unparse(mark) == "pytest.mark.integration":
+                    integration = True
+                    continue
+                assert isinstance(mark, ast.Call)
+                assert ast.unparse(mark.func) == "pytest.mark.parametrize"
+                values = mark.args[1]
+                if isinstance(values, ast.Name):
+                    values = constants[values.id]
+                assert isinstance(values, (ast.List, ast.Tuple, ast.Dict))
+                cases *= len(values.keys if isinstance(values, ast.Dict) else values.elts)
+            counts[integration] += cases
+        assert counts[False] == expected_count
+        assert counts[True] == (3 if path.endswith("test_slot_call_exception_cleanup.py") else 0)
+    assert "-m 'not integration'" in (ROOT / "pyproject.toml").read_text()
     assert gate.PE_IMAGE_STACKMAP_PARTITION_INPUTS == (
         gate.PE_IMAGE_STACKMAP_PARTITION_TEST,
         'pcc/backend/pe_x86_64.py',
@@ -1237,7 +1289,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

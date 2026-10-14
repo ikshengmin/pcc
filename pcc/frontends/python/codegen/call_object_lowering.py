@@ -269,8 +269,11 @@ class CallObjectLoweringMixin:
         # Only the helper's own balanced exception frame is hidden by this call.
         one_root = (len(root_owners) == 1 and not lease_owners
                     and root_owners[0][1] is None and root_owners[0][2])
+        two_roots = (len(root_owners) == 2 and not lease_owners
+                     and root_owners[0][1] is None and root_owners[0][2]
+                     and root_owners[1][1] is None and root_owners[1][2])
         one_lease = not root_owners and len(lease_owners) == 1
-        if one_root or one_lease:
+        if one_root or two_roots or one_lease:
             if one_root:
                 slot = root_owners[0][0]
                 self.builder.call(
@@ -278,6 +281,16 @@ class CallObjectLoweringMixin:
                     [self._as_gc_ptr(slot)],
                 )
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
+            elif two_roots:
+                first, second = root_owners[0][0], root_owners[1][0]
+                # One exception scope spans both releases. Chaining single-root
+                # helpers would hide the first callback's error from the next.
+                self.builder.call(
+                    self.runtime["py_cleanup_two_roots_preserving_exception"],
+                    [self._as_gc_ptr(first), self._as_gc_ptr(second)],
+                )
+                self._emit_gc_frame_leave_lifo_for_slot(second)
+                self._emit_gc_frame_leave_lifo_for_slot(first)
             else:
                 slot, token = lease_owners[0]
                 self.builder.call(

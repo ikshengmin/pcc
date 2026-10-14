@@ -70,7 +70,7 @@ def admitted(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
-def test_gate_reuses_terminal_runtime_and_records_twenty_executions(tmp_path, monkeypatch, admitted, stage_status):
+def test_gate_reuses_terminal_runtime_and_records_twenty_five_executions(tmp_path, monkeypatch, admitted, stage_status):
     source, runtime = admitted
     path = tmp_path / "stage1.json"
     stage = json.loads(path.read_text())
@@ -101,9 +101,9 @@ def test_gate_reuses_terminal_runtime_and_records_twenty_executions(tmp_path, mo
     assert result["runtime"] == result["runtime_after"] == runtime
     assert result["stage1_status"] == stage_status
     assert set(result["programs"]) == {
-        "object-identity", "super-result", "dict-copy-result", "dict-pop-result",
+        "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
     }
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 20
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 25
     for row in result["programs"].values():
         assert [item["requested_gc_backend"] for item in row["executions"]] == list(range(5))
         assert all("gc_backend" not in item for item in row["executions"])
@@ -203,7 +203,7 @@ def test_run_failure_or_identity_drift_is_never_a_pass(tmp_path, monkeypatch, ad
     "foreign-program", "duplicate-program",
 ))
 @pytest.mark.parametrize("label", (
-    "object-identity", "super-result", "dict-copy-result", "dict-pop-result",
+    "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
 ))
 def test_native_evidence_requires_exact_source_and_all_five_successes(
     tmp_path, monkeypatch, admitted, change, label,
@@ -249,9 +249,9 @@ def test_native_evidence_requires_exact_source_and_all_five_successes(
 
 @pytest.mark.parametrize("missing", (
     ("dict-copy-result",), ("dict-pop-result",),
-    ("dict-copy-result", "dict-pop-result"),
-), ids=("copy", "pop", "both"))
-def test_missing_dict_evidence_names_the_absent_program_and_fails_gate(
+    ("dict-copy-result", "dict-pop-result"), ("two-root-cleanup",),
+), ids=("copy", "pop", "both", "two-root"))
+def test_missing_native_evidence_names_the_absent_program_and_fails_gate(
     tmp_path, monkeypatch, admitted, missing,
 ):
     _source, runtime = admitted
@@ -273,7 +273,7 @@ def test_missing_dict_evidence_names_the_absent_program_and_fails_gate(
 def test_gate_selects_exact_dict_pcc0_nodes_and_program_sources():
     from tests.python.test_dict_method_result_ownership import _program
 
-    assert gate.NODES[2:] == (
+    assert gate.NODES[2:4] == (
         "tests/python/test_dict_method_result_ownership.py::"
         "test_dict_method_result_owners_native_five_gc[pcc0-copy]",
         "tests/python/test_dict_method_result_ownership.py::"
@@ -284,6 +284,20 @@ def test_gate_selects_exact_dict_pcc0_nodes_and_program_sources():
     assert programs["dict-pop-result"] == (_program("pop"), "DICT_METHOD_OWNERS_OK\n")
     assert programs["dict-copy-result"][0] != programs["dict-pop-result"][0]
     assert "tests/python/test_dict_method_result_ownership.py" in gate.TEST_INPUTS
+
+
+def test_gate_selects_exact_two_root_pcc0_node_and_program_source():
+    from tests.python.test_slot_call_exception_cleanup import TWO_ROOT_PROGRAM
+
+    assert gate.NODES[4:] == (
+        "tests/python/test_slot_call_exception_cleanup.py::"
+        "test_two_root_cleanup_error_path_native_five_gc[pcc0]",
+    )
+    assert gate.expected_programs()["two-root-cleanup"] == (
+        TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n",
+    )
+    assert set(prior.TWO_ROOT_CLEANUP_INPUTS) <= set(gate.TEST_INPUTS)
+    assert len(gate.NODES) == len(set(gate.NODES)) == 5
 
 
 @pytest.mark.parametrize("machine", (62, 183))
@@ -396,6 +410,39 @@ def test_dict_regressions_reuse_the_explicit_owned_helper(tmp_path, monkeypatch,
                       compiler, "pcc0", archive, capfd), {"provenance_probe": "2"})]
 
 
+def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypatch):
+    from tests.python import test_slot_call_exception_cleanup as probe
+
+    calls = []
+    monkeypatch.setattr(probe, "assert_owned_program", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(probe, "_assert_two_root_program_error_edge", lambda: "host-only IR control\n")
+    compiler, archive, capfd = object(), object(), object()
+    request = SimpleNamespace(node=SimpleNamespace(
+        callspec=SimpleNamespace(params={"python_program_compiler": "pcc0"}),
+    ))
+    probe.test_two_root_cleanup_error_path_native_five_gc(
+        compiler, request, archive, tmp_path, capfd,
+    )
+    assert calls == [((probe.TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path,
+                      compiler, "pcc0", archive, capfd), {"provenance_probe": "2"})]
+    assert (tmp_path / "two-root-cleanup.ll").read_text() == "host-only IR control\n"
+    tree = ast.parse((ROOT / gate.NODES[4].split("::")[0]).read_text())
+    native = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "test_two_root_cleanup_error_path_native_five_gc")
+    assert [arg.arg for arg in native.args.args] == [
+        "python_program_compiler", "request", "explicit_owned_runtime", "tmp_path", "capfd",
+    ]
+    assert ast.unparse(native.decorator_list[0]) == "pytest.mark.integration"
+    fixture_mark = native.decorator_list[1]
+    assert ast.unparse(fixture_mark.func) == "pytest.mark.parametrize"
+    assert [ast.literal_eval(arg) for arg in fixture_mark.args] == [
+        "python_program_compiler", ("pcc0", "pcc1"),
+    ]
+    assert [(keyword.arg, ast.literal_eval(keyword.value)) for keyword in fixture_mark.keywords] == [
+        ("indirect", True),
+    ]
+
+
 def test_explicit_fixture_retains_single_thread_config_and_never_requests_pcc1(tmp_path, monkeypatch):
     from pcc.tools import runtime_archive_provenance
 
@@ -428,7 +475,7 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     assert gate.source_identity is prior.source_identity
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     other = text.split("  other-platform-native-wheel:\n", 1)[1].split("  pcc1-package-parity:\n", 1)[0]
-    name = "Verify object identity and super results with the existing runtime"
+    name = "Verify native object ownership and cleanup with the existing runtime"
     step = other.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
     assert other.index("id: platform_qualification") < other.index("id: platform_runtime") < other.index(name)
     assert other.index(name) < other.index("--phase pcc1")
@@ -451,10 +498,10 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         assert text.count('      - "' + path + '"') == 2
     for suffix in ("json", "jsonl", "stdout", "stderr", "tsv", "xml"):
         assert "build/worker-prior-gate/**/*." + suffix in other
-    assert gate.TIMEOUT_S == 300 and len(gate.NODES) == 4
+    assert gate.TIMEOUT_S == 300 and len(gate.NODES) == 5
     assert "[pcc0]" in gate.NODES[0] and all("pcc1" not in node for node in gate.NODES)
     command = prior.pytest_command(tmp_path, gate.NODES, integration=True)
-    assert command[-6:] == ["-m", "integration", *gate.NODES]
+    assert command[-7:] == ["-m", "integration", *gate.NODES]
     assert "-x" in command
     assert not any(option in command for option in ("-n", "-n0", "--dist", "-o", "--override-ini"))
     assert '-n 6 --dist=loadgroup' in (ROOT / "pyproject.toml").read_text()

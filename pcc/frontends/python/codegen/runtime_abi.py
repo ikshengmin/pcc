@@ -1418,6 +1418,7 @@ def _runtime_signatures_part_19():
 
 def _runtime_signatures_part_20():
     return {
+    "py_cleanup_two_roots_preserving_exception": (_VOID, [_PTR, _PTR], False),
     "py_int_to_bytes": (_PYOBJ, [_PYOBJ, _I64, _PYOBJ], False),
     "py_int_to_bytes_args": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_int_from_bytes": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -2588,6 +2589,7 @@ def _cross_object_signatures_part_6():
 
 def _cross_object_signatures_part_7():
     return {
+    "py_cleanup_two_roots_preserving_exception": (("c_ptr", "c_ptr"), "c_void"),
     "py_dealloc_dict": (("c_ptr",), "c_void"),
     "py_dealloc_set": (("c_ptr",), "c_void"),
     "py_dealloc_func": (("c_ptr",), "c_void"),

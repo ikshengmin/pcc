@@ -162,6 +162,17 @@ on:
       - "tests/python/test_object_type_identity.py"
       - "tests/python/test_super_call_result_roots.py"
       - "tests/python/test_dict_method_result_ownership.py"
+      - "tests/python/test_owned_cleanup_helpers.py"
+      - "tests/python/test_owned_cleanup_helper_ir.py"
+      - "tests/python/test_slot_call_cleanup_reuse.py"
+      - "tests/python/test_slot_call_exception_cleanup.py"
+      - "tests/python/test_foreign_address_leases.py"
+      - "tests/python/test_slot_call_lexical_roots.py"
+      - "tests/python/test_shared_call_binding.py"
+      - "pcc/frontends/python/codegen/call_object_lowering.py"
+      - "pcc/frontends/python/codegen/runtime_abi.py"
+      - "pcc/runtime/py/py_cleanup_runtime.py"
+      - "pcc/runtime/include/py_runtime.h"
       - "tests/test_ci_native_object_regressions.py"
       - "scripts/ci_native_object_regressions.py"
       - "tests/fixtures/native/worker_resource_admission.py"
@@ -339,6 +350,17 @@ on:
       - "tests/python/test_object_type_identity.py"
       - "tests/python/test_super_call_result_roots.py"
       - "tests/python/test_dict_method_result_ownership.py"
+      - "tests/python/test_owned_cleanup_helpers.py"
+      - "tests/python/test_owned_cleanup_helper_ir.py"
+      - "tests/python/test_slot_call_cleanup_reuse.py"
+      - "tests/python/test_slot_call_exception_cleanup.py"
+      - "tests/python/test_foreign_address_leases.py"
+      - "tests/python/test_slot_call_lexical_roots.py"
+      - "tests/python/test_shared_call_binding.py"
+      - "pcc/frontends/python/codegen/call_object_lowering.py"
+      - "pcc/frontends/python/codegen/runtime_abi.py"
+      - "pcc/runtime/py/py_cleanup_runtime.py"
+      - "pcc/runtime/include/py_runtime.h"
       - "tests/test_ci_native_object_regressions.py"
       - "scripts/ci_native_object_regressions.py"
       - "tests/fixtures/native/worker_resource_admission.py"
@@ -801,7 +823,7 @@ jobs:
               os.environ.copy(), integration=True, timeout=300,
           )
 
-      - name: Verify object identity and super results with the existing runtime
+      - name: Verify native object ownership and cleanup with the existing runtime
         # A terminal Stage1 attempt is enough to reuse its admitted runtime.
         # Missing admission is a hard failure in this separate pcc0 gate.
         if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
