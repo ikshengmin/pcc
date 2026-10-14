@@ -282,13 +282,6 @@ def _parse_operand(text: str):
         return _Imm(int(text.strip(), 0))
     except ValueError:
         name = text.strip()
-        relocation = 0
-        if name.startswith("OFFSET FLAT:"):
-            name = name[len("OFFSET FLAT:"):]
-            relocation = R_X86_64_64
-            if name.endswith("@TPOFF"):
-                name = name[:-len("@TPOFF")]
-                relocation = R_X86_64_TPOFF32
         # Only an exact input guarantees that strip removed edge whitespace.
         # Subclasses can return arbitrary names or override their iteration.
         if not name or (
@@ -296,10 +289,27 @@ def _parse_operand(text: str):
             else any(char.isspace() for char in name)
         ):
             raise X86EncodeError(f"bad operand {text!r}")
-        if relocation:
-            return _SymbolImmediate(name, relocation)
         return _Target(name)
 
+
+
+def _parse_encoding_operand(text: str):
+    # Keep ordinary operands, including subclass protocols, on the original
+    # parser. Symbol immediates belong to the encoding dialect, not its target
+    # whitespace predicate.
+    if type(text) is not str:
+        return _parse_operand(text)
+    name = text.strip()
+    if not name.startswith("OFFSET FLAT:"):
+        return _parse_operand(text)
+    name = name[len("OFFSET FLAT:"):]
+    relocation = R_X86_64_64
+    if name.endswith("@TPOFF"):
+        name = name[:-len("@TPOFF")]
+        relocation = R_X86_64_TPOFF32
+    if not name or len(name.split(None, 1)) > 1:
+        raise X86EncodeError(f"bad operand {text!r}")
+    return _SymbolImmediate(name, relocation)
 
 
 _OPERAND_CACHE_MAX_ENTRIES = 4096
@@ -322,7 +332,7 @@ class _OperandParseCache:
     """Bounded file-local reuse of immutable, PC-independent operand syntax."""
 
     def __init__(self) -> None:
-        self.entries: dict[str, _Reg | _Mem | _Imm | _Target] = {}
+        self.entries: dict[str, _Reg | _Mem | _Imm | _Target | _SymbolImmediate] = {}
         self.key_bytes = 0
         self.instruction_encodings: dict[str, bytes] = {}
         self.instruction_encoding_bytes = 0
@@ -338,12 +348,12 @@ class _OperandParseCache:
             and key_bytes <= _OPERAND_CACHE_MAX_KEY_BYTES
         )
         if not cacheable:
-            return _parse_operand(text)
+            return _parse_encoding_operand(text)
         result = self.entries.get(text)
         if result is not None:
             return result
         # Invalid operands must still fail at their actual encounter point.
-        result = _parse_operand(text)
+        result = _parse_encoding_operand(text)
         if (
             len(self.entries) >= _OPERAND_CACHE_MAX_ENTRIES
             or self.key_bytes + key_bytes > _OPERAND_CACHE_MAX_KEY_BYTES
@@ -1155,7 +1165,7 @@ def _encode_instruction_uncached(
             nested.relocations,
         )
     operands = [
-        _parse_operand(item) if operand_cache is None else operand_cache.parse(item)
+        _parse_encoding_operand(item) if operand_cache is None else operand_cache.parse(item)
         for item in _split_operands(rest)
     ]
     if mnemonic in ("fld", "fstp", "fild", "fistp", "fnstcw", "fldcw"):
