@@ -16,9 +16,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .elf_x86_64 import (
+    R_X86_64_64,
     R_X86_64_GOTTPOFF,
     R_X86_64_PC32,
     R_X86_64_PLT32,
+    R_X86_64_TPOFF32,
 )
 
 
@@ -70,6 +72,12 @@ class _Imm:
 @dataclass(frozen=True)
 class _Target:
     name: str
+
+
+@dataclass(frozen=True)
+class _SymbolImmediate:
+    name: str
+    relocation: int
 
 
 @dataclass(frozen=True)
@@ -274,6 +282,13 @@ def _parse_operand(text: str):
         return _Imm(int(text.strip(), 0))
     except ValueError:
         name = text.strip()
+        relocation = 0
+        if name.startswith("OFFSET FLAT:"):
+            name = name[len("OFFSET FLAT:"):]
+            relocation = R_X86_64_64
+            if name.endswith("@TPOFF"):
+                name = name[:-len("@TPOFF")]
+                relocation = R_X86_64_TPOFF32
         # Only an exact input guarantees that strip removed edge whitespace.
         # Subclasses can return arbitrary names or override their iteration.
         if not name or (
@@ -281,6 +296,8 @@ def _parse_operand(text: str):
             else any(char.isspace() for char in name)
         ):
             raise X86EncodeError(f"bad operand {text!r}")
+        if relocation:
+            return _SymbolImmediate(name, relocation)
         return _Target(name)
 
 
@@ -540,6 +557,29 @@ def _same_width(first, second, *, owner: str) -> int:
     if first_width not in (None, width) or second_width not in (None, width):
         raise X86EncodeError(f"{owner} operand widths disagree")
     return width
+
+
+def _encode_symbol_immediate(mnemonic: str, operands: list, pc: int) -> EncodedInstruction:
+    if len(operands) != 2:
+        raise X86EncodeError("symbol immediate expects two operands")
+    dst, src = operands
+    if not isinstance(dst, _Reg) or dst.kind != "gp" or not isinstance(src, _SymbolImmediate):
+        raise X86EncodeError("symbol immediate requires a GP register and OFFSET FLAT:symbol")
+    if src.relocation == R_X86_64_64:
+        if mnemonic != "movabs" or dst.width != 64:
+            raise X86EncodeError("absolute symbol immediate requires movabs to a 64-bit register")
+        width = 8
+    elif src.relocation == R_X86_64_TPOFF32:
+        if mnemonic != "mov" or dst.width != 32:
+            raise X86EncodeError("TLS offset immediate requires mov to a 32-bit register")
+        width = 4
+    else:
+        raise X86EncodeError("unsupported symbol immediate relocation")
+    head = _rex(w=width == 8, r=0, x=0, b=dst.high) + bytes((0xB8 + dst.low,))
+    return EncodedInstruction(
+        head + b"\0" * width,
+        (EncodedRelocation(pc + len(head), src.name, src.relocation, 0),),
+    )
 
 
 def _encode_mov(operands: list, pc: int) -> EncodedInstruction:
@@ -1140,7 +1180,11 @@ def _encode_instruction_uncached(
             raise X86EncodeError("MXCSR transfer requires one DWORD memory operand")
         return _modrm_instruction(pc=pc, legacy=b"", opcode=b"\x0f\xae", width=32,
                                   reg=_Reg("group", 3 if mnemonic == "stmxcsr" else 2, 32), rm=operands[0])
+    if mnemonic == "movabs":
+        return _encode_symbol_immediate(mnemonic, operands, pc)
     if mnemonic == "mov":
+        if len(operands) == 2 and isinstance(operands[1], _SymbolImmediate):
+            return _encode_symbol_immediate(mnemonic, operands, pc)
         return _encode_mov(operands, pc)
     if mnemonic in _BINARY_REG_RM:
         return _encode_binary(mnemonic, operands, pc)

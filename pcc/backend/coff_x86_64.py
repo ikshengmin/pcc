@@ -273,6 +273,10 @@ def assemble(
                 kind, addend = REL32, addend + 4
             elif r.type == 1:
                 kind = ADDR64
+            elif r.type == 23:
+                # ELF's local-exec offset becomes the Windows module TLS
+                # offset. The 32-bit MOV zero-extends the unsigned SECREL.
+                kind = SECREL
             elif r.type in (10, 11):
                 kind = ADDR32
             else:

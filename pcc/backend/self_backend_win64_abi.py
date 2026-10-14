@@ -8,6 +8,11 @@ from .self_backend_ir import TypeDesc, _align_to
 
 GPRS = ("rcx", "rdx", "r8", "r9")
 
+# Existing transient slots in the 80-byte platform frame area. They do not
+# overlap saved nonvolatile GPRs (0..23) or XMM registers (32..63).
+_TRANSIENT_R10_OFFSET = 24
+_TRANSIENT_R11_OFFSET = 64
+
 
 def indirect(ty) -> bool:
     return (ty.is_struct or ty.is_array) and ty.slot_size not in (1, 2, 4, 8)
@@ -189,12 +194,33 @@ def vararg_start(func, ap):
     return lines
 
 
+def global_memory_access(name, reg, type_desc, scratch_base, store):
+    from .self_backend_x86_64_linux import (
+        _materialize_global_address, _load_from_address, _store_to_address,
+    )
+
+    # Unlike RIP-relative loads/stores, address materialization needs a GP
+    # scratch. Preserve it, including when the value itself is an r11 alias.
+    address_reg = "r10" if reg in ("r11", "r11d", "r11w", "r11b") else "r11"
+    offset = _TRANSIENT_R10_OFFSET if address_reg == "r10" else _TRANSIENT_R11_OFFSET
+    slot = scratch_base + offset
+    lines = [f"  mov QWORD PTR [rsp + {slot}], {address_reg}"]
+    lines.extend(_materialize_global_address(name, address_reg))
+    if store:
+        lines.extend(_store_to_address(address_reg, reg, type_desc))
+    else:
+        lines.extend(_load_from_address(address_reg, reg, type_desc))
+    lines.append(f"  mov {address_reg}, QWORD PTR [rsp + {slot}]")
+    return lines
+
+
 def tls_address(symbol, reg, scratch_base):
-    first = scratch_base + 24
-    second = scratch_base + 64
+    first = scratch_base + _TRANSIENT_R10_OFFSET
+    second = scratch_base + _TRANSIENT_R11_OFFSET
     lines = [f"  mov QWORD PTR [rsp + {first}], r10", f"  mov QWORD PTR [rsp + {second}], r11",
-             "  mov r10, QWORD PTR gs:88", "  mov r11d, DWORD PTR _tls_index[rip]",
-             "  mov r10, QWORD PTR [r10 + r11*8]", f"  mov r11, QWORD PTR {symbol}@GOTTPOFF[rip]",
+             "  mov r10, QWORD PTR gs:88", "  movabs r11, OFFSET FLAT:_tls_index",
+             "  mov r11d, DWORD PTR [r11]", "  mov r10, QWORD PTR [r10 + r11*8]",
+             f"  mov r11d, OFFSET FLAT:{symbol}@TPOFF",
              "  add r10, r11"]
     if reg != "r10":
         lines.append(f"  mov {reg}, r10")

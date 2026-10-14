@@ -422,6 +422,8 @@ def _materialize_global_symbol_address(name: str, reg: str) -> list[str]:
         return tls_address(_asm_symbol(name), reg, _WINDOWS_SCRATCH_BASE)
     global_ = _tls_global(name)
     if global_ is None:
+        if _WINDOWS_ABI:
+            return [f"  movabs {reg}, OFFSET FLAT:{_asm_symbol(name)}"]
         return [f"  lea {reg}, {_global_symbol_addr(name)}"]
     validate_x86_tls_global(global_)
     symbol = _asm_symbol(global_.name)
@@ -459,6 +461,9 @@ def _value_label(func_name: str, value_name: str, suffix: str) -> str:
 
 
 def _load_global_to_reg(name: str, reg: str, type_desc: TypeDesc) -> list[str]:
+    if _WINDOWS_ABI and _tls_global(name) is None:
+        from .self_backend_win64_abi import global_memory_access
+        return global_memory_access(name, reg, type_desc, _WINDOWS_SCRATCH_BASE, False)
     if _tls_global(name) is not None:
         address_reg = "r11"
         lines = _materialize_global_address(name, address_reg)
@@ -471,6 +476,9 @@ def _load_global_to_reg(name: str, reg: str, type_desc: TypeDesc) -> list[str]:
 
 
 def _store_reg_to_global(name: str, reg: str, type_desc: TypeDesc) -> list[str]:
+    if _WINDOWS_ABI and _tls_global(name) is None:
+        from .self_backend_win64_abi import global_memory_access
+        return global_memory_access(name, reg, type_desc, _WINDOWS_SCRATCH_BASE, True)
     if _tls_global(name) is not None:
         address_reg = (
             "r10" if reg in {"r11", "r11d", "r11w", "r11b"} else "r11"
