@@ -89,6 +89,9 @@ def read_archive(data: bytes) -> list[Member]:
             size = int(header[48:58].decode().strip())
         except ValueError as exc:
             raise ArchiveError(f"bad member size at {offset}") from exc
+        if size < 0:
+            # Skipped indexes must still advance past their own header.
+            raise ArchiveError(f"negative member size at {offset}")
         body = offset + _HEADER_SIZE
         if body + size > len(data):
             raise ArchiveError(f"member at {offset} runs past end of archive")
@@ -99,6 +102,8 @@ def read_archive(data: bytes) -> list[Member]:
                 name_len = int(raw_name[3:].decode())
             except ValueError as exc:
                 raise ArchiveError(f"bad extended name at {offset}") from exc
+            if name_len < 0 or name_len > size:
+                raise ArchiveError(f"bad extended name length at {offset}")
             name = data[body:body + name_len].rstrip(b"\0").decode(
                 "utf-8", "surrogateescape"
             )
