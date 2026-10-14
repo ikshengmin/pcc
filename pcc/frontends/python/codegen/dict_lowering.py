@@ -12,6 +12,8 @@ from pcc.frontends.python.py_ast import (
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_DICT,
+    PY_TYPE_LIST,
+    PY_TYPE_SET,
     PY_TYPE_TUPLE,
 )
 
@@ -60,10 +62,20 @@ def _emit_rooted_dict_method(self, expr):
         self._cpy_operand_cleanup_block = self._try_err_block
         tag = self._slot_call_runtime_call('py_obj_type_tag', (receiver,), span=expr.span)
         is_dict = self.builder.icmp_signed('==', tag, ir.Constant(_I64, PY_TYPE_DICT))
+        native_match = is_dict
+        if method_name == 'copy':
+            # The dict route claims dynamic copy before list/set dispatch.
+            # All three exact builtin containers use py_copy_copy; their
+            # runtime getattr surface need not manufacture a bound copy.
+            # Other types still resolve their actual method, even though
+            # copy.copy() itself also accepts tuples, scalars and instances.
+            for type_tag in (PY_TYPE_LIST, PY_TYPE_SET):
+                matches = self.builder.icmp_signed('==', tag, ir.Constant(_I64, type_tag))
+                native_match = self.builder.or_(native_match, matches)
         native_bb = self.current_function.append_basic_block(self._fresh(root_label + '.native'))
         generic_bb = self.current_function.append_basic_block(self._fresh(root_label + '.generic'))
         done_bb = self.current_function.append_basic_block(self._fresh(root_label + '.done'))
-        self.builder.cbranch(is_dict, native_bb, generic_bb)
+        self.builder.cbranch(native_match, native_bb, generic_bb)
 
         self.builder.position_at_end(native_bb)
         if method_name == 'pop':

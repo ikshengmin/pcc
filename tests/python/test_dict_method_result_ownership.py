@@ -13,6 +13,11 @@ import pytest
 from pcc.backend.self_backend_precise_stackmaps import build_stack_map_plans
 from pcc.backend.self_backend_prepare import prepare_module_for_target
 from pcc.backend.self_backend_x86_64_linux import _aggregate_returned_indirect
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_DICT,
+    PY_TYPE_LIST,
+    PY_TYPE_SET,
+)
 from tests.python.owned_regression_support import (
     assert_owned_program,
     assert_reference_program,
@@ -93,6 +98,21 @@ def test_dynamic_dict_method_branches_publish_the_consumer_root(method):
                   for call in _calls(function, "pcc_gc_root_copy_lease")]
         assert any("%probe.operand" in call and "dict.pop.default" in call
                    for call in copies)
+
+
+@pytest.mark.parametrize("method", ("copy()", "pop(key, fallback)", "keys()"))
+def test_dict_copy_guard_preserves_all_builtin_container_copy_routes(method):
+    function = _function(_emit(
+        "def probe(receiver, key, fallback):\n    return receiver." + method + "\n"
+    ))
+    tag = re.search(r"(%[^ ]+) = call i64[^\n]*@py_obj_type_tag\(", function)
+    assert tag is not None
+    tested_tags = re.findall(
+        r"icmp eq i64 " + re.escape(tag.group(1)) + r", (\d+)", function,
+    )
+    expected = (PY_TYPE_DICT, PY_TYPE_LIST, PY_TYPE_SET) if method == "copy()" else (PY_TYPE_DICT,)
+    assert tuple(map(int, tested_tags)) == expected
+    assert "@py_obj_call_slots(" in function
 
 
 @pytest.mark.parametrize("method", (
@@ -214,6 +234,13 @@ _PROGRAM_TEMPLATE = textwrap.dedent('''\
     def copied(receiver):
         return receiver.copy()
 
+    def missing_copy(receiver):
+        try:
+            copied(receiver)
+        except AttributeError:
+            return
+        raise AssertionError('copy method invented for unsupported receiver')
+
     def marked(label, value):
         events.append(label)
         gc.collect()
@@ -257,6 +284,13 @@ _PROGRAM_TEMPLATE = textwrap.dedent('''\
         sequence = [chosen]
         duplicate = copied(sequence)
         assert duplicate is not sequence and duplicate[0] is chosen
+        members = {1, 2}
+        duplicate_set = copied(members)
+        assert duplicate_set is not members and duplicate_set == members
+        duplicate_set.add(3)
+        assert members == {1, 2}
+        missing_copy((chosen,))
+        missing_copy(1)
         result = popped(mapping, 'key', fallback)
         assert result is chosen and len(mapping) == 0
         del result
