@@ -926,7 +926,55 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert "if: always()" in preflight
     assert "name: bootstrap-${{ matrix.platform }}" in other
     assert "name: bootstrap-macos-arm64" in mac
-    assert "continue-on-error:" not in text and "concurrency:" not in text and "max-parallel:" not in text
+    assert "continue-on-error:" not in text and "max-parallel:" not in text
+    header, jobs = text.split("\njobs:\n", 1)
+    assert text.count("concurrency:") == 1 and "concurrency:" not in jobs
+    concurrency = header.split("\nconcurrency:\n", 1)[1].strip("\n")
+    assert concurrency == (
+        "  group: ${{ github.workflow }}-${{ github.event_name }}-"
+        "${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref "
+        "|| format('{0}-{1}', github.run_id, github.run_attempt) }}\n"
+        "  cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}"
+    )
+    group = concurrency.splitlines()[0].removeprefix("  group: ")
+    cancel = concurrency.splitlines()[1].removeprefix("  cancel-in-progress: ")
+    base = dict(workflow="gate", event_name="push", ref="refs/heads/master",
+                run_id="101", run_attempt="1")
+    for changes, expected_group, expected_cancel in (
+        ({}, "gate-push-refs/heads/master", True),
+        ({"run_id": "102"}, "gate-push-refs/heads/master", True),
+        ({"ref": "refs/heads/topic"}, "gate-push-refs/heads/topic", True),
+        ({"workflow": "other"}, "other-push-refs/heads/master", True),
+        ({"run_attempt": "2"}, "gate-push-101-2", False),
+        ({"run_attempt": "3"}, "gate-push-101-3", False),
+        ({"event_name": "workflow_dispatch"}, "gate-workflow_dispatch-101-1", False),
+        ({"event_name": "workflow_dispatch", "run_id": "102"},
+         "gate-workflow_dispatch-102-1", False),
+        ({"event_name": "workflow_dispatch", "run_attempt": "2"},
+         "gate-workflow_dispatch-101-2", False),
+        ({"event_name": "pull_request", "ref": "refs/pull/7/merge"},
+         "gate-pull_request-101-1", False),
+        ({"event_name": "pull_request", "ref": "refs/pull/7/merge", "run_id": "102"},
+         "gate-pull_request-102-1", False),
+        ({"event_name": "pull_request", "ref": "refs/pull/7/merge", "run_attempt": "2"},
+         "gate-pull_request-101-2", False),
+    ):
+        github = SimpleNamespace(**(base | changes))
+        # Actions coerces this string to a number for the literal comparison.
+        # Evaluate only the exact source expressions locked above, not a scheduler.
+        github.run_attempt = int(github.run_attempt)
+        for full_chain in (False, True):
+            context = dict(github=github, inputs=SimpleNamespace(full_chain=full_chain),
+                           format=str.format)
+
+            def evaluate(expression):
+                return eval(expression.replace("&&", "and").replace("||", "or"),
+                            {"__builtins__": {}}, context)
+
+            actual_group = re.sub(r"\$\{\{ (.*?) \}\}",
+                                  lambda match: str(evaluate(match.group(1))), group)
+            assert actual_group == expected_group
+            assert evaluate(cancel.removeprefix("${{ ").removesuffix(" }}")) is expected_cancel
     for name in ("macos-pcc0-regressions", "macos-pcc0-float-doc-regressions", "macos-pcc0-indexed-split"):
         body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body

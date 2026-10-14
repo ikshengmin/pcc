@@ -351,6 +351,12 @@ on:
       - "scripts/platform_process_watchdog.py"
       - ".github/workflows/pcc1-package-parity.yml"
 
+# Only initial pushes supersede each other. Manual runs, PRs and reruns
+# keep independent groups, including manual full-chain qualification.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}
+
 jobs:
   macos-pcc0-regressions:
     name: macOS arm64 focused pcc0 native regressions
@@ -521,8 +527,8 @@ jobs:
   worker-prior-preflight:
     name: Worker prior and changed-module gate / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    # Separate hosted runners: no needs, artifact download or shared concurrency
-    # group may put this gate on the Stage1 critical path.
+    # Separate hosted runners: no needs, artifact download or shared job-level
+    # concurrency group may put this gate on the Stage1 critical path.
     # Budget: 20 min runtime + up to 40 min bounded tests + 100 min strict
     # closure + 30 min setup/receipts. Failures remain hard job failures.
     timeout-minutes: 190
