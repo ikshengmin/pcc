@@ -6,6 +6,50 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## 2026-10-14 afternoon
+
+Between `fa19e4b1` and `ca703ae0` a parallel session pushed 24 commits:
+Win64 globals beyond rel32 use ADDR64/SECREL (`b1c2c360`, the PE rel32
+failure), merged and deduplicated PE stack maps (`fa5628cc`), oversized-PE
+rejection (`69566173`), PE host budgets (`d6f50a7d`, `cc0a4bee`, `ca703ae0`),
+GC4 forwarding-shell finalization and idle retirement (`b59142c8`), super-call
+result roots (`4a9dbc69`), one `object` identity for builtin and class
+predicates (`988bc697`, the isinstance(object) gap), CI Stage1 7200 s
+(`0198e205`) and new CI regression steps.
+
+CI at `ca703ae0` (run 38567599226; seven superseded runs were cancelled to
+free runners, and this one after its Windows and macOS results; the next
+run is 38584467472 for `9cbcb1e9`):
+- Worker-prior gate passes on all four platforms (strict closure included);
+  the macOS pcc0 jobs and Windows RSS publication pass.
+- Linux native: Stage1 passes and the GC0-GC3 native canaries pass (the GC3
+  lease fix `c5363d80` holds). The GC4 canary compile exceeds its 6000 s
+  deadline: aarch64 GC0 326 s, GC1 747 s, GC2 880 s, GC3 845 s, GC4 > 6000 s
+  (run 38530860670). See
+  `docs/investigations/gc-backend4-relocation-set-free-walk.md`; `6a242b67`
+  removes the per-free relocation-set walk (local probe 186 s -> 16.7 s);
+  the page selector's whole-heap scan per selected page remains.
+- Windows native: Stage1 compiles every module (codegen done at ~3044 s);
+  the PE link stops at "compact stack-map byte budget exceeded: PE final
+  stack-map snapshot". The object-identity native test from `988bc697`
+  fails on Windows: `main` was compiled as a no-libpython stub
+  ("no-libpython function unavailable: program.main").
+- macOS native pcc1: Stage1 codegen completes (~4800 s); the Mach-O link stops
+  at "compact stack-map byte budget exceeded: Mach-O input stack-map
+  snapshot" with a 2.79 GB tree cap and the coordinator at 2.04 GB. `9cbcb1e9`
+  adds the refused check's label, estimate, sizes and limit to the PE and
+  Mach-O link errors, so the next run shows how far each estimate is over.
+
+Also failing on the `ca703ae0` snapshot (pre-existing, seen during A/B):
+`test_runtime_abi_chunking.py` (two chunk-size bounds, 70 and 60 > 50),
+`test_freestanding_gc_state.py` (four: 201 state globals, and
+`pcc_gc_foreign_lease_active` missing from the runtime ABI registry),
+`test_gc_abstraction_surface.py::test_colored_relocating_gc_read_barrier_clears_candidate`,
+eight `test_gc_backend4_production.py` cases,
+`test_relocation_copy_clears_stale_sweep_verdict_backend4[pcc_python]`, and
+`test_foreign_address_leases.py::test_native_gc3_gc4_foreign_address_movement_and_overlap`
+(self-link rejects link arguments).
+
 ## Recent source changes
 
 - `0f6fa1d9` function-local from-import aliases follow control flow.
