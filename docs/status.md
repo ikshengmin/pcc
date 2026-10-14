@@ -6,6 +6,64 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## 2026-10-15 evening
+
+- `c0e17b72`: the native link-lifetime test's stubs take the linker's
+  `archive_selections` keyword; the stubs were stale, not the linker
+  (`test_native_object_fastpath.py` natively[pcc0]).
+- `495837cb`: a dynamically called module export unboxes to its inferred
+  scalar type (`test_native_module_alias_call_does_not_bind_unrelated_class_method`).
+- `8c7f55e4`: classes nested in a class body are declared at module level
+  ahead of their outer class and bound as its attribute, with CPython's
+  `__name__`/`__qualname__`; `tests/python/test_nested_class_definition.py`
+  passes natively under GC0-GC4.
+- `70f0e38c`: keyword and default calls to known callees bind statically
+  when exact: keywords in formal order, omitted defaults None/bool/tagged
+  small int. Reordered keywords, str/bytes/tuple/heap-int defaults, `**kwargs`
+  callees and every TypeError shape keep the binder. Shape tests that reached
+  the binder through a keyword call now use a shape that still needs it; the
+  slot-call consumers in 98 test files (`take`, `consume`, ...) gained
+  `**extras` for that reason; `test_binder_contract_matrix` pins
+  `required_mixed` as a direct call and `reordered_evaluation` as the binder.
+  Native GC0-GC4: `test_static_keyword_binding.py` (now with a conditional
+  keyword operand), the dynamic-append binder program, the `required_mixed`
+  binder-matrix cells. Host: the 102 affected files on a snapshot of these
+  changes (failures there are the pre-existing ones below).
+- Worktree, not committed: decorators run once at definition (a call loads
+  the published binding; each call used to re-apply them) and a call to a
+  module function is accepted as a decorator factory. The last edit evaluates
+  decorator expressions top to bottom before applying them; it needs a
+  runtime rebuild and `tests/python/test_decorator_application.py` natively.
+- Open, found here: a dynamic `.append()` result passed to a direct call keeps
+  one extra reference (positional calls too, so pre-existing; the binder path
+  is correct). Repro: `DIRECT_PROGRAM` in
+  `tests/python/test_slot_call_dynamic_append_result.py`, pcc0, GC0. The
+  no-sink case of `_emit_dyn_list_method_with_runtime_guard` returns a raw PHI
+  of a borrowed None and an owned method result; it needs the result-root
+  path that `dyn.index` uses.
+- Pre-existing host failures (fail without these changes):
+  `test_bytes_decode_result_roots.py` (models the decoder body that
+  `c21f5a09` replaced with `_bytes_decode_body`),
+  `test_lambda_constructor_roots.py[ordinary_assignment]`,
+  `test_owned_os_descriptors.py`, `test_string_method_result_roots.py`.
+- Assigning `__defaults__`/`__kwdefaults__` does not affect calls, through the
+  binder as well; the static default fill matches that, and both need a guard
+  when the assignment becomes live.
+- Python feature matrix (48 programs, pcc0 self backend, no libpython, GC0,
+  against CPython, at `304f3926`): 19 equal, 20 differ, 9 fail to compile.
+  Programs, runner and results: recovery archive `2026-10-13/featmatrix/`.
+  Compile failures: async comprehensions, `except*`, `match`,
+  `x = yield from`, lambda forms, class keywords/`__init_subclass__`,
+  itertools ("slot-call name has no authoritative registered root"),
+  decorator factories and nested classes (both addressed above). Differences:
+  decorators re-applied per call, `functools.wraps`/`lru_cache`/`cache`
+  compiled as no-ops, `__setattr__` overrides ignored, frozen dataclass
+  assignment allowed, Enum, metaclass `super().__new__`, dict view set
+  operations, frozenset dict keys, nested f-string format specs,
+  `int('1_000')`, `math.isclose`, memoryview slicing, namedtuple `_replace`,
+  `__kwdefaults__`, `__getitem__` iteration, non-ASCII case mapping, two
+  programs whose `main` compiled as a no-libpython stub.
+
 ## 2026-10-15
 
 Commits after `bc7f53a5` (this session): `bad776a3` builtin `type` as a value
@@ -32,14 +90,13 @@ Known on these commits:
   `docs/investigations/gc-backend4-forwarding-retirement-starvation.md`).
 - `test_native_object_fastpath.py::
   test_private_link_plan_retires_graph_before_image_allocation_natively[pcc0]`
-  fails on `bad776a3` and on these commits: the natively compiled linker
-  raises "prepare_executable_object() got an unexpected keyword argument
-  'archive_selections'". Pre-existing; not caused by the link changes.
-- Still open from this session's probes: nested class attributes
-  (`Outer.Inner` raises, and a method on a nested class crashes the
-  compiler), `test_dunder_dispatch_subclass_override` dynamic binary dunders,
-  `test_native_module_alias_call_does_not_bind_unrelated_class_method` (emit
-  batch worker), `test_class_definition_defaults` (fails on `bad776a3` too).
+  failed on `bad776a3` and on these commits ("prepare_executable_object() got
+  an unexpected keyword argument 'archive_selections'"): stale test stubs,
+  fixed in `c0e17b72`.
+- Still open from this session's probes:
+  `test_dunder_dispatch_subclass_override` dynamic binary dunders,
+  `test_class_definition_defaults` (fails on `bad776a3` too). Nested class
+  attributes and the alias-call emit worker are fixed (evening section).
   `test_macho_exec_link`'s data-pointer test was stale since `50889ccd` added
   chained binds for imports in data pointers; it now checks that contract.
 
@@ -302,13 +359,9 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
 
 ## Open decisions for the maintainer
 
-1. Shape tests that pin the slow lowering. Static keyword binding conflicts
-   with tests asserting keyword/default calls use `py_obj_call_slots`
-   (e.g. `test_shared_call_binding.py::test_ordinary_binding_classifier_is_pure`,
-   `test_binder_contract_matrix.py`, `test_kwargs_method_call_loaded.py`); the
-   full list is in the archive. Proposed rule: update such shape assertions only
-   when native five-GC execution against CPython covers the behavior, keeping
-   what the test meant to check on a shape that still needs the binder.
+1. Resolved 2026-10-15: shape tests that reached the binder through keyword
+   calls now use a shape that still needs it (see the 2026-10-15 evening
+   section); the behavior is covered by native five-GC execution.
 2. Resolved: the worker-prior fixture peer wait is 15 s in `263d12af` (asked
    for together with the other CI limits). Evidence: with 15 s the x86_64
    native-pcc0 gate passed in runs 38400558239 and 38405592470; with 6 s it
