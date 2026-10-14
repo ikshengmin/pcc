@@ -31,7 +31,34 @@ OWNERSHIP_NODE = (
     "tests/python/test_valueclass_aggregate_ownership_native.py::"
     "test_aggregate_ownership_native_five_gc"
 )
+GC_SWEEP_MODES = (
+    "live-transitive", "dead-self-cycle", "self-resurrection",
+    "resurrected-finalizer-batch", "gc-start-callback", "nonpositive-budget",
+    "partial-budget-finalizer-once",
+)
+GC_SWEEP_NATIVE_NODES = (
+    "tests/python/test_gc_relocation_sweep_verdict.py::"
+    "test_relocation_copy_clears_stale_sweep_verdict_backend4[pcc_python]",
+    *("tests/python/test_gc_tracing_sweep_verdict_native.py::"
+      f"test_pending_verdict_native[gc{backend}-{mode}]"
+      for backend in (2, 1, 3, 4) for mode in GC_SWEEP_MODES),
+)
+GC_SWEEP_HOST_NODES = tuple(
+    "tests/python/test_gc_tracing_sweep_verdict.py::" + name for name in (
+        "test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref",
+        "test_dead_cycle_finalizes_before_clear_and_reclaims_once",
+        "test_post_finalizer_recheck_preserves_resurrected_graph_and_weakref",
+        "test_finalizers_keep_isolated_batch_semantics_when_one_resurrects_peer",
+        "test_nonpositive_budget_does_not_mark_finalize_or_clear[0]",
+        "test_nonpositive_budget_does_not_mark_finalize_or_clear[-1]",
+        "test_budget_limits_reclamation_without_repeating_finalizers",
+        "test_pinned_and_cext_finalizer_exclusions_are_preserved",
+        "test_gc4_forwarding_shell_is_excluded_while_unrelated_dead_object_is_swept",
+        "test_gc4_selected_but_unforwarded_candidate_still_finalizes_and_reclaims",
+    )
+)
 GATES = (
+    ("gc-sweep", GC_SWEEP_NATIVE_NODES + GC_SWEEP_HOST_NODES),
     ("clock", (
         "tests/python/test_worker_state_clock_contract.py::"
         "test_emitted_host_clock_shares_cpython_epoch_across_processes",
@@ -98,7 +125,7 @@ GATES = (
 )
 PROFILES = {
     "default": (
-        "clock", "runtime-build", "oserror", "time", "native-worker-clock",
+        "clock", "runtime-build", "gc-sweep", "oserror", "time", "native-worker-clock",
         "worker-handles", "root-joins",
     ),
     "indexed-split": (
@@ -113,7 +140,8 @@ RECEIPT_NAMES = {
     "qualification.json", "command.json", "result.json", "runtime-identity.json",
     "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json",
     "darwin-resource-handles.json", "native-worker-clock.json", "reference.json",
-    "float-callback-movement.json",
+    "float-callback-movement.json", "build.json",
+    *(f"gc{backend}-{mode}.json" for backend in (2, 1, 3, 4) for mode in GC_SWEEP_MODES),
     "indexed-process-split.json", "indexed-handoff-closed-world.json",
     *(f"gc{backend}.json" for backend in range(5)),
 }
@@ -166,10 +194,31 @@ def _command(command, directory, environment):
                               stdout=stdout, stderr=stderr).returncode
 
 
+def verify_gc_sweep_xdist(directory, expected):
+    """The owned GC controls must use the unchanged project xdist defaults."""
+    lines = {line.strip() for line in (directory / "target.stdout").read_text().splitlines()}
+    assert "created: 6/6 workers" in lines, "six actual xdist workers were not created"
+    assert f"6 workers [{len(expected)} items]" in lines, "six worker collections did not complete"
+    assert "scheduling tests via LoadGroupScheduling" in lines, "default scheduler was not used"
+    rows = [json.loads(line) for line in (directory / "live.jsonl").read_text().splitlines()]
+    start, = [row for row in rows if row["event"] == "start"]
+    assert not start["override_ini"]
+    assert Path(start["inifile"]).resolve() == ROOT / "pyproject.toml"
+    assert start["markexpr"] == "integration or not integration" and not start["keyword"]
+    return verify_execution_report(directory / "live.jsonl", expected)
+
+
 def _pytest_gate(name, nodes, out, environment):
     directory = out / "work" / name
+    if name == "gc-sweep":
+        # Admit the unmarked host models/relocation probe and integration matrix,
+        # without overriding the project's six-worker/loadgroup defaults.
+        options = ["-x", "-m", "integration or not integration", "--color=no"]
+        environment = dict(environment, PYTEST_ADDOPTS="", PCC_PYTEST_AUTO_CLEAN="0")
+    else:
+        options = ["-o", "addopts=", "-x", "-n0"]
     command = [
-        sys.executable, "-m", "pytest", "-o", "addopts=", "-x", "-n0",
+        sys.executable, "-m", "pytest", *options,
         "-vv", "--tb=short", "-p", "scripts.pytest_live_report",
         "--pcc-live-report", str(directory / "live.jsonl"),
         "--junitxml", str(directory / "junit.xml"),
@@ -177,6 +226,8 @@ def _pytest_gate(name, nodes, out, environment):
     ]
     code = _command(command, directory, environment)
     assert code == 0, f"{name}: pytest exited {code}; see {directory}/target.stderr and target.stdout"
+    if name == "gc-sweep":
+        return verify_gc_sweep_xdist(directory, nodes)
     return verify_execution_report(directory / "live.jsonl", nodes)
 
 
@@ -287,6 +338,10 @@ def run(out, profile="default"):
                   for name in order},
     }
     if profile == "default":
+        receipt["gates"]["gc-sweep"].update(
+            native_case_count=len(GC_SWEEP_NATIVE_NODES),
+            host_case_count=len(GC_SWEEP_HOST_NODES),
+        )
         receipt["clock_scope"] = "real host/native clock epoch; simulated suspend; emitted native worker-state reader"
     elif profile == "indexed-split":
         receipt["scope"] = (

@@ -279,7 +279,7 @@ def _mock_runtime_build(monkeypatch, calls):
 def test_profiles_preserve_default_order_and_bind_only_three_float_doc_nodes():
     assert gate.PROFILES == {
         "default": (
-            "clock", "runtime-build", "oserror", "time", "native-worker-clock",
+            "clock", "runtime-build", "gc-sweep", "oserror", "time", "native-worker-clock",
             "worker-handles", "root-joins",
         ),
         "float-doc": (
@@ -691,3 +691,185 @@ def test_handoff_default_xdist_workflow_is_bounded_without_stage1_dependency():
     assert "timeout-minutes: 25" in job
     assert workflow.count('      - "tests/python/test_pipeline_indexed_handoff.py"') == 2
     assert "needs:" not in _workflow_job(workflow, "pcc1-package-parity")
+
+
+def test_gc_sweep_gate_selects_twenty_nine_native_and_ten_host_cases():
+    nodes = dict(gate.GATES)["gc-sweep"]
+    expected = (
+        "tests/python/test_gc_relocation_sweep_verdict.py::"
+        "test_relocation_copy_clears_stale_sweep_verdict_backend4[pcc_python]",
+        *("tests/python/test_gc_tracing_sweep_verdict_native.py::"
+          f"test_pending_verdict_native[gc{backend}-{mode}]"
+          for backend in (2, 1, 3, 4) for mode in (
+              "live-transitive", "dead-self-cycle", "self-resurrection",
+              "resurrected-finalizer-batch", "gc-start-callback", "nonpositive-budget",
+              "partial-budget-finalizer-once",
+          )),
+    )
+    assert gate.GC_SWEEP_NATIVE_NODES == expected and len(set(expected)) == 29
+    host_names = (
+        "test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref",
+        "test_dead_cycle_finalizes_before_clear_and_reclaims_once",
+        "test_post_finalizer_recheck_preserves_resurrected_graph_and_weakref",
+        "test_finalizers_keep_isolated_batch_semantics_when_one_resurrects_peer",
+        "test_nonpositive_budget_does_not_mark_finalize_or_clear[0]",
+        "test_nonpositive_budget_does_not_mark_finalize_or_clear[-1]",
+        "test_budget_limits_reclamation_without_repeating_finalizers",
+        "test_pinned_and_cext_finalizer_exclusions_are_preserved",
+        "test_gc4_forwarding_shell_is_excluded_while_unrelated_dead_object_is_swept",
+        "test_gc4_selected_but_unforwarded_candidate_still_finalizes_and_reclaims",
+    )
+    host = tuple("tests/python/test_gc_tracing_sweep_verdict.py::" + name for name in host_names)
+    assert gate.GC_SWEEP_HOST_NODES == host and len(set(host)) == 10
+    assert nodes == expected + host and len(set(nodes)) == 39
+    assert gate.PROFILES["default"][:3] == ("clock", "runtime-build", "gc-sweep")
+    assert "gc-sweep" not in gate.PROFILES["float-doc"] + gate.PROFILES["indexed-split"]
+
+
+def _gc_sweep_reports(directory, nodes):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "target.stdout").write_text(
+        f"created: 6/6 workers\n6 workers [{len(nodes)} items]\n"
+        "scheduling tests via LoadGroupScheduling\n")
+    rows = _reports(list(nodes))
+    rows[0].update(override_ini=[], inifile=str(ROOT / "pyproject.toml"),
+                   markexpr="integration or not integration", keyword="")
+    _write_reports(directory / "live.jsonl", rows)
+    return rows
+
+
+def test_gc_sweep_command_keeps_default_xdist_and_owned_runtime(tmp_path, monkeypatch):
+    nodes = dict(gate.GATES)["gc-sweep"]
+    environment = {
+        "PCC_RUNTIME_ARCHIVE": "/admitted/libpy_runtime_pcc_py.a",
+        "PCC_THREADED_RUNTIME_ARCHIVE": "/admitted/libpy_runtime_pcc_py.a",
+        "PCC_TEST_NO_NATIVE_PROVISIONING": "1",
+        "PCC_WITH_THREADS": "1", "PCC_REFCOUNT_KIND": "atomic",
+        "PCC_WORKER_TREE_BUDGET_BYTES": "2147483648",
+        "PCC_WORKER_TREE_STATE_PATH": str(tmp_path / "tree-state.tsv"),
+        "PYTEST_ADDOPTS": "-n0 -o addopts=",
+    }
+    seen = []
+
+    def command(arguments, directory, actual_environment):
+        seen.append(arguments)
+        assert actual_environment == dict(environment, PYTEST_ADDOPTS="", PCC_PYTEST_AUTO_CLEAN="0")
+        _gc_sweep_reports(directory, nodes)
+        return 0
+
+    monkeypatch.setattr(gate, "_command", command)
+    assert gate._pytest_gate("gc-sweep", nodes, tmp_path, environment) == list(nodes)
+    args, = seen
+    assert args[:7] == [gate.sys.executable, "-m", "pytest", "-x", "-m",
+                        "integration or not integration", "--color=no"]
+    assert args[-39:] == list(nodes)
+    assert not any(arg in {"-o", "--override-ini", "-c", "--dist", "--collect-only"}
+                   or arg.startswith(("-n", "--numprocesses", "--dist=", "addopts=")) for arg in args)
+    assert environment["PYTEST_ADDOPTS"] == "-n0 -o addopts="
+
+
+@pytest.mark.parametrize("change", (
+    "no-workers", "partial-collection", "wrong-scheduler", "override-defaults",
+    "wrong-config", "wrong-markers",
+))
+def test_gc_sweep_rejects_weakened_xdist_defaults(tmp_path, change):
+    nodes = list(dict(gate.GATES)["gc-sweep"])
+    rows = _gc_sweep_reports(tmp_path, nodes)
+    stdout = tmp_path / "target.stdout"
+    if change == "no-workers":
+        stdout.write_text(stdout.read_text().replace("created: 6/6 workers", "created: 5/5 workers"))
+    elif change == "partial-collection":
+        stdout.write_text(stdout.read_text().replace("6 workers [39 items]", "collecting: 5/6 workers"))
+    elif change == "wrong-scheduler":
+        stdout.write_text(stdout.read_text().replace("LoadGroupScheduling", "LoadScheduling"))
+    elif change == "override-defaults":
+        rows[0]["override_ini"] = ["addopts="]
+    elif change == "wrong-config":
+        rows[0]["inifile"] = "/dev/null"
+    else:
+        rows[0]["markexpr"] = "not integration"
+    _write_reports(tmp_path / "live.jsonl", rows)
+    with pytest.raises(AssertionError):
+        gate.verify_gc_sweep_xdist(tmp_path, nodes)
+
+
+@pytest.mark.parametrize("fail_gc", (False, True))
+def test_default_profile_runs_gc_after_verified_runtime_and_stops_on_failure(tmp_path, monkeypatch, fail_gc):
+    _mock_macos(monkeypatch)
+    calls = []
+    _mock_runtime_build(monkeypatch, calls)
+
+    def execute(name, nodes, out, environment):
+        calls.append(name)
+        if name == "gc-sweep":
+            assert calls == ["clock", "runtime-build", "gc-sweep"]
+            archive = str(tmp_path / "runtime/libpy_runtime_pcc_py.a")
+            assert environment["PCC_RUNTIME_ARCHIVE"] == archive
+            assert environment["PCC_THREADED_RUNTIME_ARCHIVE"] == archive
+            assert environment["PCC_WITH_THREADS"] == "1"
+            assert environment["PCC_REFCOUNT_KIND"] == "atomic"
+            assert environment["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+            assert len(nodes) == 39
+            if fail_gc:
+                raise AssertionError("original GC sweep failure")
+        return list(nodes)
+
+    monkeypatch.setattr(gate, "_pytest_gate", execute)
+    if fail_gc:
+        with pytest.raises(AssertionError, match="original GC sweep failure"):
+            gate.run(tmp_path)
+        assert calls == ["clock", "runtime-build", "gc-sweep"]
+    else:
+        gate.run(tmp_path)
+        assert calls == list(gate.PROFILES["default"])
+    receipt = json.loads((tmp_path / "work/qualification.json").read_text())
+    assert receipt["status"] == ("FAIL" if fail_gc else "PASS")
+    assert receipt["gates"]["gc-sweep"]["status"] == receipt["status"]
+    assert receipt["gates"]["gc-sweep"]["native_case_count"] == 29
+    assert receipt["gates"]["gc-sweep"]["host_case_count"] == 10
+    assert receipt["gates"]["runtime-build"]["status"] == "PASS"
+    if fail_gc:
+        assert all(receipt["gates"][name]["status"] == "NOT_RUN"
+                   for name in gate.PROFILES["default"][3:])
+        assert "executed_nodes" not in receipt["gates"]["gc-sweep"]
+    else:
+        assert receipt["gates"]["gc-sweep"]["executed_nodes"] == list(dict(gate.GATES)["gc-sweep"])
+
+
+def test_gc_receipts_are_retained_without_native_artifacts(tmp_path):
+    work = tmp_path / "work/gc-sweep/tests"
+    work.mkdir(parents=True)
+    names = ["build.json", *(f"gc{backend}-{mode}.json"
+             for backend in (2, 1, 3, 4) for mode in gate.GC_SWEEP_MODES)]
+    for name in names:
+        (work / name).write_text('{"returncode": 0}\n')
+    (work / "sweep_verdict.out").write_bytes(b"native executable stays on runner")
+    gate.collect_evidence(tmp_path)
+    index = json.loads((tmp_path / "evidence/index.json").read_text())
+    assert index["status"] == "COMPLETE"
+    assert {row["source"] for row in index["files"]} == {"gc-sweep/tests/" + name for name in names}
+    for name in names:
+        assert gzip.decompress((tmp_path / "evidence/gc-sweep/tests" / (name + ".gz")).read_bytes()) == (
+            work / name).read_bytes()
+
+
+def test_gc_workflow_triggers_cover_fixtures_and_keep_existing_job_budgets():
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for path in (
+        "tests/python/test_gc_relocation_sweep_verdict.py",
+        "tests/python/test_gc_tracing_sweep_verdict_native.py",
+        "tests/fixtures/native/gc_tracing_pending_verdict.c",
+        "tests/owned_runtime_c_fixture.py",
+        "tests/python/test_gc_tracing_sweep_verdict.py",
+        "tests/python/test_freestanding_gc_tracing_sweep_collector.py",
+        "tests/runtime_fixture_provenance.py",
+        "pcc/**",
+    ):
+        assert workflow.count('      - "' + path + '"') == 2
+    job = _workflow_job(workflow, "macos-pcc0-regressions")
+    assert "timeout-minutes: 25" in job and "--timeout 1200" in job
+    assert "--auto-tree-rss-ceiling-bytes 4294967296" in job
+    assert "--min-tree-rss-bytes 2147483648" in job
+    assert "--darwin-preflight-reserve-bytes 536870912" in job
+    assert job.count("--out-dir build/macos-regressions") == 2
+    assert "--profile" not in job
