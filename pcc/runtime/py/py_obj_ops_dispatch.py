@@ -190,6 +190,7 @@ py_set_symmetric_difference = extern(
 )
 
 py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
+py_class_new_from_objects = extern("py_class_new_from_objects", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_subs_object_root = extern("py_subs_object_root", (), c_ptr)
 py_class_lookup = extern("py_class_lookup", (c_ptr, c_ptr), c_ptr)
 py_class_getattr = extern("py_class_getattr", (c_ptr, c_ptr), c_ptr)
@@ -3659,6 +3660,35 @@ def _descriptor_call_body(slots, tokens, tag: int) -> int:
     return 0
 
 
+def _type_object_call(args, nargs: int, nkwargs: int):
+    # ``type`` reached as a value (``kind = type``, ``type(cls)(...)``) shares
+    # the owners of the direct type(x) and type(name, bases, namespace)
+    # spellings; the generic class path built an instance of type instead.
+    if nargs == 1:
+        if nkwargs != 0:
+            py_raise_owned(py_exc_new(3, cstr("type() takes no keyword arguments")))
+            return null()
+        value = py_tuple_get(args, 0)
+        out = py_type_builtin(value)
+        py_decref(value)
+        return out
+    if nargs != 3:
+        py_raise_owned(py_exc_new(3, cstr("type() takes 1 or 3 arguments")))
+        return null()
+    if nkwargs != 0:
+        # CPython hands class keywords to __init_subclass__; this entry has none.
+        py_raise_owned(py_exc_new(11, cstr("pcc type(name, bases, namespace) does not take class keywords")))
+        return null()
+    name = py_tuple_get(args, 0)
+    bases = py_tuple_get(args, 1)
+    namespace = py_tuple_get(args, 2)
+    out = py_class_new_from_objects(name, bases, namespace)
+    py_decref(namespace)
+    py_decref(bases)
+    py_decref(name)
+    return out
+
+
 def _descriptor_type_call(args, kwargs, tag: int):
     # Descriptor and float constructors share this owning call frame. Every
     # argument and result keeps a counted lease across callbacks and cleanup.
@@ -3842,6 +3872,8 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
                 or descriptor_tag == PY_TYPE_CLASSMETHOD
                 or descriptor_tag == PY_TYPE_PROPERTY):
             return _descriptor_type_call(args, kwargs, descriptor_tag)
+        if descriptor_tag == PY_TYPE_CLASS:
+            return _type_object_call(args, nargs, nkwargs)
         is_builtin: int = 0
         if ptr_eq(callable, global_load_ptr("pcc_type_cls_bool")) != 0:
             is_builtin = 1

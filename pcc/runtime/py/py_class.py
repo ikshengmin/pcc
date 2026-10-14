@@ -116,6 +116,7 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     malloc,
+    memcpy,
     memset,
     null,
     ptr_add,
@@ -3871,6 +3872,17 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
             py_raise_owned(py_exc_new(3, cstr("struct sequence type is not an acceptable base type")))
             return _class_construct_finish(roots, borrowed, 0)
         base_index = base_index + 1
+    # The class keeps its name for its immortal life, like the bases and
+    # field names copied below. type(name, bases, namespace) passes a str's
+    # bytes, which die or move with the str.
+    own_name = null()
+    if ptr_is_null(name) == 0:
+        name_size: int = strlen(name) + 1
+        own_name = malloc(name_size)
+        if ptr_is_null(own_name):
+            _class_construct_input_leave(handles, n_bases)
+            return _class_construct_finish(roots, borrowed, 0)
+        memcpy(own_name, name, name_size)
 
     c = pcc_gc_alloc(PYCLASSOBJECT_SIZE, PY_TYPE_CLASS, 0)
     store_ptr(roots, 0, c)
@@ -3881,7 +3893,7 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     store_i64(c, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
     store_i32(c, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_CLASS)
     store_i32(c, PYOBJECTHEADER_FLAGS_OFFSET, load_i32(c, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_IMMORTAL)
-    store_ptr(c, PYCLASSOBJECT_NAME_OFFSET, name)
+    store_ptr(c, PYCLASSOBJECT_NAME_OFFSET, own_name)
     store_i32(c, PYCLASSOBJECT_N_BASES_OFFSET, n_bases)
     store_i32(c, PYCLASSOBJECT_N_FIELDS_OFFSET, n_fields)
 
@@ -4122,6 +4134,12 @@ def _class_new_from_objects_body(slots: c_ptr, tokens: c_ptr) -> int:
             return -1
         _special_drop(slots, tokens, _CLASS_OBJECTS_BASE_ITEM)
         index = index + 1
+    # The class keeps its name as a C string, so a NUL would truncate it;
+    # CPython rejects that name here, after the argument checks above.
+    if strlen(py_str_utf8(load_ptr(slots, _CLASS_OBJECTS_NAME * C_POINTER_SIZE))) != load_i64(
+            load_ptr(slots, _CLASS_OBJECTS_NAME * C_POINTER_SIZE), PYSTROBJECT_BYTE_LEN_OFFSET):
+        py_raise_owned(py_exc_new(2, cstr("type name must not contain null characters")))
+        return -1
     # Both name bytes and the tuple's inline item array have independent
     # address leases. Its traced elements remain authoritative to C3.
     store_ptr(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE,

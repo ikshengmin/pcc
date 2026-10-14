@@ -13,6 +13,7 @@ from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
+    PY_TYPE_CLASS,
     PY_TYPE_CLASSMETHOD,
     PY_TYPE_COMPLEX,
     PY_TYPE_DICT,
@@ -83,6 +84,7 @@ _NATIVE_BUILTIN_CALLABLE_NAMES = frozenset(
         "set",
         "str",
         "tuple",
+        "type",
     }
 )
 
@@ -418,6 +420,7 @@ class NameLoweringMixin:
             "builtins.set": "set",
             "builtins.str": "str",
             "builtins.tuple": "tuple",
+            "builtins.type": "type",
         }
         canonical_name = (name[len("builtins."):] if name.startswith("builtins.")
                           else canonical_names.get(builtin_value, name))
@@ -443,6 +446,8 @@ class NameLoweringMixin:
             "bytearray": PY_TYPE_BYTEARRAY,
             "memoryview": PY_TYPE_MEMORYVIEW,
             "complex": PY_TYPE_COMPLEX,
+            # The class of classes, the same object type(cls) returns.
+            "type": PY_TYPE_CLASS,
             # ``py_builtin_type_for_tag`` maps unknown tags to the runtime's
             # canonical object class. There is deliberately no object-instance
             # tag in the object header enum: ordinary instances carry their

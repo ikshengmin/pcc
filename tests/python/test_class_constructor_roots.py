@@ -30,7 +30,7 @@ class _C3Memory(_Memory):
         self.parents = []
         self.namespace.update({name:getattr(abi,name) for name in dir(abi) if name.isupper()})
         self.namespace.update({
-            "malloc":self.malloc, "free":self.free,
+            "malloc":self.malloc, "free":self.free, "memcpy":self.memcpy,
             "cstr":lambda value:value,
             "load_i64":lambda value,offset:self.read(value,offset) or 0,
             "load_i32":lambda value,offset:self.read(value,offset) or 0,
@@ -74,6 +74,11 @@ class _C3Memory(_Memory):
         if value is None:return
         assert value.alive
         value.alive=False
+    def memcpy(self,destination,source,size):
+        # Raw byte copies (the class's own name) carry no managed references.
+        assert destination.alive and len(destination.fields)*8>=size
+        destination.name=source
+        return destination
     def read(self,value,offset):
         if isinstance(value,_Payload):assert value.alive, "read from retired raw MRO payload"
         return super().read(value,offset)

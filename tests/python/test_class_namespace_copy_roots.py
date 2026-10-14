@@ -30,7 +30,7 @@ class NamespaceMemory(DictMemory):
         self.ns.update({
             'c_ptr': object,
             'global_addr': lambda name: name,
-            'strlen': len,
+            'strlen': self.strlen,
             'pcc_gc_frame_enter': self.frame_enter,
             'pcc_gc_frame_leave': self.frame_leave,
             'pcc_gc_pin': self.pin,
@@ -97,6 +97,19 @@ class NamespaceMemory(DictMemory):
         super().store_root(slot, value)
         if self.cleanup_error:
             self.error = (7, 'cleanup finalizer')
+
+    def make(self, value, tag):
+        obj = super().make(value, tag)
+        if tag == abi.PY_TYPE_STR:
+            # The native str header carries the UTF-8 byte length.
+            obj.fields[abi.PYSTROBJECT_BYTE_LEN_OFFSET] = len(value.encode())
+        return obj
+
+    @staticmethod
+    def strlen(value):
+        # A str's bytes are NUL-terminated; strlen stops at the first NUL.
+        text = value.value if isinstance(value, Object) else value
+        return len(text.encode().split(b'\0', 1)[0])
 
     def name(self, value):
         assert value.alive and value.leases > 0
@@ -202,6 +215,17 @@ def test_type_constructor_keeps_name_bases_namespace_and_result(phase):
     output = memory.ns['py_class_new_from_objects'](memory.read(caller, 0), memory.read(caller, 8), memory.read(caller, 16))
     assert output.alive and memory.error is None
     assert memory.unwrap(memory.read(output, abi.PYCLASSOBJECT_ATTRS_OFFSET).fields['value']) == ('kept',)
+    assert len(memory.roots) == 3 and not memory.frames and memory.depth == 0
+    assert all(obj.leases == (1000 if obj is memory.none else 0) for obj in memory.objects if obj.alive)
+
+
+@pytest.mark.parametrize('phase', PHASES)
+def test_type_constructor_rejects_a_name_with_nul_before_creating_a_class(phase):
+    memory = NamespaceMemory(phase)
+    caller = memory.input_roots((memory.wrap('A\0B'), memory.wrap(()), memory.source({'value': ('kept',)}, True)))
+    output = memory.ns['py_class_new_from_objects'](memory.read(caller, 0), memory.read(caller, 8), memory.read(caller, 16))
+    assert output is None and memory.error[0] == 2
+    assert not any(obj.tag == abi.PY_TYPE_CLASS and obj.value == 'A\0B' for obj in memory.objects)
     assert len(memory.roots) == 3 and not memory.frames and memory.depth == 0
     assert all(obj.leases == (1000 if obj is memory.none else 0) for obj in memory.objects if obj.alive)
 

@@ -565,8 +565,9 @@ def PyErr_NewException(name, base, dict):
         n_bases = 1
 
     cls = py_class_new(class_name, bases, n_bases, null(), 0)
+    # py_class_new keeps its own copy of the name.
+    free(class_name)
     if ptr_is_null(cls):
-        free(class_name)
         PyErr_SetString(
             global_load_ptr("PyExc_RuntimeError"),
             cstr("failed to create exception class"),

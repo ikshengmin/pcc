@@ -71,6 +71,7 @@ def _native_builtin_type_value_names():
         "set",
         "str",
         "tuple",
+        "type",
     )
 
 
