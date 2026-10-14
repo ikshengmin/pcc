@@ -291,6 +291,33 @@ Source `984cb2d4`, same setup. A function that only builds and drops
 Repro programs and runner: `/Users/jiamo/pcc-recovery-archive/2026-10-13/gc4/min/`
 (`probe.py DIR NAME...` compiles DIR/NAME.py with pcc0 and runs GC0-4).
 
+### 2026-10-15: the classmethod-tuples test flips with unrelated runtime changes
+`tests/python/test_class_init_argument_ownership.py::
+test_classmethod_constructor_consumes_temporary_tuples[pcc0-tuple(left),
+tuple(right)]` passes on `bad776a3` (3/3) and fails under GC4 (3/3,
+`assert destroyed == created == 2000` after two `gc.collect()` calls) on
+`ea678a14`, whose runtime differs only in paths this program never executes:
+`_py_obj_call_body` gained an exception-subclass branch, and with that branch
+removed again (incremental runtime build) the test passes. Moving the work
+before instance creation, or reducing it to one flag load and a branch, both
+still fail. GC4 scheduling is allocation-driven (the scheduler reads the
+clock only to record pauses), so the likely variable is layout: the change
+adds globals and module variables, which moves later addresses and so which
+pages relocation selects.
+
+The program itself is not the trigger: a copy that prints the counts instead
+of asserting and reads `pcc_gc_telemetry(15/25)` behaves identically on both
+runtimes (2000 then 4000 finalized, 1527 then 3055 relocation forwards,
+forwarding entries back to 0 after each collect). So which objects relocate
+before the collect decides whether the unretired-relocation retention above
+shows up, and this test is a layout-sensitive probe of that defect, not a
+check of the code being changed.
+
+Files: recovery archive `2026-10-13/gc4/layout/` (`owners.py`,
+`owners_exact.py`, `run.py`, `run_exact.py`: compile with
+`PCC_PYTHON_IR_PASSES=off` against a source-matched archive and run GC4;
+`bisect_dispatch_without_call.py` is the passing dispatch module).
+
 ## What this investigation does not claim
 `owns_stw=1` was observed on the sole thread of a single-threaded probe before
 any `pcc_stop_the_world` call of its own. That may be trivially true when there

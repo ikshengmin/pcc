@@ -1,10 +1,47 @@
 # PCC current status
 
-Updated 2026-10-14. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-10-15. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## 2026-10-15
+
+Commits after `bc7f53a5` (this session): `bad776a3` builtin `type` as a value
+(the Windows object-identity failure: `main` was a no-libpython stub) plus
+the type-object call and copied class names; `27183c2e`/`ea678a14` user
+exception subclasses keep BaseException args, str and repr; `ba9f5aa1`
+exception tags as their own numeric domain; `329af921` stale GC4 source pin;
+`8d9079d9` quiet successful Mach-O links (macOS empty-stderr tests);
+`8fd1be9b` local class `__name__`/`__qualname__`; `110870ba` Mach-O link
+retires inputs and source payloads once copied; `2d913a05` one PE stack-map
+snapshot copy on CPython.
+
+CI 38584467472 (`9cbcb1e9`) gave the refused link sizes: Windows "PE final
+stack-map snapshot" raw=10945047087 retained=8343004237 limit=10201337856;
+macOS "Mach-O input stack-map snapshot" raw=3711958786 limit=2485518336, where
+the macOS tree cap is the runner's 3.36 GB reclaimable memory minus a 512 MB
+reserve. `docs/investigations/stage1-link-memory-budget.md` has the analysis;
+`110870ba` and `2d913a05` target those two checks.
+
+Known on these commits:
+- `test_classmethod_constructor_consumes_temporary_tuples[pcc0-...tuple]`
+  fails under GC4 since `27183c2e`: layout-sensitive exposure of the GC4
+  unretired-relocation retention (see the 2026-10-15 section of
+  `docs/investigations/gc-backend4-forwarding-retirement-starvation.md`).
+- `test_native_object_fastpath.py::
+  test_private_link_plan_retires_graph_before_image_allocation_natively[pcc0]`
+  fails on `bad776a3` and on these commits: the natively compiled linker
+  raises "prepare_executable_object() got an unexpected keyword argument
+  'archive_selections'". Pre-existing; not caused by the link changes.
+- Still open from this session's probes: nested class attributes
+  (`Outer.Inner` raises, and a method on a nested class crashes the
+  compiler), `test_dunder_dispatch_subclass_override` dynamic binary dunders,
+  `test_native_module_alias_call_does_not_bind_unrelated_class_method` (emit
+  batch worker), `test_class_definition_defaults` (fails on `bad776a3` too).
+  `test_macho_exec_link`'s data-pointer test was stale since `50889ccd` added
+  chained binds for imports in data pointers; it now checks that contract.
 
 ## 2026-10-14 afternoon
 
