@@ -122,7 +122,8 @@ static int fail_state(
 
 int main(void) {
     const int32_t backend = @BACKEND@;
-    if (pcc_refcount_strategy() != PCC_REFCOUNT_STRATEGY_ATOMIC) return 1;
+    if (pcc_threads_enabled() != @EXPECTED_THREADS@) return 6;
+    if (pcc_refcount_strategy() != @EXPECTED_REFCOUNT_STRATEGY@) return 1;
     if (pcc_gc_set_backend(backend) != 0) return 2;
 
     struct PyClassObject *value_class =
@@ -237,8 +238,17 @@ def _compile_probe(
     stem = f"sweep_verdict_gc{backend}_{kind}"
     source = tmp_path / f"{stem}.c"
     executable = tmp_path / stem
+    # Admission records the requested refcount setting; the single-thread
+    # kernel deliberately implements the non-atomic runtime strategy.
+    expected_strategy = (
+        "PCC_REFCOUNT_STRATEGY_ATOMIC"
+        if expected_threads else "PCC_REFCOUNT_STRATEGY_NONATOMIC"
+    )
     source.write_text(
-        PROBE_SOURCE.replace("@BACKEND@", str(backend)), encoding="utf-8"
+        PROBE_SOURCE.replace("@BACKEND@", str(backend))
+        .replace("@EXPECTED_THREADS@", str(int(expected_threads)))
+        .replace("@EXPECTED_REFCOUNT_STRATEGY@", expected_strategy),
+        encoding="utf-8",
     )
     build = link_c_harness(
         source, executable, extra_include_dirs=(str(runtime_dir / "src"),),

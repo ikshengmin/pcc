@@ -1022,7 +1022,24 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
         Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
         with pytest.raises(AssertionError):
             probe._compile_probe(tmp_path, "wrong-refcount", 4, expected_threads=threads)
-    assert linked == [probe.PROBE_SOURCE.replace("@BACKEND@", "4")] * 2
+    assert linked == [
+        probe.PROBE_SOURCE.replace("@BACKEND@", "4")
+        .replace("@EXPECTED_THREADS@", str(int(threads)))
+        .replace("@EXPECTED_REFCOUNT_STRATEGY@", strategy)
+        for threads, strategy in (
+            (True, "PCC_REFCOUNT_STRATEGY_ATOMIC"),
+            (False, "PCC_REFCOUNT_STRATEGY_NONATOMIC"),
+        )
+    ]
+    for source, threads, strategy in (
+        (linked[0], 1, "PCC_REFCOUNT_STRATEGY_ATOMIC"),
+        (linked[1], 0, "PCC_REFCOUNT_STRATEGY_NONATOMIC"),
+    ):
+        assert f"if (pcc_threads_enabled() != {threads}) return 6;" in source
+        assert f"if (pcc_refcount_strategy() != {strategy}) return 1;" in source
+    assert linked[0].split("    if (pcc_gc_set_backend(backend)", 1)[1] == (
+        linked[1].split("    if (pcc_gc_set_backend(backend)", 1)[1]
+    )
 
 
 def test_stage1_extension_preserves_other_job_budgets_and_hosted_ceiling():
