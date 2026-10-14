@@ -128,13 +128,14 @@ def test_dynamic_append_result_reaches_a_statically_bound_keyword_call():
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("program", ("binder", "direct"))
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
 def test_dynamic_append_owned_result_and_error_native_five_gc(
-    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd, program,
 ):
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(
-        PROGRAM, "DYNAMIC_APPEND_OWNER_OK\n", tmp_path,
+        PROGRAM if program == "binder" else DIRECT_PROGRAM, "DYNAMIC_APPEND_OWNER_OK\n", tmp_path,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
         provenance_probe="2",
     )

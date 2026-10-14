@@ -43,10 +43,15 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   no-sink case of `_emit_dyn_list_method_with_runtime_guard` returns a raw PHI
   of a borrowed None and an owned method result, and
   `_emit_generic_dyn_method_call_on_value` never releases the bound method
-  from `py_obj_getattr`. A fix (result root for append as `list.extend` has,
-  the other methods' join recorded as owned, the method released) and
-  `tests/python/test_dynamic_method_result_ownership.py` are in the worktree,
-  waiting for native GC0-GC4 runs.
+  from `py_obj_getattr`. Fixed in the commit after `88036dc2` for the list
+  route (append takes a result root as `list.extend` does, the other names'
+  join is recorded as owned, the method is released): the append cases of
+  `tests/python/test_dynamic_method_result_ownership.py` matched CPython on
+  GC0; GC1-GC4 and the `direct` variant of
+  `test_dynamic_append_owned_result_and_error_native_five_gc` have not run.
+  Still open: names the dict route claims first (`copy`, `pop`, ...) leak a
+  user method's result the same way (`dyn.pop.result` PHI in
+  `dict_lowering.py` is not recorded as owned).
 - Pre-existing host failures: `test_lambda_constructor_roots.py`,
   `test_owned_os_descriptors.py` and `test_string_method_result_roots.py`
   are fixed in `17f1819a` (stale shapes; macOS ran the Linux-target model

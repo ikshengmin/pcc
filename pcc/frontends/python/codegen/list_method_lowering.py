@@ -112,6 +112,9 @@ class ListMethodLoweringMixin:
         self._gc_release(args_tuple)
         if expr.kwargs or kwargs_expr is not None:
             self._gc_release(kwargs_obj)
+        # py_obj_getattr returned a new reference (a bound method holds the
+        # receiver); the call has its own.
+        self._gc_release(method_obj)
         self._emit_post_call_err_check(expr.span)
         return result
 
@@ -704,14 +707,20 @@ class ListMethodLoweringMixin:
             return None
         if self.current_function is None:
             return None
-        if (attr.name == "append" and self._slot_call_result_sink(expr) is not None
-                and not self._expr_looks_cpython(attr.obj)):
+        if attr.name == "append" and not self._expr_looks_cpython(attr.obj):
             # An expression-valued dynamic append can return either the native
             # None singleton or an arbitrary user-method result. Publish both
             # arms into the consumer's authoritative root before any cleanup;
             # a raw PHI cannot inherit one arm's ownership or singleton proof.
-            output = self._slot_call_result_sink(expr)
+            # Without a consumer root (a direct-call argument, a return, an
+            # assignment or a statement) the result gets its own root, taken
+            # as an owned value at the end, as list.extend does.
+            sink = self._slot_call_result_sink(expr)
+            output = sink
             roots = []
+            if output is None:
+                output = self._new_slot_call_root("list.append.result")
+                roots.append(output)
             previous = self._current_try_err_block()
             target = previous if previous is not None else self._ensure_fn_err_exit()
             saved_cpy = self._cpy_operand_cleanup_block
@@ -790,11 +799,13 @@ class ListMethodLoweringMixin:
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_note_published(output)
-                self._release_slot_call_roots(tuple(roots))
+                self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
-            return self.builder.load(output, name=self._fresh("list.append.output"))
+            if sink is not None:
+                return self.builder.load(output, name=self._fresh("list.append.output"))
+            return self._take_slot_call_root(output)
 
         if attr.name == "pop" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_list_pop(expr)
@@ -978,6 +989,10 @@ class ListMethodLoweringMixin:
         result = self.builder.phi(_CSTR, name=self._fresh("dyn.list.result"))
         result.add_incoming(list_result, list_exit)
         result.add_incoming(generic_result, generic_exit)
+        # The list arm yields the immortal None or a new object (copy) and the
+        # generic arm a new reference: the join carries one owner, which its
+        # consumer releases.
+        self._note_owned_object_value(result)
         return result
 
     def _maybe_emit_list_method(
