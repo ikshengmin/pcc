@@ -27,8 +27,10 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   `required_mixed` as a direct call and `reordered_evaluation` as the binder.
   Native GC0-GC4: `test_static_keyword_binding.py` (now with a conditional
   keyword operand), the dynamic-append binder program, the `required_mixed`
-  binder-matrix cells. Host: the 102 affected files on a snapshot of these
-  changes (failures there are the pre-existing ones below).
+  binder-matrix cells. Host: 101 of the 102 affected files on a snapshot of
+  these changes (failures there are the pre-existing ones below, plus pcc1
+  cells without a provisioned pcc1); `test_valueclass_aggregate_ownership_native.py`
+  (only `**extras` added) was stopped unfinished.
 - Worktree, not committed: decorators run once at definition (a call loads
   the published binding; each call used to re-apply them) and a call to a
   module function is accepted as a decorator factory. The last edit evaluates
