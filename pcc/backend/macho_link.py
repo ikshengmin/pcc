@@ -262,6 +262,31 @@ def _section_addr(section, section_index: int, addrs: tuple[int, ...]) -> int:
     return section["addr"]
 
 
+def _normalized_section_target_value(
+    stored, target_offset, target_addr, target_size, width, target_section_index,
+):
+    """Shared absolute-first interpretation of a native section target."""
+    if target_offset is not None:
+        if stored:
+            raise NativeObjectError(
+                "section-target relocation with target_offset must have "
+                "a zero-filled field"
+            )
+        target_value = target_addr + target_offset
+    elif target_addr <= stored < target_addr + target_size:
+        target_value = stored
+    elif 0 <= stored < target_size:
+        target_value = target_addr + stored
+    else:
+        raise NativeObjectError(
+            f"section-target value {stored} is outside section "
+            f"{target_section_index}"
+        )
+    if target_value >= 1 << (width * 8):
+        raise NativeObjectError("section-target value does not fit relocation width")
+    return target_value
+
+
 def _native_section_payload(
     native: NativeObject | PackedNativeObject,
     section_index: int,
@@ -305,26 +330,9 @@ def _native_section_payload(
         target_index = target_section_index - 1
         target_addr = addrs[target_index]
         target_size = native.sections[target_index].vm_size
-        if target_offset is not None:
-            if stored:
-                raise NativeObjectError(
-                    "section-target relocation with target_offset must have "
-                    "a zero-filled field"
-                )
-            target_value = target_addr + target_offset
-        elif target_addr <= stored < target_addr + target_size:
-            target_value = stored
-        elif 0 <= stored < target_size:
-            target_value = target_addr + stored
-        else:
-            raise NativeObjectError(
-                f"section-target value {stored} is outside section "
-                f"{target_section_index}"
-            )
-        if target_value >= 1 << (width * 8):
-            raise NativeObjectError(
-                "section-target value does not fit relocation width"
-            )
+        target_value = _normalized_section_target_value(
+            stored, target_offset, target_addr, target_size, width, target_section_index,
+        )
         # pcc's Layer 1 frontend does not lower ``bytearray`` slice assignment
         # yet, and this module must compile under pcc so an installed native
         # pcc1 can link without a host Python. Store the fixed-width field one
@@ -646,9 +654,16 @@ def _read_relocations(
             ))
         return out
 
-    raw = obj.relocations(section)
-    sections = obj.sections()
-    out: list[Relocation] = []
+    return list(_iter_folded_relocation_rows(
+        obj.relocations(section), obj.sections(), symbols, local_rename,
+        offset_bias=offset_bias,
+    ))
+
+
+def _iter_folded_relocation_rows(
+    raw, sections, symbols, local_rename, *, offset_bias=0,
+):
+    """Fold the existing raw companion contract without retaining all rows."""
     pending_addend = None
     pending_subtractor = None
     for entry in raw:
@@ -664,7 +679,7 @@ def _read_relocations(
                     "SUBTRACTOR must be followed by a same-address, "
                     "same-width extern UNSIGNED entry"
                 )
-            out.append(Relocation(
+            yield Relocation(
                 offset=pending_subtractor["r_address"] + offset_bias,
                 symbol=_relocation_symbol_name(
                     symbols,
@@ -682,7 +697,7 @@ def _read_relocations(
                     local_rename,
                     context="SUBTRACTOR minuend relocation",
                 ),
-            ))
+            )
             pending_subtractor = None
             continue
         if entry["r_type"] == spec.ARM64_RELOC_ADDEND:
@@ -725,12 +740,12 @@ def _read_relocations(
                     f"section-target relocation names section {index}"
                 )
             target = sections[index - 1]
-            out.append(Relocation(
+            yield Relocation(
                 offset=entry["r_address"] + offset_bias, symbol="",
                 type=entry["r_type"], pcrel=bool(entry["r_pcrel"]),
                 length=entry["r_length"], addend=0,
                 section=(target["segname_str"], target["sectname_str"]),
-            ))
+            )
             pending_addend = None
             continue
         addend = (
@@ -739,7 +754,7 @@ def _read_relocations(
             else 0
         )
         pending_addend = None
-        out.append(Relocation(
+        yield Relocation(
             offset=entry["r_address"] + offset_bias,
             symbol=_relocation_symbol_name(
                 symbols,
@@ -751,12 +766,11 @@ def _read_relocations(
             pcrel=bool(entry["r_pcrel"]),
             length=entry["r_length"],
             addend=addend,
-        ))
+        )
     if pending_addend is not None:
         raise LinkError("trailing ADDEND entry with nothing to modify")
     if pending_subtractor is not None:
         raise LinkError("trailing SUBTRACTOR entry without UNSIGNED pair")
-    return out
 
 
 def _inspect_link_input(
@@ -897,6 +911,67 @@ def _coerce_link_objects(
         )
     except ParallelLinkError as exc:
         raise LinkError(f"parallel input parsing failed: {exc}") from exc
+
+
+def _merge_input_symbols(
+    index, symbols, targeted_indices, sections, section_addrs, local_rename,
+    bases, input_merged_key, external_definitions, merged, defined, referenced,
+    weak_references, strong_references,
+) -> None:
+    """Shared symbol provenance/order step after one input's sections."""
+    for symbol_index, sym in enumerate(symbols):
+        name = _symbol_name(sym)
+        sym_type = _symbol_type(sym)
+        if (sym_type & spec.N_TYPE) == spec.N_UNDF:
+            referenced.add(name)
+            if _symbol_is_weak_reference(sym):
+                weak_references.add(name)
+            else:
+                strong_references.add(name)
+            continue
+        if (sym_type & spec.N_TYPE) != spec.N_SECT:
+            raise LinkError(f"symbol {name!r} has an unsupported type")
+        if (
+            name[:1] in ("l", "L")
+            and symbol_index not in targeted_indices
+        ):
+            # Mach-O assembler-local temporaries that nothing references:
+            # they delimit atoms inside one input and mean nothing after
+            # the merge. `ld -r` drops them, and so does this — keeping
+            # them would make every multi-object link collide on `ltmp0`.
+            # Referenced L-labels (pcc emits cstring labels this way) are
+            # real targets and are kept.
+            continue
+        name = local_rename.get(name, name)
+        if sym_type & spec.N_EXT:
+            owner = external_definitions.owner(name)
+            if owner != SymbolDefinition(index, symbol_index):
+                raise LinkError(f"duplicate definition of {name!r}")
+        if name in defined:
+            raise LinkError(f"duplicate definition of {name!r}")
+        sec_index = _symbol_section_index(sym)
+        if sec_index not in bases:
+            raise LinkError(f"symbol {name!r} names section {sec_index}")
+        sec = sections[sec_index - 1]
+        key = _section_key(sec)
+        merged_key = input_merged_key.get(key, key)
+        # n_value is the section-relative address in an object file;
+        # subtract the section's own addr to get the payload offset.
+        if isinstance(sym, (NativeSymbol, PackedNativeSymbol)):
+            offset = sym.offset + bases[sec_index]
+        else:
+            offset = (
+                sym["n_value"]
+                - _section_addr(sec, sec_index, section_addrs)
+                + bases[sec_index]
+            )
+        merged[merged_key].symbols.append(TextSymbol(
+            name,
+            offset,
+            external=bool(sym_type & spec.N_EXT),
+            private_external=bool(sym_type & spec.N_PEXT),
+        ))
+        defined[name] = merged_key
 
 
 def link_relocatable_native(
@@ -1201,59 +1276,12 @@ def link_relocatable_native(
             else:
                 target.proven_prefix_open = False
 
-        for symbol_index, sym in enumerate(symbols):
-            name = _symbol_name(sym)
-            sym_type = _symbol_type(sym)
-            if (sym_type & spec.N_TYPE) == spec.N_UNDF:
-                referenced.add(name)
-                if _symbol_is_weak_reference(sym):
-                    weak_references.add(name)
-                else:
-                    strong_references.add(name)
-                continue
-            if (sym_type & spec.N_TYPE) != spec.N_SECT:
-                raise LinkError(f"symbol {name!r} has an unsupported type")
-            if (
-                name[:1] in ("l", "L")
-                and symbol_index not in relocation_target_indices[index]
-            ):
-                # Mach-O assembler-local temporaries that nothing references:
-                # they delimit atoms inside one input and mean nothing after
-                # the merge. `ld -r` drops them, and so does this — keeping
-                # them would make every multi-object link collide on `ltmp0`.
-                # Referenced L-labels (pcc emits cstring labels this way) are
-                # real targets and are kept.
-                continue
-            name = local_rename.get(name, name)
-            if sym_type & spec.N_EXT:
-                owner = external_definitions.owner(name)
-                if owner != SymbolDefinition(index, symbol_index):
-                    raise LinkError(f"duplicate definition of {name!r}")
-            if name in defined:
-                raise LinkError(f"duplicate definition of {name!r}")
-            sec_index = _symbol_section_index(sym)
-            if sec_index not in bases:
-                raise LinkError(f"symbol {name!r} names section {sec_index}")
-            sec = sections[sec_index - 1]
-            key = _section_key(sec)
-            merged_key = input_merged_key.get(key, key)
-            # n_value is the section-relative address in an object file;
-            # subtract the section's own addr to get the payload offset.
-            if isinstance(sym, (NativeSymbol, PackedNativeSymbol)):
-                offset = sym.offset + bases[sec_index]
-            else:
-                offset = (
-                    sym["n_value"]
-                    - _section_addr(sec, sec_index, section_addrs)
-                    + bases[sec_index]
-                )
-            merged[merged_key].symbols.append(TextSymbol(
-                name,
-                offset,
-                external=bool(sym_type & spec.N_EXT),
-                private_external=bool(sym_type & spec.N_PEXT),
-            ))
-            defined[name] = merged_key
+        _merge_input_symbols(
+            index, symbols, relocation_target_indices[index], sections,
+            section_addrs, local_rename, bases, input_merged_key,
+            external_definitions, merged, defined, referenced,
+            weak_references, strong_references,
+        )
 
     if _consume_inputs:
         # The merge loop was the inputs' last use; only the payload views in

@@ -183,40 +183,58 @@ def _owned_macho_link_in_process(
             ordered.extend(("PCO", path) for path in pcc_native_object_inputs)
         asm_count = 0
         native_count = 0
-        for kind, path in ordered:
-            item_started = time.monotonic()
-            if kind == "ASM":
-                with open(path, "r", encoding="utf-8") as stream:
-                    sections, undefined = assemble_file(stream.read())
-                objects.append(NativeObject.from_sections(sections, undefined=undefined))
-                asm_count += 1
-                phases["assemble_pool"] += (time.monotonic() - item_started) * 1000.0
-            else:
-                with open(path, "rb") as stream:
-                    objects.append(decode_packed_native_object(stream.read()))
-                native_count += 1
-                phases["decode_pco"] += (time.monotonic() - item_started) * 1000.0
-        before_extras = time.monotonic()
-        for path in extra_link_inputs or ():
-            with open(path, "rb") as stream:
-                objects.append(stream.read())
         archives = []
-        if runtime_archive is not None:
-            with open(runtime_archive, "rb") as stream:
-                archives.append(stream.read())
-        before_link = time.monotonic()
-        phases["decode_pco"] += (before_link - before_extras) * 1000.0
-        # These inputs are private to this link invocation. Transfer them so
-        # the merge can retire decoded graphs before constructing its result.
-        if compact_budget is None:
-            pending = [prepare_executable_object(
-                objects, archives=archives, _consume_inputs=True, _source_view=True,
-            )]
-        else:
-            pending = [prepare_executable_object(
-                objects, archives=archives, _consume_inputs=True, _source_view=True,
-                compact_budget=compact_budget,
-            )]
+        windowed = False
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if compact_budget is not None and ordered and not extra_link_inputs and all(kind == "PCO" for kind, _path in ordered):
+                from pcc.backend.macho_host_prepare import prepare_executable_from_paths
+                compact_budget.check_peak(0, entries=len(ordered), label="Mach-O ordered path projection")
+                before_link = time.monotonic()
+                pending = [prepare_executable_from_paths(
+                    [path for _kind, path in ordered],
+                    archive_paths=() if runtime_archive is None else (runtime_archive,),
+                    compact_budget=compact_budget,
+                    caller_owners=(ordered, pcc_native_object_inputs, pcc_asm_inputs,
+                                   pcc_internal_input_manifest, extra_link_inputs),
+                )]
+                native_count = len(ordered)
+                windowed = True
+        if not windowed:
+            for kind, path in ordered:
+                item_started = time.monotonic()
+                if kind == "ASM":
+                    with open(path, "r", encoding="utf-8") as stream:
+                        sections, undefined = assemble_file(stream.read())
+                    objects.append(NativeObject.from_sections(sections, undefined=undefined))
+                    asm_count += 1
+                    phases["assemble_pool"] += (time.monotonic() - item_started) * 1000.0
+                else:
+                    with open(path, "rb") as stream:
+                        objects.append(decode_packed_native_object(stream.read()))
+                    native_count += 1
+                    phases["decode_pco"] += (time.monotonic() - item_started) * 1000.0
+            before_extras = time.monotonic()
+            for path in extra_link_inputs or ():
+                with open(path, "rb") as stream:
+                    objects.append(stream.read())
+            archives = []
+            if runtime_archive is not None:
+                with open(runtime_archive, "rb") as stream:
+                    archives.append(stream.read())
+            before_link = time.monotonic()
+            phases["decode_pco"] += (before_link - before_extras) * 1000.0
+            # These inputs are private to this link invocation. Transfer them so
+            # the merge can retire decoded graphs before constructing its result.
+            if compact_budget is None:
+                pending = [prepare_executable_object(
+                    objects, archives=archives, _consume_inputs=True, _source_view=True,
+                )]
+            else:
+                pending = [prepare_executable_object(
+                    objects, archives=archives, _consume_inputs=True, _source_view=True,
+                    compact_budget=compact_budget,
+                )]
         objects.clear()
         archives.clear()
         sign_times = [0.0, 0.0]

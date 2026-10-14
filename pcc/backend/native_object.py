@@ -1320,6 +1320,71 @@ def _source_symbols_in_offset_order(section: Section):
     return section.symbols
 
 
+def _final_section_rows(source_sections, payloads, addrs, relocation_counts=None) -> list[dict]:
+    """The common final section numbering/file layout for owned views."""
+    result = []
+    file_size = 0
+    for index, section in enumerate(source_sections):
+        if section.vm_size == section.zerofill_size and section.zerofill_size:
+            file_offset = 0
+        else:
+            file_offset = _align_up(file_size, section.align_log2)
+            file_size = file_offset + len(payloads[index])
+        if relocation_counts is None:
+            count = len(section.relocations)
+            for relocation in section.relocations:
+                if relocation.addend:
+                    count += 1
+                if relocation.type == spec.ARM64_RELOC_SUBTRACTOR:
+                    count += 1
+        else:
+            count = relocation_counts[index]
+        result.append({
+            "segname_str": section.segname,
+            "sectname_str": section.sectname,
+            "flags": section.flags,
+            "align": section.align_log2,
+            "addr": addrs[index],
+            "offset": file_offset,
+            "size": section.vm_size,
+            "nreloc": count,
+            "_pcc_source_index": index,
+        })
+
+    return result
+
+
+def _final_symbol_rows(source_sections, undefined_names, weak_names, addrs) -> list[dict]:
+    """Canonical locals/externals/undefined numbering shared by preparation."""
+    result = []
+    for external in (False, True):
+        for index, section in enumerate(source_sections, start=1):
+            for symbol in _source_symbols_in_offset_order(section):
+                if symbol.external != external:
+                    continue
+                n_type = spec.N_SECT
+                if symbol.external:
+                    n_type |= spec.N_EXT
+                if symbol.private_external:
+                    n_type |= spec.N_PEXT
+                result.append({
+                    "name": symbol.name,
+                    "n_type": n_type,
+                    "n_sect": index,
+                    "n_desc": 0,
+                    "n_value": addrs[index - 1] + symbol.offset,
+                })
+    for name in sorted(undefined_names):
+        result.append({
+            "name": name,
+            "n_type": spec.N_UNDF | spec.N_EXT,
+            "n_sect": 0,
+            "n_desc": spec.N_WEAK_REF if name in weak_names else 0,
+            "n_value": 0,
+        })
+    return result
+
+
 class OwnedMergedSourceView:
     """Final-link view over one validated, privately owned section merge.
 
@@ -1332,8 +1397,22 @@ class OwnedMergedSourceView:
 
     def __init__(
         self, sections, *, undefined=(), weak_undefined=(),
-        proven_relocations=None, compact_budget=None,
+        proven_relocations=None, compact_budget=None, _compact_rows=None,
     ) -> None:
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if _compact_rows is not None:
+                from .macho_host_prepare import _initialize_checked_compact_view
+                try:
+                    _initialize_checked_compact_view(
+                        self, sections, undefined, weak_undefined, _compact_rows,
+                        compact_budget,
+                    )
+                finally:
+                    sections = undefined = weak_undefined = _compact_rows = None
+                return
+        if _compact_rows is not None:
+            raise NativeObjectError("compact source rows require the explicit host budget")
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
         weak_names = set(weak_undefined)
@@ -1404,58 +1483,8 @@ class OwnedMergedSourceView:
                     target_value.to_bytes(width, "little")
                 )
 
-        self._sections = []
-        file_size = 0
-        for index, section in enumerate(source_sections):
-            if section.vm_size == section.zerofill_size and section.zerofill_size:
-                file_offset = 0
-            else:
-                file_offset = _align_up(file_size, section.align_log2)
-                file_size = file_offset + len(self._payloads[index])
-            count = len(section.relocations)
-            for relocation in section.relocations:
-                if relocation.addend:
-                    count += 1
-                if relocation.type == spec.ARM64_RELOC_SUBTRACTOR:
-                    count += 1
-            self._sections.append({
-                "segname_str": section.segname,
-                "sectname_str": section.sectname,
-                "flags": section.flags,
-                "align": section.align_log2,
-                "addr": addrs[index],
-                "offset": file_offset,
-                "size": section.vm_size,
-                "nreloc": count,
-                "_pcc_source_index": index,
-            })
-
-        self._symbols = []
-        for external in (False, True):
-            for index, section in enumerate(source_sections, start=1):
-                for symbol in _source_symbols_in_offset_order(section):
-                    if symbol.external != external:
-                        continue
-                    n_type = spec.N_SECT
-                    if symbol.external:
-                        n_type |= spec.N_EXT
-                    if symbol.private_external:
-                        n_type |= spec.N_PEXT
-                    self._symbols.append({
-                        "name": symbol.name,
-                        "n_type": n_type,
-                        "n_sect": index,
-                        "n_desc": 0,
-                        "n_value": addrs[index - 1] + symbol.offset,
-                    })
-        for name in sorted(undefined_names):
-            self._symbols.append({
-                "name": name,
-                "n_type": spec.N_UNDF | spec.N_EXT,
-                "n_sect": 0,
-                "n_desc": spec.N_WEAK_REF if name in weak_names else 0,
-                "n_value": 0,
-            })
+        self._sections = _final_section_rows(source_sections, self._payloads, addrs)
+        self._symbols = _final_symbol_rows(source_sections, undefined_names, weak_names, addrs)
         self._symbol_index = {
             symbol["name"]: index for index, symbol in enumerate(self._symbols)
         }
