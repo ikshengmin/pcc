@@ -282,7 +282,10 @@ def PyObject_IsInstance(obj, cls) -> int:
     if ptr_is_null(obj) or ptr_is_null(cls):
         _type_error(cstr("invalid PyObject_IsInstance call"))
         return -1
-    if py_obj_isinstance(obj, cls) != 0:
+    result: int = py_obj_isinstance(obj, cls)
+    if result < 0:
+        return -1
+    if result != 0:
         return 1
     return 0
 

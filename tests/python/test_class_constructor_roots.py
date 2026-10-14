@@ -25,7 +25,8 @@ class _C3Memory(_Memory):
         self.maps.update({"pcc_class_construct_owned_frame_map":5,
                           "pcc_class_construct_borrowed_frame_map":-2})
         self.root = self.klass("object", [])
-        self.builtin_classes = {"pcc_type_cls_object": self.root}
+        self.builtin_classes = {"pcc_type_cls_object": self.root,
+                                "py_object_root_cache": self.root}
         self.parents = []
         self.namespace.update({name:getattr(abi,name) for name in dir(abi) if name.isupper()})
         self.namespace.update({

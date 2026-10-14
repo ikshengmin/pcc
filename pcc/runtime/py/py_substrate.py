@@ -669,7 +669,9 @@ def py_subs_object_root():
     store_i32(
         r,
         PYOBJECTHEADER_FLAGS_OFFSET,
-        PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC,
+        # Class flag 2 means slots-only. Apply it before the root can be
+        # observed through an MRO, even before the builtin alias is fetched.
+        PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC | 2,
     )
     if pcc_gc_pointer_register(r) < 0:
         free(r)

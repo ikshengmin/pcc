@@ -39,14 +39,14 @@ def test_canonical_object_class_is_slots_only_before_publication():
               ptr_is_null=lambda value: int(value is None),
               global_load_ptr=lambda name: globals_.get(name),
               global_store_ptr=lambda name, value: (events.append('publish'), globals_.__setitem__(name, value)),
-              py_class_new=lambda *args: events.append('new') or cls,
+              py_subs_object_root=lambda: events.append('root') or cls,
               atomic_rmw_i32=lambda op, value, offset, bits, order: events.append(('slots', value, offset, bits)),
               py_incref=lambda value: events.append(('retain', value)))
     _functions(RUNTIME / 'py_obj_ops_dispatch.py', {'_builtin_type_class_for_tag', '_return_builtin_type'}, ns)
     assert ns['_builtin_type_class_for_tag'](-1) is cls
-    assert events == ['new', ('slots', cls, abi.PYOBJECTHEADER_FLAGS_OFFSET, 2), 'publish', ('retain', cls)]
+    assert events == ['root', ('slots', cls, abi.PYOBJECTHEADER_FLAGS_OFFSET, 2), 'publish', ('retain', cls)]
     assert ns['_builtin_type_class_for_tag'](-1) is cls
-    assert events[-1] == ('retain', cls) and events.count('new') == 1
+    assert events[-1] == ('retain', cls) and events.count('root') == 1
 
 
 @pytest.mark.parametrize('kind', ('base', 'subclass', 'non-instance', 'extension'))
@@ -67,7 +67,7 @@ def test_weakref_exact_base_check_uses_one_relocation_epoch(kind, relocate):
     def load(owner, slot):
         assert state['depth'] == 1
         reads.append(slot)
-        if slot == 'pcc_type_cls_object':
+        if slot == 'py_object_root_cache':
             return state['base']
         assert slot == state['target'] + abi.PYINSTANCEOBJECT_CLS_OFFSET
         return state['class']

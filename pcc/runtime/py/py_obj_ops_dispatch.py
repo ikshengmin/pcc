@@ -190,6 +190,7 @@ py_set_symmetric_difference = extern(
 )
 
 py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
+py_subs_object_root = extern("py_subs_object_root", (), c_ptr)
 py_class_lookup = extern("py_class_lookup", (c_ptr, c_ptr), c_ptr)
 py_class_getattr = extern("py_class_getattr", (c_ptr, c_ptr), c_ptr)
 py_class_metaclass_call = extern("py_class_metaclass_call", (c_ptr, c_ptr, c_ptr), c_ptr)
@@ -1928,7 +1929,9 @@ def _builtin_type_class_for_tag(tag: int):
         return _return_builtin_type(cls)
     cls = global_load_ptr("pcc_type_cls_object")
     if ptr_is_null(cls) != 0:
-        cls = py_class_new(cstr("object"), null(), 0, null(), 0)
+        # The builtin object is the same immortal, stable root that terminates
+        # every native class MRO. A fresh class named object splits identity.
+        cls = py_subs_object_root()
         if ptr_is_null(cls) == 0:
             # Base object has no instance dictionary. Ordinary subclasses
             # receive independent flags from py_class_new and may have one.
@@ -2057,7 +2060,7 @@ def py_builtin_type_class_tag(value) -> int:
         return PY_TYPE_CLASSMETHOD
     if ptr_eq(value, global_load_ptr("pcc_type_cls_property")) != 0:
         return PY_TYPE_PROPERTY
-    if ptr_eq(value, global_load_ptr("pcc_type_cls_object")) != 0:
+    if ptr_eq(value, global_load_ptr("py_object_root_cache")) != 0:
         return -1
     return -2
 
@@ -4104,9 +4107,12 @@ def py_obj_isinstance(o, cls) -> int:
     if ptr_is_null(o) != 0:
         return 0
     if ptr_is_null(cls) != 0:
+        # Internal callers use NULL for an uninitialized lazy class cache
+        # (e.g. CodeType). Python None is a non-NULL object validated below.
         return 0
     if is_tagged_int(cls) != 0:
-        return 0
+        py_raise_owned(py_exc_new(3, cstr("isinstance() arg 2 must be a type, a tuple of types, or a union")))
+        return -1
     if load_i32(cls, 8) == PY_TYPE_TUPLE:
         count: int = py_tuple_len(cls)
         index: int = 0
@@ -4119,7 +4125,16 @@ def py_obj_isinstance(o, cls) -> int:
             index += 1
         return 0
     if load_i32(cls, 8) != PY_TYPE_CLASS:  # PY_TYPE_CLASS
-        return 0
+        if pcc_capi_is_type_object_value(cls) != 0:
+            # Keep the existing extension-class path separate from invalid
+            # classinfo; native object identity is handled below.
+            return 0
+        py_raise_owned(py_exc_new(3, cstr("isinstance() arg 2 must be a type, a tuple of types, or a union")))
+        return -1
+    # Every Python value, including tagged integers and class objects, is an
+    # object. Those values do not carry an instance-class/MRO payload.
+    if ptr_eq(cls, global_load_ptr("py_object_root_cache")) != 0:
+        return 1
     tag: int = _type_of(o)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_type")) != 0:
         if tag == PY_TYPE_CLASS:
@@ -4153,6 +4168,20 @@ def py_obj_isinstance(o, cls) -> int:
 
 @c_abi_export("py_obj_issubclass")
 def py_obj_issubclass(derived, cls) -> int:
+    # An empty tuple has no candidate to validate, even for an invalid first
+    # argument. Nonempty/nested tuples validate in their short-circuit order.
+    if ptr_is_null(cls) == 0 and is_tagged_int(cls) == 0:
+        if load_i32(cls, 8) == PY_TYPE_TUPLE:
+            count: int = py_tuple_len(cls)
+            index: int = 0
+            while index < count:
+                candidate = py_tuple_get(cls, index)
+                matched: int = py_obj_issubclass(derived, candidate)
+                py_decref(candidate)
+                if matched != 0:
+                    return matched
+                index += 1
+            return 0
     if ptr_is_null(derived) != 0 or is_tagged_int(derived) != 0:
         py_raise_owned(py_exc_new(3, cstr("issubclass() arg 1 must be a class")))
         return -1
@@ -4161,12 +4190,15 @@ def py_obj_issubclass(derived, cls) -> int:
         py_raise_owned(py_exc_new(3, cstr("issubclass() arg 1 must be a class")))
         return -1
     if ptr_is_null(cls) != 0 or is_tagged_int(cls) != 0:
-        py_raise_owned(py_exc_new(3, cstr("issubclass() arg 2 must be a class")))
+        py_raise_owned(py_exc_new(3, cstr("issubclass() arg 2 must be a class, a tuple of classes, or a union")))
         return -1
     cls_is_capi_type: int = pcc_capi_is_type_object_value(cls)
     if cls_is_capi_type == 0 and load_i32(cls, 8) != PY_TYPE_CLASS:  # PY_TYPE_CLASS
-        py_raise_owned(py_exc_new(3, cstr("issubclass() arg 2 must be a class")))
+        py_raise_owned(py_exc_new(3, cstr("issubclass() arg 2 must be a class, a tuple of classes, or a union")))
         return -1
+    # Validate derived before this universal match, including extension types.
+    if ptr_eq(cls, global_load_ptr("py_object_root_cache")) != 0:
+        return 1
     if derived_is_capi_type != 0 or cls_is_capi_type != 0:
         if derived_is_capi_type == 0 or cls_is_capi_type == 0:
             return 0

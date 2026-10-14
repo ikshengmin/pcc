@@ -89,6 +89,8 @@ class AttrLoadLoweringMixin:
                     and expr.obj.name == "path"):
                 return None
             module = "os.path"
+        if module == "builtins" and expr.name == "object":
+            return ("runtime", "py_builtin_type_for_tag", (ir.Constant(_I64, -1),))
         if module in ("os", "os.path"):
             windows = self._target_sys_platform_text() == "win32"
             constants = {"sep": "\\" if windows else "/", "pathsep": ";" if windows else ":",

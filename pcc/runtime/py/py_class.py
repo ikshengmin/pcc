@@ -188,6 +188,7 @@ py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
 py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_builtin_type_class_tag = extern("py_builtin_type_class_tag", (c_ptr,), c_int32)
 py_subs_alloc_user_tag = extern("py_subs_alloc_user_tag", (), c_int32)
+py_subs_object_root = extern("py_subs_object_root", (), c_ptr)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
@@ -289,54 +290,8 @@ def _alloc_user_tag() -> int:
 
 
 def _object_root():
-    root = global_load_ptr("py_object_root_cache")
-    if ptr_is_null(root) == 0:
-        return root
-
-    mro = malloc(C_POINTER_SIZE)
-    if ptr_is_null(mro) != 0:
-        return null()
-    # This root is cached in a raw global pointer, not a relocation-updated
-    # root slot.  Give it stable storage and register exact provenance.
-    r = malloc(PYCLASSOBJECT_SIZE)
-    if ptr_is_null(r) != 0:
-        free(mro)
-        return null()
-    memset(r, 0, PYCLASSOBJECT_SIZE)
-    store_i64(r, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
-    store_i32(r, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_CLASS)
-    store_i32(
-        r,
-        PYOBJECTHEADER_FLAGS_OFFSET,
-        PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC,
-    )
-    if pcc_gc_pointer_register(r) < 0:
-        free(r)
-        free(mro)
-        return null()
-    store_ptr(r, PYCLASSOBJECT_NAME_OFFSET, cstr("object"))
-    store_i32(r, PYCLASSOBJECT_N_BASES_OFFSET, 0)
-    store_ptr(r, PYCLASSOBJECT_BASES_OFFSET, null())
-    store_i32(r, PYCLASSOBJECT_N_MRO_OFFSET, 1)
-
-    store_ptr(mro, 0, r)
-    store_ptr(r, PYCLASSOBJECT_MRO_OFFSET, mro)
-
-    store_i32(r, PYCLASSOBJECT_N_METHODS_OFFSET, 0)
-    store_ptr(r, PYCLASSOBJECT_METHODS_OFFSET, null())
-    store_i32(r, PYCLASSOBJECT_N_FIELDS_OFFSET, 0)
-    store_ptr(r, PYCLASSOBJECT_FIELD_NAMES_OFFSET, null())
-    store_i32(
-        r,
-        PYCLASSOBJECT_INSTANCE_SIZE_OFFSET,
-        PYINSTANCEOBJECT_SIZE + C_POINTER_SIZE,
-    )
-    store_i32(r, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, PY_TYPE_INSTANCE)
-    store_ptr(r, PYCLASSOBJECT_DEL_METHOD_OFFSET, null())
-    store_ptr(r, PYCLASSOBJECT_ATTRS_OFFSET, null())
-
-    global_store_ptr("py_object_root_cache", r)
-    return r
+    # The substrate owns the canonical root's identity, flags and lifetime.
+    return py_subs_object_root()
 
 
 pcc_gc_pointer_is_managed = extern(

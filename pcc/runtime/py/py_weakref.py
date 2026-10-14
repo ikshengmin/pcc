@@ -83,7 +83,7 @@ def _weakref_target_is_base_object(target) -> int:
     pcc_py_gc_minor_graph_lock()
     current = pcc_gc_note_relocation_read(target)
     cls = pcc_gc_load_ptr(current, ptr_add(current, PYINSTANCEOBJECT_CLS_OFFSET))
-    base = pcc_gc_load_ptr(null(), global_addr("pcc_type_cls_object"))
+    base = pcc_gc_load_ptr(null(), global_addr("py_object_root_cache"))
     result: int = 0
     if ptr_is_null(base) == 0:
         result = ptr_eq(cls, base)

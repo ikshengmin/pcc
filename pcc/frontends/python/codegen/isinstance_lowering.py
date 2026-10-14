@@ -179,28 +179,30 @@ def emit_ir_scaffold_isinstance_impl(
 
 def maybe_emit_issubclass_builtin_impl(host, expr: Call) -> Optional[ir.Value]:
     lhs, rhs = expr.args
-    if (
-        isinstance(lhs, Name)
-        and isinstance(rhs, Name)
-        and hasattr(host, "class_lowering")
-    ):
-        sub_name = host._resolve_class_alias(lhs.ident)
-        sup_name = host._resolve_class_alias(rhs.ident)
-        if sub_name in host.class_lowering.classes and (
-            sup_name == "object" or sup_name in host.class_lowering.classes
-        ):
-            return ir.Constant(
-                _I1,
-                1 if host._class_is_subclass(sub_name, sup_name) else 0,
+    # Class names can be rebound or shadowed by parameters. Read both actual
+    # values; keep the first alive while a tuple/property classinfo allocates.
+    previous_error = host._current_try_err_block()
+    target = previous_error if previous_error is not None else host._ensure_fn_err_exit()
+    roots = []
+    try:
+        for argument, label in ((lhs, "issubclass.derived"), (rhs, "issubclass.classinfo")):
+            value = host._emit_as_object(argument)
+            owned = (
+                host._value_is_owned_object(value)
+                or host._owned_release_needed(value, argument)
+                or host._pcc_pointer_source_is_owned(argument)
             )
-    derived_obj = host._emit_as_object(lhs)
-    cls_obj = host._emit_as_object(rhs)
-    result = host.builder.call(
-        host.runtime["py_obj_issubclass"],
-        [derived_obj, cls_obj],
-        name=host._fresh("issubclass"),
-    )
-    host._emit_post_call_err_check(getattr(expr, "span", None))
+            roots.append(host._extern_enter_root(value, owned, label))
+            host._try_err_block = host._extern_cleanup_block(tuple(roots), target)
+        result = host.builder.call(
+            host.runtime["py_obj_issubclass"],
+            [host._extern_load_root(roots[0]), host._extern_load_root(roots[1])],
+            name=host._fresh("issubclass"),
+        )
+        host._emit_post_call_err_check(getattr(expr, "span", None))
+    finally:
+        host._try_err_block = previous_error
+        host._extern_release_roots(tuple(roots))
     return host.builder.icmp_signed(
         "!=",
         result,
@@ -367,10 +369,16 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
                 "FunctionType", "NoneType", "CodeType",
             ):
                 return e.name, None, False
+            if (
+                owner == "builtins"
+                and e.name == "object"
+                and host._native_module_attr_global_if_exists(owner, e.name) is not None
+            ):
+                return None, None, False
             if owner == "builtins" and (
                 e.name in _BUILTIN_TYPE_TAGS
                 or e.name in _BUILTIN_EXC_TAG
-                or e.name == "slice"
+                or e.name in ("slice", "object")
             ):
                 return e.name, None, False
             # A field, property, or foreign module export is a classinfo
@@ -429,7 +437,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
                 name=host._fresh("isinstance.classinfo.cell"),
             )
         else:
-            cls_val = host._emit_expr(classinfo_expr)
+            cls_val = host._emit_as_object(classinfo_expr)
         # Cell reads, attributes and subscripts can return a new owner. Keep
         # the classinfo in an authoritative root until the borrowing predicate
         # and its error check finish, then retire that owner on either edge.
@@ -466,6 +474,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
         return isinstance(element, Name) and (
             element.ident in host.env
             or element.ident in getattr(host, "_module_globals", {})
+            or element.ident in getattr(host, "_native_builtin_value_aliases", {})
             or _name_is_imported_into_module(host, element.ident)
             or _name_is_declared_class_in_module(host, element.ident)
         )
@@ -493,7 +502,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
                 and not declared_classinfo
                 and name not in _BUILTIN_TYPE_TAGS
                 and name not in _BUILTIN_EXC_TAG
-                and name not in ("slice", "CodeType")
+                and name not in ("slice", "CodeType", "object")
                 and name not in host.class_lowering.classes
             ):
                 return emit_dynamic_classinfo_isinstance(current_operand(), class_arg)
@@ -515,6 +524,12 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
                     obj_val,
                     ir_symbol,
                 )
+            elif nm == "object":
+                # There is no object-only tag: all Python values qualify.
+                # Evaluation and ownership still happen exactly once.
+                if obj_val is None:
+                    obj_val = current_operand()
+                ct = ir.Constant(_I1, 1)
             else:
                 ct = host._compile_time_isinstance(expr.args[0], nm)
             if ct is None:
@@ -641,6 +656,9 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
         # ``pcc/frontends/c/ply/lex.py``'s ``self.lexdata[lexpos:]``.
         obj_val = current_operand()
         return emit_dynamic_classinfo_isinstance(obj_val, class_arg)
+    if cls_ident == "object":
+        current_operand()
+        return ir.Constant(_I1, 1)
     # These two were computed-and-discarded when the shadowing guard above
     # landed, which left every builtin-type check falling through to the
     # class-table path and answering False: `isinstance("x", str)`,
