@@ -3570,7 +3570,28 @@ class NativeModuleAliasMixin:
             expr, "compiled.module.call." + attr.name, module_name, attr.name,
         )
         self._note_owned_dynamic_call_value(result)
-        return result
+        return self._dynamic_export_call_value(expr, result)
+
+    def _dynamic_export_call_value(self, expr: Call, result: ir.Value) -> ir.Value:
+        """Give a dynamically called export its inferred type's representation.
+
+        The call returns a NEW object reference, while inference may type it as
+        a native scalar (``math.sqrt`` -> float) that every consumer reads
+        unboxed: ``print(N.sqrt(4.0))`` boxed the object pointer as a double
+        and the self IR verifier refused the program. Unbox here and release
+        the reference the scalar no longer needs. An enclosing object slot
+        keeps the boxed value, as for runtime-bound user calls.
+        """
+        ty = getattr(expr, "ty", None)
+        if (ty is None or not isinstance(result.type, ir.PointerType)
+                or self._slot_call_result_sink(expr) is not None
+                or not self._is_native_scalar_type(ty)
+                or (isinstance(ty, IntType) and self._int_exprs_are_boxed())):
+            return result
+        value = self._coerce_from_object(result, ty)
+        self._owned_dynamic_call_values.discard(result)
+        self._gc_release(result, self._release_context_label("dynamic-export-call"))
+        return value
 
     def _maybe_emit_native_module_alias_call(self, expr: Call) -> Optional[ir.Value]:
         """Lower ``submod.fn(...)`` when ``submod`` was imported from a
@@ -3588,7 +3609,9 @@ class NativeModuleAliasMixin:
                 native = self._maybe_emit_dict_method_via_dyn(expr)
                 if native is not None:
                     return native
-            return self._emit_slot_call_object(expr, "import.method." + attr.name)
+            return self._dynamic_export_call_value(
+                expr, self._emit_slot_call_object(expr, "import.method." + attr.name),
+            )
         export = self._native_module_expr_export_info(attr.obj, attr.name)
         if export is None:
             module_name = None
