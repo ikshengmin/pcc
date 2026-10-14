@@ -3512,14 +3512,14 @@ def _builtin_exception_call(cls, args, nargs: int):
     retain the message-only path used by static ``ValueError("x")`` calls;
     generic class allocation would lose their message and ``args``.
     """
-    tag: int = _builtin_exception_class_tag(cls)
-    if tag == 14 or (tag >= 34 and tag <= 48):
+    exception_tag: int = _builtin_exception_class_tag(cls)
+    if exception_tag == 14 or (exception_tag >= 34 and exception_tag <= 48):
         # The contiguous FileNotFoundError..ConnectionResetError family.
         # Only OSError itself remaps errno; explicit subclasses keep tag.
-        return py_os_error_new(tag, args)
-    if tag == 58:
+        return py_os_error_new(exception_tag, args)
+    if exception_tag == 58:
         return py_unicode_decode_error_new(args)
-    if tag == 59:
+    if exception_tag == 59:
         return py_unicode_encode_error_new(args)
     if nargs == 0:
         return py_exc_new_with_class(cls, null())

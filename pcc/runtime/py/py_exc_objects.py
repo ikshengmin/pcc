@@ -895,7 +895,7 @@ def _os_error_argument(borrowed, owned, index: int, destination: int) -> int:
     return 0 if ptr_is_null(load_ptr(owned, destination)) else 1
 
 
-def _os_error_constructor_body(borrowed, owned, type_tag: int) -> int:
+def _os_error_constructor_body(borrowed, owned, exception_tag: int) -> int:
     count: int = 0
     prior: int = 0
     if ptr_is_null(pcc_gc_load_ptr(null(), borrowed)):
@@ -911,7 +911,7 @@ def _os_error_constructor_body(borrowed, owned, type_tag: int) -> int:
         py_incref(args)
         store_ptr(owned, _OS_NEW_ARGS, args)
         pcc_py_gc_minor_graph_unlock()
-    kind: int = type_tag
+    kind: int = exception_tag
     if count >= 2 and count <= 5:
         if _os_error_argument(borrowed, owned, 0, _OS_NEW_ERRNO) == 0:
             return 0
@@ -919,7 +919,7 @@ def _os_error_constructor_body(borrowed, owned, type_tag: int) -> int:
             return 0
         number_slot = ptr_add(owned, _OS_NEW_ERRNO)
         number_tag: int = _type_of(pcc_gc_load_ptr(null(), number_slot))
-        if type_tag == 14 and (number_tag == PY_TYPE_INT or number_tag == PY_TYPE_BOOL):
+        if exception_tag == 14 and (number_tag == PY_TYPE_INT or number_tag == PY_TYPE_BOOL):
             # OSError accepts arbitrary objects, including arbitrary-precision
             # ints. Mapping must neither coerce user objects nor truncate ints.
             overflow = stack_alloc(4)
@@ -985,7 +985,7 @@ def _os_error_constructor_body(borrowed, owned, type_tag: int) -> int:
 
 
 @c_abi_export("py_os_error_new")
-def py_os_error_new(type_tag: int, args):
+def py_os_error_new(exception_tag: int, args):
     borrowed = stack_alloc(16)
     store_ptr(borrowed, 0, args)
     store_ptr(borrowed, 8, null())
@@ -993,7 +993,7 @@ def py_os_error_new(type_tag: int, args):
     owned = stack_alloc(64)
     memset(owned, 0, 64)
     pcc_gc_frame_enter(global_addr("pcc_unicode_owned_map"), owned)
-    success: int = _os_error_constructor_body(borrowed, owned, type_tag)
+    success: int = _os_error_constructor_body(borrowed, owned, exception_tag)
     return _unicode_finish(borrowed, owned, success)
 
 

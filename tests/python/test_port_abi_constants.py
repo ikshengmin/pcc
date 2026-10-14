@@ -491,7 +491,9 @@ class _RawPublicTagVisitor(ast.NodeVisitor):
 
     @staticmethod
     def _tag_name(node: ast.AST) -> bool:
-        return isinstance(node, ast.Name) and (
+        # ``exception_*`` names hold builtin exception tags (OSError is 14),
+        # a separate numeric domain like PRIVATE_TAG_DOMAINS.
+        return isinstance(node, ast.Name) and not node.id.startswith("exception_") and (
             node.id == "tag"
             or node.id == "type_tag"
             or node.id.endswith("_tag")
@@ -596,6 +598,8 @@ class _RawPublicTagVisitor(ast.NodeVisitor):
         ("py_obj.py", "alloc", "flags & 65536", []),
         ("py_capi_cext_runtime.py", "decode_i16", "value - 65536", []),
         ("py_obj.py", "alloc", "tag + 1", []),
+        ("py_exc_objects.py", "ctor", "exception_tag == 14", []),
+        ("py_exc_objects.py", "ctor", "type_tag == 14", [14]),
     ],
 )
 def test_raw_tag_scanner_preserves_numeric_domains(filename, function, expression, expected):
