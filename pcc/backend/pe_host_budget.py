@@ -248,6 +248,8 @@ class PEHostBudget(CompactStackMapBudget):
         self._initial_retained = None
         self.bytearray_header = sys.getsizeof(bytearray())
         self.bytes_header = sys.getsizeof(b"")
+        self.validation_set_header = sys.getsizeof(set())
+        self.validation_key_bytes = self._rounded(sys.getsizeof((0, 0, 0)))
 
     def prepare(self, objects, imports):
         if self._initial_retained is not None:
@@ -376,6 +378,46 @@ class PEHostBudget(CompactStackMapBudget):
         header = self._rounded(sys.getsizeof([]))
         slots = 2 * entries + 8 * lists
         return 2 * (lists * (header + self.allocation_quantum) + slots * word)
+
+    def _validation_cache_bytes(self, count, allocated):
+        # This cache is an insertion-only CPython set of three-integer tuples,
+        # not the several dictionary/row shapes covered by metadata entries.
+        # Its current allocation exposes the table capacity in O(1), leaving
+        # the separate all-record ID-set estimate cached across slice misses.
+        slot = 2 * struct.calcsize("P")
+        capacity = max(8, (allocated - self.validation_set_header) // slot)
+        tables = self._rounded(allocated)
+        if count * 5 >= (capacity - 1) * 3:
+            target = count * (4 if count <= 50000 else 2)
+            following = 1 << target.bit_length()
+            tables += self._rounded(following * slot)
+        # A cache hit still constructs a temporary equal tuple. Two spare
+        # keys cover old/new temporaries during replacement on repeated hits.
+        keys = (count + 2) * (self.validation_key_bytes + 3 * self.integer_bytes)
+        return tables + keys
+
+    def check_validation_cache(self, payload, records, functions, cache, locations):
+        count = len(cache) + 1
+        cache_bytes = self._validation_cache_bytes(count, sys.getsizeof(cache))
+        # The flag list is discarded after this miss. Include its integer
+        # owners and old/new list arrays before any locations are visited.
+        scratch_bytes = self._list_bytes(locations) + locations * self.integer_bytes
+        try:
+            self.check_peak(
+                len(payload) + cache_bytes + scratch_bytes,
+                records=records, entries=functions, label="validation cache",
+            )
+        except PreciseStackMapError as exc:
+            raise PreciseStackMapError(
+                str(exc) + "; allowance_bytes=" + str(self.limit_bytes)
+                + "; retained_bytes=" + str(self.retained_bytes)
+                + "; payload_bytes=" + str(len(payload))
+                + "; safepoint_records=" + str(records)
+                + "; function_count=" + str(functions)
+                + "; validation_cache_entries=" + str(count)
+                + "; validation_cache_bytes=" + str(cache_bytes)
+                + "; validation_scratch_bytes=" + str(scratch_bytes)
+            ) from exc
 
     def finish(self):
         if self._initial_retained is not None:

@@ -574,6 +574,136 @@ def test_metadata_failure_reports_numerical_allowance_and_charge_without_refund(
     assert value.retained_bytes == 17 and value.record_visits == 2
 
 
+@pytest.mark.parametrize("count,capacity,following", (
+    (1, 8, 0), (4, 8, 0), (5, 8, 32), (6, 32, 0),
+    (19, 32, 128), (78643, 131072, 262144), (157286, 262144, 524288),
+))
+def test_validation_cache_accounts_exact_next_set_table_without_large_allocations(count, capacity, following):
+    value = _physical_budget()
+    slot = 2 * struct.calcsize("P")
+    allocated = value.validation_set_header + (capacity * slot if capacity > 8 else 0)
+    keys = (count + 2) * (value.validation_key_bytes + 3 * value.integer_bytes)
+    expected = value._rounded(allocated) + keys
+    if following:
+        expected += value._rounded(following * slot)
+    assert value._validation_cache_bytes(count, allocated) == expected
+
+
+def test_validation_cache_bound_covers_real_triples_and_set_resize_overlap():
+    value = _physical_budget()
+    cache = set()
+    key_bytes = 0
+    resizes = 0
+    for index in range(2048):
+        count = len(cache) + 1
+        before = sys.getsizeof(cache)
+        bound = value._validation_cache_bytes(count, before)
+        key = (1000 + index, 3000 + index, 5000 + index)
+        key_bytes += value._rounded(sys.getsizeof(key))
+        key_bytes += sum(value._rounded(sys.getsizeof(part)) for part in key)
+        cache.add(key)
+        after = sys.getsizeof(cache)
+        tables = after
+        if before != after:
+            resizes += 1
+            tables += before - value.validation_set_header
+        assert tables + key_bytes <= bound
+    assert resizes >= 4
+    assert bound < len(cache) * value.metadata_entry_bytes // 2
+
+
+@pytest.mark.parametrize("existing", (0, 4, 18))
+def test_validation_cache_has_exact_byte_boundary_with_pe_owners_retained(existing):
+    value = _physical_budget()
+    value.retained_bytes = 17
+    value.prepare((), ())
+    retained = bytearray(b"x" * 128)
+    value.retain(retained)
+    cache = {(index, 1, 32) for index in range(existing)}
+    payload = b"p" * 10
+    cache_bytes = value._validation_cache_bytes(existing + 1, sys.getsizeof(cache))
+    scratch = value._list_bytes(3) + 3 * value.integer_bytes
+    peak = value.retained_bytes + len(payload) + cache_bytes + scratch
+    peak += value._set_bytes(7) + 2 * value.metadata_entry_bytes
+    value.limit_bytes = peak
+    value.check_validation_cache(payload, 7, 2, cache, 3)
+    value.limit_bytes -= 1
+    with pytest.raises(PreciseStackMapError, match="byte budget exceeded: validation cache") as caught:
+        value.check_validation_cache(payload, 7, 2, cache, 3)
+    assert "allowance_bytes=" + str(peak - 1) in str(caught.value)
+    assert "retained_bytes=" + str(value.retained_bytes) in str(caught.value)
+    assert "validation_cache_entries=" + str(existing + 1) in str(caught.value)
+    assert "validation_cache_bytes=" + str(cache_bytes) in str(caught.value)
+    assert len(cache) == existing and value.record_visits == 0
+    value.finish()
+    assert value.retained_bytes == 17
+
+
+def _validation_payload(function_roots):
+    from pcc.backend import precise_stackmap as wire
+    functions = []
+    record_id = 0
+    for function_id, (frame_size, slices) in enumerate(function_roots, 1):
+        records = []
+        for index, offsets in enumerate(slices):
+            record_id += 1
+            records.append(wire.SafepointRecord(
+                safepoint_id=record_id, instruction_offset=4 * index,
+                kind=wire.SAFEPOINT_ENTRY,
+                locations=tuple(wire.StackMapLocation(
+                    kind=wire.LOCATION_STACK_INDIRECT,
+                    flags=wire.LOCATION_MANAGED | wire.LOCATION_OWNED,
+                    register=6, offset=offset,
+                ) for offset in offsets),
+            ))
+        functions.append(wire.FunctionStackMap(
+            function_id=function_id, function_address=0,
+            code_size=4 * (len(records) + 1), frame_size=frame_size,
+            records=tuple(records),
+        ))
+    return wire.encode_stack_map(wire.PreciseStackMap(
+        arch=wire.ARCH_X86_64, functions=tuple(functions),
+    ))
+
+
+def test_validation_cache_admits_real_tuple_shapes_inside_unchanged_small_limit():
+    from pcc.backend import precise_stackmap as wire
+    slices = tuple((-(index + 1) * 8,) for index in range(256))
+    payload = _validation_payload(((2048, slices),))
+    value = _physical_budget(limit=150_000, work=512)
+    generic = wire.CompactStackMapBudget(150_000, 512, **host._host_profile())
+    with pytest.raises(PreciseStackMapError, match="byte budget exceeded: validation cache"):
+        wire.validate_stack_map_payload(payload, compact_budget=generic)
+    wire.validate_stack_map_payload(payload, compact_budget=value)
+    assert value.limit_bytes == 150_000 and value.record_visits == 512
+
+
+def test_validation_cache_releases_large_scratch_before_smaller_miss_and_reuses_hits(monkeypatch):
+    from pcc.backend import precise_stackmap as wire
+    slices = (tuple(-8 * index for index in range(1, 9)), (-8,), (-8,))
+    payload = _validation_payload(((64, slices),))
+    original = host.PEHostBudget.check_validation_cache
+    misses = []
+    def checked(self, payload, records, functions, cache, locations):
+        assert "prior_flags" not in sys._getframe(1).f_locals
+        misses.append((len(cache), locations))
+        return original(self, payload, records, functions, cache, locations)
+    monkeypatch.setattr(host.PEHostBudget, "check_validation_cache", checked)
+    value = _physical_budget()
+    wire.validate_stack_map_payload(payload, compact_budget=value)
+    assert misses == [(0, 8), (1, 1)]
+    assert value.record_visits == 6
+
+
+def test_validation_cache_preserves_frame_dependent_checks():
+    from pcc.backend import precise_stackmap as wire
+    payload = bytearray(_validation_payload(((64, ((-48,),)), (64, ((-48,),)))))
+    second_function = wire.HEADER_SIZE + wire.FUNCTION_SIZE + wire.RECORD_SIZE
+    struct.pack_into("<I", payload, second_function + 20, 32)
+    with pytest.raises(PreciseStackMapError, match="exceeds frame size 32"):
+        wire.validate_stack_map_payload(bytes(payload), compact_budget=_physical_budget())
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="requires an actual Windows Job")
 def test_real_windows_direct_root_guard_admits_and_wrapper_does_not(tmp_path):
     # Small CPython children only. No compiler, runtime build or native pcc.

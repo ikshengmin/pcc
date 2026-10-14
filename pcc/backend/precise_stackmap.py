@@ -200,6 +200,13 @@ class CompactStackMapBudget:
             raise PreciseStackMapError("compact stack-map record work budget exceeded")
         self.record_visits += count
 
+    def check_validation_cache(self, payload, records, functions, cache, locations):
+        self.check_peak(
+            len(payload) + locations * self.integer_bytes,
+            records=records, entries=functions + len(cache) + 1,
+            label="validation cache",
+        )
+
 
 def _native_record_reads_available() -> bool:
     try:
@@ -1308,11 +1315,9 @@ def validate_stack_map_payload(
             if validation_locations > MAX_LOCATIONS:
                 raise PreciseStackMapError("too much stack-map location validation work")
             if compact_budget is not None:
-                compact_budget.check_peak(
-                    len(payload) + location_count * compact_budget.integer_bytes,
-                    records=total_records,
-                    entries=function_count + len(validated_location_slices) + 1,
-                    label="validation cache",
+                compact_budget.check_validation_cache(
+                    payload, total_records, function_count,
+                    validated_location_slices, location_count,
                 )
             start = table_start + location_index * _LOCATION.size
             end = start + location_count * _LOCATION.size
@@ -1420,6 +1425,10 @@ def validate_stack_map_payload(
                     )
                 prior_flags.append(location_flags)
             validated_location_slices.add(slice_key)
+            if compact_budget is not None:
+                # Scratch belongs to this miss only. Do not keep a large
+                # prior slice alive through hits or the next smaller miss.
+                del prior_flags
 
     if cursor != table_start:
         raise PreciseStackMapError("stack-map record layout changed during validation")
