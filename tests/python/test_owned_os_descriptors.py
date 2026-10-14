@@ -8,10 +8,14 @@ from tests.python.test_owned_fdopen_provider import FileRuntime
 from tests.python.test_owned_tempfile_provider import Obj
 from tests.python.test_shared_call_binding import _emit
 
+# The model runtime targets Linux and translates Linux open flags to the
+# host's; pass Linux values, not the host's os.O_* constants.
+_LINUX_WRONLY_CREAT_EXCL = 0o1 | 0o100 | 0o200
+
 
 def test_os_open_close_create_permissions_inheritance_and_errno(tmp_path):
     runtime=FileRuntime();path=tmp_path/'lease'
-    args=Obj('tuple',[runtime.string(str(path)),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,runtime.none])
+    args=Obj('tuple',[runtime.string(str(path)),_LINUX_WRONLY_CREAT_EXCL,0o600,runtime.none])
     fd=runtime.ns['_os_open_entry'](None,args)
     assert fd>=0 and not os.get_inheritable(fd) and path.stat().st_mode&0o777==0o600
     assert runtime.ns['_os_close_entry'](None,Obj('tuple',[fd])) is runtime.none
@@ -24,7 +28,7 @@ def test_os_open_close_create_permissions_inheritance_and_errno(tmp_path):
 def test_os_open_dir_fd_and_bytes(tmp_path):
     runtime=FileRuntime();directory=os.open(tmp_path,os.O_RDONLY)
     try:
-        args=Obj('tuple',[Obj('bytes',b'child'),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,directory])
+        args=Obj('tuple',[Obj('bytes',b'child'),_LINUX_WRONLY_CREAT_EXCL,0o600,directory])
         fd=runtime.ns['_os_open_entry'](None,args)
         assert fd>=0 and (tmp_path/'child').exists()
         runtime.ns['_os_close_entry'](None,Obj('tuple',[fd]))

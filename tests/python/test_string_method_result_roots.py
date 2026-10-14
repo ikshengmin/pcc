@@ -56,13 +56,19 @@ def probe(value):
         stored = re.search(r'store ptr ' + re.escape(call.group(1)) + r', ptr (%[-\w.]+)', call.group(2))
         assert stored is not None
         after = body[call.end():]
-        released = re.search(r'@pcc_gc_foreign_lease_release\(', after)
+        # Publication itself leases the output, reloads it for the slot write
+        # barrier and releases that lease; the operand leases are released
+        # before the consumer reloads the output.
+        output = re.escape(stored.group(1))
+        released = re.search(r'@pcc_gc_foreign_lease_release\(ptr (?!' + output + r'[,)])', after)
         assert released is not None
-        output_reload = re.search(r'load ptr, ptr ' + re.escape(stored.group(1)), after)
+        output_reload = re.search(r'%(?!call\.slot\.published)[-\w.]+ = load ptr, ptr ' + output + r'\b', after)
         assert output_reload is not None
         assert released.start() < output_reload.start()
-    assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr %str.method.receiver', body)
-    assert re.search(r'@pcc_gc_store_root\(ptr %str.method.receiver[^\n]*ptr null\)', body)
+    # An untyped receiver's strip/split family uses its guarded route, whose
+    # receiver root is named after the method (strip.receiver, ...).
+    assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr %[\w.]*receiver', body)
+    assert re.search(r'@pcc_gc_store_root\(ptr %[\w.]*receiver[^\n]*ptr null\)', body)
     assert 'str.result.current' not in body
     if 'limit' in case:
         assert re.search(r'@py_index_i64_checked_slots\(ptr %str.method.argument', body)

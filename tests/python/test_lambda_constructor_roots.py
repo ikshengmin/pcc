@@ -84,12 +84,21 @@ def test_native_lambda_constructor_has_immediate_authoritative_result(case):
     text = emit(CASES[case])
     if case == 'ordinary_assignment':
         # Assignment is hoisted to the existing named-function constructor.
-        # This is a compatibility control for that actual rooted route.
+        # This is a compatibility control for that actual rooted route: the
+        # constructor publishes into its output slot, reads the captures from
+        # their operand root and reports a checked status.
         selected = re.search(r'^define[^\n]*@user_lambda_owned_probe\([^\n]*\).*?^}', text, re.M | re.S)
         assert selected is not None
         checked = selected.group(0)
-        created = immediate_store(checked, 'py_func_new_named')
-        capture_prefix = 'function'
+        constructions = re.findall(
+            r'(%[-\w.]+) = call i64 [^\n]*@py_func_new_signature_slots\(ptr (%[-\w.]+)', checked,
+        )
+        assert constructions, case
+        for status, captures in constructions:
+            assert re.search(re.escape(captures) + r' = bitcast ptr %function\.captures\.operand[-\w.]* to ptr', checked)
+            assert re.search(r'icmp slt i64 ' + re.escape(status) + r', 0', checked)
+        assert re.search(r'\bcall[^\n]*@py_cpy_', text) is None
+        return
     else:
         checked = text
         created = immediate_store(checked, 'py_func_new')
