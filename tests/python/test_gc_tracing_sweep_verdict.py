@@ -18,19 +18,23 @@ WHITE, BLACK, FINALIZED, CANDIDATE = 8, 32, 4, 1024
 
 
 class _SweepBoundary:
-    def __init__(self):
+    def __init__(self, *, backend=2):
         self.nodes = []
         self.roots = []
         self.events = []
         self.callbacks = {}
+        self.global_cells = {"pcc_gc_backend_selected": {0: backend}}
+        self.forwardings = {}
         namespace = {
             "i64": int,
+            "global_addr": self.global_cells.__getitem__,
             "global_load_ptr": lambda name: self.nodes[0] if self.nodes else None,
             "ptr_is_null": lambda ptr: int(ptr is None),
             "load_ptr": lambda ptr, offset: ptr[offset],
             "load_i32": lambda ptr, offset: ptr[offset],
             "store_i32": lambda ptr, offset, value: ptr.__setitem__(offset, value),
             "pcc_gc_object_node_is_active": lambda node: int(node["active"]),
+            "pcc_gc_forwarding_index_find": lambda obj: self.forwardings.get(id(obj)),
             "pcc_gc_object_is_address_pinned": lambda obj: int(obj["pinned"]),
             "pcc_capi_is_cext_type_tag": lambda tag: int(tag == 10001),
             "pcc_gc_seed_roots": self.seed_roots,
@@ -61,6 +65,9 @@ class _SweepBoundary:
         self.nodes.append(node)
         return obj
 
+    def forward(self, source, target):
+        self.forwardings[id(source)] = {0: source, 8: target}
+
     def seed_roots(self):
         self.events.append("seed")
         for node in self.nodes:
@@ -75,6 +82,10 @@ class _SweepBoundary:
         seen = set()
         while pending:
             obj = pending.pop()
+            # Production root marking follows the source-to-target edge.
+            forwarding = self.forwardings.get(id(obj))
+            if forwarding is not None:
+                obj = forwarding[8]
             if id(obj) in seen:
                 continue
             seen.add(id(obj))
@@ -192,3 +203,48 @@ def test_pinned_and_cext_finalizer_exclusions_are_preserved():
     assert boundary.events == ["seed", "drain", "seed", "drain", "weakref:cext",
                                "clear:cext", "free:cext"]
     assert pinned["weakref_live"] and pinned[12] & CANDIDATE == 0
+
+
+def test_gc4_forwarding_shell_is_excluded_while_unrelated_dead_object_is_swept():
+    boundary = _SweepBoundary(backend=4)
+    source = boundary.object("source")
+    copy = boundary.object("copy", candidate=False)
+    dead = boundary.object("dead")
+    dead["edges"] = [dead]
+    boundary.forward(source, copy)
+    # The real owner still stores the old address. Root marking keeps the
+    # replacement alive while the physical source remains white.
+    boundary.roots = [source]
+
+    assert boundary.sweep(3) == 1
+    assert boundary.events == ["seed", "drain", "del:dead", "seed", "drain",
+                               "weakref:dead", "clear:dead", "free:dead"]
+    assert source[12] & (CANDIDATE | FINALIZED) == 0
+    assert source[12] & WHITE
+    assert copy[12] & (CANDIDATE | FINALIZED) == 0
+    assert copy[12] & BLACK
+    assert source["weakref_live"] and copy["weakref_live"]
+    assert boundary.forwardings[id(source)][8] is copy
+    assert all(node["active"] for node in boundary.nodes if node[0] is not dead)
+    assert boundary.sweep(3) == 0
+    assert boundary.events.count("del:source") == 0
+    assert boundary.events.count("del:copy") == 0
+    assert boundary.events.count("del:dead") == 1
+
+
+def test_gc4_selected_but_unforwarded_candidate_still_finalizes_and_reclaims():
+    boundary = _SweepBoundary(backend=4)
+    selected = boundary.object("selected")
+    selected[12] |= 2048  # Selection alone does not establish a forwarding edge.
+    selected["edges"] = [selected]
+
+    assert boundary.sweep(1) == 1
+    assert boundary.events == ["seed", "drain", "del:selected", "seed", "drain",
+                               "weakref:selected", "clear:selected", "free:selected"]
+    assert selected[12] & FINALIZED
+    assert not selected["weakref_live"]
+    assert selected["edges"] == []
+    assert not boundary.nodes[0]["active"]
+    assert boundary.sweep(1) == 0
+    assert boundary.events.count("del:selected") == 1
+    assert boundary.events.count("free:selected") == 1

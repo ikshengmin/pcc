@@ -29,6 +29,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_capi_dealloc_cext_object",
     "pcc_capi_is_cext_type_tag",
     "pcc_gc_drain_all_gray_unlocked",
+    "pcc_gc_forwarding_index_find",
     "pcc_gc_note_object_freeing",
     "pcc_gc_object_node_is_active",
     "pcc_gc_seed_roots",
