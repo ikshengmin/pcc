@@ -10,6 +10,65 @@ from pcc.backend import pe_x86_64 as pe
 from pcc.backend import precise_stackmap as wire
 
 
+def _pe_budget(*, work=1000, limit=10_000_000):
+    from pcc.backend.pe_host_budget import PEHostBudget
+    return PEHostBudget(limit, work, set_header_bytes=10, set_entry_bytes=2,
+                        integer_bytes=3, metadata_entry_bytes=7, allocation_quantum=1)
+
+
+def test_explicit_pe_budget_preserves_bytes_above_aggregate_legacy_cap(monkeypatch):
+    objects = [_object("pcc_windows_start"), _object("private_worker", external=False)]
+    expected = pe.link_executable(objects)
+    monkeypatch.setattr(wire, "MAX_RECORDS", 3)
+    with pytest.raises(coff.CoffError, match="too many stack-map records"):
+        pe.link_executable(objects)
+    budget = _pe_budget(work=28)
+    budget.retained_bytes = 19
+    assert pe.link_executable(objects, compact_budget=budget) == expected
+    assert budget.record_visits == 28  # 4 records times the existing 7 visits.
+    assert budget.retained_bytes == 19
+    # The same budget retains cumulative work across a second operation.
+    with pytest.raises(coff.CoffError, match="record work budget exceeded"):
+        pe.link_executable(objects, compact_budget=budget)
+    assert budget.record_visits == 28 and budget.retained_bytes == 19
+
+
+def test_pe_budget_failure_keeps_retained_storage_and_charged_work():
+    objects = [_object("pcc_windows_start"), _object("private_worker", external=False)]
+    budget = _pe_budget(work=27)
+    budget.retained_bytes = 23
+    with pytest.raises(coff.CoffError, match="record work budget exceeded"):
+        pe.link_executable(objects, compact_budget=budget)
+    assert budget.record_visits == 26
+    assert budget.retained_bytes == 23
+
+
+def test_pe_allocation_failure_restores_storage_before_any_wire_work():
+    budget = _pe_budget(limit=100)
+    budget.retained_bytes = 17
+    with pytest.raises(coff.CoffError, match="budget exceeded"):
+        pe.link_executable([_object("pcc_windows_start")], compact_budget=budget)
+    assert budget.retained_bytes == 17 and budget.record_visits == 0
+
+
+def test_rejected_active_budget_keeps_its_existing_operation():
+    budget = _pe_budget()
+    budget.retained_bytes = 17
+    budget.prepare((), ())
+    owned = bytearray(b"owned by a different operation")
+    budget.retain(owned)
+    budget.charge_records(2)
+    before = (budget.retained_bytes, dict(budget._buffers), dict(budget.metadata_owners))
+    try:
+        with pytest.raises(coff.CoffError, match="already owns an operation"):
+            pe.link_executable([_object("pcc_windows_start")], compact_budget=budget)
+        assert (budget.retained_bytes, budget._buffers, budget.metadata_owners) == before
+        assert budget.record_visits == 2 and budget._initial_retained == 17
+    finally:
+        budget.finish()
+    assert budget.retained_bytes == 17
+
+
 def _object(name, *, roots=3, ordinary=b"", external=True):
     locations = tuple(wire.StackMapLocation(
         kind=wire.LOCATION_STACK_INDIRECT,
@@ -90,13 +149,14 @@ def _dir64_sites(image):
     return sites
 
 
-def test_pe_interns_equal_root_sets_across_input_objects_and_keeps_local_targets():
+@pytest.mark.parametrize("budgeted", (False, True))
+def test_pe_interns_equal_root_sets_across_input_objects_and_keeps_local_targets(budgeted):
     ordinary = b"ordinary read-only bytes\0"
     first = _object("pcc_windows_start", roots=63, ordinary=ordinary)
     second = _object("private_worker", roots=63, external=False)
     inputs = (first, second)
     originals = tuple(coff.emit_object(obj) for obj in inputs)
-    image = pe.link_executable(inputs)
+    image = pe.link_executable(inputs, compact_budget=_pe_budget() if budgeted else None)
     optional, sections = _sections(image)
     table_rva, table = _stack_table(image)
     decoded = wire.decode_stack_map(table, expected_arch=wire.ARCH_X86_64, final_image=True)
@@ -129,13 +189,15 @@ def test_pe_interns_equal_root_sets_across_input_objects_and_keeps_local_targets
     }
 
 
-def test_merged_pe_table_uses_the_runtime_exact_pc_and_shared_location_indices(monkeypatch):
+@pytest.mark.parametrize("budgeted", (False, True))
+def test_merged_pe_table_uses_the_runtime_exact_pc_and_shared_location_indices(monkeypatch, budgeted):
     # Execute the real runtime consumer logic with bounded host memory adapters.
     # This checks its table/index contract, not native code generation or GC.
     from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
     from pcc.runtime.py import freestanding_gc_mapped_roots as runtime
 
-    image = pe.link_executable([_object("pcc_windows_start"), _object("second")])
+    image = pe.link_executable([_object("pcc_windows_start"), _object("second")],
+                               compact_budget=_pe_budget() if budgeted else None)
     _rva, table = _stack_table(image)
     decoded = wire.decode_stack_map(table, expected_arch=wire.ARCH_X86_64, final_image=True)
     visited = []
@@ -211,7 +273,8 @@ def test_pe_stackmap_merge_rejects_duplicate_function_identity():
         pe.link_executable([first, second, second])
 
 
-def test_pe_stackmap_merge_includes_only_selected_archive_members():
+@pytest.mark.parametrize("budgeted", (False, True))
+def test_pe_stackmap_merge_includes_only_selected_archive_members(budgeted):
     from pcc.backend.ar_writer import write_archive
 
     first = _object("pcc_windows_start")
@@ -220,7 +283,8 @@ def test_pe_stackmap_merge_includes_only_selected_archive_members():
     ignored = _object("pcc_windows_start")
     archive = write_archive([("selected.o", coff.emit_object(selected)),
                              ("unselected.o", coff.emit_object(ignored))])
-    image = pe.link_executable([first], archives=[archive])
+    image = pe.link_executable([first], archives=[archive],
+                               compact_budget=_pe_budget() if budgeted else None)
     _rva, table = _stack_table(image)
     decoded = wire.decode_stack_map(table, expected_arch=wire.ARCH_X86_64, final_image=True)
     assert {function.function_id for function in decoded.functions} == {

@@ -855,6 +855,16 @@ def workflow_job(text, name):
 
 def test_workflow_starts_stage1_without_independent_validation_dependencies():
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    for path in ("pcc/backend/pe_host_budget.py", "tests/python/test_pe_host_budget.py"):
+        assert text.count('      - "' + path + '"') == 2
+    pe_step = text.split("      - name: Verify Windows global addressing and PE relocations\n", 1)[1].split("      - name:", 1)[0]
+    assert "timeout-minutes: 2" in pe_step
+    assert "tests/python/test_pe_host_budget.py" in pe_step
+    assert not any(value in pe_step for value in ("-n0", "--noconftest", "addopts=", "--dist="))
+    budget_test = (ROOT / "tests/python/test_pe_host_budget.py").read_text()
+    assert '@pytest.mark.skipif(sys.platform != "win32"' in budget_test
+    assert "test_real_windows_direct_root_guard_admits_and_wrapper_does_not" in budget_test
+    assert "No compiler, runtime build or native pcc" in budget_test
     for path in (*gate.HOST_FILES, "tests/fixtures/native/worker_size_priors.py",
                  "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version",
                  "tests/python/test_worker_resource_publication.py"):

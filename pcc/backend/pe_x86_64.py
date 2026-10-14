@@ -103,30 +103,45 @@ def _symbols(objects):
     return defined, needed - set(defined)
 
 
-def _import_data(names, base_rva):
+def _append(payload, data, compact_budget):
+    if compact_budget is None:
+        payload.extend(data)
+    else:
+        compact_budget.extend(payload, data)
+
+
+def _zeros(payload, count, compact_budget):
+    if compact_budget is None:
+        payload.extend(b"\0" * count)
+    else:
+        compact_budget.zeros(payload, count)
+
+
+def _import_data(names, base_rva, compact_budget=None):
     groups = {}
     for name in sorted(names):
         groups.setdefault(system_dll(name), []).append(name)
-    payload = bytearray(b"\0" * (20 * (len(groups) + 1)))
-    payload.extend(b"\0" * ((-len(payload)) & 7))
+    payload = bytearray()
+    _zeros(payload, 20 * (len(groups) + 1), compact_budget)
+    _zeros(payload, (-len(payload)) & 7, compact_budget)
     lookups = {}
     iats = {}
     slots = {}
     for dll in sorted(groups):
         lookups[dll] = len(payload)
-        payload.extend(b"\0" * ((len(groups[dll]) + 1) * 8))
+        _zeros(payload, (len(groups[dll]) + 1) * 8, compact_budget)
     iat_start = len(payload)
     for dll in sorted(groups):
         iats[dll] = len(payload)
-        payload.extend(b"\0" * ((len(groups[dll]) + 1) * 8))
+        _zeros(payload, (len(groups[dll]) + 1) * 8, compact_budget)
     iat_end = len(payload)
     for ordinal, dll in enumerate(sorted(groups)):
         dll_offset = len(payload)
-        payload.extend(dll.encode("ascii") + b"\0")
+        _append(payload, dll.encode("ascii") + b"\0", compact_budget)
         for index, name in enumerate(groups[dll]):
-            payload.extend(b"\0" * (len(payload) & 1))
+            _zeros(payload, len(payload) & 1, compact_budget)
             hint = len(payload)
-            payload.extend(b"\0\0" + name.encode("ascii") + b"\0")
+            _append(payload, b"\0\0" + name.encode("ascii") + b"\0", compact_budget)
             struct.pack_into("<Q", payload, lookups[dll] + index * 8, base_rva + hint)
             struct.pack_into("<Q", payload, iats[dll] + index * 8, base_rva + hint)
             slots[name] = base_rva + iats[dll] + index * 8
@@ -152,7 +167,7 @@ def _rel32_range_error(symbol, source_section, place, target, target_section,
             + "; sections " + ", ".join(layout))
 
 
-def _merge_stack_maps(objects):
+def _merge_stack_maps(objects, compact_budget=None):
     """Intern root-set shapes across COFF inputs without renaming functions.
 
     Ordinary section concatenation repeats every object's location table.
@@ -179,10 +194,17 @@ def _merge_stack_maps(objects):
             if any(symbol.section == si for symbol in obj.symbols):
                 raise CoffError("PE stack-map section must not define symbols")
             try:
-                validate_stack_map_payload(section.data, expected_arch=ARCH_X86_64)
-                _count, functions, _start, _locations = _scan_stack_map_payload(section.data)
+                validate_stack_map_payload(section.data, expected_arch=ARCH_X86_64,
+                                           compact_budget=compact_budget)
+                _count, functions, _start, _locations = _scan_stack_map_payload(
+                    section.data, compact_budget=compact_budget,
+                )
             except PreciseStackMapError as exc:
                 raise CoffError("invalid PE stack-map input: " + str(exc)) from exc
+            # A malformed relocation list must not allocate an unbounded
+            # dictionary before the function-count reservation can reject it.
+            if len(section.relocations) != len(functions):
+                raise CoffError("every PE stack-map function needs exactly one relocation")
             relocations = {rel.offset: rel for rel in section.relocations}
             offsets = {start + 8 for _fid, start, _end in functions}
             if (len(relocations) != len(section.relocations)
@@ -213,15 +235,17 @@ def _merge_stack_maps(objects):
     if not payloads:
         return b"", ()
     try:
-        payload, offsets = merge_stack_map_payloads(tuple(payloads))
-        validate_stack_map_payload(payload, expected_arch=ARCH_X86_64)
+        payload, offsets = merge_stack_map_payloads(tuple(payloads), compact_budget=compact_budget)
+        if compact_budget is not None:
+            compact_budget.retain(payload, "PE merged stack map")
+        validate_stack_map_payload(payload, expected_arch=ARCH_X86_64, compact_budget=compact_budget)
     except PreciseStackMapError as exc:
         raise CoffError("invalid merged PE stack map: " + str(exc)) from exc
     return payload, tuple((offset, *targets[fid]) for fid, offset in offsets)
 
 
 def link_executable(objects, *, archives=(), entry="pcc_windows_start",
-                    image_base=0x140000000) -> bytes:
+                    image_base=0x140000000, compact_budget=None) -> bytes:
     objects = list(objects)
     pool = []
     for archive in archives:
@@ -255,7 +279,33 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     for name in imports:
         system_dll(name)
 
-    stack_payload, stack_targets = _merge_stack_maps(objects)
+    # All original COFF/archive owners, including unselected members, exist
+    # before the host baseline is observed. The recognized implementation
+    # guard keeps the ctypes/provider module out of the native compiler closure.
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if compact_budget is None:
+            from pcc.backend.pe_host_budget import host_pe_budget
+            compact_budget = host_pe_budget()
+    from .precise_stackmap import PreciseStackMapError
+    budget_prepared = False
+    try:
+        if compact_budget is not None:
+            compact_budget.prepare(objects, imports)
+            budget_prepared = True
+        return _link_selected_objects(
+            objects, definitions, imports, boundary_names, entry, image_base, compact_budget,
+        )
+    except PreciseStackMapError as exc:
+        raise CoffError("PE compact stack-map budget rejected: " + str(exc)) from exc
+    finally:
+        if budget_prepared:
+            compact_budget.finish()
+
+
+def _link_selected_objects(objects, definitions, imports, boundary_names,
+                           entry, image_base, compact_budget):
+    stack_payload, stack_targets = _merge_stack_maps(objects, compact_budget)
     stack_size = len(stack_payload)
     stack_placement = None
     # Merge sections by PE name, sorting COFF $ suffixes before concatenation.
@@ -288,27 +338,31 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     import_directory = (0, 0)
     for name in sorted(groups, key=lambda value: (value != ".text", value)):
         payload = bytearray()
+        if compact_budget is not None:
+            compact_budget.retain(payload)
         flags = 0x40000040
         if name == ".text":
             flags = 0x60000020
         for _source_name, oi, si, sec in sorted(groups[name], key=lambda item: (item[0], item[1], item[2])):
             if sec.align > 4096:
                 raise CoffError("PE section alignment above page size is unsupported")
-            payload.extend(b"\0" * ((-len(payload)) & (sec.align - 1)))
+            _zeros(payload, (-len(payload)) & (sec.align - 1), compact_budget)
             if oi < 0:
                 stack_placement = (len(sections), len(payload))
             else:
                 placements[(oi, si)] = (len(sections), len(payload))
-            payload.extend(sec.data)
+            _append(payload, sec.data, compact_budget)
             flags |= sec.flags & 0xE00000E0
         if name == ".text":
             for symbol in sorted(imports):
                 text_thunks[symbol] = rva + len(payload)
-                payload.extend(b"\xff\x25\0\0\0\0")
+                _append(payload, b"\xff\x25\0\0\0\0", compact_budget)
         if name == ".idata":
             if payload:
                 raise CoffError("explicit import sections conflict with owned imports")
-            payload, import_slots, iat_directory = _import_data(imports, rva)
+            if compact_budget is not None:
+                compact_budget.release(payload)
+            payload, import_slots, iat_directory = _import_data(imports, rva, compact_budget)
             flags = 0xC0000040
             import_directory = (rva, 20 * (len({system_dll(n) for n in imports}) + 1)) if imports else (0, 0)
         if name == ".tls":
@@ -394,10 +448,22 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
             fixups.append(output[1] + base + offset)
         # Validate the final address-bound table, excluding ordinary .rodata
         # that follows it. No input table or caller-owned object was mutated.
-        validate_stack_map_payload(
-            bytes(output[2][base:base + stack_size]),
-            expected_arch=ARCH_X86_64, final_image=True,
-        )
+        if compact_budget is not None:
+            # bytearray slicing and bytes conversion coexist briefly. Keep
+            # every output section and the original merged payload charged.
+            compact_budget.check_copy(stack_size, 2, "PE final stack-map snapshot")
+        final_table = bytes(output[2][base:base + stack_size])
+        if compact_budget is not None:
+            compact_budget.retain(final_table)
+        try:
+            validate_stack_map_payload(
+                final_table, expected_arch=ARCH_X86_64, final_image=True,
+                compact_budget=compact_budget,
+            )
+        finally:
+            if compact_budget is not None:
+                compact_budget.release(final_table)
+        del final_table
     for name, address in text_thunks.items():
         text = sections[0]
         struct.pack_into("<i", text[2], address - text[1] + 2, import_slots[name] - address - 6)
@@ -406,8 +472,12 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
         tls_directory = rva
         oi, si = definitions["_tls_index"]
         index_rva = resolve(oi, si)[0]
+        if compact_budget is not None:
+            compact_budget.check_copy(40, 2, "PE TLS directory")
         payload = bytearray(struct.pack("<QQQQII", image_base + tls_start, image_base + tls_end,
                                         image_base + index_rva, 0, 0, 0))
+        if compact_budget is not None:
+            compact_budget.retain(payload)
         sections.append([".tlsdir", rva, payload, 0x40000040])
         fixups.extend((rva, rva + 8, rva + 16))
         rva += 4096
@@ -418,7 +488,13 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
                 raise CoffError("malformed runtime function table")
             records = [bytes(payload[i:i + 12]) for i in range(0, len(payload), 12)]
             records.sort(key=lambda record: struct.unpack_from("<I", record)[0])
+            if compact_budget is not None:
+                # Joining bytes and bytearray slice-assignment's conversion
+                # overlap. The existing payload stays retained as well.
+                compact_budget.check_copy(len(payload), 2, "PE pdata join")
             payload[:] = b"".join(records)
+            if compact_budget is not None:
+                compact_budget.retain(payload)
             exception_directory = (address, len(payload))
     reloc_data = bytearray()
     pages = {}
@@ -427,16 +503,20 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     for page, entries in sorted(pages.items()):
         if len(entries) & 1:
             entries.append(0)
-        reloc_data.extend(struct.pack("<II", page, 8 + len(entries) * 2))
+        _append(reloc_data, struct.pack("<II", page, 8 + len(entries) * 2), compact_budget)
         for word in entries:
-            reloc_data.extend(struct.pack("<H", word))
+            _append(reloc_data, struct.pack("<H", word), compact_budget)
     reloc_directory = (rva, len(reloc_data)) if reloc_data else (0, 0)
     if reloc_data:
         sections.append([".reloc", rva, reloc_data, 0x42000040])
         rva = _align(rva + len(reloc_data), 4096)
     _check_image_size(rva, sections, stack_map_bytes=stack_size)
     headers = _align(128 + 4 + 20 + 240 + len(sections) * 40, 512)
+    if compact_budget is not None:
+        compact_budget.check_copy(headers, 2, "PE image header")
     image = bytearray(b"\0" * headers)
+    if compact_budget is not None:
+        compact_budget.retain(image)
     image[:2] = b"MZ"
     struct.pack_into("<I", image, 60, 128)
     image[128:132] = b"PE\0\0"
@@ -457,9 +537,11 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
     for index, (name, address, payload, flags) in enumerate(sections):
         raw = len(image)
         size = _align(len(payload), 512)
-        image.extend(payload)
-        image.extend(b"\0" * (size - len(payload)))
+        _append(image, payload, compact_budget)
+        _zeros(image, size - len(payload), compact_budget)
         struct.pack_into("<8sIIIIIIHHI", image, opt + 240 + index * 40,
                          name.encode().ljust(8, b"\0"), len(payload), address, size, raw,
                          0, 0, 0, 0, flags)
+    if compact_budget is not None:
+        compact_budget.check_copy(len(image), label="PE returned image")
     return bytes(image)

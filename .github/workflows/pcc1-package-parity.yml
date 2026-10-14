@@ -46,6 +46,7 @@ on:
       - "tests/python/test_windows_global_memory_scratch.py"
       - "tests/python/test_windows_pe_absolute_relocations.py"
       - "tests/python/test_pe_stackmap_merge.py"
+      - "tests/python/test_pe_host_budget.py"
       - "tests/python/test_pe_image_size_limit.py"
       - "tests/python/test_x86_64_x87_table_prefix.py"
       - "tests/python/test_x86_64_x87_table_encoding.py"
@@ -115,6 +116,7 @@ on:
       - "tests/strict_exception_oracle.py"
       - "tests/fixtures/strict_stackmap_catch.ll"
       - "pcc/backend/pe_x86_64.py"
+      - "pcc/backend/pe_host_budget.py"
       - "pcc/frontends/python/codegen/platform_machine_abis.py"
       - "pcc/frontends/python/codegen/unsafe_lowering.py"
       - "pcc/frontends/python/codegen/windows_platform.py"
@@ -207,6 +209,7 @@ on:
       - "tests/python/test_windows_global_memory_scratch.py"
       - "tests/python/test_windows_pe_absolute_relocations.py"
       - "tests/python/test_pe_stackmap_merge.py"
+      - "tests/python/test_pe_host_budget.py"
       - "tests/python/test_pe_image_size_limit.py"
       - "tests/python/test_x86_64_x87_table_prefix.py"
       - "tests/python/test_x86_64_x87_table_encoding.py"
@@ -276,6 +279,7 @@ on:
       - "tests/strict_exception_oracle.py"
       - "tests/fixtures/strict_stackmap_catch.ll"
       - "pcc/backend/pe_x86_64.py"
+      - "pcc/backend/pe_host_budget.py"
       - "pcc/frontends/python/codegen/platform_machine_abis.py"
       - "pcc/frontends/python/codegen/unsafe_lowering.py"
       - "pcc/frontends/python/codegen/windows_platform.py"
@@ -540,7 +544,7 @@ jobs:
 
       - name: Verify Windows global addressing and PE relocations
         timeout-minutes: 2
-        run: uv run --frozen --no-sync ${{ matrix.platform != 'macos-arm64' && '--python 3.13' || '' }} python -m pytest -x -q tests/python/test_windows_symbol_immediates.py tests/python/test_windows_global_memory_scratch.py tests/python/test_windows_pe_absolute_relocations.py tests/python/test_pe_stackmap_merge.py tests/python/test_pe_image_size_limit.py
+        run: uv run --frozen --no-sync ${{ matrix.platform != 'macos-arm64' && '--python 3.13' || '' }} python -m pytest -x -q tests/python/test_windows_symbol_immediates.py tests/python/test_windows_global_memory_scratch.py tests/python/test_windows_pe_absolute_relocations.py tests/python/test_pe_stackmap_merge.py tests/python/test_pe_host_budget.py tests/python/test_pe_image_size_limit.py
 
       # fa62fbd9 receipts: compile alone took 189-278s; the 634 MB whole
       # parse was still incomplete at 300s. 85825b40 receipts (Linux): the
