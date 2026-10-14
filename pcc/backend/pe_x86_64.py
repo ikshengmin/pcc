@@ -451,11 +451,20 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
             fixups.append(output[1] + base + offset)
         # Validate the final address-bound table, excluding ordinary .rodata
         # that follows it. No input table or caller-owned object was mutated.
+        # On CPython a memoryview slice is a view, so bytes() makes the one
+        # immutable copy the validator needs; a bytearray slice would first
+        # copy the table (1.3 GB in a Windows Stage1 link) and bytes() would
+        # copy it again. The native runtime's slicing still copies.
+        import sys as execution_runtime
+        view_slice = execution_runtime.implementation.name == "cpython"
         if compact_budget is not None:
-            # bytearray slicing and bytes conversion coexist briefly. Keep
-            # every output section and the original merged payload charged.
-            compact_budget.check_copy(stack_size, 2, "PE final stack-map snapshot")
-        final_table = bytes(output[2][base:base + stack_size])
+            # Keep every output section and the original merged payload charged.
+            compact_budget.check_copy(stack_size, 1 if view_slice else 2, "PE final stack-map snapshot")
+        if view_slice:
+            with memoryview(output[2]) as output_view:
+                final_table = bytes(output_view[base:base + stack_size])
+        else:
+            final_table = bytes(output[2][base:base + stack_size])
         if compact_budget is not None:
             compact_budget.retain(final_table)
         try:
