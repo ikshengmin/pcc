@@ -33,6 +33,7 @@ Nonclaims: this probe does not exercise the concurrent-stepping window
 itself (the overlap probes own that).
 """
 from pathlib import Path
+import hashlib
 import json
 import os
 
@@ -212,13 +213,26 @@ int main(void) {
 """
 
 
-def _compile_probe(tmp_path: Path, kind: str, backend: int) -> Path:
+def _digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _compile_probe(
+    tmp_path: Path, kind: str, backend: int, *, expected_threads: bool = True,
+) -> Path:
+    assert type(expected_threads) is bool
     archive = admitted_runtime()
-    manifest = json.loads(Path(str(archive) + ".provenance.json").read_text(encoding="utf-8"))
+    provenance = Path(str(archive) + ".provenance.json")
+    manifest = json.loads(provenance.read_text(encoding="utf-8"))
     assert manifest["members"]
-    assert all(member["runtime_build_config"]["threads"] is True
+    assert all(member["runtime_build_config"]["threads"] is expected_threads
                and member["runtime_build_config"]["refcount"] == "atomic"
                for member in manifest["members"])
+    runtime_hashes = {
+        suffix: _digest(Path(str(archive) + suffix))
+        for suffix in ("", ".provenance.json", ".capi_syms")
+    }
     runtime_dir = Path(__file__).resolve().parents[2] / "pcc/runtime"
     stem = f"sweep_verdict_gc{backend}_{kind}"
     source = tmp_path / f"{stem}.c"
@@ -230,6 +244,20 @@ def _compile_probe(tmp_path: Path, kind: str, backend: int) -> Path:
         source, executable, extra_include_dirs=(str(runtime_dir / "src"),),
     )
     assert build.returncode == 0, build.stdout + build.stderr
+    assert all(_digest(Path(str(archive) + suffix)) == digest
+               for suffix, digest in runtime_hashes.items())
+    identity = {
+        "schema": "pcc.gc4-relocation-sweep-verdict.v1",
+        "compiler": "host-pcc0", "backend": "self", "gc_backend": backend,
+        "runtime_provisioning": False, "runtime_archive": str(archive),
+        "runtime_hashes": runtime_hashes,
+        "runtime_config": {"threads": expected_threads, "refcount": "atomic"},
+        "target_triple": manifest["target_triple"],
+        "source_sha256": _digest(source), "binary_sha256": _digest(executable),
+    }
+    executable.with_suffix(".identity.json").write_text(
+        json.dumps(identity, indent=2) + "\n", encoding="utf-8",
+    )
     return executable
 
 
@@ -238,16 +266,37 @@ def test_relocation_copy_clears_stale_sweep_verdict_backend4(
     tmp_path: Path, kind: str
 ) -> None:
     """Backend 4 colored evacuation must publish a verdict-free copy."""
-    executable = _compile_probe(tmp_path, kind, backend=4)
+    _run_probe(tmp_path, kind, expected_threads=True)
+
+
+@pytest.mark.integration
+def test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread(
+    tmp_path: Path,
+) -> None:
+    """Run the same native contract against the admitted CI compiler runtime."""
+    _run_probe(tmp_path, "pcc_python_single_thread", expected_threads=False)
+
+
+def _run_probe(tmp_path: Path, kind: str, *, expected_threads: bool) -> None:
+    executable = _compile_probe(tmp_path, kind, backend=4, expected_threads=expected_threads)
+    identity = json.loads(executable.with_suffix(".identity.json").read_text(encoding="utf-8"))
     run_env = {**os.environ}
     run_env.pop("PCC_REFCOUNT_STRATEGY", None)
     run = run_process_group_timeout(
         [str(executable)], timeout=120, env=run_env,
     )
+    executable.with_suffix(".run.json").write_text(
+        json.dumps(dict(identity, command=[str(executable)], returncode=run.returncode,
+                        stdout=run.stdout, stderr=run.stderr), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    assert all(_digest(Path(identity["runtime_archive"] + suffix)) == digest
+               for suffix, digest in identity["runtime_hashes"].items())
     assert run.returncode == 0, (
         f"{kind} gc4 sweep-verdict relocation probe returned "
         f"{run.returncode}: " + run.stdout + run.stderr
     )
+    assert run.stdout == "ok backend=4 del_other=0\n", run.stdout + run.stderr
 
 
 def test_source_sweep_verdict_clears_only_after_forwarding_commit() -> None:

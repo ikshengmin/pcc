@@ -734,6 +734,35 @@ jobs:
           PCC_TEST_NO_NATIVE_PROVISIONING: "1"
         run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q --junitxml=build/worker-prior-gate/platform-machine-provider.xml tests/python/test_platform_machine_provider.py
 
+      - name: Verify GC4 relocation with the existing single-thread runtime
+        if: ${{ !cancelled() && startsWith(matrix.platform, 'linux-') && steps.platform_runtime.outputs.ready == 'true' }}
+        timeout-minutes: 6
+        shell: uv run --frozen --no-sync --python 3.13 python {0}
+        env:
+          PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
+          PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+          PCC_NO_AUTO_PCC1: "1"
+          PCC_WITH_THREADS: "0"
+          PCC_REFCOUNT_KIND: "atomic"
+          PCC_PYTEST_AUTO_CLEAN: "0"
+        run: |
+          import os
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, str(Path.cwd()))
+          from scripts.ci_worker_size_prior_gate import run_pytest
+
+          # Exact native execution, including after the canary fails. Reuse
+          # the verified archive; do not rebuild or substitute a threaded one.
+          # This is host-pcc0 C emission, not a native-pcc1 compiler result.
+          run_pytest(
+              Path("build/worker-prior-gate"), "gc4-single-thread-relocation",
+              ["tests/python/test_gc_relocation_sweep_verdict.py::"
+               "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"],
+              os.environ.copy(), integration=True, timeout=300,
+          )
+
       - name: Verify the new pcc1 on native prior worker shapes
         run: uv run --frozen --no-sync --python 3.13 python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1
 

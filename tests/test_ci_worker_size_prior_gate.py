@@ -914,7 +914,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert "--phase stage1${{ inputs.full_chain && ' --full-chain' || '' }}" in other
 
 
-def test_other_platform_entry_runs_the_five_gc_matrix_once():
+def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch):
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     commands = [node for node in ast.walk(tree) if isinstance(node, ast.List)
                 and any(isinstance(item, ast.Constant) and item.value == "scripts/bootstrap_platform.py" for item in node.elts)]
@@ -928,6 +928,91 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once():
     assert gate.STAGE1_TIMEOUT_S == 7200
     assert gate.PLATFORM_COMPILE_TIMEOUT_S == 6000
     assert "--stage1-timeout" in constants
+
+    # Reuse the exact Stage1 runtime after either terminal outcome; this
+    # independent native regression must not rebuild or require pcc1 success.
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    other = workflow_job(workflow, "other-platform-native-wheel")
+    name = "Verify GC4 relocation with the existing single-thread runtime"
+    step = other.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
+    assert "!cancelled() && startsWith(matrix.platform, 'linux-')" in step
+    assert "steps.platform_runtime.outputs.ready == 'true'" in step
+    assert "timeout-minutes: 6" in step
+    assert "shell: uv run --frozen --no-sync --python 3.13 python {0}" in step
+    assert "PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}" in step
+    assert 'PCC_TEST_NO_NATIVE_PROVISIONING: "1"' in step
+    assert 'PCC_NO_AUTO_PCC1: "1"' in step
+    assert 'PCC_WITH_THREADS: "0"' in step and 'PCC_REFCOUNT_KIND: "atomic"' in step
+    assert 'PCC_PYTEST_AUTO_CLEAN: "0"' in step
+    assert "steps.platform_qualification.outcome == 'failure'" in other
+    assert other.index("id: platform_runtime") < other.index(name) < other.index("--phase pcc1")
+    assert "build/worker-prior-gate/**/*.json" in other
+    assert "build/worker-prior-gate/**/*.xml" in other
+    probe_path = "tests/python/test_gc_relocation_sweep_verdict.py"
+    assert workflow.count('      - "' + probe_path + '"') == 2
+    node = probe_path + "::test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"
+    import textwrap
+
+    calls = []
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", "/admitted/libpy_runtime_pcc_py.a")
+    monkeypatch.setattr(gate, "run_pytest", lambda *args, **kwargs: calls.append((args, kwargs)))
+    # Execute only the workflow wrapper with a mocked runner. No compiler,
+    # runtime admission, subprocess or native program runs in this host test.
+    exec(compile(textwrap.dedent(step.split("        run: |\n", 1)[1]),
+                 "<gc4 single-thread workflow>", "exec"), {})
+    args, kwargs = calls.pop()
+    assert not calls
+    assert args[:3] == (Path("build/worker-prior-gate"), "gc4-single-thread-relocation", [node])
+    assert args[3]["PCC_RUNTIME_ARCHIVE"] == "/admitted/libpy_runtime_pcc_py.a"
+    assert kwargs == {"integration": True, "timeout": 300}
+    command = gate.pytest_command(tmp_path, [node], integration=True)
+    assert command[-3:] == ["-m", "integration", node]
+    assert not any(argument in ("-n", "-n0", "--dist", "-o", "--override-ini") for argument in command)
+
+    from tests.python import test_gc_relocation_sweep_verdict as probe
+
+    probe_tree = ast.parse((ROOT / probe_path).read_text())
+    single = next(item for item in probe_tree.body if isinstance(item, ast.FunctionDef)
+                  and item.name == node.split("::")[1])
+    assert [ast.unparse(mark) for mark in single.decorator_list] == ["pytest.mark.integration"]
+    run_calls = []
+    with monkeypatch.context() as scoped:
+        scoped.setattr(probe, "_run_probe", lambda *args, **kwargs: run_calls.append((args, kwargs)))
+        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4(tmp_path, "pcc_python")
+        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread(tmp_path)
+    assert run_calls == [
+        ((tmp_path, "pcc_python"), {"expected_threads": True}),
+        ((tmp_path, "pcc_python_single_thread"), {"expected_threads": False}),
+    ]
+    archive = tmp_path / "libpy_runtime_pcc_py.a"
+    archive.write_bytes(b"host-test placeholder, never a native runtime")
+    Path(str(archive) + ".capi_syms").write_text("host-test inventory")
+    monkeypatch.setattr(probe, "admitted_runtime", lambda: archive)
+    linked = []
+
+    def fake_link(source, output, **kwargs):
+        linked.append(source.read_text())
+        output.write_bytes(b"host-test placeholder, never a native binary")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(probe, "link_c_harness", fake_link)
+    for threads in (True, False):
+        manifest = {"target_triple": "host-test-only", "members": [
+            {"runtime_build_config": {"threads": threads, "refcount": "atomic"}},
+        ]}
+        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
+        executable = probe._compile_probe(tmp_path, str(threads), 4, expected_threads=threads)
+        receipt = json.loads(executable.with_suffix(".identity.json").read_text())
+        assert receipt["runtime_config"] == {"threads": threads, "refcount": "atomic"}
+        assert receipt["compiler"] == "host-pcc0" and receipt["runtime_provisioning"] is False
+        assert set(receipt["runtime_hashes"]) == {"", ".provenance.json", ".capi_syms"}
+        with pytest.raises(AssertionError):
+            probe._compile_probe(tmp_path, "wrong-threads", 4, expected_threads=not threads)
+        manifest["members"][0]["runtime_build_config"]["refcount"] = "plain"
+        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
+        with pytest.raises(AssertionError):
+            probe._compile_probe(tmp_path, "wrong-refcount", 4, expected_threads=threads)
+    assert linked == [probe.PROBE_SOURCE.replace("@BACKEND@", "4")] * 2
 
 
 def test_stage1_extension_preserves_other_job_budgets_and_hosted_ceiling():
