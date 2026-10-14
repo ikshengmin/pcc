@@ -275,6 +275,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_decorator_c_abi_typed_signature",
     "_decorator_is_noop_whitelist",
     "_decorator_is_runtime_partial_factory",
+    "_decorator_is_user_factory_call",
     "_decorator_qualname",
     "_decorator_repr",
     "_discard_owned_local_gc_root",

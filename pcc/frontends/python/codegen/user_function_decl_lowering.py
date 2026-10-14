@@ -171,6 +171,7 @@ class UserFunctionDeclLoweringMixin:
                     if not (
                         (isinstance(d, Name) and d.ident in self.functions)
                         or self._decorator_is_runtime_partial_factory(d)
+                        or self._decorator_is_user_factory_call(d)
                     ):
                         unrecognised.append(d)
                 i += 1

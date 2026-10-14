@@ -207,6 +207,18 @@ class DecoratorLoweringMixin:
             return True
         return False
 
+    def _decorator_is_user_factory_call(self, dec) -> bool:
+        """``@factory(...)`` where ``factory`` is a module-level function.
+
+        The call returns the decorator; like any decorator it is applied once,
+        when the definition executes, and the result is the bound function.
+        """
+        return (
+            isinstance(dec, Call)
+            and isinstance(dec.func, Name)
+            and dec.func.ident in self.functions
+        )
+
     def _decorator_is_runtime_partial_factory(self, dec) -> bool:
         """Whether ``dec`` calls a module-global ``functools.partial`` value.
 

@@ -3209,7 +3209,8 @@ class UserFunctionLoweringMixin:
         i = 0
         while i < len(decorators):
             dec = decorators[i]
-            if self._decorator_is_runtime_partial_factory(dec):
+            if (self._decorator_is_runtime_partial_factory(dec)
+                    or self._decorator_is_user_factory_call(dec)):
                 saw_native_decorator = True
                 i += 1
                 continue
@@ -3404,10 +3405,19 @@ class UserFunctionLoweringMixin:
         fn: ir.Function,
         ast_func_def: FuncDef,
     ) -> ir.Value:
+        decorators = self._func_decorators(ast_func_def)
+        # Python evaluates the decorator expressions top to bottom before it
+        # creates the function, then applies them bottom to top.
+        factories = {}
+        for index, dec in enumerate(decorators):
+            if (self._decorator_is_runtime_partial_factory(dec)
+                    or self._decorator_is_user_factory_call(dec)):
+                factories[index] = self._emit_expr(dec)
         fn_obj = self._emit_native_func_value(name, name, fn, ())
-        for dec in reversed(self._func_decorators(ast_func_def)):
-            if self._decorator_is_runtime_partial_factory(dec):
-                decorator_callable = self._emit_expr(dec)
+        for index in reversed(range(len(decorators))):
+            dec = decorators[index]
+            if index in factories:
+                decorator_callable = factories[index]
                 apply_args = self.builder.call(
                     self.runtime["py_tuple_new"],
                     [ir.Constant(_I64, 1)],
@@ -3464,11 +3474,11 @@ class UserFunctionLoweringMixin:
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
     ) -> ir.Value:
-        fn_obj = self._emit_decorated_user_function_value(
-            name=name,
-            fn=fn,
-            ast_func_def=ast_func_def,
-        )
+        # The definition applied the decorators once and published the result
+        # as the module binding; a call uses that binding. Decorating again at
+        # every call ran each decorator once per call and gave stateful ones a
+        # fresh state each time.
+        fn_obj = self._emit_published_function_binding(name, ast_func_def.span)
         kwdict_unpack = self._split_starstar_kwargs_unpack(args)
         arg_exprs = args
         kwargs_expr = None
@@ -3488,8 +3498,46 @@ class UserFunctionLoweringMixin:
         self._gc_release(args_tuple)
         if kwargs:
             self._gc_release(kwargs_obj)
+        self._gc_release(fn_obj)
         self._emit_post_call_err_check(ast_func_def.span)
         return result
+
+    def _emit_published_function_binding(self, name: str, span) -> ir.Value:
+        """A NEW reference to the module's current binding for ``name``.
+
+        Raises NameError, as a name lookup would, when the binding is gone.
+        """
+        module_name = self.ast_module.name or "__main__"
+        module_name_ptr = self._ptr_to_cstr(
+            self._cstr_global(module_name, f".pcc.def.binding.module.{module_name}")
+        )
+        value = self.builder.call(
+            self.runtime["py_module_attr_get"],
+            [module_name_ptr, self._attr_name_ptr(name)],
+            name=self._fresh(f"{name}.binding"),
+        )
+        missing = self.builder.icmp_signed(
+            "==", value, ir.Constant(_CSTR, None), name=self._fresh(f"{name}.binding.missing"),
+        )
+        err_bb = self.current_function.append_basic_block(name=self._fresh(f"{name}.binding.err"))
+        ok_bb = self.current_function.append_basic_block(name=self._fresh(f"{name}.binding.ok"))
+        self.builder.cbranch(missing, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        msg = self._pooled_cstr_ptr("name '" + name + "' is not defined", ".name_error")
+        exc = self.builder.call(
+            self.runtime["py_exc_new"], [ir.Constant(_I64, 10), msg], name=self._fresh("name_error"),
+        )
+        self.builder.call(self.runtime["py_raise"], [exc])
+        frame_exc = self.builder.call(
+            self.runtime["py_current_exception"], [], name=self._fresh("name.frame.exc"),
+        )
+        self._emit_exception_frame(frame_exc, span)
+        err_target = self._current_try_err_block()
+        if err_target is None:
+            err_target = self._ensure_fn_err_exit()
+        self.builder.branch(err_target)
+        self.builder.position_at_end(ok_bb)
+        return value
 
     def _emit_function_annotations_dict(
         self,
