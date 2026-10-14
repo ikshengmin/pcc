@@ -1467,6 +1467,19 @@ class OwnedMergedSourceView:
         # those six scalar fields while the already-validated source records
         # are still here, then retire their managed-object graph. The public
         # NativeObject and relocatable-link representations are unchanged.
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if compact_budget is not None:
+                from .macho_host_relocations import pack_owned_final_link_rows
+                self._raw_relocations = pack_owned_final_link_rows(
+                    source_sections, self._payloads, self._sections,
+                    self._symbols, self._symbol_index, self._section_index,
+                    addrs, undefined_names, weak_names,
+                    source_container=sections,
+                    compact_budget=compact_budget,
+                )
+                self._source_sections = ()
+                return
         self._raw_relocations = []
         for section_index, section in enumerate(source_sections):
             records = CompilerIntArena(
