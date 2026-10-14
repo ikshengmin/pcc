@@ -12,7 +12,6 @@ from pcc.frontends.python.py_ast import (
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_DICT,
-    PY_TYPE_LIST,
     PY_TYPE_TUPLE,
 )
 
@@ -38,8 +37,11 @@ def _dict_method_box(host, e: Expr) -> ir.Value:
     return host._emit_expr_as_pcc_object(e)
 
 
-def _emit_rooted_dict_view(self, expr):
-    """Materialize a dict view or call an override through owned slots."""
+def _emit_rooted_dict_method(self, expr):
+    """Publish a dict result or a user-method result before any cleanup."""
+    method_name = expr.func.name
+    root_label = ('dict.view' if method_name in ('keys', 'values', 'items')
+                  else 'dict.' + method_name)
     previous = self._current_try_err_block()
     target = previous if previous is not None else self._ensure_fn_err_exit()
     saved_cpy = self._cpy_operand_cleanup_block
@@ -47,32 +49,65 @@ def _emit_rooted_dict_view(self, expr):
     output = sink
     roots = []
     if output is None:
-        output = self._new_slot_call_root('dict.view.result')
+        output = self._new_slot_call_root(root_label + '.result')
         roots.append(output)
     try:
         self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
         self._cpy_operand_cleanup_block = self._try_err_block
-        receiver = self._emit_slot_call_operand(expr.func.obj, 'dict.view.receiver')
+        receiver = self._emit_slot_call_operand(expr.func.obj, root_label + '.receiver')
         roots.append(receiver)
         self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
         self._cpy_operand_cleanup_block = self._try_err_block
         tag = self._slot_call_runtime_call('py_obj_type_tag', (receiver,), span=expr.span)
         is_dict = self.builder.icmp_signed('==', tag, ir.Constant(_I64, PY_TYPE_DICT))
-        native_bb = self.current_function.append_basic_block(self._fresh('dict.view.native'))
-        generic_bb = self.current_function.append_basic_block(self._fresh('dict.view.generic'))
-        done_bb = self.current_function.append_basic_block(self._fresh('dict.view.done'))
+        native_bb = self.current_function.append_basic_block(self._fresh(root_label + '.native'))
+        generic_bb = self.current_function.append_basic_block(self._fresh(root_label + '.generic'))
+        done_bb = self.current_function.append_basic_block(self._fresh(root_label + '.done'))
         self.builder.cbranch(is_dict, native_bb, generic_bb)
 
         self.builder.position_at_end(native_bb)
-        self._slot_call_runtime_call(
-            'py_dict_' + expr.func.name, (receiver,),
-            result_slot=output, span=expr.span,
-        )
+        if method_name == 'pop':
+            native_roots = list(roots)
+            key = self._emit_slot_call_operand(expr.args[0], root_label + '.key')
+            native_roots.append(key)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            default = self._emit_slot_call_operand(expr.args[1], root_label + '.default')
+            native_roots.append(default)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(native_roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                'py_dict_get', (receiver, key), result_slot=output, span=expr.span,
+            )
+            current = self.builder.load(output, name=self._fresh(root_label + '.selected'))
+            missing = self.builder.icmp_signed('==', current, ir.Constant(_CSTR, None))
+            hit_bb = self.current_function.append_basic_block(self._fresh(root_label + '.hit'))
+            miss_bb = self.current_function.append_basic_block(self._fresh(root_label + '.miss'))
+            join_bb = self.current_function.append_basic_block(self._fresh(root_label + '.join'))
+            self.builder.cbranch(missing, miss_bb, hit_bb)
+            self.builder.position_at_end(hit_bb)
+            # py_dict_get returns an owner. Keep it published while deletion
+            # hashes the key again and may raise or run a finalizer.
+            self._slot_call_runtime_call('py_dict_del', (receiver, key), span=expr.span)
+            self.builder.branch(join_bb)
+            self.builder.position_at_end(miss_bb)
+            # The default is borrowed from its operand root. Copy its owner
+            # into the still-empty output before retiring either operand.
+            self._slot_call_copy_source(output, default, span=expr.span)
+            self.builder.branch(join_bb)
+            self.builder.position_at_end(join_bb)
+            self._release_slot_call_roots((key, default))
+        else:
+            runtime_name = ('py_copy_copy' if method_name == 'copy'
+                            else 'py_dict_' + method_name)
+            self._slot_call_runtime_call(
+                runtime_name, (receiver,), result_slot=output, span=expr.span,
+            )
         self.builder.branch(done_bb)
 
         self.builder.position_at_end(generic_bb)
         generic_roots = list(roots)
-        callable_root = self._new_slot_call_root('dict.view.callable')
+        callable_root = self._new_slot_call_root(root_label + '.callable')
         generic_roots.append(callable_root)
         self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
         self._cpy_operand_cleanup_block = self._try_err_block
@@ -81,13 +116,13 @@ def _emit_rooted_dict_view(self, expr):
             'py_obj_getattr', (receiver,), result_slot=callable_root,
             suffix_args=(self._attr_name_ptr(expr.func.name),), span=expr.span,
         )
-        current_method = self.builder.load(callable_root, name=self._fresh('dict.view.method.current'))
+        current_method = self.builder.load(callable_root, name=self._fresh(root_label + '.method.current'))
         self._emit_attribute_error_if_null(current_method, expr.func.name, expr.span)
-        args = self._emit_slot_call_args_tuple(expr.args, 'dict.view.args')
+        args = self._emit_slot_call_args_tuple(expr.args, root_label + '.args')
         generic_roots.append(args)
         self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
         self._cpy_operand_cleanup_block = self._try_err_block
-        kwargs = self._emit_slot_call_kwargs_object((), None, expr.span, 'dict.view.kwargs', callable_root)
+        kwargs = self._emit_slot_call_kwargs_object((), None, expr.span, root_label + '.kwargs', callable_root)
         generic_roots.append(kwargs)
         self._try_err_block = self._slot_call_cleanup_block(tuple(generic_roots), target)
         self._cpy_operand_cleanup_block = self._try_err_block
@@ -95,10 +130,10 @@ def _emit_rooted_dict_view(self, expr):
             self.runtime['py_obj_call_slots'],
             [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),
              self._as_gc_ptr(kwargs), self._as_gc_ptr(output)],
-            name=self._fresh('dict.view.generic.invoke'),
+            name=self._fresh(root_label + '.generic.invoke'),
         )
         self._slot_call_note_published(output)
-        self._slot_call_check_status(status, 'dictionary view method call', expr.span)
+        self._slot_call_check_status(status, 'dictionary ' + method_name + ' method call', expr.span)
         self._emit_post_call_err_check(expr.span)
         self._release_slot_call_roots((callable_root, args, kwargs))
         self.builder.branch(done_bb)
@@ -111,7 +146,7 @@ def _emit_rooted_dict_view(self, expr):
         self._try_err_block = previous
         self._cpy_operand_cleanup_block = saved_cpy
     if sink is not None:
-        return self.builder.load(output, name=self._fresh('dict.view.current'))
+        return self.builder.load(output, name=self._fresh(root_label + '.current'))
     return self._take_slot_call_root(output)
 
 
@@ -232,9 +267,9 @@ class DictLoweringMixin:
         assert isinstance(attr, Attr)
         if self._dict_get_uses_owned_slots(expr):
             return self._emit_rooted_dict_get(expr)
-        if (attr.name in ("keys", "values", "items") and not expr.args
+        if (attr.name in ("keys", "values", "items", "copy") and not expr.args
                 and not expr.kwargs and not self._expr_looks_cpython(attr.obj)):
-            return _emit_rooted_dict_view(self, expr)
+            return _emit_rooted_dict_method(self, expr)
         if attr.name == "update" and len(expr.args) == 1 and not expr.kwargs:
             if not self._has_starred_unpack(expr.args):
                 return self._emit_shared_container_update(expr)
@@ -242,6 +277,11 @@ class DictLoweringMixin:
             return None
         if attr.name == "pop":
             return self._emit_dyn_pop_method_with_runtime_guard(expr)
+        if not self._expr_looks_cpython(attr.obj):
+            # Unsupported builtin shapes can still be valid user methods.
+            # The ordinary callable path preserves their owned result and
+            # evaluates the bound method before any argument or unpacking.
+            return self._emit_slot_call_object(expr, label="dict.method")
         dict_ty = DictType(
             name="dict",
             key=DynType(name="dyn"),
@@ -329,142 +369,16 @@ class DictLoweringMixin:
             return None
         if self.current_function is None:
             return None
-        if (self._dyn_list_method_shape_supported(expr)
-                and not self._expr_looks_cpython(attr.obj)):
-            return self._emit_owned_list_pop(expr)
-
-        recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if self._expr_looks_cpython(attr.obj):
             return self._emit_cpy_method_call_src(
-                recv,
-                attr.name,
-                expr.args,
-                kwargs=expr.kwargs,
+                self._emit_expr(attr.obj), attr.name, expr.args, kwargs=expr.kwargs,
             )
-
-        tag = self.builder.call(
-            self.runtime["py_obj_type_tag"],
-            [recv],
-            name=self._fresh("dyn.pop.recv.tag"),
-        )
-        is_list = self.builder.icmp_signed(
-            "==",
-            tag,
-            ir.Constant(_I64, PY_TYPE_LIST),
-            name=self._fresh("dyn.pop.recv.is_list"),
-        )
-
-        fn = self.current_function
-        list_bb = fn.append_basic_block(name=self._fresh("dyn.pop.list"))
-        non_list_bb = fn.append_basic_block(name=self._fresh("dyn.pop.non_list"))
-        dict_bb = fn.append_basic_block(name=self._fresh("dyn.pop.dict"))
-        generic_bb = fn.append_basic_block(name=self._fresh("dyn.pop.generic"))
-        done_bb = fn.append_basic_block(name=self._fresh("dyn.pop.done"))
-        self.builder.cbranch(is_list, list_bb, non_list_bb)
-
-        self.builder.position_at_end(list_bb)
-        if len(expr.args) <= 1:
-            if len(expr.args) == 0:
-                idx_val = ir.Constant(_I64, -1)
-            else:
-                idx_val = self._emit_expr_as_i64(expr.args[0])
-            list_result = self.builder.call(
-                self.runtime["py_list_pop"],
-                [recv, idx_val],
-                name=self._fresh("dyn.pop.list.result"),
-            )
-            self._emit_post_call_err_check(getattr(expr, "span", None))
-        else:
-            list_result = self._emit_generic_dyn_method_call_on_value(
-                recv,
-                attr.name,
-                expr,
-            )
-        list_exit = self.builder.block
-        self.builder.branch(done_bb)
-
-        self.builder.position_at_end(non_list_bb)
-        is_dict = self.builder.icmp_signed(
-            "==",
-            tag,
-            ir.Constant(_I64, PY_TYPE_DICT),
-            name=self._fresh("dyn.pop.recv.is_dict"),
-        )
-        self.builder.cbranch(is_dict, dict_bb, generic_bb)
-
-        self.builder.position_at_end(dict_bb)
-        if len(expr.args) == 1:
-            dict_result = self.builder.call(
-                self.runtime["py_dict_pop"],
-                [recv, _dict_method_box(self, expr.args[0])],
-                name=self._fresh("dyn.pop.dict.result"),
-            )
-            self._emit_post_call_err_check(expr.span)
-        elif len(expr.args) == 2:
-            k_obj = _dict_method_box(self, expr.args[0])
-            default_obj = _dict_method_box(self, expr.args[1])
-            existing = self.builder.call(
-                self.runtime["py_dict_get"],
-                [recv, k_obj],
-                name=self._fresh("dyn.pop.dict.get"),
-            )
-            self._emit_post_call_err_check(expr.span)
-            null_p = ir.Constant(_CSTR, None)
-            is_missing = self.builder.icmp_signed(
-                "==",
-                existing,
-                null_p,
-                name=self._fresh("dyn.pop.dict.miss"),
-            )
-            hit_bb = fn.append_basic_block(name=self._fresh("dyn.pop.dict.hit"))
-            miss_bb = fn.append_basic_block(name=self._fresh("dyn.pop.dict.miss"))
-            dict_join_bb = fn.append_basic_block(
-                name=self._fresh("dyn.pop.dict.join"),
-            )
-            self.builder.cbranch(is_missing, miss_bb, hit_bb)
-            self.builder.position_at_end(hit_bb)
-            self.builder.call(
-                self.runtime["py_dict_del"],
-                [recv, k_obj],
-                name=self._fresh("dyn.pop.dict.del"),
-            )
-            self._emit_post_call_err_check(expr.span)
-            hit_exit = self.builder.block
-            self.builder.branch(dict_join_bb)
-            self.builder.position_at_end(miss_bb)
-            miss_exit = self.builder.block
-            self.builder.branch(dict_join_bb)
-            self.builder.position_at_end(dict_join_bb)
-            dict_result = self.builder.phi(
-                _CSTR,
-                name=self._fresh("dyn.pop.dict.result"),
-            )
-            dict_result.add_incoming(existing, hit_exit)
-            dict_result.add_incoming(default_obj, miss_exit)
-        else:
-            dict_result = self._emit_generic_dyn_method_call_on_value(
-                recv,
-                attr.name,
-                expr,
-            )
-        dict_exit = self.builder.block
-        self.builder.branch(done_bb)
-
-        self.builder.position_at_end(generic_bb)
-        generic_result = self._emit_generic_dyn_method_call_on_value(
-            recv,
-            attr.name,
-            expr,
-        )
-        generic_exit = self.builder.block
-        self.builder.branch(done_bb)
-
-        self.builder.position_at_end(done_bb)
-        result = self.builder.phi(_CSTR, name=self._fresh("dyn.pop.result"))
-        result.add_incoming(list_result, list_exit)
-        result.add_incoming(dict_result, dict_exit)
-        result.add_incoming(generic_result, generic_exit)
-        return result
+        if (self._has_starred_unpack(expr.args)
+                or self._split_starstar_kwargs_unpack(expr.args) is not None):
+            return self._emit_slot_call_object(expr, label="dict.pop")
+        if self._dyn_list_method_shape_supported(expr):
+            return self._emit_owned_list_pop(expr)
+        return _emit_rooted_dict_method(self, expr)
 
     def _emit_owned_dict_get(
         self,
@@ -546,10 +460,15 @@ class DictLoweringMixin:
         name = attr.name
         if recv is None and self._dict_get_uses_owned_slots(expr):
             return self._emit_rooted_dict_get(expr)
-        if (recv is None and name in ("keys", "values", "items")
+        if (recv is None and name in ("keys", "values", "items", "copy")
                 and not expr.args and not expr.kwargs
                 and not self._expr_looks_cpython(attr.obj)):
-            return _emit_rooted_dict_view(self, expr)
+            return _emit_rooted_dict_method(self, expr)
+        if (recv is None and name == "pop" and len(expr.args) == 2
+                and not expr.kwargs and not self._has_starred_unpack(expr.args)
+                and self._split_starstar_kwargs_unpack(expr.args) is None
+                and not self._expr_looks_cpython(attr.obj)):
+            return _emit_rooted_dict_method(self, expr)
         if recv is None:
             recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):
