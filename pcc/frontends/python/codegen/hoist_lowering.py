@@ -338,6 +338,11 @@ class _HoistLoweringPass:
             "sibling_effective_free_names_calls": 0,
             "sibling_effective_free_names_cache_hits": 0,
         }
+        flattened = _lift_nested_classes(ast_module, hoisted_qualnames)
+        if flattened is not ast_module:
+            ast_module = flattened
+            setattr(self, "ast_module", ast_module)
+            setattr(self, "_ast_body", ast_module.body)
         may_need_hoist = module_may_need_hoist_fast(ast_module.body)
         if not may_need_hoist:
             _hoist_log(debug_hoist, mod_name, "module skip")
@@ -2105,6 +2110,110 @@ class _HoistLoweringPass:
     # -- user-function declaration / definition -----------------------
 
     # ------------------------------------------------------- statements
+
+
+def _lift_nested_classes(module, qualnames):
+    """Declare classes nested in module-level class bodies at module level.
+
+    ``class Inner`` inside ``class Outer`` runs within the outer body and
+    becomes an attribute of ``Outer``. Class lowering declares only module
+    classes and skipped the nested statement, so ``Outer.Inner`` raised
+    AttributeError and a method call on ``Outer.Inner()`` crashed codegen.
+    Each nested class now precedes its outer class at module level under its
+    own name (suffixed when that name is already bound), records
+    ``Outer.Inner`` as its qualified name, and the outer body binds the
+    attribute to it. Unlike CPython, statements of the outer body that come
+    before the nested class run after the nested class body.
+    """
+    taken = set()
+    _module_bound_names(module.body, taken)
+    body = []
+    changed = False
+    for stmt in module.body:
+        if isinstance(stmt, ClassDef):
+            lifted, stmt = _lift_class_members(stmt, stmt.name, taken, qualnames)
+            if lifted:
+                body.extend(lifted)
+                changed = True
+        body.append(stmt)
+    if not changed:
+        return module
+    return _replace(module, body=tuple(body))
+
+
+def _module_bound_names(body, taken):
+    """Collect module-scope names bound by ``body``, including in blocks."""
+    for stmt in body:
+        if isinstance(stmt, (ClassDef, FuncDef)):
+            taken.add(stmt.name)
+        elif isinstance(stmt, Assign):
+            for target in stmt.targets:
+                _target_bound_names(target, taken)
+        elif isinstance(stmt, AugAssign):
+            _target_bound_names(stmt.target, taken)
+        elif isinstance(stmt, (Import, ImportFrom)):
+            for _name, bound in _import_names_from_stmt(stmt):
+                if bound:
+                    taken.add(bound.split(".")[0])
+        elif isinstance(stmt, For):
+            _target_bound_names(stmt.target, taken)
+            _module_bound_names(stmt.body, taken)
+            _module_bound_names(stmt.else_body, taken)
+        elif isinstance(stmt, (If, While)):
+            _module_bound_names(stmt.body, taken)
+            _module_bound_names(stmt.else_body, taken)
+        elif isinstance(stmt, With):
+            for _ctx, as_var in stmt.items:
+                if as_var is not None:
+                    _target_bound_names(as_var, taken)
+            _module_bound_names(stmt.body, taken)
+        elif isinstance(stmt, Try):
+            _module_bound_names(stmt.body, taken)
+            for handler in stmt.handlers:
+                if handler.name:
+                    taken.add(handler.name)
+                _module_bound_names(handler.body, taken)
+            _module_bound_names(stmt.else_body, taken)
+            _module_bound_names(stmt.finally_body, taken)
+
+
+def _target_bound_names(target, taken):
+    if isinstance(target, Name):
+        taken.add(target.ident)
+    elif isinstance(target, (TupleExpr, ListExpr)):
+        for element in target.elems:
+            _target_bound_names(element, taken)
+    elif (isinstance(target, Call) and isinstance(target.func, Name)
+          and target.func.ident == "__starred__" and target.args):
+        _target_bound_names(target.args[0], taken)
+
+
+def _lift_class_members(cd, qualname, taken, qualnames):
+    lifted = []
+    members = []
+    for item in cd.body:
+        if not isinstance(item, ClassDef):
+            members.append(item)
+            continue
+        inner_qualname = qualname + "." + item.name
+        inner_lifted, inner = _lift_class_members(item, inner_qualname, taken, qualnames)
+        name = item.name
+        suffix = 0
+        while name in taken:
+            suffix += 1
+            name = item.name + "_nest" + str(suffix)
+        taken.add(name)
+        qualnames[name] = inner_qualname
+        lifted.extend(inner_lifted)
+        lifted.append(_replace(inner, name=name))
+        members.append(Assign(
+            span=item.span,
+            targets=(Name(span=item.span, ty=_DYN, ident=item.name),),
+            value=Name(span=item.span, ty=_DYN, ident=name),
+        ))
+    if not lifted:
+        return [], cd
+    return lifted, _replace(cd, body=tuple(members))
 
 
 def hoist_nested_funcdefs(codegen):
