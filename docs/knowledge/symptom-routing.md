@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-591 investigations.
+592 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -999,6 +999,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `_l1_codegen_static_methods` · `_PyEval_EvalFrameDefault` · `_platform_memcmp` · `FunctionStackMapPlan.instruction_suffix_lines(block, index)` · `instruction_suffix_labels` · `self_backend_emit.emit_function_blocks`
 - [Investigation: stage1 lazy-import discovery spawns host probes that execute the pcc package](../investigations/stage1-lazy-import-host-probe-spawn.md) — **Resolved locally on 2026-09-17. Red→green regression landed; the 420-second**
   - `_expand_recursive_stdlib` · `_host_find_spec_origin` · `importlib.util.find_spec` · `pcc/__init__.py` · `roadmap_deepwire._install_pipeline_profile` · `subprocess.check_output`
+- [Investigation: Stage1 links exceed the compact stack-map memory budget](../investigations/stage1-link-memory-budget.md) — **active — 2026-10-14. Measured on CI run 38584467472 (`9cbcb1e9`); the Mach-O**
+  - `pe_x86_64.py` · `platform-qualification/shared/stage1.log:21236` · `macho_link.py` · `worker-prior-gate/stage1.log:20020` · `profile/stage1.result.json` · `. The process-tree samples (`
 - [Investigation: Stage1 receipt validator rejects current producer metric labels](../investigations/stage1-receipt-metric-contract-rejected.md) — **resolved**
   - `test_build_receipt_validates_current_producer_metric_contract[producer]`
 - [Investigation: stage1 self-backend ir-scaffold segfault](../investigations/stage1-self-backend-ir-scaffold-segfault.md) — **active**

@@ -1094,6 +1094,8 @@ Regenerate with `env -u LC_ALL uv run python scripts/regen_investigations_index.
   - resolved (2026-08-15) — cold `pcc0 -> pcc1` self-backend build measured
 - [stage1-lazy-import-host-probe-spawn.md](stage1-lazy-import-host-probe-spawn.md) — **stage1 lazy-import discovery spawns host probes that execute the pcc package**
   - Resolved locally on 2026-09-17. Red→green regression landed; the 420-second
+- [stage1-link-memory-budget.md](stage1-link-memory-budget.md) — **Stage1 links exceed the compact stack-map memory budget**
+  - active — 2026-10-14. Measured on CI run 38584467472 (`9cbcb1e9`); the Mach-O
 - [stage1-private-pycache-disabled-worker-startup.md](stage1-private-pycache-disabled-worker-startup.md) — **private Stage1 environment disables every worker bytecode cache**
   - The source-frozen Stage1 harness gives every CPython process an isolated
 - [stage1-receipt-metric-contract-rejected.md](stage1-receipt-metric-contract-rejected.md) — **Stage1 receipt validator rejects current producer metric labels**
