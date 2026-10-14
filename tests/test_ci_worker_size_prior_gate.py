@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -67,9 +67,11 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[40:42] == (gate.ELF_APPLICATION_TEST, gate.ELF_APPLICATION_SOURCE_TEST)
     assert gate.HOST_FILES[42:43] == (gate.MANAGED_DIRTY_ROWS_TEST,)
     assert gate.HOST_FILES[43:45] == (gate.FACTS_STRUCTURE_TEST, gate.FACTS_NATIVE_BOUNDARY_TEST)
-    assert gate.HOST_FILES[45:] == (gate.HOME_SUMMARY_CI_TEST, gate.MACHO_HOST_RELOCATIONS_TEST)
-    assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 47
-    assert sum(gate.HOST_COUNTS) == 2109 and sum(gate.HOST_COUNTS[:43]) == 2017
+    assert gate.HOST_FILES[45:] == (gate.HOME_SUMMARY_CI_TEST, gate.MACHO_HOST_RELOCATIONS_TEST,
+                                  gate.MACHO_ARCHIVE_SYMBOL_STATE_TEST)
+    assert len(gate.HOST_FILES) == len(gate.HOST_COUNTS) == 48
+    assert sum(gate.HOST_COUNTS) == 2152 and sum(gate.HOST_COUNTS[:47]) == 2109
+    assert sum(gate.HOST_COUNTS[:43]) == 2017
     assert sum(gate.HOST_COUNTS[:42]) == 1922
     assert sum(gate.HOST_COUNTS[:40]) == 1913
     assert sum(gate.HOST_COUNTS[:38]) == 1903
@@ -180,6 +182,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/python/test_compact_stackmap_processing_budget.py',
         'tests/python/test_stackmap_host_budget.py',
         'tests/python/test_macho_host_relocations.py',
+        'tests/python/test_macho_archive_symbol_state.py',
         'pcc/backend/precise_stackmap.py',
         'pcc/backend/macho_link.py',
         'pcc/backend/macho_exec.py',
@@ -192,10 +195,11 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "STACKMAP_BUDGET_INPUTS" for node in ast.walk(identity))
     for path in (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST,
-                 gate.MACHO_HOST_RELOCATIONS_TEST):
+                 gate.MACHO_HOST_RELOCATIONS_TEST, gate.MACHO_ARCHIVE_SYMBOL_STATE_TEST):
         assert workflow.count('      - "' + path + '"') == 2
     for path, expected in ((gate.STACKMAP_BUDGET_TEST, 136), (gate.STACKMAP_HOST_BUDGET_TEST, 19),
-                           (gate.MACHO_HOST_RELOCATIONS_TEST, 38)):
+                           (gate.MACHO_HOST_RELOCATIONS_TEST, 38),
+                           (gate.MACHO_ARCHIVE_SYMBOL_STATE_TEST, 43)):
         count = 0
         module = ast.parse((ROOT / path).read_text())
         consumer_values = [node.value for node in module.body
@@ -1143,7 +1147,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

@@ -57,8 +57,10 @@ from .macho_parallel import (
 from .native_object import (
     NativeObject,
     NativeObjectView,
+    NativeSymbol,
     OwnedMergedSourceView,
     PackedNativeObject,
+    PackedNativeSymbol,
 )
 from .precise_stackmap import (
     ARCH_AARCH64,
@@ -398,6 +400,36 @@ def _check_compact_copy_peak(compact_budget, raw_bytes: int, label: str) -> None
         ) from exc
 
 
+def _accumulate_external_symbol_state(
+    symbols, defined: set[str], undefined: set[str],
+) -> None:
+    """Borrow one validated table and retain only its external symbol names.
+
+    ``undefined`` accumulates strong references, including already satisfied
+    ones. The caller subtracts ``defined`` when asking for pending archive
+    references, so a definition in a later input cancels an earlier request.
+    Neither the table nor its object/payload owner escapes this call.
+    """
+    for symbol in symbols:
+        if isinstance(symbol, PackedNativeSymbol):
+            if symbol.section_index and symbol.external:
+                defined.add(symbol.name)
+            elif not symbol.section_index and symbol.external and not symbol.weak_reference:
+                undefined.add(symbol.name)
+            continue
+        if isinstance(symbol, NativeSymbol):
+            if symbol.section_index and symbol.external:
+                defined.add(symbol.name)
+            elif not symbol.section_index and symbol.external and not symbol.weak_reference:
+                undefined.add(symbol.name)
+            continue
+        kind = symbol["n_type"] & spec.N_TYPE
+        if kind == spec.N_SECT and (symbol["n_type"] & spec.N_EXT):
+            defined.add(symbol["name"])
+        elif kind == spec.N_UNDF and (symbol["n_type"] & spec.N_EXT) and not _symbol_is_weak_reference(symbol):
+            undefined.add(symbol["name"])
+
+
 def _external_symbol_state(
     objects: list[LinkInput],
 ) -> tuple[set[str], set[str]]:
@@ -405,25 +437,11 @@ def _external_symbol_state(
     for index, data in enumerate(objects):
         obj = _coerce_link_object(data, index)
         if isinstance(obj, PackedNativeObject):
-            for symbol in obj.symbols:
-                if symbol.section_index and symbol.external:
-                    defined.add(symbol.name)
-                elif not symbol.section_index and symbol.external and not symbol.weak_reference:
-                    undefined.add(symbol.name)
-            continue
-        if isinstance(obj, NativeObject):
-            for symbol in obj.symbols:
-                if symbol.section_index and symbol.external:
-                    defined.add(symbol.name)
-                elif not symbol.section_index and symbol.external and not symbol.weak_reference:
-                    undefined.add(symbol.name)
-            continue
-        for sym in obj.symbols():
-            kind = sym["n_type"] & spec.N_TYPE
-            if kind == spec.N_SECT and (sym["n_type"] & spec.N_EXT):
-                defined.add(sym["name"])
-            elif kind == spec.N_UNDF and (sym["n_type"] & spec.N_EXT) and not _symbol_is_weak_reference(sym):
-                undefined.add(sym["name"])
+            _accumulate_external_symbol_state(obj.symbols, defined, undefined)
+        elif isinstance(obj, NativeObject):
+            _accumulate_external_symbol_state(obj.symbols, defined, undefined)
+        else:
+            _accumulate_external_symbol_state(obj.symbols(), defined, undefined)
     return defined, undefined - defined
 
 
