@@ -58,6 +58,16 @@ def check_method_frames(text):
                 cleared = re.search(r'@pcc_gc_store_root\(ptr (%[\w.$]+), ptr null\)', line)
                 if cleared:
                     dirty.discard(canonical(cleared[1]))
+                # Singleton error cleanup clears this exact owner inside the
+                # runtime helper, then the caller retires its frame below.
+                # The lease helper does not clear ownership. Its production
+                # body contract is exercised by test_owned_cleanup_helpers.
+                disposed = re.search(
+                    r'^call void (?:\(ptr\) )?@py_cleanup_one_root_preserving_exception'
+                    r'\(ptr (%[\w.$]+)\)$', line,
+                )
+                if disposed:
+                    dirty.discard(canonical(disposed[1]))
                 leaving = re.search(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.$]+)\)', line)
                 if leaving:
                     root = canonical(leaving[1])
