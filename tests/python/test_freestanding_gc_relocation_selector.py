@@ -221,7 +221,12 @@ def test_relocation_selector_preserves_page_policy_contract() -> None:
     )[1]
     assert "if pcc_gc_config_ensure() != 4" in page_selector
     assert "if allocated != object_budget:" in page_selector
-    assert "if batch_budget > 16:" in page_selector
+    assert "batch_budget: i64 = object_budget - page_selected" in page_selector
+    assert "if batch_budget > 16:" not in page_selector
+    page_batch = strict.split("def _select_page_objects_batch(", 1)[1].split(
+        '@c_abi_export("pcc_gc_select_relocation_set")', 1
+    )[0]
+    assert "and examined < 16" in page_batch
     assert "_best_relocation_page_batch(" in page_selector
     assert "_select_page_objects_batch(" in page_selector
     for forbidden in (

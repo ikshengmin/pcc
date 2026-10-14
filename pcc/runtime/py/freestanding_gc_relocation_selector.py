@@ -931,9 +931,12 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         page_selected: i64 = 0
         retry_preflight: i64 = 0
         while page_selected < object_budget:
+            # Keep the registered page cursor until this pass exhausts the
+            # page or its remaining quota. The helper still examines at most
+            # 16 owners per graph-lock interval. Capping this pass at 16
+            # selected objects discarded that cursor and rescanned the whole
+            # heap before every subsequent group on the same page.
             batch_budget: i64 = object_budget - page_selected
-            if batch_budget > 16:
-                batch_budget = 16
             added: i64 = 0
             current_complete: i64 = 0
             page_commit_complete: i64 = 1
