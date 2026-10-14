@@ -1323,6 +1323,9 @@ class _HoistLoweringPass:
                     hoisted_class_capture_params[hoist_name] = tuple(
                         sorted(class_free_names)
                     )
+                    # CPython's __qualname__ (``outer.<locals>.Name``); the
+                    # hoisted symbol may carry a ``_nestN`` suffix.
+                    hoisted_qualnames[hoist_name] = qual_prefix + st.name
                     if hoist_name != st.name:
                         rename_map[st.name] = hoist_name
                     continue

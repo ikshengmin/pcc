@@ -5347,7 +5347,7 @@ class ClassLowering:
         class_error_target = self.parent._current_try_err_block()
 
         # 1. Class name C-string.
-        name_ptr = self._cname_ptr(cd.name)
+        name_ptr = self._cname_ptr(self._class_source_name(cd))
 
         # 2. Field names array — const char*[]. For n_fields == 0 pass NULL.
         field_names = _classgen_effective_field_names(info)
@@ -5532,7 +5532,7 @@ class ClassLowering:
                 [
                     cls_ptr,
                     self._cname_ptr("__qualname__"),
-                    self.parent._emit_str_literal(cd.name),
+                    self.parent._emit_str_literal(self._class_source_qualname(cd)),
                 ],
             )
 
@@ -6474,8 +6474,17 @@ class ClassLowering:
             out.append((key, value))
         return tuple(out)
 
+    def _class_source_qualname(self, cd: ClassDef) -> str:
+        """CPython's __qualname__: a hoisted function-local class keeps its
+        ``outer.<locals>.Name`` path, recorded when it was hoisted."""
+        return getattr(self.parent, "_hoisted_qualnames", {}).get(cd.name) or cd.name
+
+    def _class_source_name(self, cd: ClassDef) -> str:
+        """CPython's __name__, without a hoisted symbol's ``_nestN`` suffix."""
+        return self._class_source_qualname(cd).rsplit(".", 1)[-1]
+
     def _class_name_expr(self, cd: ClassDef) -> StrLit:
-        return StrLit(span=cd.span, ty=StrType(name="str"), value=cd.name)
+        return StrLit(span=cd.span, ty=StrType(name="str"), value=self._class_source_name(cd))
 
     def _class_bases_tuple_expr(self, cd: ClassDef) -> TupleExpr:
         return TupleExpr(
@@ -6927,7 +6936,7 @@ class ClassLowering:
             ns_obj,
             ns_info,
             "__qualname__",
-            self.parent._emit_str_literal(cd.name),
+            self.parent._emit_str_literal(self._class_source_qualname(cd)),
         )
         first_lineno = cd.span.line if cd.span is not None else 1
         first_lineno_expr = IntLit(
