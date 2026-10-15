@@ -1601,6 +1601,7 @@ def merge_stack_map_payloads(
     """
     if not payloads:
         raise PreciseStackMapError("cannot merge an empty stack-map collection")
+    construction_copies = 2
     if _consume_payloads:
         import sys as execution_runtime
 
@@ -1608,7 +1609,14 @@ def merge_stack_map_payloads(
                 or compact_budget is None or type(payloads) is not list
                 or any(type(payload) is not bytes for payload in payloads)):
             raise PreciseStackMapError("consuming stack-map merge requires owned host bytes")
+        # During construction, functions/table own one detached copy of each
+        # accumulated chunk. The joined output does not exist yet. Consuming
+        # inputs retire before the separate two-copy merge-join admission, so
+        # its future output cannot overlap these input/cache owners. Keep the
+        # ordinary caller's existing reservation and every scratch charge.
+        construction_copies = 1
     consumed_index = 0
+    scan_entries = 0
     input_bytes = 0
     if compact_budget is not None:
         input_bytes = sum(len(payload) for payload in payloads)
@@ -1629,6 +1637,24 @@ def merge_stack_map_payloads(
     for payload in payloads:
         if compact_budget is None:
             _count, scanned, table_start, table_count = _scan_stack_map_payload(payload)
+        elif _consume_payloads:
+            # The scanner admits its current payload and complete function
+            # list. Carry all other live merge owners into that admission;
+            # the previous input's scan/cache have already been retired.
+            previous_retained = compact_budget.retained_bytes
+            compact_budget.retained_bytes += (
+                input_bytes - len(payload) + function_bytes
+                + table_locations * location_size
+                + (4 * len(functions) + len(table_index))
+                * compact_budget.metadata_entry_bytes
+            )
+            try:
+                _count, scanned, table_start, table_count = _scan_stack_map_payload(
+                    payload, compact_budget=compact_budget,
+                )
+            finally:
+                compact_budget.retained_bytes = previous_retained
+            scan_entries = len(scanned)
         else:
             _count, scanned, table_start, table_count = _scan_stack_map_payload(
                 payload, compact_budget=compact_budget,
@@ -1670,9 +1696,10 @@ def merge_stack_map_payloads(
             function_bytes += fn_end - fn_start
             if compact_budget is not None:
                 compact_budget.check_peak(
-                    input_bytes + 2 * (_HEADER.size + function_bytes + table_locations * location_size)
+                    input_bytes + construction_copies * (
+                        _HEADER.size + function_bytes + table_locations * location_size)
                     + 2 * (fn_end - fn_start),
-                    entries=4 * (len(functions) + 1) + len(source_index_cache) + len(table_index),
+                    entries=4 * (len(functions) + 1) + len(source_index_cache) + len(table_index) + scan_entries,
                     label="merge function",
                 )
             blob = bytearray(payload[fn_start:fn_end])
@@ -1719,10 +1746,11 @@ def merge_stack_map_payloads(
                         raise PreciseStackMapError("too much stack-map location merge work")
                     if compact_budget is not None:
                         compact_budget.check_peak(
-                            input_bytes + 2 * (_HEADER.size + function_bytes
-                                               + (table_locations + count) * location_size)
+                            input_bytes + construction_copies * (
+                                _HEADER.size + function_bytes
+                                + (table_locations + count) * location_size)
                             + 2 * len(blob) + count * location_size,
-                            entries=4 * (len(functions) + 1) + len(source_index_cache) + len(table_index) + 2,
+                            entries=4 * (len(functions) + 1) + len(source_index_cache) + len(table_index) + scan_entries + 2,
                             label="merge cache",
                         )
                     start = index * location_size
@@ -1765,6 +1793,9 @@ def merge_stack_map_payloads(
             # Keep input headers, list storage and caller retention charged.
             if execution_runtime.implementation.name == "cpython":
                 retired_size = len(payload)
+                scanned = None
+                source_index_cache = None
+                scan_entries = 0
                 payloads[consumed_index] = None
                 payload = None
                 input_bytes -= retired_size

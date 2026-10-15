@@ -168,16 +168,34 @@ def test_each_completed_raw_owner_is_removed_after_its_last_read_only():
     assert len(ordinary) == len(consumed)
     completed = 0
     input_index = -1
+    function_bytes = 0
+    table_locations = 0
     for old, new in zip(ordinary, consumed):
         label, raw, records, entries, estimate = old
-        assert (new[0], new[2], new[3]) == (label, records, entries)
+        assert (new[0], new[2]) == (label, records)
         if label == "input":
             input_index += 1
             completed = sum(map(len, payloads[:input_index]))
         if label == "merge join":
             completed = sum(map(len, payloads))
         reduction = completed if label in ("merge function", "merge cache", "merge join") else 0
-        assert raw - new[1] == estimate - new[4] == reduction
+        # Construction has no final joined allocation. These fixture
+        # functions all contain four records and share one nonempty root.
+        if label == "merge function":
+            function_bytes += maps.FUNCTION_SIZE + 4 * maps.RECORD_SIZE
+            reduction += maps.HEADER_SIZE + function_bytes + table_locations * maps.LOCATION_SIZE
+        elif label == "merge cache":
+            reduction += maps.HEADER_SIZE + function_bytes + (table_locations + 1) * maps.LOCATION_SIZE
+            table_locations = 1
+        assert raw - new[1] == reduction
+        if label in ("merge function", "merge cache"):
+            # The complete current scan, including not-yet-merged functions,
+            # now has an explicit consuming-only metadata reservation.
+            assert new[3] == entries + 2
+            assert estimate - new[4] == reduction - 2 * _budget().metadata_entry_bytes
+        elif label != "input":
+            assert new[3] == entries
+            assert estimate - new[4] == reduction
 
 
 def test_actual_slot_and_loop_references_retire_before_the_next_scan(monkeypatch):
@@ -196,13 +214,17 @@ def test_actual_slot_and_loop_references_retire_before_the_next_scan(monkeypatch
         if scans == 2:
             assert owned[0] is None
             assert sys.getrefcount(kept) == baseline_refs - 1
-            assert budget.retained_bytes == sys.getsizeof(kept)
+            assert budget.retained_bytes == (
+                sys.getsizeof(kept) + maps.FUNCTION_SIZE + 4 * maps.RECORD_SIZE
+                + maps.LOCATION_SIZE + 5 * budget.metadata_entry_bytes
+            )
         return original(payload, **kwargs)
 
     monkeypatch.setattr(maps, "_scan_stack_map_payload", scan)
     maps.merge_stack_map_payloads(owned, compact_budget=budget, _consume_payloads=True)
     assert scans == 2 and owned == [None, None]
     assert sys.getrefcount(kept) == baseline_refs - 1
+    assert budget.retained_bytes == sys.getsizeof(kept)
 
 
 def test_repeated_payload_alias_stays_live_and_charged_until_its_own_slot(monkeypatch):
@@ -219,13 +241,17 @@ def test_repeated_payload_alias_stays_live_and_charged_until_its_own_slot(monkey
         if scans == 2:
             assert owned == [None, payload]
             assert value is payload
-            assert budget.retained_bytes == sys.getsizeof(payload)
+            assert budget.retained_bytes == (
+                sys.getsizeof(payload) + maps.FUNCTION_SIZE + 4 * maps.RECORD_SIZE
+                + maps.LOCATION_SIZE + 5 * budget.metadata_entry_bytes
+            )
         return original(value, **kwargs)
 
     monkeypatch.setattr(maps, "_scan_stack_map_payload", scan)
     with pytest.raises(maps.PreciseStackMapError, match="duplicate stack-map function"):
         maps.merge_stack_map_payloads(owned, compact_budget=budget, _consume_payloads=True)
     assert scans == 2 and owned == [None, payload]
+    assert budget.retained_bytes == sys.getsizeof(payload)
 
 
 def test_real_owner_retirement_admits_at_unchanged_tight_limit():
