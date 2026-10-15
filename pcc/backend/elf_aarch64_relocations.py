@@ -179,8 +179,26 @@ def apply_relocation(image: bytearray, offset: int, kind: int,
         immediate = ((target >> 12) if kind == 549 else target) & 0xFFF
         word = (word & ~0x003FFC00) | (immediate << 10)
     else:
-        scale = {278: 0, 284: 1, 285: 2, 286: 3, 299: 4,
-                 312: 3, 542: 3}[kind]
+        if type(kind) is int:
+            # relocation_width and the branches above leave only the seven
+            # load/store kinds here. Avoid constructing a temporary dict for
+            # each instruction; 286, 312 and 542 encode eight-byte accesses.
+            if kind == 278:
+                scale = 0
+            elif kind == 284:
+                scale = 1
+            elif kind == 285:
+                scale = 2
+            elif kind == 299:
+                scale = 4
+            elif kind == 286 or kind == 312 or kind == 542:
+                scale = 3
+            else:
+                raise KeyError(kind)
+        else:
+            # Preserve the original hash/equality behavior for custom kinds.
+            scale = {278: 0, 284: 1, 285: 2, 286: 3, 299: 4,
+                     312: 3, 542: 3}[kind]
         low = target & 0xFFF
         if low & ((1 << scale) - 1):
             raise ValueError("misaligned AArch64 load/store relocation")
