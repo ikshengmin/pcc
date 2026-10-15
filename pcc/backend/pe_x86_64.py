@@ -404,6 +404,7 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
     rva = 0x1000
     text_thunks = {}
     tls_start = tls_end = tls_directory = 0
+    tls_alignment = 1
     tls_pointers = []
     iat_directory = (0, 0)
     import_directory = (0, 0)
@@ -417,6 +418,10 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
         for _source_name, oi, si, sec in sorted(groups[name], key=lambda item: (item[0], item[1], item[2])):
             if sec.align > 4096:
                 raise CoffError("PE section alignment above page size is unsupported")
+            if name == ".tls":
+                if sec.align <= 0 or sec.align & (sec.align - 1):
+                    raise CoffError("invalid PE TLS section alignment")
+                tls_alignment = max(tls_alignment, sec.align)
             _zeros(payload, (-len(payload)) & (sec.align - 1), compact_budget)
             if oi < 0:
                 stack_placement = (len(sections), len(payload))
@@ -554,8 +559,9 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
         index_rva = resolve(oi, si)[0]
         if compact_budget is not None:
             compact_budget.check_copy(40, 2, "PE TLS directory")
+        # Characteristics bits [23:20] encode log2(alignment) + 1 for the loader.
         payload = bytearray(struct.pack("<QQQQII", image_base + tls_start, image_base + tls_end,
-                                        image_base + index_rva, 0, 0, 0))
+                                        image_base + index_rva, 0, 0, tls_alignment.bit_length() << 20))
         if compact_budget is not None:
             compact_budget.retain(payload)
         sections.append([".tlsdir", rva, payload, 0x40000040])

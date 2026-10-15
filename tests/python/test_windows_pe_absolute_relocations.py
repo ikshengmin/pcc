@@ -119,6 +119,8 @@ def test_addr64_instruction_and_data_have_exact_dir64_and_rebase(image_base, del
 
     image = link_executable([consumer, provider], image_base=image_base)
     optional, sections = _pe(image)
+    assert struct.unpack_from("<II", image, optional + 112 + 9 * 8) == (0, 0)
+    assert ".tlsdir" not in sections
     assert struct.unpack_from("<Q", image, optional + 24)[0] == image_base
     text_rva, data_rva = sections[".text"][0], sections[".data"][0]
     target_rva = sections[".rdata"][0] + 13
@@ -194,7 +196,7 @@ def test_tls_secrel_binds_other_objects_after_section_merge(prefix_first, init_o
     tls_fields = struct.unpack_from("<QQQQII", image, _offset(sections, directory, 40))
     assert tls_fields == (
         image_base + tls_rva, image_base + tls_rva + 47,
-        image_base + index_rva, 0, 0, 0,
+        image_base + index_rva, 0, 0, 0x00600000,  # IMAGE_SCN_ALIGN_32BYTES
     )
     blocks, sites = _relocations(image, optional, sections)
     assert blocks == [
@@ -208,8 +210,57 @@ def test_tls_secrel_binds_other_objects_after_section_merge(prefix_first, init_o
     assert _value(rebased, sections, text_rva + 17, "<I") == 39
     assert struct.unpack_from("<QQQQII", rebased, _offset(sections, directory, 40)) == (
         image_base + delta + tls_rva, image_base + delta + tls_rva + 47,
-        image_base + delta + index_rva, 0, 0, 0,
+        image_base + delta + index_rva, 0, 0, 0x00600000,
     )
+
+
+def _tls_alignment_object(alignment, data=b"A"):
+    return coff.CoffObject((
+        # A non-TLS section must not increase the TLS directory's alignment.
+        coff.CoffSection(".text", b"\xc3", 0x60000020, 4096),
+        coff.CoffSection(".tls$A", data, 0xC0000040, alignment),
+        coff.CoffSection(".tls$B", b"B", 0xC0000040, 1),
+    ), (coff.CoffSymbol("pcc_windows_start", 1, function=True),))
+
+
+@pytest.mark.parametrize("alignment, characteristics", (
+    (1, 0x00100000), (2, 0x00200000), (4, 0x00300000),
+    (8, 0x00400000), (16, 0x00500000), (32, 0x00600000),
+    (64, 0x00700000), (128, 0x00800000), (256, 0x00900000),
+    (512, 0x00A00000), (1024, 0x00B00000), (2048, 0x00C00000),
+    (4096, 0x00D00000),
+))
+@pytest.mark.parametrize("data", (b"A", b""), ids=("initialized", "empty"))
+def test_tls_directory_encodes_maximum_input_alignment(alignment, characteristics, data):
+    obj = coff.parse_object(coff.emit_object(_tls_alignment_object(alignment, data)))
+    image = link_executable([obj])
+    optional, sections = _pe(image)
+    tls_rva, tls_size, raw, _ = sections[".tls"]
+    assert tls_rva % alignment == 0
+    assert image[raw:raw + tls_size] == data + b"B"
+    directory, size = struct.unpack_from("<II", image, optional + 112 + 9 * 8)
+    assert (directory, size) == (sections[".tlsdir"][0], 40)
+    assert _value(image, sections, directory + 36, "<I") == characteristics
+    _blocks, sites = _relocations(image, optional, sections)
+    assert sites == [directory, directory + 8, directory + 16]
+    rebased = _rebase(image, sections, sites, 0x200000000)
+    assert _value(rebased, sections, directory + 36, "<I") == characteristics
+
+
+@pytest.mark.parametrize("alignment", (0, -1, 3, 24))
+def test_tls_directory_rejects_invalid_input_alignment(alignment):
+    with pytest.raises(coff.CoffError, match="invalid PE TLS section alignment"):
+        link_executable([_tls_alignment_object(alignment)])
+
+
+@pytest.mark.parametrize("alignment", (8192, 16384))
+def test_tls_directory_preserves_page_alignment_limit(alignment):
+    obj = _tls_alignment_object(alignment)
+    if alignment == 8192:
+        # The PE encoding allows 8192, but this linker still caps sections at 4096.
+        obj = coff.parse_object(coff.emit_object(obj))
+    with pytest.raises(coff.CoffError, match="PE section alignment above page size is unsupported"):
+        link_executable([obj])
 
 
 @pytest.mark.parametrize("patch, target, addend, displacement", (

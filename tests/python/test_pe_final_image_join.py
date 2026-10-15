@@ -99,17 +99,31 @@ def _section_rows(image):
     return optional, rows
 
 
+def _assert_frozen_original_bytes_except_tls_alignment(image, rich, span):
+    baseline_image = image
+    if rich:
+        _optional, original_rows = _section_rows(image)
+        tlsdir_raw = next(raw for name, _length, _rva, _size, raw in original_rows
+                          if name == b".tlsdir")
+        assert struct.unpack_from("<I", image, tlsdir_raw + 36)[0] == 0x00400000
+        # The old linker omitted TLS alignment. Preserve its whole-image oracle
+        # for every other byte rather than replacing the frozen baseline hashes.
+        baseline_image = (image[:tlsdir_raw + 36] + b"\0" * 4
+                          + image[tlsdir_raw + 40:])
+    assert hashlib.sha256(baseline_image).hexdigest() == BASELINE_SHA256[rich, span]
+
+
 @pytest.mark.parametrize("rich,span", (
     (False, 0), (False, 1), (False, 511), (False, 512), (False, 513), (False, 1024),
     (True, 0), (True, 513), (True, 32769),
 ))
-def test_final_image_matches_frozen_original_linker_bytes(rich, span):
+def test_final_image_matches_frozen_original_except_tls_alignment(rich, span):
     obj = _fixture(span, rich)
     original = coff.emit_object(obj)
     value = _budget()
     image = pe.link_executable((obj,), compact_budget=value)
     assert type(image) is bytes
-    assert hashlib.sha256(image).hexdigest() == BASELINE_SHA256[rich, span]
+    _assert_frozen_original_bytes_except_tls_alignment(image, rich, span)
     assert coff.emit_object(obj) == original
     assert value.retained_bytes == 0 and not value._buffers
     assert value.record_visits == (14 if rich else 0)
@@ -212,7 +226,7 @@ def test_link_checks_join_before_chunks_with_all_section_and_map_owners(monkeypa
             pe.link_executable((_fixture(513, True),), compact_budget=value)
     else:
         image = pe.link_executable((_fixture(513, True),), compact_budget=value)
-        assert hashlib.sha256(image).hexdigest() == BASELINE_SHA256[True, 513]
+        _assert_frozen_original_bytes_except_tls_alignment(image, True, 513)
     assert len(calls) == 1 and calls[0][1] * 2 + 1 > 10
     assert value.retained_bytes == 17 and not value._buffers and value.record_visits == 14
 
