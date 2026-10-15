@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 import pytest
 
@@ -55,7 +56,9 @@ def explicit_owned_runtime(request, monkeypatch):
 
 
 def _record_execution(directory, label, command, environment):
+    start_ns = time.monotonic_ns()
     result = run_process_group_timeout(command, env=environment, timeout=10)
+    end_ns = time.monotonic_ns()
     (directory / (label + ".stdout")).write_text(result.stdout)
     (directory / (label + ".stderr")).write_text(result.stderr)
     record = {
@@ -63,6 +66,9 @@ def _record_execution(directory, label, command, environment):
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
+        "start_ns": start_ns,
+        "end_ns": end_ns,
+        "elapsed_ns": end_ns - start_ns,
     }
     (directory / (label + ".json")).write_text(json.dumps(record, indent=2) + "\n")
     return record

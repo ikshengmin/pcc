@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -1136,13 +1137,39 @@ def test_aggregate_ownership_native_five_gc(
         _write_receipt(receipt_path, receipt)
         raise
 
+    compile_options = {}
+    if actual_mode == "pcc0":
+        from pcc.frontends.python.pipeline import compile_python
+
+        if (
+            compiler is compile_python
+            and compiler.__module__ == "pcc.frontends.python.pipeline"
+        ):
+            receipt["compile_profile"] = {}
+            compile_options["profile"] = receipt["compile_profile"]
     receipt["status"] = "COMPILE_RUNNING"
     _write_receipt(receipt_path, receipt)
     try:
-        compiler(
-            str(source), str(binary), backend="self", libpython_mode="off",
-            ir_scaffold_mode="on", runtime_archive=str(archive),
-        )
+        start_ns = time.monotonic_ns()
+        try:
+            compiler(
+                str(source), str(binary), backend="self", libpython_mode="off",
+                ir_scaffold_mode="on", runtime_archive=str(archive), **compile_options,
+            )
+        finally:
+            end_ns = time.monotonic_ns()
+            receipt["compile_timing"] = {
+                "start_ns": start_ns,
+                "end_ns": end_ns,
+                "elapsed_ns": end_ns - start_ns,
+            }
+            if "compile_profile" in receipt:
+                try:
+                    json.dumps(receipt["compile_profile"])
+                except (TypeError, ValueError, RecursionError) as error:
+                    # Diagnostic data must not replace a compiler failure.
+                    del receipt["compile_profile"]
+                    receipt["compile_profile_error"] = type(error).__name__ + ": " + str(error)
         assert binary.is_file(), "Compiler did not emit an executable"
         assert _native_magic(binary), "Compiler emitted a non-native launcher"
         receipt["binary_sha256"] = _digest(binary)
