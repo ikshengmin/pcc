@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -75,12 +75,14 @@ def test_default_command_retains_project_xdist(tmp_path):
                                   gate.MACHO_WINDOWED_PARITY_TEST,
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
     assert gate.HOST_FILES[53:57] == gate.TWO_ROOT_CLEANUP_TESTS
-    assert gate.HOST_FILES[57:] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
+    assert gate.HOST_FILES[57:59] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
+    assert gate.HOST_FILES[59:] == (gate.MACHO_SECTION_TARGET_INDEX_TEST,)
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 59
-    assert sum(gate.HOST_COUNTS) == 2499 and sum(gate.HOST_COUNTS[:58]) == 2448
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 60
+    assert sum(gate.HOST_COUNTS) == 2510 and sum(gate.HOST_COUNTS[:59]) == 2499
+    assert sum(gate.HOST_COUNTS[:58]) == 2448
     assert sum(gate.HOST_COUNTS[:57]) == 2444
     assert sum(gate.HOST_COUNTS[:53]) == 2331
     assert sum(gate.HOST_COUNTS[:52]) == 2306
@@ -279,6 +281,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/python/test_macho_archive_framing.py',
         'tests/python/test_macho_windowed_prepare.py',
         'tests/python/test_macho_windowed_parity.py',
+        'tests/python/test_macho_section_target_index.py',
         'pcc/backend/precise_stackmap.py',
         'pcc/backend/macho_link.py',
         'pcc/backend/macho_exec.py',
@@ -298,10 +301,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     for path in (gate.STACKMAP_BUDGET_TEST, gate.STACKMAP_HOST_BUDGET_TEST,
                  gate.MACHO_HOST_RELOCATIONS_TEST, gate.MACHO_ARCHIVE_SYMBOL_STATE_TEST,
                  gate.MACHO_SECTION_PLACEMENT_TEST, gate.MACHO_ARCHIVE_FRAMING_TEST,
-                 gate.MACHO_WINDOWED_PREPARE_TEST, gate.MACHO_WINDOWED_PARITY_TEST):
+                 gate.MACHO_WINDOWED_PREPARE_TEST, gate.MACHO_WINDOWED_PARITY_TEST,
+                 gate.MACHO_SECTION_TARGET_INDEX_TEST):
         assert workflow.count('      - "' + path + '"') == 2
     for path in (gate.MACHO_SECTION_PLACEMENT_TEST, gate.MACHO_ARCHIVE_FRAMING_TEST,
-                 gate.MACHO_WINDOWED_PREPARE_TEST, gate.MACHO_WINDOWED_PARITY_TEST):
+                 gate.MACHO_WINDOWED_PREPARE_TEST, gate.MACHO_WINDOWED_PARITY_TEST,
+                 gate.MACHO_SECTION_TARGET_INDEX_TEST):
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
     for path, expected in ((gate.STACKMAP_BUDGET_TEST, 136), (gate.STACKMAP_HOST_BUDGET_TEST, 19),
@@ -311,6 +316,7 @@ def test_default_command_retains_project_xdist(tmp_path):
                            (gate.MACHO_ARCHIVE_FRAMING_TEST, 46),
                            (gate.MACHO_WINDOWED_PREPARE_TEST, 40),
                            (gate.MACHO_WINDOWED_PARITY_TEST, 27),
+                           (gate.MACHO_SECTION_TARGET_INDEX_TEST, 11),
                            (gate.PE_IMAGE_STACKMAP_PARTITION_TEST, 25)):
         count = 0
         module = ast.parse((ROOT / path).read_text())
@@ -1307,7 +1313,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

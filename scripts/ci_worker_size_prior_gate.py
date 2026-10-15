@@ -160,6 +160,7 @@ MACHO_SECTION_PLACEMENT_TEST = 'tests/python/test_macho_section_placement.py'
 MACHO_ARCHIVE_FRAMING_TEST = 'tests/python/test_macho_archive_framing.py'
 MACHO_WINDOWED_PREPARE_TEST = 'tests/python/test_macho_windowed_prepare.py'
 MACHO_WINDOWED_PARITY_TEST = 'tests/python/test_macho_windowed_parity.py'
+MACHO_SECTION_TARGET_INDEX_TEST = 'tests/python/test_macho_section_target_index.py'
 STACKMAP_BUDGET_INPUTS = (
     'tests/python/test_compact_stackmap_processing_budget.py',
     'tests/python/test_stackmap_host_budget.py',
@@ -169,6 +170,7 @@ STACKMAP_BUDGET_INPUTS = (
     'tests/python/test_macho_archive_framing.py',
     'tests/python/test_macho_windowed_prepare.py',
     'tests/python/test_macho_windowed_parity.py',
+    'tests/python/test_macho_section_target_index.py',
     'pcc/backend/precise_stackmap.py',
     'pcc/backend/macho_link.py',
     'pcc/backend/macho_exec.py',
@@ -260,10 +262,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               MACHO_ARCHIVE_SYMBOL_STATE_TEST, MACHO_SECTION_PLACEMENT_TEST,
               MACHO_ARCHIVE_FRAMING_TEST, MACHO_WINDOWED_PREPARE_TEST,
               MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
-              *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
+              *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
+              MACHO_SECTION_TARGET_INDEX_TEST)
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51)
+HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

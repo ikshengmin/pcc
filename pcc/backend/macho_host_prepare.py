@@ -688,6 +688,23 @@ def _canonical_symbol_indices(merged, order, unresolved, ledger):
     return result
 
 
+def _section_target_symbol_index(merged, ledger):
+    """Keep the first alias at each address, borrowing charged source owners."""
+    reserved = ledger.mapping(sum(len(target.symbols) for target in merged.values()))
+    ledger.keep(reserved, label="Mach-O section-target symbol index")
+    result = {}
+    for key, target in merged.items():
+        for symbol in target.symbols:
+            result.setdefault((key, symbol.offset), symbol.name)
+    # The completed table owns only its storage and one two-element key
+    # tuple per distinct address. Its section keys, offsets and names are
+    # borrowed from order/merged, which stay charged and live until it retires.
+    ledger.retained += (ledger.rounded(sys.getsizeof(result))
+                        + len(result) * ledger.rounded(sys.getsizeof((None, None)))
+                        - reserved)
+    return result
+
+
 def _merge_paths(paths, archives, archive_paths, ledger):
     """Return only detached final sections/rows; retire every input owner."""
     from .macho_archive import ArchiveError, read_archive, select_members
@@ -848,13 +865,10 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         # Their addresses are recomputed after the merged stack-map size is
         # known; zerofill and later segments can follow that table.
         symbol_indices = _canonical_symbol_indices(merged, order, unresolved, ledger)
-        symbol_at = {}
         if any(any(item.target_counts) for item in descriptors):
-            ledger.keep(ledger.mapping(sum(len(target.symbols) for target in merged.values())),
-                        label="Mach-O section-target symbol index")
-            for key, target in merged.items():
-                for symbol in target.symbols:
-                    symbol_at.setdefault((key, symbol.offset), symbol.name)
+            symbol_at = _section_target_symbol_index(merged, ledger)
+        else:
+            symbol_at = {}
 
         item = symbol = None
         for index, descriptor in enumerate(descriptors):
