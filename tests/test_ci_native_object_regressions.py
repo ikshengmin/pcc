@@ -66,6 +66,9 @@ def admitted(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "runtime_identity", lambda path: copy.deepcopy(runtime))
     monkeypatch.setattr(gate, "environment", lambda: {"PCC_RUNTIME_ARCHIVE": str(archive)})
     monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "host-only control"})
+    # Common-program controls remain platform-independent; the Windows
+    # extension has its own selection and receipt controls below.
+    monkeypatch.setattr(gate, "selected_nodes", lambda: gate.NODES)
     return source, runtime
 
 
@@ -493,7 +496,7 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     assert "run: " + command in step
     assert "download-artifact" not in step and "continue-on-error" not in step
     assert "tests/test_ci_native_object_regressions.py\n" in other
-    for path in (*[node.split("::")[0] for node in gate.NODES],
+    for path in (*[node.split("::")[0] for node in (*gate.NODES, *gate.WINDOWS_NODES)],
                  "scripts/ci_native_object_regressions.py", "tests/test_ci_native_object_regressions.py"):
         assert text.count('      - "' + path + '"') == 2
     for suffix in ("json", "jsonl", "stdout", "stderr", "tsv", "xml"):
@@ -505,3 +508,220 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     assert "-x" in command
     assert not any(option in command for option in ("-n", "-n0", "--dist", "-o", "--override-ini"))
     assert '-n 6 --dist=loadgroup' in (ROOT / "pyproject.toml").read_text()
+
+
+def _win64_receipt(directory, runtime, run_id):
+    import hashlib
+    from pcc.backend.target_objects import encode_assembly_object
+    from tests.python.test_windows_direct_scalar_call_args import (
+        HOME_CALLBACK_ASM,
+        MANAGED_CALLBACK_SOURCE,
+        TARGET,
+    )
+
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / "win64_home_callback.py"
+    source.write_text(MANAGED_CALLBACK_SOURCE)
+    helper = directory / "win64_home_callback.obj"
+    helper.write_bytes(encode_assembly_object(HOME_CALLBACK_ASM, TARGET))
+    binary = directory / "win64_home_callback.exe"
+    payload = bytearray(70)
+    payload[:2] = b"MZ"
+    payload[60:64] = (64).to_bytes(4, "little")
+    payload[64:] = b"PE\0\0\x64\x86"
+    binary.write_bytes(payload)
+    record = {
+        "schema": "pcc.win64-home-callback.v1", "status": "PASS", "run_id": run_id,
+        "compiler_mode": "host-pcc0", "backend": "self", "libpython": "off", "target": TARGET,
+        "source_sha256": gate.sha(source),
+        "helper_assembly_sha256": hashlib.sha256(HOME_CALLBACK_ASM.encode()).hexdigest(),
+        "helper_sha256": gate.sha(helper), "runtime_archive": runtime["path"],
+        "runtime_sha256": runtime["hashes"][""],
+        "binary_path": str(binary), "binary_sha256": gate.sha(binary),
+        "executions": [{"requested_gc_backend": gc, "command": [str(binary)],
+                        "returncode": 0, "stdout": "WIN64_HOME_ROOT_CALLBACK_OK\n", "stderr": ""}
+                       for gc in range(5)],
+    }
+    path = directory / "win64-home-callback.json"
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_win64_native_extension_selects_only_windows_and_binds_its_inputs():
+    expected = (prior.WIN64_DIRECT_SCALAR_TEST +
+                "::test_native_win64_home_space_and_rooted_callback_five_collectors",)
+    assert gate.WINDOWS_NODES == expected
+    assert gate.selected_nodes("win32") == (*gate.NODES, *expected)
+    assert gate.selected_nodes("linux") == gate.NODES
+    assert gate.selected_nodes("darwin") == gate.NODES
+    assert set(prior.WIN64_DIRECT_SCALAR_INPUTS) <= set(gate.TEST_INPUTS)
+    command = prior.pytest_command(Path("host-only"), gate.selected_nodes("win32"), integration=True)
+    assert command[-8:] == ["-m", "integration", *gate.NODES, *expected]
+    assert "-x" in command
+    assert not any(option in command for option in ("-n", "-n0", "--dist", "-o", "--override-ini"))
+
+
+@pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
+def test_win64_extension_reuses_admission_in_one_existing_gate_call(
+    tmp_path, monkeypatch, admitted, stage_status,
+):
+    _source, runtime = admitted
+    from tests.python.test_windows_direct_scalar_call_args import TARGET
+
+    runtime["target"] = TARGET
+    stage_path = tmp_path / "stage1.json"
+    stage = json.loads(stage_path.read_text())
+    stage.update(status=stage_status, runtime=runtime)
+    stage_path.write_text(json.dumps(stage))
+    nodes = (*gate.NODES, *gate.WINDOWS_NODES)
+    monkeypatch.setattr(gate, "selected_nodes", lambda: nodes)
+    monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "pe", "libraries": ["kernel32.dll"]})
+    calls = []
+
+    def run(out, name, selected, env, **options):
+        calls.append((selected, env, options))
+        _receipts(out / name, runtime)
+        _win64_receipt(out / name / "win64", runtime, env["PCC_NATIVE_OBJECT_GATE_RUN_ID"])
+
+    monkeypatch.setattr(gate, "run_pytest", run)
+    result = gate.run(tmp_path)
+    assert len(calls) == 1
+    selected, env, options = calls[0]
+    assert selected == nodes and options == {"integration": True, "timeout": 300}
+    assert env["PCC_RUNTIME_ARCHIVE"] == runtime["path"]
+    assert env["PCC_NATIVE_OBJECT_GATE_RUN_ID"] == result["run_id"]
+    assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1" and env["UV_PYTHON_DOWNLOADS"] == "never"
+    assert result["status"] == "PASS" and result["nodes"] == list(nodes)
+    assert result["tree_rss_limit_bytes"] == 17179869184
+    assert result["observed_collector_witness"] is False
+    assert len(result["programs"]) == 6
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 30
+    extra = result["programs"]["win64-home-callback"]
+    assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is True
+    assert [row["requested_gc_backend"] for row in extra["executions"]] == list(range(5))
+    assert result["source"] == result["source_after"]
+    assert result["runtime"] == result["runtime_after"] == runtime
+
+
+@pytest.mark.parametrize("change", (
+    "missing", "duplicate", "stale", "running", "schema", "pcc1", "llvm", "libpython",
+    "target", "runtime-target", "runtime-path", "runtime-digest", "source", "source-digest",
+    "assembly-digest", "helper", "helper-digest", "binary-path", "binary-digest", "machine",
+    "image-format", "missing-gc", "duplicate-gc", "boolean-gc", "failed-gc", "wrong-output",
+    "stderr", "wrong-command",
+))
+def test_win64_receipt_rejects_missing_stale_or_mismatched_evidence(
+    tmp_path, monkeypatch, admitted, change,
+):
+    _source, runtime = admitted
+    from tests.python.test_windows_direct_scalar_call_args import TARGET
+
+    runtime["target"] = TARGET
+    monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "pe", "libraries": ["kernel32.dll"]})
+    directory = tmp_path / "receipts"
+    path = _win64_receipt(directory / "win64", runtime, "current-run")
+    record = json.loads(path.read_text())
+    fields = {
+        "stale": ("run_id", "old-run"), "running": ("status", "RUNNING"),
+        "schema": ("schema", "other"), "pcc1": ("compiler_mode", "pcc1"),
+        "llvm": ("backend", "llvm"), "libpython": ("libpython", "on"),
+        "target": ("target", "aarch64-pc-windows-msvc"),
+        "runtime-path": ("runtime_archive", "other.a"), "runtime-digest": ("runtime_sha256", "stale"),
+        "source-digest": ("source_sha256", "stale"),
+        "assembly-digest": ("helper_assembly_sha256", "stale"),
+        "helper-digest": ("helper_sha256", "stale"),
+        "binary-path": ("binary_path", "other.exe"), "binary-digest": ("binary_sha256", "stale"),
+    }
+    if change in fields:
+        key, value = fields[change]
+        record[key] = value
+    elif change == "runtime-target":
+        runtime["target"] = "aarch64-pc-windows-msvc"
+    elif change in ("source", "helper"):
+        target = path.parent / ("win64_home_callback.py" if change == "source" else "win64_home_callback.obj")
+        target.write_bytes(b"unexpected source or helper")
+        record[change + "_sha256"] = gate.sha(target)
+    elif change == "machine":
+        binary = path.parent / "win64_home_callback.exe"
+        raw = bytearray(binary.read_bytes())
+        raw[68:70] = b"\x64\xaa"
+        binary.write_bytes(raw)
+        record["binary_sha256"] = gate.sha(binary)
+    elif change == "image-format":
+        monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "static-elf"})
+    elif change == "missing-gc":
+        record["executions"].pop()
+    elif change == "duplicate-gc":
+        record["executions"][-1]["requested_gc_backend"] = 0
+    elif change == "boolean-gc":
+        record["executions"][1]["requested_gc_backend"] = True
+    elif change == "failed-gc":
+        record["executions"][2]["returncode"] = 124
+    elif change == "wrong-output":
+        record["executions"][2]["stdout"] = "616\n"
+    elif change == "stderr":
+        record["executions"][2]["stderr"] = "diagnostic"
+    elif change == "wrong-command":
+        record["executions"][2]["command"] = [sys.executable]
+    path.write_text(json.dumps(record))
+    if change == "missing":
+        path.unlink()
+    elif change == "duplicate":
+        _win64_receipt(directory / "duplicate", runtime, "current-run")
+    with pytest.raises(AssertionError):
+        gate.verify_win64_callback_receipt(directory, runtime, "current-run")
+
+
+@pytest.mark.parametrize("failure", (None, "compile", "collector", "runtime-drift"))
+def test_win64_native_probe_records_one_compile_and_fails_closed(
+    tmp_path, monkeypatch, admitted, failure,
+):
+    _source, runtime = admitted
+    from pcc.frontends.python import pipeline
+    from tests.python import test_windows_direct_scalar_call_args as probe
+
+    runtime["target"] = probe.TARGET
+    monkeypatch.setenv("PCC_NATIVE_OBJECT_GATE_RUN_ID", "host-control-run")
+    calls, executions = [], []
+    expected = tmp_path / "expected"
+    expected_path = _win64_receipt(expected, runtime, "host-control-run")
+    expected_binary = (expected_path.parent / "win64_home_callback.exe").read_bytes()
+    work = tmp_path / "probe"
+    work.mkdir()
+
+    def compile_program(source, binary, **options):
+        calls.append((source, binary, options))
+        if failure == "compile":
+            raise RuntimeError("deliberate compile failure")
+        Path(binary).write_bytes(expected_binary)
+
+    def execute(command, *, env, timeout):
+        backend = int(env["PCC_GC_BACKEND"])
+        executions.append((command, env, timeout))
+        assert command == [str(work / "win64_home_callback.exe")] and timeout == 10
+        if failure == "runtime-drift" and backend == 4:
+            Path(runtime["path"]).write_bytes(b"changed runtime")
+        return subprocess.CompletedProcess(command, 124 if failure == "collector" and backend == 2 else 0,
+                                           stdout="WIN64_HOME_ROOT_CALLBACK_OK\n", stderr="")
+
+    monkeypatch.setattr(pipeline, "compile_python", compile_program)
+    monkeypatch.setattr(probe, "run_process_group_timeout", execute)
+    monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "pe", "libraries": ["kernel32.dll"]})
+    capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
+    if failure is None:
+        probe.test_native_win64_home_space_and_rooted_callback_five_collectors(work, Path(runtime["path"]), capfd)
+        verified = gate.verify_win64_callback_receipt(work, runtime, "host-control-run")
+        assert verified["status"] == "PASS" and verified["compiler_mode"] == "host-pcc0"
+    else:
+        with pytest.raises((AssertionError, RuntimeError)):
+            probe.test_native_win64_home_space_and_rooted_callback_five_collectors(work, Path(runtime["path"]), capfd)
+    assert len(calls) == 1
+    source, binary, options = calls[0]
+    assert options == {"backend": "self", "libpython_mode": "off", "ir_scaffold_mode": "on",
+                       "runtime_archive": runtime["path"], "link_args": (str(work / "win64_home_callback.obj"),)}
+    record = json.loads((work / "win64-home-callback.json").read_text())
+    assert record["status"] == ("PASS" if failure is None else "FAIL")
+    assert len(executions) == (0 if failure == "compile" else 3 if failure == "collector" else 5)
+    assert "assert result == 616" in probe.MANAGED_CALLBACK_SOURCE
+    assert 'assert caller_only[0]["answer"] == 73' in probe.MANAGED_CALLBACK_SOURCE
+    assert 'assert collector() == int(os.environ["PCC_GC_BACKEND"])' in probe.MANAGED_CALLBACK_SOURCE

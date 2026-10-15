@@ -5,6 +5,7 @@ positions are shared by GPR/XMM classes; every call reserves home space.
 """
 
 from .self_backend_ir import TypeDesc, _align_to
+from .self_backend_literals import const_int_from_value
 
 GPRS = ("rcx", "rdx", "r8", "r9")
 
@@ -119,6 +120,34 @@ def epilogue(func):
     return lines
 
 
+def _direct_scalar_call_eligible(func, dest, ret_type, callee, is_indirect, args, is_vararg):
+    from .self_backend_x86_64_linux import _is_constant_gep_value
+
+    # Only destination-local materialization: no argument-register source or
+    # scratch-borrowing expression may enter this path. Home space stays
+    # reserved; the Win64 callee owns it and spills its registers if needed.
+    if is_indirect or is_vararg or not 1 <= len(args) <= 4:
+        return False
+    if callee.startswith('llvm.'):
+        return False
+    if not (ret_type.is_void or ret_type.is_ptr or
+            (ret_type.is_int and ret_type.width in (1, 8, 16, 32, 64))):
+        return False
+    for ty, value in args:
+        if not (ty.is_ptr or (ty.is_int and ty.width in (1, 8, 16, 32, 64))):
+            return False
+        # Do not accept globals, TLS, GEPs, constant casts, poison/undef,
+        # aggregate temporaries or arbitrary materializer fallback routes.
+        if (value in ('poison', 'undef') or _is_constant_gep_value(value) or
+                value.startswith('@') or value.startswith('inttoptrconst:')):
+            return False
+        if not ((ty.is_ptr and value in func.alloca_slots) or
+                value in func.value_slots or
+                value == 'null' or const_int_from_value(value) is not None):
+            return False
+    return True
+
+
 def call(func, dest, ret_type, callee, is_indirect, args, is_vararg):
     from .self_backend_x86_64_linux import (
         _slot_addr, _materialize_value, _materialize_aggregate_value_address,
@@ -137,12 +166,25 @@ def call(func, dest, ret_type, callee, is_indirect, args, is_vararg):
         if indirect(ty):
             copies[index] = cursor
             cursor += _align_to(ty.slot_size, 16)
-    # Stage all arguments in memory before filling the four argument registers.
-    # Aggregate copies and constant expressions may borrow rdx/rcx themselves.
+    # Keep the complete outgoing frame even when scalar setup needs no staging.
     size = _align_to(cursor, 16)
     if size > outgoing_size(func):
         raise BackendUnavailable("Win64 outgoing arguments exceed the planned fixed frame")
     lines = []
+    if _direct_scalar_call_eligible(
+        func, dest, ret_type, callee, is_indirect, args, is_vararg,
+    ):
+        for index, (ty, value) in enumerate(args):
+            register = _reg_alias(GPRS[index], min(8, ty.slot_size))
+            lines.extend(_materialize_value(func, value, ty, register))
+        lines.append("  call " + _asm_symbol(callee))
+        if dest is not None and dest in func.value_slots and not ret_type.is_void:
+            slot = func.value_slots[dest]
+            register = _reg_alias("rax", min(8, ret_type.slot_size))
+            lines.extend(_store_reg_to_slot(register, slot.offset, ret_type))
+        return lines
+    # Complex forms stage before filling argument registers: aggregate copies
+    # and constant expressions may borrow rdx/rcx themselves.
     if hidden:
         lines.extend([f"  lea r10, {_slot_addr(func.value_slots[dest].offset)}", "  mov QWORD PTR [rsp], r10"])
     for index, (ty, value) in enumerate(args, first):

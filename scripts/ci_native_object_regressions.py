@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Bounded host-pcc0 object regressions using the terminal Stage1 runtime.
 
-Five compiles and twenty-five native executions, with no archive/compiler provisioning.
+Five common compiles and twenty-five native executions, plus one Win64
+callback/root compile and five executions, with no archive/compiler provisioning.
 This independent gate does not qualify Stage1, pcc1 or a self-host fixed point.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import sys
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +22,8 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.ci_worker_size_prior_gate import (
     TWO_ROOT_CLEANUP_INPUTS,
+    WIN64_DIRECT_SCALAR_INPUTS,
+    WIN64_DIRECT_SCALAR_TEST,
     environment,
     run_pytest,
     runtime_identity,
@@ -41,9 +46,13 @@ NODES = (
     "tests/python/test_slot_call_exception_cleanup.py::"
     "test_two_root_cleanup_error_path_native_five_gc[pcc0]",
 )
+WINDOWS_NODES = (
+    WIN64_DIRECT_SCALAR_TEST + "::test_native_win64_home_space_and_rooted_callback_five_collectors",
+)
 TEST_INPUTS = (
-    *(node.split("::")[0] for node in NODES),
+    *(node.split("::")[0] for node in (*NODES, *WINDOWS_NODES)),
     *TWO_ROOT_CLEANUP_INPUTS,
+    *WIN64_DIRECT_SCALAR_INPUTS,
     "tests/python/owned_regression_support.py",
     "tests/python/process_timeout.py",
     "tests/python/conftest.py",
@@ -56,6 +65,11 @@ TEST_INPUTS = (
 WINDOWS_SYSTEM_LIBRARIES = {
     "kernel32.dll", "ws2_32.dll", "ntdll.dll", "shell32.dll", "psapi.dll", "bcrypt.dll",
 }
+
+
+def selected_nodes(platform_name=None):
+    platform_name = sys.platform if platform_name is None else platform_name
+    return NODES + (WINDOWS_NODES if platform_name == "win32" else ())
 
 
 def expected_programs():
@@ -134,8 +148,63 @@ def verify_program_receipts(directory, runtime):
     return results
 
 
+def verify_win64_callback_receipt(directory, runtime, run_id):
+    from pcc.backend.target_objects import encode_assembly_object
+    from tests.python.test_windows_direct_scalar_call_args import (
+        HOME_CALLBACK_ASM,
+        MANAGED_CALLBACK_SOURCE,
+        TARGET,
+    )
+
+    paths = sorted(directory.rglob("win64-home-callback.json"))
+    assert len(paths) == 1, "missing or duplicate Win64 callback receipt"
+    path = paths[0]
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["schema"] == "pcc.win64-home-callback.v1"
+    assert record["status"] == "PASS"
+    assert run_id and record["run_id"] == run_id, "stale Win64 callback receipt"
+    assert record["compiler_mode"] == "host-pcc0"
+    assert record["backend"] == "self" and record["libpython"] == "off"
+    assert record["target"] == runtime["target"] == TARGET
+    source = path.parent / "win64_home_callback.py"
+    helper = path.parent / "win64_home_callback.obj"
+    binary = path.parent / "win64_home_callback.exe"
+    assert source.read_text(encoding="utf-8") == MANAGED_CALLBACK_SOURCE
+    assert record["source_sha256"] == sha(source)
+    assert record["helper_assembly_sha256"] == hashlib.sha256(HOME_CALLBACK_ASM.encode()).hexdigest()
+    assert helper.read_bytes() == encode_assembly_object(HOME_CALLBACK_ASM, TARGET)
+    assert record["helper_sha256"] == sha(helper)
+    assert record["runtime_archive"] == runtime["path"]
+    assert record["runtime_sha256"] == runtime["hashes"][""]
+    assert binary.is_absolute() and record["binary_path"] == str(binary)
+    assert record["binary_sha256"] == sha(binary)
+    image = verify_native_image(binary)
+    assert image["format"] == "pe", "Win64 callback must execute a native PE image"
+    with binary.open("rb") as stream:
+        header = stream.read(64)
+        assert len(header) == 64 and header[:2] == b"MZ"
+        stream.seek(int.from_bytes(header[60:64], "little"))
+        assert stream.read(6) == b"PE\0\0\x64\x86", "Win64 callback must target AMD64"
+    executions = record["executions"]
+    assert [row["requested_gc_backend"] for row in executions] == list(range(5))
+    for row in executions:
+        assert type(row["requested_gc_backend"]) is int
+        assert row["command"] == [str(binary)]
+        assert (row["returncode"], row["stdout"], row["stderr"]) == (
+            0, "WIN64_HOME_ROOT_CALLBACK_OK\n", "",
+        )
+    return {
+        "receipt": str(path), **record, "image": image,
+        "observed_collector_witness": True,
+        "collector_evidence": "The exact native source asserts pcc_gc_backend() equals "
+                              "PCC_GC_BACKEND before the home-space, result-616 and rooted-callback oracle.",
+    }
+
+
 def run(out):
     out = Path(out).resolve()
+    nodes = selected_nodes()
+    run_id = uuid.uuid4().hex
     receipt_path = out / (NAME + ".json")
     assert not receipt_path.exists(), "refuse a stale native object gate receipt"
     receipt = {
@@ -143,7 +212,8 @@ def run(out):
         "status": "RUNNING",
         "compiler_mode": "host-pcc0",
         "qualifies_stage1": False,
-        "nodes": list(NODES),
+        "nodes": list(nodes),
+        "run_id": run_id,
         "timeout_s": TIMEOUT_S,
         "tree_rss_limit_bytes": 17179869184,
         "observed_collector_witness": False,
@@ -159,7 +229,8 @@ def run(out):
         # also assert quiet compilation. Keep diagnostics enabled for Stage1
         # itself and disable only its opt-in timing in this child environment.
         env.pop("PCC_PY_FRONTEND_WORKER_TIMING", None)
-        env.update(PCC_TEST_NO_NATIVE_PROVISIONING="1", UV_PYTHON_DOWNLOADS="never")
+        env.update(PCC_TEST_NO_NATIVE_PROVISIONING="1", UV_PYTHON_DOWNLOADS="never",
+                   PCC_NATIVE_OBJECT_GATE_RUN_ID=run_id)
         selected = env.get("PCC_RUNTIME_ARCHIVE")
         assert selected, "the existing Stage1 runtime must be admitted before this gate"
         archive = Path(selected)
@@ -176,8 +247,12 @@ def run(out):
                        stage1_status=stage["status"])
         save(receipt_path, receipt)
         try:
-            run_pytest(out, NAME, NODES, env, integration=True, timeout=TIMEOUT_S)
+            run_pytest(out, NAME, nodes, env, integration=True, timeout=TIMEOUT_S)
             receipt["programs"] = verify_program_receipts(out / NAME, runtime)
+            if WINDOWS_NODES[0] in nodes:
+                receipt["programs"]["win64-home-callback"] = verify_win64_callback_receipt(
+                    out / NAME, runtime, run_id,
+                )
         finally:
             receipt["source_after"] = source_identity()
             receipt["runtime_after"] = runtime_identity(archive)

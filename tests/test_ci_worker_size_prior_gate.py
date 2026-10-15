@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -76,12 +76,13 @@ def test_default_command_retains_project_xdist(tmp_path):
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
     assert gate.HOST_FILES[53:57] == gate.TWO_ROOT_CLEANUP_TESTS
     assert gate.HOST_FILES[57:59] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
-    assert gate.HOST_FILES[59:] == (gate.MACHO_SECTION_TARGET_INDEX_TEST,)
+    assert gate.HOST_FILES[59:] == (gate.MACHO_SECTION_TARGET_INDEX_TEST, gate.WIN64_DIRECT_SCALAR_TEST)
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 60
-    assert sum(gate.HOST_COUNTS) == 2510 and sum(gate.HOST_COUNTS[:59]) == 2499
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 61
+    assert sum(gate.HOST_COUNTS) == 2621 and sum(gate.HOST_COUNTS[:60]) == 2510
+    assert sum(gate.HOST_COUNTS[:59]) == 2499
     assert sum(gate.HOST_COUNTS[:58]) == 2448
     assert sum(gate.HOST_COUNTS[:57]) == 2444
     assert sum(gate.HOST_COUNTS[:53]) == 2331
@@ -272,6 +273,33 @@ def test_default_command_retains_project_xdist(tmp_path):
     for path in gate.PE_IMAGE_STACKMAP_PARTITION_INPUTS:
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
+    assert gate.WIN64_DIRECT_SCALAR_INPUTS == (
+        "tests/python/test_windows_direct_scalar_call_args.py",
+        "pcc/backend/self_backend_win64_abi.py",
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "WIN64_DIRECT_SCALAR_INPUTS" for node in ast.walk(identity))
+    for path in gate.WIN64_DIRECT_SCALAR_INPUTS:
+        assert push_filters.count('      - "' + path + '"') == 1
+        assert pull_request_filters.count('      - "' + path + '"') == 1
+    direct_cases = 0
+    for node in ast.parse((ROOT / gate.WIN64_DIRECT_SCALAR_TEST).read_text()).body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        if any(ast.unparse(mark) == "pytest.mark.integration" for mark in node.decorator_list):
+            continue
+        cases = 1
+        for mark in node.decorator_list:
+            assert isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.parametrize"
+            values = mark.args[1]
+            if isinstance(values, ast.Call):
+                assert ast.unparse(values.func) == "range" and len(values.args) == 1
+                cases *= ast.literal_eval(values.args[0])
+            else:
+                assert isinstance(values, (ast.List, ast.Tuple))
+                cases *= len(values.elts)
+        direct_cases += cases
+    assert direct_cases == gate.HOST_COUNTS[-1] == 111
     assert gate.STACKMAP_BUDGET_INPUTS == (
         'tests/python/test_compact_stackmap_processing_budget.py',
         'tests/python/test_stackmap_host_budget.py',
@@ -1313,7 +1341,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

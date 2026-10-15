@@ -31,6 +31,10 @@ DARWIN_TARGET_AVERAGE_WORKERS = 2
 PROCESS_TEST = "tests/python/test_worker_size_prior_processes.py"
 CLOSURE_TEST = "tests/integration/test_worker_size_prior_closed_world.py"
 EXIT_TEST = "tests/python/test_owned_windows_exit.py"
+WIN64_DIRECT_SCALAR_TEST = "tests/python/test_windows_direct_scalar_call_args.py"
+WIN64_DIRECT_SCALAR_INPUTS = (
+    WIN64_DIRECT_SCALAR_TEST, "pcc/backend/self_backend_win64_abi.py",
+)
 TAR_ATTRIBUTES_TEST = "tests/python/test_windows_tar_attributes.py"
 TAR_STRICT_ORACLE_TEST = "tests/test_tar_attribute_strict_oracle.py"
 TAR_ATTRIBUTES_INPUTS = (
@@ -263,10 +267,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               MACHO_ARCHIVE_FRAMING_TEST, MACHO_WINDOWED_PREPARE_TEST,
               MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
               *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
-              MACHO_SECTION_TARGET_INDEX_TEST)
+              MACHO_SECTION_TARGET_INDEX_TEST, WIN64_DIRECT_SCALAR_TEST)
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11)
+HOST_COUNTS = (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -291,7 +295,7 @@ def source_identity():
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
     value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
                            *PE_IMAGE_STACKMAP_PARTITION_INPUTS, *TWO_ROOT_CLEANUP_INPUTS,
-                           *GC_RELOCATION_PAGE_CURSOR_INPUTS,
+                           *GC_RELOCATION_PAGE_CURSOR_INPUTS, *WIN64_DIRECT_SCALAR_INPUTS,
                            "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
