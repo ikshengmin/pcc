@@ -68,6 +68,7 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
+pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 
 
 @c_abi_export("pcc_gc_relocation_selector_zpage_head")
@@ -880,6 +881,7 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
     pages: i64 = 0
     while pages < page_budget:
         page_token = null()
+        preflight_seed = null()
         object_budget: i64 = 0
         preflight_result = stack_alloc(24)
         preflight_complete: i64 = 0
@@ -894,6 +896,15 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
                 object_budget = load_i64(page_token, 32)
                 if object_budget < 1:
                     object_budget = 1
+                if pcc_threads_enabled() == 0:
+                    # The linked runtime provider, not an environment option,
+                    # proves there is no concurrent managed mutator. From
+                    # this completed scan to the next graph lock, only raw
+                    # plan allocation runs: this freestanding module has no
+                    # injected polls and malloc has no managed callbacks.
+                    # Asynchronous foreign managed reentry remains outside
+                    # the raw-runtime contract.
+                    preflight_seed = load_ptr(preflight_result, 0)
             pcc_py_gc_minor_graph_unlock()
             if (
                 preflight_complete == 0
@@ -943,13 +954,31 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
             current_result = stack_alloc(24)
             while current_complete == 0:
                 pcc_py_gc_minor_graph_lock()
-                has_current: i64 = _best_relocation_page_batch(
-                    owner_thread_id,
-                    page_token,
-                    0,
-                    1,
-                    current_result,
-                )
+                has_current: i64 = 0
+                if ptr_is_null(preflight_seed) == 0:
+                    # Recheck and register this one-shot seed before the
+                    # first explicit poll. After that boundary only the
+                    # registered cursor is safe; residual passes must rescan.
+                    store_ptr(current_result, 0, null())
+                    store_i64(current_result, 8, 1)
+                    store_i64(current_result, 16, 1)
+                    if (
+                        ptr_eq(load_ptr(preflight_seed, 8), page_token) != 0
+                        and _backend4_zpage_candidate_score(
+                            preflight_seed, 1
+                        ) > 0
+                    ):
+                        store_ptr(current_result, 0, preflight_seed)
+                        has_current = 1
+                    preflight_seed = null()
+                else:
+                    has_current = _best_relocation_page_batch(
+                        owner_thread_id,
+                        page_token,
+                        0,
+                        1,
+                        current_result,
+                    )
                 current_complete = load_i64(current_result, 16)
                 if current_complete != 0 and has_current > 0:
                     if (

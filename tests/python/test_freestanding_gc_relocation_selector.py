@@ -54,6 +54,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
     "pcc_thread_safepoint",
+    "pcc_threads_enabled",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_evacuation_candidate_bytes_count",

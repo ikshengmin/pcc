@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4, 51)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -75,11 +75,13 @@ def test_default_command_retains_project_xdist(tmp_path):
                                   gate.MACHO_WINDOWED_PARITY_TEST,
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
     assert gate.HOST_FILES[53:57] == gate.TWO_ROOT_CLEANUP_TESTS
-    assert gate.HOST_FILES[57:] == (gate.RUNTIME_ABI_CHUNK_TEST,)
+    assert gate.HOST_FILES[57:] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
+    assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 58
-    assert sum(gate.HOST_COUNTS) == 2421 and sum(gate.HOST_COUNTS[:57]) == 2417
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 59
+    assert sum(gate.HOST_COUNTS) == 2472 and sum(gate.HOST_COUNTS[:58]) == 2421
+    assert sum(gate.HOST_COUNTS[:57]) == 2417
     assert sum(gate.HOST_COUNTS[:53]) == 2304
     assert sum(gate.HOST_COUNTS[:52]) == 2279
     assert sum(gate.HOST_COUNTS[:51]) == 2252
@@ -104,7 +106,8 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert sum(gate.HOST_COUNTS[:18]) == 1104
     assert sum(gate.HOST_COUNTS[:17]) == 1037 and sum(gate.HOST_COUNTS[:16]) == 977
     assert sum(gate.HOST_COUNTS[:14]) == 968
-    for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1)):
+    for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
+                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 51)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
@@ -190,6 +193,17 @@ def test_default_command_retains_project_xdist(tmp_path):
                    for node in ast.walk(identity))
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     push_filters, pull_request_filters = workflow.split('\n  pull_request:', 1)
+    assert gate.GC_RELOCATION_PAGE_CURSOR_INPUTS == (
+        gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
+        "pcc/runtime/py/freestanding_gc_relocation_selector.py",
+        "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py",
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "GC_RELOCATION_PAGE_CURSOR_INPUTS"
+               for node in ast.walk(identity))
+    for path in gate.GC_RELOCATION_PAGE_CURSOR_INPUTS:
+        assert push_filters.count('      - "' + path + '"') == 1
+        assert pull_request_filters.count('      - "' + path + '"') == 1
     for path in exception_inputs:
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
@@ -1293,7 +1307,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 13, 27, 25, 43, 21, 6, 43, 4, 51) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
