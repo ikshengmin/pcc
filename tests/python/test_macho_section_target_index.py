@@ -299,9 +299,9 @@ def test_index_survives_descriptor_retirement_and_matches_complete_eager_image(
             assert charges and result
             if current == 0:
                 assert ledger.retained == charges[0][2]
-                # The change deliberately leaves these unrelated owners and
-                # charges alive. It cannot silently credit them as savings.
-                assert state["archive_buffers"]
+                # Archive selection has retired its aggregate buffers;
+                # selected member descriptors retain their detached bytes.
+                assert state["archive_buffers"] == []
             else:
                 assert all(mapping == {} for mapping in state["local_renames"][:current])
             assert state["descriptors"][current] is not None

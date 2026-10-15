@@ -6,7 +6,7 @@ an encoded-buffer view. Counts admit each allocation phase before it starts;
 the process-tree guard remains authoritative for actual RSS.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import io
 import os
@@ -35,6 +35,12 @@ _LIST = sys.getsizeof([])
 _TUPLE = sys.getsizeof(())
 _STRING = sys.getsizeof("")
 _STACK_KEY = ("__DATA", "__pcc_stackmaps")
+_ARCHIVE_DESCRIPTOR_FIELDS = (
+    "path", "size", "digest", "sections", "symbols", "targeted",
+    "section_addrs", "stack_functions", "row_counts", "target_counts", "regions",
+)
+_ARCHIVE_COMMAND_FIELDS = ("cmd", "cmdsize", "offset", "raw", "body", "sections")
+_INSTANCE_VALUES_BYTES = 32 + 31 * _WORD
 
 
 class _Ledger:
@@ -577,6 +583,33 @@ def _archive_raw_rows(obj, section):
         yield row
 
 
+def _archive_descriptor_bytes(descriptor, ledger):
+    """Conservatively census the selected, detached archive member model.
+
+    No identity graph or payload copy is created. Aliased section dictionaries
+    are deliberately counted from both owners. The ordinary dataclasses use
+    the same supported-host embedded/detached instance-values allowance as
+    the host relocation model; inspecting __dict__ could materialize it.
+    """
+    total = ledger.rounded(sys.getsizeof(descriptor)) + ledger.integers(1)
+    for name in _ARCHIVE_DESCRIPTOR_FIELDS:
+        total += _model_bytes(getattr(descriptor, name), ledger.budget)
+    obj = descriptor.archive_object
+    instance_extra = ledger.rounded(sys.getsizeof({})) + 2 * ledger.rounded(_INSTANCE_VALUES_BYTES)
+    total += ledger.rounded(sys.getsizeof(obj)) + instance_extra
+    for name in ("header", "data"):
+        total += _model_bytes(name, ledger.budget)
+        total += _model_bytes(getattr(obj, name), ledger.budget)
+    total += _model_bytes("commands", ledger.budget)
+    total += ledger.rounded(sys.getsizeof(obj.commands))
+    for command in obj.commands:
+        total += ledger.rounded(sys.getsizeof(command)) + instance_extra
+        for name in _ARCHIVE_COMMAND_FIELDS:
+            total += _model_bytes(name, ledger.budget)
+            total += _model_bytes(getattr(command, name), ledger.budget)
+    return total
+
+
 def _archive_descriptor(raw, index, ledger):
     from .macho_exec import _validate_input_load_commands
 
@@ -639,9 +672,15 @@ def _archive_descriptor(raw, index, ledger):
                 raise link.LinkError("stack-map section must not define symbols")
             current = tuple(current)
         functions.append(current)
-    return _InputDescriptor("", len(raw), b"", sections, symbols, frozenset(targeted), (),
-                            tuple(functions), 0, tuple(counts), tuple(targets),
-                            tuple(tuple(rows) for rows in regions), obj)
+    result = _InputDescriptor("", len(raw), b"", sections, symbols, frozenset(targeted), (),
+                              tuple(functions), 0, tuple(counts), tuple(targets),
+                              tuple(tuple(rows) for rows in regions), obj)
+    # The parser reservation remains live during the bounded census and the
+    # old/new descriptor overlap. It is replaced only after archive selection
+    # and all associated transient owners have reached their last use.
+    ledger.check(8192, label="Mach-O archive descriptor census scratch")
+    retained = _archive_descriptor_bytes(result, ledger)
+    return replace(result, metadata_bytes=retained)
 
 
 def _input_relocations(descriptor, packed, section_index, local_rename, base):
@@ -711,6 +750,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
     from .macho_exec import _accumulate_external_symbol_state
 
     descriptors, archive_buffers, members = [], [], []
+    archive_reservation = archive_survivors = 0
     merged, order, plans = {}, [], []
     normal_parts, rebase_parts, stack_payloads = {}, {}, []
     raw = packed = payload = descriptor = section = target = part = None
@@ -736,7 +776,9 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             else:
                 raw, _digest = _read_window(archive_paths[archive_index - len(archives)], ledger)
             bounds = _archive_bounds(raw, ledger)
-            ledger.keep(bounds + ledger.immutable(len(raw)), label="Mach-O archive parser owners")
+            reservation = bounds + ledger.immutable(len(raw))
+            ledger.keep(reservation, label="Mach-O archive parser owners")
+            archive_reservation += reservation
             archive_buffers.append(raw)
             try:
                 members = read_archive(raw)
@@ -746,11 +788,25 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             for member in pulled:
                 descriptor = _archive_descriptor(member, len(descriptors), ledger)
                 descriptors.append(descriptor)
+                archive_survivors += descriptor.metadata_bytes
                 _accumulate_external_symbol_state(descriptor.symbols, already_defined, undefined)
             raw = None
         members = pulled = member = _pending = None
         already_defined = undefined = None
-        ledger.retained -= archive_symbol_bytes
+        # read_archive slices every member out of its larger archive bytes.
+        # Selected descriptors own those independent bytes and parsed models;
+        # no second-pass input or index borrows the whole archive. All archive
+        # symbol-set growth remains covered until selection of every archive
+        # is complete, including backreferences into preceding archives.
+        if archive_reservation:
+            # Archive selection can grow this pointer table beyond len(paths).
+            # Keep its construction allowance until all descriptors retire.
+            archive_survivors += ledger.sequence(len(descriptors))
+            ledger.check(max(0, archive_survivors - archive_reservation) + 8192,
+                         label="Mach-O archive retained ownership transition")
+            archive_buffers.clear()
+            raw = None
+        ledger.retained += archive_survivors - archive_reservation - archive_symbol_bytes
         descriptor_bytes = ledger.retained
 
         symbol_count = sum(len(item.symbols) for item in descriptors)
@@ -871,7 +927,10 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             symbol_at = {}
 
         item = symbol = None
-        for index, descriptor in enumerate(descriptors):
+        # enumerate caches its last result tuple and would keep a retired
+        # descriptor alive across the debit at the bottom of this loop.
+        for index in range(len(descriptors)):
+            descriptor = descriptors[index]
             if descriptor.archive_object is None:
                 raw, _digest = _read_window(descriptor.path, ledger, descriptor.size, descriptor.digest)
                 raw_bytes = ledger.immutable(len(raw))
@@ -966,9 +1025,10 @@ def _merge_paths(paths, archives, archive_paths, ledger):
                 target.data_parts.append(payload)
                 payload = None
             raw = packed = section = input_keys = None
-            ledger.retained -= raw_bytes + descriptor.metadata_bytes
+            retired_bytes = raw_bytes + descriptor.metadata_bytes
             descriptors[index] = None
             descriptor = None
+            ledger.retained -= retired_bytes
             local_renames[index].clear()
 
         # All input bytes, parser graphs and placement/provenance scratch
