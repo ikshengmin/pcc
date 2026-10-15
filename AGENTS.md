@@ -67,6 +67,13 @@ These are required outcomes, not assertions that migration is complete. See
 
 ## Shared work and changes
 
+- For authorized PCC pushes, commit our already-validated changes, pull the
+  latest `shenming/master`, integrate concurrent AI commits, then push normally
+  with `[skip ci]` unless the user changes that CI preference. Trust peers'
+  committed validation after a conflict-free pull; do not rerun their suites or
+  add post-pull qualification merely because upstream changed. Validate our own
+  changes and any actual conflict resolution. If the remote advances, integrate
+  it again; never force-push over other contributors.
 - Preserve other work. Re-read targets before narrow edits; no destructive
   restore/reset/revert/stash/clean or discarding branch switches without explicit
   user direction. Do not commit/push unless authorized in the current session.
