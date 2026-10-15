@@ -401,11 +401,12 @@ on:
       - "scripts/platform_process_watchdog.py"
       - ".github/workflows/pcc1-package-parity.yml"
 
-# Only initial pushes supersede each other. Manual runs, PRs and reruns
-# keep independent groups, including manual full-chain qualification.
+# Let active native qualification finish; only queued initial pushes supersede
+# each other. Manual runs, PRs and reruns keep independent groups, including
+# manual full-chain qualification.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}
+  cancel-in-progress: false
 
 jobs:
   macos-pcc0-regressions:

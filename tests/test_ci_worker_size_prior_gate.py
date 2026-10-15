@@ -1115,17 +1115,17 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         "  group: ${{ github.workflow }}-${{ github.event_name }}-"
         "${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref "
         "|| format('{0}-{1}', github.run_id, github.run_attempt) }}\n"
-        "  cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}"
+        "  cancel-in-progress: false"
     )
     group = concurrency.splitlines()[0].removeprefix("  group: ")
     cancel = concurrency.splitlines()[1].removeprefix("  cancel-in-progress: ")
     base = dict(workflow="gate", event_name="push", ref="refs/heads/master",
                 run_id="101", run_attempt="1")
     for changes, expected_group, expected_cancel in (
-        ({}, "gate-push-refs/heads/master", True),
-        ({"run_id": "102"}, "gate-push-refs/heads/master", True),
-        ({"ref": "refs/heads/topic"}, "gate-push-refs/heads/topic", True),
-        ({"workflow": "other"}, "other-push-refs/heads/master", True),
+        ({}, "gate-push-refs/heads/master", False),
+        ({"run_id": "102"}, "gate-push-refs/heads/master", False),
+        ({"ref": "refs/heads/topic"}, "gate-push-refs/heads/topic", False),
+        ({"workflow": "other"}, "other-push-refs/heads/master", False),
         ({"run_attempt": "2"}, "gate-push-101-2", False),
         ({"run_attempt": "3"}, "gate-push-101-3", False),
         ({"event_name": "workflow_dispatch"}, "gate-workflow_dispatch-101-1", False),
@@ -1155,7 +1155,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
             actual_group = re.sub(r"\$\{\{ (.*?) \}\}",
                                   lambda match: str(evaluate(match.group(1))), group)
             assert actual_group == expected_group
-            assert evaluate(cancel.removeprefix("${{ ").removesuffix(" }}")) is expected_cancel
+            assert json.loads(cancel) is expected_cancel
     for name in ("macos-pcc0-regressions", "macos-pcc0-float-doc-regressions", "macos-pcc0-indexed-split"):
         body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body
