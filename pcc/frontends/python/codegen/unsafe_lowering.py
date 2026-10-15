@@ -8,6 +8,9 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
+from pcc.frontends.python.unsafe_intrinsic_policy import (
+    UNSAFE_PROVIDER_INDEPENDENT_ZERO_ARG_RETURNS,
+)
 
 from pcc.frontends.python.py_ast import Assign, AugAssign, BinOp, ClassDef, DynType, BoolType, Call, Expr, FloatType, FuncDef, Global, IntLit, IntType, Name, Stmt, StrLit, UnaryOp
 
@@ -69,7 +72,6 @@ UNSAFE_INTRINSICS = frozenset(
         "f64_pair_make",
         "f64_pair_first",
         "f64_pair_second",
-        "null",
         "ptr_eq",
         "ptr_is_null",
         "is_tagged_int",
@@ -97,8 +99,6 @@ UNSAFE_INTRINSICS = frozenset(
         "pwrite_file",
         "truncate_file",
         "open_readonly",
-        "darwin_current_rss_bytes",
-        "darwin_peak_rss_bytes",
         "open_file",
         "open_file_flags",
         "mkdir_at",
@@ -124,7 +124,6 @@ UNSAFE_INTRINSICS = frozenset(
         "socket_peername",
         "poll_fd",
         "poll_readable_pair",
-        "getpid",
         "getcwd",
         "readlink",
         "mkdir",
@@ -144,16 +143,12 @@ UNSAFE_INTRINSICS = frozenset(
         "getenv",
         "setenv",
         "unsetenv",
-        "initial_environ",
         "access",
         "stat_kind",
         "lstat_kind",
         "stat_mtime",
         "stat_size",
         "is_symlink",
-        "target_sys_platform",
-        "target_platform_machine",
-        "darwin_errno_location",
         "call_ptr1",
         "call_void_i32",
         "call_void_ptr0",
@@ -202,13 +197,10 @@ UNSAFE_INTRINSICS = frozenset(
         "dynamic_library_symbol",
         "darwin_libsystem_symbol",
         "dynamic_library_close",
-        "kqueue_create",
         "kevent_call",
         "epoll_create1",
         "epoll_ctl",
         "epoll_wait",
-        "thread_safepoint",
-        "gc_backend_current",
         "atomic_load_i32",
         "atomic_load_i64",
         "atomic_store_i32",
@@ -226,7 +218,6 @@ UNSAFE_INTRINSICS = frozenset(
         "linux_set_thread_pointer",
         "page_alloc",
         "page_free",
-        "va_start",
         "va_arg_i64",
         "va_arg_i32",
         "va_arg_u32",
@@ -235,7 +226,7 @@ UNSAFE_INTRINSICS = frozenset(
         "va_cursor",
         "va_end",
     }
-)
+) | frozenset(UNSAFE_PROVIDER_INDEPENDENT_ZERO_ARG_RETURNS)
 
 
 # pcc.unsafe spells orderings the way musl/GCC __atomic_* does; LLVM spells

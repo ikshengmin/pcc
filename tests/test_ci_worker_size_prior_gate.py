@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111)
+    assert gate.HOST_COUNTS == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111, 161)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -76,12 +76,14 @@ def test_default_command_retains_project_xdist(tmp_path):
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
     assert gate.HOST_FILES[53:57] == gate.TWO_ROOT_CLEANUP_TESTS
     assert gate.HOST_FILES[57:59] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
-    assert gate.HOST_FILES[59:] == (gate.MACHO_SECTION_TARGET_INDEX_TEST, gate.WIN64_DIRECT_SCALAR_TEST)
+    assert gate.HOST_FILES[59:61] == (gate.MACHO_SECTION_TARGET_INDEX_TEST, gate.WIN64_DIRECT_SCALAR_TEST)
+    assert gate.HOST_FILES[61:] == (gate.CONSUMED_UNSAFE_TEST,)
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 61
-    assert sum(gate.HOST_COUNTS) == 2621 and sum(gate.HOST_COUNTS[:60]) == 2510
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 62
+    assert sum(gate.HOST_COUNTS) == 2782 and sum(gate.HOST_COUNTS[:61]) == 2621
+    assert sum(gate.HOST_COUNTS[:60]) == 2510
     assert sum(gate.HOST_COUNTS[:59]) == 2499
     assert sum(gate.HOST_COUNTS[:58]) == 2448
     assert sum(gate.HOST_COUNTS[:57]) == 2444
@@ -299,7 +301,47 @@ def test_default_command_retains_project_xdist(tmp_path):
                 assert isinstance(values, (ast.List, ast.Tuple))
                 cases *= len(values.elts)
         direct_cases += cases
-    assert direct_cases == gate.HOST_COUNTS[-1] == 111
+    assert direct_cases == gate.HOST_COUNTS[60] == 111
+    assert gate.CONSUMED_UNSAFE_INPUTS == (
+        "tests/python/test_consumed_unsafe_dependency.py",
+        "pcc/frontends/python/pipeline_dependency_closure.py",
+        "pcc/frontends/python/pipeline_unsafe_imports.py",
+        "pcc/frontends/python/unsafe_intrinsic_policy.py",
+        "pcc/frontends/python/codegen/unsafe_lowering.py",
+        "pcc/frontends/python/type_infer.py",
+        "pcc/frontends/python/py_parse.py",
+        "pcc/frontends/python/pipeline_import_scan.py",
+        "pcc/unsafe/__init__.py",
+        "scripts/bootstrap_platform.py",
+        "tests/owned_ir_validation.py",
+    )
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "CONSUMED_UNSAFE_INPUTS" for node in ast.walk(identity))
+    for path in gate.CONSUMED_UNSAFE_INPUTS:
+        trigger = "pcc/**" if path.startswith("pcc/") else path
+        assert push_filters.count('      - "' + trigger + '"') == 1
+        assert pull_request_filters.count('      - "' + trigger + '"') == 1
+    policy = ast.parse((ROOT / "pcc/frontends/python/unsafe_intrinsic_policy.py").read_text())
+    signatures = [ast.literal_eval(node.value) for node in policy.body
+                  if isinstance(node, ast.Assign) and len(node.targets) == 1
+                  and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id == "UNSAFE_PROVIDER_INDEPENDENT_ZERO_ARG_RETURNS"]
+    assert len(signatures) == 1 and len(signatures[0]) == 12
+    consumed_cases = 0
+    for node in ast.parse((ROOT / gate.CONSUMED_UNSAFE_TEST).read_text()).body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        cases = 1
+        for mark in node.decorator_list:
+            assert isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.parametrize"
+            values = mark.args[1]
+            if isinstance(values, (ast.List, ast.Tuple)):
+                cases *= len(values.elts)
+            else:
+                assert ast.unparse(values) in ("tuple(SIGNATURES)", "tuple(SIGNATURES.items())")
+                cases *= len(signatures[0])
+        consumed_cases += cases
+    assert consumed_cases == gate.HOST_COUNTS[61] == 161
     assert gate.STACKMAP_BUDGET_INPUTS == (
         'tests/python/test_compact_stackmap_processing_budget.py',
         'tests/python/test_stackmap_host_budget.py',
@@ -1341,7 +1383,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111) and not integration
+            assert nodes == gate.HOST_FILES and counts == (80, 3, 287, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 77, 23, 55, 84, 12, 51, 83, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 40, 27, 25, 43, 21, 6, 43, 4, 51, 11, 111, 161) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

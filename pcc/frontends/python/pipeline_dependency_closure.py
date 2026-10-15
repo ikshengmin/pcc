@@ -12,6 +12,9 @@ from pcc.frontends.python import pipeline_import_policy as _pipeline_import_poli
 from pcc.frontends.python import pipeline_import_scan as _pipeline_import_scan
 from pcc.frontends.python import pipeline_libpython as _pipeline_libpython
 from pcc.frontends.python import pipeline_packages as _pipeline_packages
+from pcc.frontends.python.pipeline_unsafe_imports import (
+    source_has_only_consumed_unsafe_imports,
+)
 from pcc.driver import paths as _pipeline_paths
 from pcc.frontends.python.pipeline_modes import PyPipelineError
 from pcc.frontends.python.pipeline_profile import profile_begin as _profile_begin, profile_end as _profile_end
@@ -192,6 +195,7 @@ def _top_level_import_targets(
     source: str,
     *,
     top_level_only: bool,
+    consumed_unsafe_imports: bool = False,
 ) -> list[tuple[str, str]]:
     source = _without_inactive_runtime_imports(source)
     targets: list[tuple[str, str]] = []
@@ -231,6 +235,9 @@ def _top_level_import_targets(
     ):
         if module_spec.startswith("."):
             continue
+        if (consumed_unsafe_imports and module_spec == "pcc.unsafe"
+                and _resolves_owned_unsafe_provider(root_dir)):
+            continue
         add_candidate(module_spec)
         # ``from pkg import submodule`` — also try each imported name as a
         # SUBMODULE of the package, so the submodule file is discovered and
@@ -248,6 +255,19 @@ def _top_level_import_targets(
     return targets
 
 
+def _resolves_owned_unsafe_provider(root_dir: str) -> bool:
+    """Preserve alternate providers after ordinary nearest-first resolution."""
+    try:
+        resolved = _resolve_module_src_for_import(root_dir, "pcc.unsafe")
+        if resolved is None:
+            return False
+        owned = os.path.join(_PCC_DIR, "unsafe", "__init__.py")
+        return os.path.realpath(resolved) == os.path.realpath(owned)
+    except Exception:
+        # An optional proof must not introduce a new compilation failure.
+        return False
+
+
 def _package_import_targets(
     src_path: str,
     mod_name: str,
@@ -256,6 +276,7 @@ def _package_import_targets(
     top_level_only: bool = False,
     include_relative: bool = True,
     include_same_package_absolute: bool = True,
+    consumed_unsafe_imports: bool = False,
 ) -> list[tuple[str, str]]:
     """Return package-local import targets for ``src_path``.
 
@@ -286,6 +307,9 @@ def _package_import_targets(
         top_level_only=top_level_only,
     )
     for module_spec, imported_names in import_specs:
+        if (consumed_unsafe_imports and module_spec == "pcc.unsafe"
+                and _resolves_owned_unsafe_provider(root_dir)):
+            continue
         candidate_mods: list[str] = []
         level = 0
         while level < len(module_spec) and module_spec[level] == ".":
@@ -352,6 +376,12 @@ def _collect_relative_module_closure(
     same-package absolute-import leaf set."""
     entry_src = str(os.path.abspath(entry_src))
     entry_mod = _module_name_from_src(entry_src)
+    with open(entry_src, "r", encoding="utf-8") as f:
+        entry_source = f.read()
+    # Only a single entry with no other imports can make this local proof.
+    # Do not apply it to discovered providers or multi-source roots: their
+    # lazy runtime obligations may be outside the module-scope import scan.
+    consumed_unsafe_imports = source_has_only_consumed_unsafe_imports(entry_source)
     if "." not in entry_mod:
         root_dir = str(os.path.dirname(entry_src))
         ordered_srcs = [entry_src]
@@ -382,6 +412,7 @@ def _collect_relative_module_closure(
                 root_dir,
                 source,
                 top_level_only=not is_entry,
+                consumed_unsafe_imports=consumed_unsafe_imports and is_entry,
             ):
                 if target_mod in seen:
                     continue
@@ -398,6 +429,7 @@ def _collect_relative_module_closure(
                 top_level_only=not is_entry,
                 include_relative=True,
                 include_same_package_absolute=True,
+                consumed_unsafe_imports=consumed_unsafe_imports and is_entry,
             ):
                 if target_mod in seen:
                     continue
@@ -421,6 +453,7 @@ def _collect_relative_module_closure(
             root_dir=root_dir,
             include_relative=False,
             include_same_package_absolute=True,
+            consumed_unsafe_imports=consumed_unsafe_imports,
         ):
             if target_mod in seen:
                 continue
@@ -439,6 +472,7 @@ def _collect_relative_module_closure(
             root_dir=root_dir,
             include_relative=True,
             include_same_package_absolute=recurse_same_package_absolute,
+            consumed_unsafe_imports=consumed_unsafe_imports and src_path == entry_src,
         ):
             if target_mod in seen:
                 continue

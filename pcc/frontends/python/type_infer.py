@@ -35,6 +35,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Optional
 
+from pcc.frontends.python.unsafe_intrinsic_policy import (
+    UNSAFE_PROVIDER_INDEPENDENT_ZERO_ARG_RETURNS,
+)
+
 from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_ATTRS, L1_CODEGEN_HOST_METHODS, PROBE_POLICY_CONTEXTUAL_MIXIN, per_module_probe_policy
 from pcc.frontends.python.export_meta import decode_type, encode_type, encode_type_memo
 from pcc.frontends.python.py_ast import (
@@ -693,7 +697,6 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "f64_pair_make": TYPE_COMPLEX,
     "f64_pair_first": TYPE_FLOAT,
     "f64_pair_second": TYPE_FLOAT,
-    "null": TYPE_DYN,
     "ptr_eq": TYPE_BOOL,
     "ptr_is_null": TYPE_BOOL,
     "is_tagged_int": TYPE_BOOL,
@@ -721,8 +724,6 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "pwrite_file": TYPE_INT,
     "truncate_file": TYPE_INT,
     "open_readonly": TYPE_INT,
-    "darwin_current_rss_bytes": TYPE_INT,
-    "darwin_peak_rss_bytes": TYPE_INT,
     "open_file": TYPE_INT,
     "open_file_flags": TYPE_INT,
     "mkdir_at": TYPE_INT,
@@ -748,7 +749,6 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "socket_peername": TYPE_INT,
     "poll_fd": TYPE_INT,
     "poll_readable_pair": TYPE_INT,
-    "getpid": TYPE_INT,
     "getcwd": TYPE_DYN,
     "readlink": TYPE_INT,
     "mkdir": TYPE_INT,
@@ -768,16 +768,12 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "getenv": TYPE_DYN,
     "setenv": TYPE_INT,
     "unsetenv": TYPE_INT,
-    "initial_environ": TYPE_DYN,
     "access": TYPE_INT,
     "stat_kind": TYPE_INT,
     "lstat_kind": TYPE_INT,
     "stat_mtime": TYPE_FLOAT,
     "stat_size": TYPE_INT,
     "is_symlink": TYPE_INT,
-    "target_sys_platform": TYPE_DYN,
-    "target_platform_machine": TYPE_DYN,
-    "darwin_errno_location": TYPE_DYN,
     "call_ptr1": TYPE_DYN,
     "call_ptr0": TYPE_DYN,
     "call_void_i32": TYPE_NONE,
@@ -814,13 +810,10 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "dynamic_library_symbol": TYPE_DYN,
     "darwin_libsystem_symbol": TYPE_DYN,
     "dynamic_library_close": TYPE_INT,
-    "kqueue_create": TYPE_INT,
     "kevent_call": TYPE_INT,
     "epoll_create1": TYPE_INT,
     "epoll_ctl": TYPE_INT,
     "epoll_wait": TYPE_INT,
-    "thread_safepoint": TYPE_NONE,
-    "gc_backend_current": TYPE_INT,
     "atomic_load_i32": TYPE_INT,
     "atomic_load_i64": TYPE_INT,
     "atomic_store_i32": TYPE_NONE,
@@ -843,7 +836,6 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "linux_set_thread_pointer": TYPE_INT,
     "page_alloc": TYPE_DYN,
     "page_free": TYPE_INT,
-    "va_start": TYPE_DYN,
     "va_arg_i64": TYPE_INT,
     "va_arg_i32": TYPE_INT,
     "va_arg_u32": TYPE_INT,
@@ -852,6 +844,18 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "va_cursor": TYPE_DYN,
     "va_end": TYPE_NONE,
 }
+
+# These zero-argument signatures do not need pcc.unsafe's trap provider.
+# Keep the existing pointer-lane/freestanding projection in
+# _unsafe_intrinsic_return_type; "pointer" is its unprojected dynamic type.
+for _unsafe_name, _unsafe_result in UNSAFE_PROVIDER_INDEPENDENT_ZERO_ARG_RETURNS.items():
+    if _unsafe_result == "int":
+        _UNSAFE_INTRINSIC_RETURN_TYPES[_unsafe_name] = TYPE_INT
+    elif _unsafe_result == "none":
+        _UNSAFE_INTRINSIC_RETURN_TYPES[_unsafe_name] = TYPE_NONE
+    else:
+        _UNSAFE_INTRINSIC_RETURN_TYPES[_unsafe_name] = TYPE_DYN
+
 
 
 # ---------------------------------------------------------------------------
