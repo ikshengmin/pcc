@@ -382,7 +382,7 @@ def _collect_relative_module_closure(
     with open(entry_src, "r", encoding="utf-8") as f:
         entry_source = f.read()
     # Only a single entry with no other imports can make this local proof.
-    # Do not apply it to discovered providers or multi-source roots: their
+    # Do not apply it to discovered providers or multiple source roots: their
     # lazy runtime obligations may be outside the module-scope import scan.
     consumed_unsafe_imports = source_has_only_consumed_unsafe_imports(entry_source)
     if "." not in entry_mod:
@@ -561,10 +561,20 @@ def _collect_multi_source_relative_closure(
         root_dir = _module_root_from_src(src_path, mod_name)
         with open(src_path, "r", encoding="utf-8") as stream:
             source = stream.read()
+        # Multi-file admission also serves single-entry direct-indexed builds.
+        # Re-prove the sole original root before rediscovering its imports;
+        # multiple roots and discovered providers keep their ordinary edges.
+        consumed_unsafe_imports = (
+            len(src_paths) == 1
+            and len(module_names) == 1
+            and queue_i == 1
+            and source_has_only_consumed_unsafe_imports(source)
+        )
         targets = _top_level_import_targets(
             absolute_root,
             source,
             top_level_only=True,
+            consumed_unsafe_imports=consumed_unsafe_imports,
         )
         targets.extend(
             _package_import_targets(
@@ -574,6 +584,7 @@ def _collect_multi_source_relative_closure(
                 top_level_only="." not in mod_name,
                 include_relative=True,
                 include_same_package_absolute=False,
+                consumed_unsafe_imports=consumed_unsafe_imports,
             )
         )
         targets.extend(
@@ -584,6 +595,7 @@ def _collect_multi_source_relative_closure(
                 top_level_only=True,
                 include_relative=False,
                 include_same_package_absolute=True,
+                consumed_unsafe_imports=consumed_unsafe_imports,
             )
         )
         for target_src, target_mod in targets:

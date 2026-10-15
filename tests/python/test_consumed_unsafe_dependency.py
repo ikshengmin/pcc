@@ -66,7 +66,10 @@ def test_exact_production_canary_omits_only_consumed_provider(tmp_path, owned_so
     assert (owned_sources["pcc.unsafe"], "pcc.unsafe") in ordinary
 
 
-def test_direct_indexed_canary_stays_pruned_at_production_admission(tmp_path, monkeypatch):
+@pytest.mark.parametrize("recursive_stdlib", [False, True])
+def test_direct_indexed_canary_stays_pruned_at_production_admission(
+    tmp_path, monkeypatch, recursive_stdlib,
+):
     from pcc.frontends.python import pipeline
 
     # Exercise ordinary nearest-first project resolution, not a mocked resolver.
@@ -93,6 +96,7 @@ def test_direct_indexed_canary_stays_pruned_at_production_admission(tmp_path, mo
         pipeline.compile_python(
             str(entry), str(directory / "not-produced"), backend="self",
             libpython_mode="off", ir_scaffold_mode="on",
+            recursive_stdlib=recursive_stdlib,
         )
     assert captured == [(str(entry), "canary")]
     assert not (directory / "not-produced").exists()
@@ -255,9 +259,10 @@ def test_unknown_raw_nodes_and_parser_field_drift_fail_closed():
     assert not proof._only_consumed_unsafe_imports(module)
 
 
+@pytest.mark.parametrize("route", ["single", "multi_admission"])
 @pytest.mark.parametrize("provider_kind", ["copy", "same_name", "symlink"])
 def test_only_canonical_owned_provider_can_be_omitted(
-    tmp_path, owned_sources, provider_kind,
+    tmp_path, owned_sources, provider_kind, route,
 ):
     provider = tmp_path / "pcc/unsafe/__init__.py"
     provider.parent.mkdir(parents=True)
@@ -271,7 +276,13 @@ def test_only_canonical_owned_provider_can_be_omitted(
     owned_sources["pcc.unsafe"] = str(provider)
     entry = tmp_path / "entry.py"
     entry.write_text(IMPORT + CALL)
-    paths, names = closure._collect_relative_module_closure(str(entry))
+    if route == "single":
+        paths, names = closure._collect_relative_module_closure(str(entry))
+    else:
+        paths, names = closure._prepare_multi_source_compile_closure(
+            [str(entry)], ["entry"], recursive_stdlib=False,
+            ir_scaffold_mode="on",
+        )
     assert ("pcc.unsafe" in names) is (provider_kind != "symlink")
     if provider_kind != "symlink":
         assert str(provider) in paths
@@ -321,6 +332,40 @@ def test_multi_source_and_explicit_provider_inputs_are_never_pruned(tmp_path, ow
         assert actual_paths[:2] == paths
         assert actual_names[:2] == names
         assert "pcc.unsafe" in actual_names
+
+
+@pytest.mark.parametrize("module_name", ["entry", "pcc.entry"])
+@pytest.mark.parametrize("tail", [CALL, "value = backend\n", "globals()\n" + CALL])
+def test_single_root_admission_requires_the_complete_consumed_edge_proof(
+    tmp_path, owned_sources, module_name, tail,
+):
+    entry = tmp_path / "entry.py"
+    entry.write_text(IMPORT + tail)
+    paths, names = closure._prepare_multi_source_compile_closure(
+        [str(entry)], [module_name], recursive_stdlib=False,
+        ir_scaffold_mode="on",
+    )
+    if tail == CALL:
+        assert paths == [str(entry)]
+        assert names == [module_name]
+    else:
+        assert {module_name, "pcc.unsafe"} <= set(names)
+
+
+def test_single_root_admission_never_prunes_a_discovered_provider(
+    tmp_path, owned_sources,
+):
+    helper = tmp_path / "helper.py"
+    helper.write_text(IMPORT + CALL)
+    owned_sources["helper"] = str(helper)
+    entry = tmp_path / "entry.py"
+    entry.write_text("import helper\n")
+    paths, names = closure._prepare_multi_source_compile_closure(
+        [str(entry)], ["entry"], recursive_stdlib=False,
+        ir_scaffold_mode="on",
+    )
+    assert {"entry", "helper", "pcc.unsafe"} <= set(names)
+    assert str(helper) in paths
 
 
 def test_single_package_entry_uses_same_owned_edge_proof(tmp_path, owned_sources):
