@@ -727,6 +727,43 @@ def _canonical_symbol_indices(merged, order, unresolved, ledger):
     return result
 
 
+def _canonical_stack_symbol_indices(merged, order, unresolved, stack_symbols, ledger):
+    """Keep canonical stack indices, using a sparse table when its bound wins."""
+    count = sum(len(merged[key].symbols) for key in order) + len(unresolved)
+    # Many function IDs may alias fewer canonical names. In that case the
+    # original full table preserves its smaller pre-allocation admission.
+    if len(stack_symbols) >= count:
+        return _canonical_symbol_indices(merged, order, unresolved, ledger)
+    # Multiple function IDs can target one name. The input count bounds the
+    # sparse table without allocating a separate wanted-name set. Sorting
+    # still visits the full symbol universe and keeps its full scratch charge.
+    ledger.check(ledger.mapping(len(stack_symbols)) + ledger.sequence(count),
+                 label="Mach-O canonical stack symbol index")
+    result = dict.fromkeys(stack_symbols.values(), -1)
+    index = 0
+    for external in (False, True):
+        for key in order:
+            for symbol in sorted(merged[key].symbols, key=lambda symbol: symbol.offset):
+                if symbol.external == external:
+                    if symbol.name in result:
+                        result[symbol.name] = index
+                    index += 1
+    for name in sorted(unresolved):
+        if name in result:
+            result[name] = index
+        index += 1
+    # Keep an absent target absent, preserving the existing packing lookup's
+    # KeyError rather than passing a sentinel as a relocation index. Revisit
+    # the still-live source values instead of materializing a second table.
+    for name in stack_symbols.values():
+        if result.get(name) == -1:
+            del result[name]
+    # Keys borrow stack_symbols values; that mapping and all merged source
+    # owners remain live and charged. Only this dict and its indices are new.
+    ledger.retained += ledger.rounded(sys.getsizeof(result)) + ledger.integers(len(result))
+    return result
+
+
 def _section_target_symbol_index(merged, ledger):
     """Keep the first alias at each address, borrowing charged source owners."""
     reserved = ledger.mapping(sum(len(target.symbols) for target in merged.values()))
@@ -1051,10 +1088,13 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             ledger.retained += 1024 + _model_bytes(target.data_parts, ledger.budget)
             ledger.retained += _model_bytes(target.symbols, ledger.budget)
             ledger.retained += _model_bytes(target.data_in_code, ledger.budget)
-        # Rebuild only the small canonical symbol index needed by stack rows.
+        # Prefer the canonical entries consumed by stack rows; dense targets
+        # retain the full index and its original allocation bound.
         symbol_indices = {}
         if stack_payloads:
-            symbol_indices = _canonical_symbol_indices(merged, order, unresolved, ledger)
+            symbol_indices = _canonical_stack_symbol_indices(
+                merged, order, unresolved, stack_symbols, ledger,
+            )
         if stack_payloads:
             snapshots = sum(ledger.immutable(len(item)) for item in stack_payloads)
             snapshot_raw = sum(len(item) for item in stack_payloads)
