@@ -16,6 +16,7 @@ import traceback
 
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
+from .macho_host_stackmap import merge_owned_stack_map_payloads
 from .macho_obj import DataInCodeRegion, Relocation, Section, TextSymbol
 from .macho_parallel import ShardedSymbolDefinitions, SymbolDefinition
 from .precise_stackmap import (
@@ -23,7 +24,6 @@ from .precise_stackmap import (
     _scan_stack_map_payload,
     _FUNCTION as _STACK_FUNCTION,
     _HEADER as _STACK_HEADER,
-    merge_stack_map_payloads,
 )
 
 
@@ -1105,8 +1105,9 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             # completed inputs can retire while later inputs are still merged.
             ledger.budget.retained_bytes = previous + ledger.retained - snapshot_raw
             try:
-                stack_payload, stack_offsets = merge_stack_map_payloads(
-                    stack_payloads, compact_budget=ledger.budget, _consume_payloads=True,
+                stack_payload, stack_offsets = merge_owned_stack_map_payloads(
+                    stack_payloads, compact_budget=ledger.budget,
+                    single_buffer=_single_buffer_window_supported(),
                 )
             finally:
                 ledger.budget.retained_bytes = previous

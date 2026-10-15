@@ -280,19 +280,19 @@ def test_real_owner_retirement_admits_at_unchanged_tight_limit():
 @pytest.mark.parametrize("single_buffer", [False, True])
 def test_host_transfers_exact_list_and_preserves_full_image(tmp_path, monkeypatch, single_buffer):
     paths = _write_sparse_stack_inputs(tmp_path)
-    original = host.merge_stack_map_payloads
+    original = host.merge_owned_stack_map_payloads
     transfers = []
 
     def merge(payloads, **kwargs):
         assert type(payloads) is list and all(type(value) is bytes for value in payloads)
-        assert kwargs["_consume_payloads"] is True
+        assert kwargs["single_buffer"] is single_buffer
         transferred = len(payloads)
         result = original(payloads, **kwargs)
         assert payloads == [None] * transferred
         transfers.append(transferred)
         return result
 
-    monkeypatch.setattr(host, "merge_stack_map_payloads", merge)
+    monkeypatch.setattr(host, "merge_owned_stack_map_payloads", merge)
     monkeypatch.setattr(host, "_single_buffer_window_supported", lambda: single_buffer)
     budget = _budget(20_000_000)
     budget.retained_bytes = 1024
@@ -309,7 +309,7 @@ def test_host_transfers_exact_list_and_preserves_full_image(tmp_path, monkeypatc
 
 def test_host_clears_partial_transfer_and_restores_budget_on_failure(tmp_path, monkeypatch):
     paths = _write_sparse_stack_inputs(tmp_path)
-    original_merge = host.merge_stack_map_payloads
+    original_merge = host.merge_owned_stack_map_payloads
     original_scan = maps._scan_stack_map_payload
     transferred = []
     scans = 0
@@ -328,7 +328,7 @@ def test_host_clears_partial_transfer_and_restores_budget_on_failure(tmp_path, m
             raise maps.PreciseStackMapError("injected second payload refusal")
         return original_scan(payload, **kwargs)
 
-    monkeypatch.setattr(host, "merge_stack_map_payloads", merge)
+    monkeypatch.setattr(host, "merge_owned_stack_map_payloads", merge)
     monkeypatch.setattr(maps, "_scan_stack_map_payload", scan)
     budget = _budget(20_000_000)
     budget.retained_bytes = 1024
