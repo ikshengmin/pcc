@@ -89,10 +89,10 @@ entry:
 
 def test_runtime_receipts_invalidate_when_emitter_policy_changes(monkeypatch):
     monkeypatch.setattr(provenance, "_CODEGEN_CHECKSUM_CACHE", {})
-    monkeypatch.setattr(provenance, "_runtime_emitter_source_identity", lambda: "first")
+    monkeypatch.setattr(provenance, "_runtime_emitter_source_identity", lambda _root=None: "first")
     before = provenance.codegen_checksum()
     provenance._CODEGEN_CHECKSUM_CACHE.clear()
-    monkeypatch.setattr(provenance, "_runtime_emitter_source_identity", lambda: "second")
+    monkeypatch.setattr(provenance, "_runtime_emitter_source_identity", lambda _root=None: "second")
     after = provenance.codegen_checksum()
     assert before != after
     assert provenance.manifest_is_stale_for_current_codegen({"members": [{"codegen_checksum": before}]})

@@ -326,7 +326,41 @@ def write_pcc_python_receipt(
 _CODEGEN_CHECKSUM_CACHE: dict = {}
 
 
-def _runtime_emitter_source_identity() -> str:
+def _codegen_root_path(value: str) -> Path:
+    # Match package discovery's lexical path normalization before resolving.
+    # In particular, do not expand a literal '~' only for identity hashing.
+    # The native POSIX Path.resolve() does not follow symlinks; os.path uses
+    # the owned realpath provider so aliases compare as one selected tree.
+    root = Path(os.path.realpath(os.path.abspath(value)))
+    if ((root / "__init__.py").is_file()
+            and (root / "backend/self_backend_dispatch.py").is_file()):
+        root = root.parent
+    return root
+
+
+def _codegen_source_root() -> Path:
+    """Select one source tree even when native ``__file__`` names its builder."""
+    source = str(os.environ.get("PCC_SOURCE_ROOT", "") or "").strip()
+    repository = str(os.environ.get("PCC_REPO_ROOT", "") or "").strip()
+    if source or repository:
+        root = _codegen_root_path(source or repository)
+    else:
+        root = Path(__file__).resolve().parents[2]
+    # The native Path provider has no value-equality operator.
+    if repository and str(_codegen_root_path(repository)) != str(root):
+        raise ProvenanceError("conflicting compiler source roots")
+    for relative in (
+        "pcc/__init__.py", "pcc/frontends/python/pipeline.py",
+        "pcc/backend/self_backend_dispatch.py",
+        "pcc/driver/bootstrap_cache_identity.py",
+        "pcc/tools/ir_to_obj.py", "pcc/backend/owned_object_emit.py",
+    ):
+        if not (root / relative).is_file():
+            raise ProvenanceError("compiler identity source is missing: " + str(root / relative))
+    return root
+
+
+def _runtime_emitter_source_identity(source_root: str | Path | None = None) -> str:
     # A freshness check is not an object-emission request. In particular,
     # checking a prebuilt runtime must not import llvmlite or load LLVM.
     #
@@ -338,12 +372,13 @@ def _runtime_emitter_source_identity() -> str:
         macho_linker_source_identity,
     )
 
+    root = _codegen_source_root() if source_root is None else Path(source_root)
     digest = hashlib.sha256()
-    digest.update(Path(__file__).with_name("ir_to_obj.py").read_bytes())
+    digest.update((root / "pcc/tools/ir_to_obj.py").read_bytes())
     digest.update(
-        (Path(__file__).resolve().parents[1] / "backend" / "owned_object_emit.py").read_bytes()
+        (root / "pcc/backend/owned_object_emit.py").read_bytes()
     )
-    digest.update(macho_linker_source_identity().encode("ascii"))
+    digest.update(macho_linker_source_identity(root).encode("ascii"))
     return digest.hexdigest()
 
 
@@ -362,23 +397,27 @@ def codegen_checksum() -> str:
     backend-relevant source set, so there is one definition of "the compiler
     changed" rather than two that can drift.
     """
-    cached = _CODEGEN_CHECKSUM_CACHE.get("value")
-    if cached is not None:
-        return cached
     try:
+        root = _codegen_source_root()
+        cached = _CODEGEN_CHECKSUM_CACHE.get("value")
+        if cached is not None and _CODEGEN_CHECKSUM_CACHE.get("root") == str(root):
+            return cached
         from pcc.driver.bootstrap_cache_identity import bootstrap_source_sha256
 
         # Frontend identity excludes pcc/tools; bind emitter source without
         # importing its LLVM implementation into the self compilation path.
         value = _sha256_bytes(
-            (bootstrap_source_sha256() + ":" + _runtime_emitter_source_identity()).encode("ascii")
+            (bootstrap_source_sha256(root) + ":" + _runtime_emitter_source_identity(root)).encode("ascii")
         )
     except Exception:
         # Never fail an object build over provenance metadata; an unknown
         # identity is recorded verbatim so a reader can tell it apart from a
         # real mismatch.
         value = "unknown"
-    _CODEGEN_CHECKSUM_CACHE["value"] = value
+    _CODEGEN_CHECKSUM_CACHE.clear()
+    if value != "unknown":
+        _CODEGEN_CHECKSUM_CACHE["root"] = str(root)
+        _CODEGEN_CHECKSUM_CACHE["value"] = value
     return value
 
 
