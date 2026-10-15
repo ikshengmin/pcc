@@ -85,6 +85,13 @@ define_global_i32("pcc_c_exit_started", 0)
 @c_abi_export("pcc_win_error")
 def error() -> i64:
     value: i64 = GetLastError()
+    return error_code(value)
+
+
+@c_abi_export("pcc_win_error_code")
+def error_code(value: i64) -> i64:
+    # NT calls return NTSTATUS without setting Win32 last-error. Their callers
+    # pass RtlNtStatusToDosError's result here instead of reading stale TLS.
     if value == 2 or value == 3:
         return -2
     if value == 5 or value == 32 or value == 33:
@@ -105,6 +112,10 @@ def error() -> i64:
         return -39
     if value == 206:
         return -36
+    if value == 267:
+        return -20
+    if value == 681 or value == 1921 or value == 4395:
+        return -40
     return -5
 
 

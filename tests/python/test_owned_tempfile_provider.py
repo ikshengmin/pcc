@@ -138,6 +138,9 @@ class Runtime:
         self.ns=ns
         self.load(PLATFORM)
         ns['mkdtemps']=ns['pcc_platform_mkdtemp_suffix']
+        ns['create_owned']=ns['pcc_platform_tempdir_create_owned']
+        ns['remove_owned']=ns['pcc_platform_tempdir_remove_owned']
+        ns['close_owned']=ns['pcc_platform_tempdir_close_owned']
         ns['remove_tree']=self.remove_tree
         self.load(SOURCE)
 

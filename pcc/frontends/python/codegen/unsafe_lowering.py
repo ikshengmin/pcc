@@ -213,6 +213,7 @@ UNSAFE_INTRINSICS = frozenset(
         "atomic_test_and_set",
         "atomic_clear",
         "windows_full_path", "windows_real_path",
+        "windows_tempdir_create", "windows_tempdir_remove_owned", "windows_tempdir_close_owned",
         "directory_open", "directory_next", "directory_entry_type", "directory_error", "directory_close",
         "syscall6",
         "linux_set_thread_pointer",
@@ -1687,6 +1688,14 @@ class UnsafeIntrinsicMixin:
             function = self._declare_external_function(symbol, _CSTR, [_CSTR, _CSTR, _I64])
             return self.builder.call(function, [self._unsafe_ptr_arg(expr.args[0]),
                 self._unsafe_ptr_arg(expr.args[1]), self._unsafe_i64_arg(expr.args[2])])
+        if intrinsic in ("windows_tempdir_create", "windows_tempdir_remove_owned", "windows_tempdir_close_owned"):
+            count = 2 if intrinsic == "windows_tempdir_create" else 1
+            self._unsafe_expect_arity(intrinsic, expr, count)
+            if self._target_sys_platform_text() != "win32":
+                return ir.Constant(_I64, -38)
+            symbol = "pcc_win_" + intrinsic[len("windows_"):]
+            function = self._declare_external_function(symbol, _I64, [_CSTR] * count)
+            return self.builder.call(function, [self._unsafe_ptr_arg(arg) for arg in expr.args])
         if intrinsic in ("directory_open", "directory_next", "directory_entry_type", "directory_error", "directory_close"):
             from pcc.frontends.python.codegen.platform_directory import emit as emit_directory
             return emit_directory(self, intrinsic, expr)

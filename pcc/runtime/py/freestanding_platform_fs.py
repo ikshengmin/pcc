@@ -9,6 +9,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_ptr, c_size_t, extern
 from pcc.unsafe import (
     windows_real_path, target_sys_platform,
+    windows_tempdir_create, windows_tempdir_remove_owned, windows_tempdir_close_owned,
     directory_open, directory_next, directory_error, directory_close,
     chmod_file, darwin_errno_location, load_i32,
     malloc, free, unlinkat,
@@ -29,6 +30,7 @@ from pcc.unsafe import (
     stat_kind,
     stat_mtime,
     store_i8,
+    store_ptr,
 )
 
 __pcc_freestanding__ = True
@@ -218,7 +220,7 @@ def pcc_platform_realpath(path, output, size: i64):
 
 
 @c_abi_export("pcc_platform_create_temporary_suffix")
-def _create_temporary_suffix(path_template, suffix_length: i64, regular_file: i64) -> i64:
+def _create_temporary_suffix(path_template, suffix_length: i64, regular_file: i64, owner) -> i64:
     """Replace the six-X stem and create one exclusive filesystem owner."""
     if ptr_is_null(path_template):
         return -22
@@ -257,7 +259,10 @@ def _create_temporary_suffix(path_template, suffix_length: i64, regular_file: i6
             if status >= 0:
                 return status
         else:
-            status = mkdir(path_template, 448)
+            if load_i8(target_sys_platform(), 0) == 119 and not ptr_is_null(owner):
+                status = windows_tempdir_create(path_template, owner)
+            else:
+                status = mkdir(path_template, 448)
             if status == 0:
                 return 0
             if load_i8(target_sys_platform(), 0) == 100:
@@ -271,13 +276,33 @@ def _create_temporary_suffix(path_template, suffix_length: i64, regular_file: i6
 @c_abi_export("pcc_platform_mkdtemp_suffix")
 def pcc_platform_mkdtemp_suffix(path_template, suffix_length: i64) -> i64:
     """Create a 0700 directory; return zero or negative errno."""
-    return _create_temporary_suffix(path_template, suffix_length, 0)
+    return _create_temporary_suffix(path_template, suffix_length, 0, null())
+
+
+@c_abi_export("pcc_platform_tempdir_create_owned")
+def pcc_platform_tempdir_create_owned(path_template, suffix_length: i64, owner) -> i64:
+    store_ptr(owner, 0, null())
+    return _create_temporary_suffix(path_template, suffix_length, 0, owner)
+
+
+@c_abi_export("pcc_platform_tempdir_remove_owned")
+def pcc_platform_tempdir_remove_owned(owner) -> i64:
+    if load_i8(target_sys_platform(), 0) == 119:
+        return windows_tempdir_remove_owned(owner)
+    return -38
+
+
+@c_abi_export("pcc_platform_tempdir_close_owned")
+def pcc_platform_tempdir_close_owned(owner) -> i64:
+    if load_i8(target_sys_platform(), 0) == 119:
+        return windows_tempdir_close_owned(owner)
+    return -38
 
 
 @c_abi_export("pcc_platform_mkstemp_suffix")
 def pcc_platform_mkstemp_suffix(path_template, suffix_length: i64) -> i64:
     """Create a 0600 exclusive, close-on-exec file; return fd or negative errno."""
-    return _create_temporary_suffix(path_template, suffix_length, 1)
+    return _create_temporary_suffix(path_template, suffix_length, 1, null())
 
 
 @c_abi_export("pcc_platform_mkdtemp")

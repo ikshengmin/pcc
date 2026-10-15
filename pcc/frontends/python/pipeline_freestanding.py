@@ -303,6 +303,9 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "directory_close": ("closedir", "pcc_linux_directory_close", "pcc_win_directory_close"),
         "windows_full_path": ("pcc_win_full_path",),
         "windows_real_path": ("pcc_win_realpath",),
+        "windows_tempdir_create": ("pcc_win_tempdir_create",),
+        "windows_tempdir_remove_owned": ("pcc_win_tempdir_remove_owned",),
+        "windows_tempdir_close_owned": ("pcc_win_tempdir_close_owned",),
     })
     imported = []
     collecting = False

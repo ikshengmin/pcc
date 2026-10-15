@@ -747,6 +747,24 @@ def windows_real_path(path: Any, output: Any, capacity: int) -> Any:
     _trap("windows_real_path")
 
 
+def windows_tempdir_create(path: Any, owner: Any) -> int:
+    """Atomically create a private directory and write its HANDLE to owner.
+
+    Return zero or negative errno; non-Windows targets return -ENOSYS.
+    """
+    _trap("windows_tempdir_create")
+
+
+def windows_tempdir_remove_owned(owner: Any) -> int:
+    """Remove only this HANDLE's tree; non-Windows targets return -ENOSYS."""
+    _trap("windows_tempdir_remove_owned")
+
+
+def windows_tempdir_close_owned(owner: Any) -> int:
+    """Release the owned HANDLE; non-Windows targets return -ENOSYS."""
+    _trap("windows_tempdir_close_owned")
+
+
 def directory_open(path: Any) -> Any:
     """Open an owned directory stream; null denotes failure."""
     _trap("directory_open")
@@ -1334,6 +1352,7 @@ __all__ = [
     "atomic_test_and_set",
     "atomic_clear",
     "windows_full_path", "windows_real_path",
+    "windows_tempdir_create", "windows_tempdir_remove_owned", "windows_tempdir_close_owned",
     "directory_open", "directory_next", "directory_entry_type", "directory_error", "directory_close",
     "syscall6",
     "linux_set_thread_pointer",

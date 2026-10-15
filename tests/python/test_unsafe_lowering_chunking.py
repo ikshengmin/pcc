@@ -46,6 +46,9 @@ DIRECT_DISPATCH_INTRINSICS = frozenset({
     "directory_open",
     "windows_full_path",
     "windows_real_path",
+    "windows_tempdir_create",
+    "windows_tempdir_remove_owned",
+    "windows_tempdir_close_owned",
 })
 
 

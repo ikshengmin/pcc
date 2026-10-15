@@ -18,7 +18,7 @@ VirtualAlloc VirtualFree VirtualProtect GetSystemInfo GetNativeSystemInfo
 GetProcessHeap HeapAlloc HeapReAlloc HeapFree GetLastError SetLastError
 GetStdHandle SetStdHandle ReadFile WriteFile CloseHandle CreateFileW LockFileEx UnlockFileEx
 DeleteFileW MoveFileExW CreateDirectoryW RemoveDirectoryW GetFileAttributesW
-SetFileAttributesW SetFileTime GetFileInformationByHandle GetFileInformationByHandleEx GetFileSizeEx SetFilePointerEx
+SetFileAttributesW SetFileTime GetFileInformationByHandle GetFileInformationByHandleEx SetFileInformationByHandle GetFileSizeEx SetFilePointerEx
 SetEndOfFile FlushFileBuffers GetCurrentDirectoryW SetCurrentDirectoryW
 GetFullPathNameW GetFinalPathNameByHandleW GetTempPathW GetTempFileNameW
 FindFirstFileW FindNextFileW FindClose GetModuleFileNameW GetModuleHandleW
@@ -55,8 +55,10 @@ def system_dll(symbol: str) -> str:
         return "KERNEL32.dll"
     if symbol in _WS2:
         return "WS2_32.dll"
-    if symbol == "RtlGetVersion":
+    if symbol in ("RtlGetVersion", "NtCreateFile", "RtlNtStatusToDosError"):
         return "NTDLL.dll"
+    if symbol == "ConvertStringSecurityDescriptorToSecurityDescriptorW":
+        return "ADVAPI32.dll"
     if symbol == "CommandLineToArgvW":
         return "SHELL32.dll"
     if symbol in ("GetProcessMemoryInfo", "K32GetProcessMemoryInfo"):

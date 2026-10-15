@@ -79,6 +79,7 @@ py_class_setattr = extern("py_class_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_class_add_method = extern("py_class_add_method", (c_ptr, c_ptr, c_ptr), c_void)
 py_weakref_new = extern("py_weakref_new", (c_ptr, c_ptr), c_ptr)
 py_os_path_abspath = extern("py_os_path_abspath", (c_ptr,), c_ptr)
+py_os_path_join = extern("py_os_path_join", (c_ptr,), c_ptr)
 py_os_path_exists = extern("py_os_path_exists", (c_ptr,), c_int64)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
@@ -101,6 +102,9 @@ pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
 pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 mkdtemps = extern("pcc_platform_mkdtemp_suffix", (c_ptr, c_int64), c_int64)
+create_owned = extern("pcc_platform_tempdir_create_owned", (c_ptr, c_int64, c_ptr), c_int64)
+remove_owned = extern("pcc_platform_tempdir_remove_owned", (c_ptr,), c_int64)
+close_owned = extern("pcc_platform_tempdir_close_owned", (c_ptr,), c_int64)
 mkstemps = extern("pcc_platform_mkstemp_suffix", (c_ptr, c_int64), c_int64)
 remove_tree = extern("pcc_platform_tempdir_remove_tree", (c_ptr,), c_int64)
 atexit = extern("atexit", (c_ptr,), c_int32)
@@ -188,7 +192,8 @@ _TD_NEXT = 0
 _TD_PREVIOUS = 8
 _TD_STATE = 16
 _TD_HANDLE = 24
-_TD_RECORD_SIZE = 32
+_TD_FILESYSTEM_OWNER = 32
+_TD_RECORD_SIZE = 40
 # Managed finalizer state: no strong edge points back to its manager.
 _TD_NAME = 0
 _TD_IGNORE = 1
@@ -368,26 +373,71 @@ def _td_path_template(root, prefix, suffix):
     return path
 
 
-def _td_mkdir_at(root, prefix, suffix, status):
+def _td_windows_path_template(root, prefix, suffix):
+    # Use the existing owned Windows drive/UNC join implementation, and fix
+    # the absolute spelling BEFORE creation (never resolve a later cwd).
+    slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
+    memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
+    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    raw = _td_path_template(cstr(""), prefix, suffix)
+    result = null()
+    if not ptr_is_null(raw):
+        _td_hold(slots, pins, 0, py_str_new(root, strlen(root)))
+        _td_hold(slots, pins, 1, py_str_new(raw, strlen(raw)))
+        free(raw)
+        _td_hold(slots, pins, 2, py_tuple_new(2))
+        if not py_err_occurred():
+            py_tuple_set_item(load_ptr(slots, 2 * C_POINTER_SIZE), 0, load_ptr(slots, 0))
+            py_tuple_set_item(load_ptr(slots, 2 * C_POINTER_SIZE), 1, load_ptr(slots, C_POINTER_SIZE))
+            _td_hold(slots, pins, 3, py_os_path_join(load_ptr(slots, 2 * C_POINTER_SIZE)))
+            if not py_err_occurred():
+                _td_hold(slots, pins, 4, py_os_path_abspath(load_ptr(slots, 3 * C_POINTER_SIZE)))
+                if not py_err_occurred():
+                    text = py_str_utf8(load_ptr(slots, 4 * C_POINTER_SIZE))
+                    if not ptr_is_null(text):
+                        length: int = strlen(text)
+                        result = malloc(length + 1)
+                        if not ptr_is_null(result):
+                            memcpy(result, text, length + 1)
+    _td_finish(slots, pins)
+    return result
+
+
+def _td_mkdir_at(root, prefix, suffix, status, owner):
     previous_failure = load_ptr(status, C_POINTER_SIZE)
     if not ptr_is_null(previous_failure):
         free(previous_failure)
     store_ptr(status, C_POINTER_SIZE, null())
-    path = _td_path_template(root, prefix, suffix)
+    path = _td_windows_path_template(root, prefix, suffix) if load_i8(target_sys_platform(), 0) == 119 else _td_path_template(root, prefix, suffix)
     if ptr_is_null(path):
         store_i64(status, 0, -12)
         return null()
-    result: int = mkdtemps(path, strlen(suffix))
+    result: int = create_owned(path, strlen(suffix), owner) if not ptr_is_null(owner) else mkdtemps(path, strlen(suffix))
     store_i64(status, 0, result)
     if result < 0:
+        if not ptr_is_null(owner) and not ptr_is_null(load_ptr(owner, 0)):
+            _td_remove_created(path, owner)
         store_ptr(status, C_POINTER_SIZE, path)
         return null()
     return path
 
 
-def _td_mkdtemp(suffix, prefix, directory, slots, pins):
+def _td_remove_created(path, owner) -> int:
     if load_i8(target_sys_platform(), 0) == 119:
-        return _td_error(11, cstr("pcc TemporaryDirectory: Windows filesystem provider is not implemented"))
+        handle = load_ptr(owner, 0)
+        if ptr_is_null(handle):
+            return 0
+        status: int = remove_owned(handle)
+        closed: int = close_owned(handle)
+        store_ptr(owner, 0, null())
+        return status if status < 0 else closed
+    return remove_tree(path)
+
+
+def _td_mkdtemp(suffix, prefix, directory, slots, pins, owner):
+    store_ptr(owner, 0, null())
     suffix_raw = _td_text(suffix, cstr(""))
     if ptr_is_null(suffix_raw):
         return null()
@@ -402,12 +452,14 @@ def _td_mkdtemp(suffix, prefix, directory, slots, pins):
         root = _td_text(directory, cstr(""))
         if ptr_is_null(root):
             return null()
-        path = _td_mkdir_at(root, prefix_raw, suffix_raw, status)
+        path = _td_mkdir_at(root, prefix_raw, suffix_raw, status, owner)
     else:
         # CPython's default directory search order. A failed candidate does
         # not become an empty successful name and does not suppress errors.
         candidate: int = 0
-        while candidate < 7 and ptr_is_null(path):
+        windows: int = load_i8(target_sys_platform(), 0) == 119
+        probe_owner = stack_alloc(C_POINTER_SIZE)
+        while candidate < (10 if windows else 7) and ptr_is_null(path):
             root = null()
             if candidate == 0:
                 root = getenv(cstr("TMPDIR"))
@@ -415,6 +467,32 @@ def _td_mkdtemp(suffix, prefix, directory, slots, pins):
                 root = getenv(cstr("TEMP"))
             elif candidate == 2:
                 root = getenv(cstr("TMP"))
+            elif windows and candidate == 3:
+                root = getenv(cstr("USERPROFILE"))
+                if not ptr_is_null(root) and load_i8(root, 0) != 0:
+                    _td_hold(slots, pins, 12, py_str_new(root, strlen(root)))
+                    _td_hold(slots, pins, 13, py_str_new(cstr("\\AppData\\Local\\Temp"), 19))
+                    _td_hold(slots, pins, 14, py_str_concat(load_ptr(slots, 12 * C_POINTER_SIZE), load_ptr(slots, 13 * C_POINTER_SIZE)))
+                    if not py_err_occurred():
+                        root = py_str_utf8(load_ptr(slots, 14 * C_POINTER_SIZE))
+            elif windows and candidate == 4:
+                root = getenv(cstr("SYSTEMROOT"))
+                if not ptr_is_null(root) and load_i8(root, 0) != 0:
+                    _td_hold(slots, pins, 15, py_str_new(root, strlen(root)))
+                    _td_hold(slots, pins, 16, py_str_new(cstr("\\Temp"), 5))
+                    _td_hold(slots, pins, 17, py_str_concat(load_ptr(slots, 15 * C_POINTER_SIZE), load_ptr(slots, 16 * C_POINTER_SIZE)))
+                    if not py_err_occurred():
+                        root = py_str_utf8(load_ptr(slots, 17 * C_POINTER_SIZE))
+            elif windows and candidate == 5:
+                root = cstr("C:\\TEMP")
+            elif windows and candidate == 6:
+                root = cstr("C:\\TMP")
+            elif windows and candidate == 7:
+                root = cstr("\\TEMP")
+            elif windows and candidate == 8:
+                root = cstr("\\TMP")
+            elif windows:
+                root = cstr(".")
             elif candidate == 3:
                 root = cstr("/tmp")
             elif candidate == 4:
@@ -423,19 +501,22 @@ def _td_mkdtemp(suffix, prefix, directory, slots, pins):
                 root = cstr("/usr/tmp")
             else:
                 root = cstr(".")
+            if py_err_occurred():
+                break
             if not ptr_is_null(root) and load_i8(root, 0) != 0:
                 # Select the root independently of user prefix/suffix errors.
                 # Once a writable candidate is found, errors in the requested
                 # name must propagate instead of trying a different directory.
-                probe_path = _td_mkdir_at(root, cstr(".pcc_probe_"), cstr(""), status)
+                store_ptr(probe_owner, 0, null())
+                probe_path = _td_mkdir_at(root, cstr(".pcc_probe_"), cstr(""), status, probe_owner)
                 if not ptr_is_null(probe_path):
-                    probe_status: int = remove_tree(probe_path)
+                    probe_status: int = _td_remove_created(probe_path, probe_owner)
                     if probe_status < 0:
                         store_i64(status, 0, probe_status)
                         store_ptr(status, C_POINTER_SIZE, probe_path)
                         break
                     free(probe_path)
-                    path = _td_mkdir_at(root, prefix_raw, suffix_raw, status)
+                    path = _td_mkdir_at(root, prefix_raw, suffix_raw, status, owner)
                     break
             candidate = candidate + 1
     if ptr_is_null(path):
@@ -443,19 +524,24 @@ def _td_mkdtemp(suffix, prefix, directory, slots, pins):
         if not ptr_is_null(failed_path):
             _td_hold(slots, pins, 8, py_str_new(failed_path, strlen(failed_path)))
             free(failed_path)
-            if not ptr_is_null(load_ptr(slots, 8 * C_POINTER_SIZE)):
+            if not ptr_is_null(load_ptr(slots, 8 * C_POINTER_SIZE)) and not py_err_occurred():
                 return _td_os_error(load_i64(status, 0), load_ptr(slots, 8 * C_POINTER_SIZE))
             return null()
         return _td_os_error(load_i64(status, 0), directory)
     _td_hold(slots, pins, 8, py_str_new(path, strlen(path)))
     if ptr_is_null(load_ptr(slots, 8 * C_POINTER_SIZE)):
-        remove_tree(path)
+        _td_remove_created(path, owner)
         free(path)
         return null()
     # Since 3.12 mkdtemp returns an absolute path even for relative dir.
-    result = py_os_path_abspath(load_ptr(slots, 8 * C_POINTER_SIZE))
+    result = null()
+    if load_i8(target_sys_platform(), 0) == 119:
+        result = load_ptr(slots, 8 * C_POINTER_SIZE)
+        py_incref(result)
+    else:
+        result = py_os_path_abspath(load_ptr(slots, 8 * C_POINTER_SIZE))
     if ptr_is_null(result):
-        remove_tree(path)
+        _td_remove_created(path, owner)
     free(path)
     return result
 
@@ -480,7 +566,7 @@ def _td_remove(name, ignore) -> None:
         _td_os_error(status, name)
 
 
-def _td_register(state) -> int:
+def _td_register(state, owner) -> int:
     record = malloc(_TD_RECORD_SIZE)
     if ptr_is_null(record):
         _td_error(19, cstr("TemporaryDirectory finalizer allocation failed"))
@@ -492,6 +578,7 @@ def _td_register(state) -> int:
         _td_error(19, cstr("TemporaryDirectory finalizer root registration failed"))
         return -1
     store_ptr(record, _TD_HANDLE, handle)
+    store_ptr(record, _TD_FILESYSTEM_OWNER, owner)
     pcc_gc_store_root(ptr_add(record, _TD_STATE), state)
     mutex = _td_mutex()
     if ptr_is_null(mutex):
@@ -527,6 +614,11 @@ def _td_detach(state) -> int:
     if ptr_is_null(record):
         pcc_mutex_unlock(mutex)
         return 0
+    owner = load_ptr(record, _TD_FILESYSTEM_OWNER)
+    closed: int = 0
+    if not ptr_is_null(owner):
+        closed = close_owned(owner)
+        store_ptr(record, _TD_FILESYSTEM_OWNER, null())
     # Unlink before dropping a weakref or registry owner can call arbitrary
     # finalizers. Repeated/manual/weakref/shutdown paths converge here.
     previous = load_ptr(record, _TD_PREVIOUS)
@@ -542,7 +634,39 @@ def _td_detach(state) -> int:
     pcc_gc_scheduler_root_unregister_handle(load_ptr(record, _TD_HANDLE))
     pcc_gc_store_root(ptr_add(record, _TD_STATE), null())
     free(record)
-    return 1
+    return closed if closed < 0 else 1
+
+
+def _td_windows_cleanup(state, delete: int, terminal: int) -> int:
+    # Serialize raw handle use; no managed callbacks run while this lock is
+    # held. A failed explicit cleanup retains its owner for a later retry.
+    mutex = _td_mutex()
+    if ptr_is_null(mutex):
+        return -12
+    pcc_mutex_lock(mutex)
+    pcc_py_gc_minor_graph_lock()
+    record = global_load_ptr("pcc_tempdir_records")
+    while not ptr_is_null(record):
+        current = pcc_gc_load_ptr(null(), ptr_add(record, _TD_STATE))
+        if ptr_eq(current, state):
+            break
+        record = load_ptr(record, _TD_NEXT)
+    pcc_py_gc_minor_graph_unlock()
+    result: int = 0
+    if not ptr_is_null(record):
+        owner = load_ptr(record, _TD_FILESYSTEM_OWNER)
+        if not ptr_is_null(owner) and delete:
+            result = remove_owned(owner)
+        if result == 0 and not terminal and not ptr_is_null(owner):
+            result = close_owned(owner)
+            if result == 0:
+                store_ptr(record, _TD_FILESYSTEM_OWNER, null())
+    pcc_mutex_unlock(mutex)
+    if terminal or result == 0:
+        detached: int = _td_detach(state)
+        if result == 0 and detached < 0:
+            result = detached
+    return result
 
 
 def _td_finalize_state(state) -> None:
@@ -553,7 +677,20 @@ def _td_finalize_state(state) -> None:
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     py_incref(state)
     _td_hold(slots, pins, 0, state)
-    if _td_detach(load_ptr(slots, 0)):
+    if load_i8(target_sys_platform(), 0) == 119:
+        _td_hold(slots, pins, 1, py_list_get(load_ptr(slots, 0), _TD_DELETE))
+        should_delete: int = py_obj_truthy(load_ptr(slots, C_POINTER_SIZE))
+        # Even a failing user truth conversion must release the OS resource
+        # and registry entry; shutdown must not revisit an undetachable node.
+        status: int = _td_windows_cleanup(load_ptr(slots, 0),
+            should_delete if not py_err_occurred() else 0, 1)
+        if status < 0 and not py_err_occurred():
+            _td_hold(slots, pins, 2, py_list_get(load_ptr(slots, 0), _TD_NAME))
+            _td_hold(slots, pins, 3, py_list_get(load_ptr(slots, 0), _TD_IGNORE))
+            ignored: int = py_obj_truthy(load_ptr(slots, 3 * C_POINTER_SIZE))
+            if not ignored and not py_err_occurred():
+                _td_os_error(status, load_ptr(slots, 2 * C_POINTER_SIZE))
+    elif _td_detach(load_ptr(slots, 0)):
         _td_hold(slots, pins, 1, py_list_get(load_ptr(slots, 0), _TD_DELETE))
         should_delete: int = py_obj_truthy(load_ptr(slots, C_POINTER_SIZE))
         if should_delete and not py_err_occurred():
@@ -609,12 +746,14 @@ def _td_init(captures, args):
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
     memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    owner = stack_alloc(C_POINTER_SIZE)
+    store_ptr(owner, 0, null())
     index: int = 0
     while index < 6:
         _td_hold(slots, pins, index, py_tuple_get(args, index))
         index = index + 1
     _td_hold(slots, pins, 6, _td_mkdtemp(load_ptr(slots, C_POINTER_SIZE),
-        load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE), slots, pins))
+        load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE), slots, pins, owner))
     if not ptr_is_null(load_ptr(slots, 6 * C_POINTER_SIZE)):
         _td_hold(slots, pins, 7, py_list_new(4))
         state = load_ptr(slots, 7 * C_POINTER_SIZE)
@@ -633,7 +772,8 @@ def _td_init(captures, args):
                         load_ptr(slots, 10 * C_POINTER_SIZE)))
                     if not ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)):
                         py_list_set(state, _TD_WEAKREF, load_ptr(slots, 11 * C_POINTER_SIZE))
-                        if _td_register(state) == 0:
+                        if _td_register(state, load_ptr(owner, 0)) == 0:
+                            store_ptr(owner, 0, null())  # Registry takes ownership.
                             py_obj_setattr(load_ptr(slots, 0), cstr("name"), load_ptr(slots, 6 * C_POINTER_SIZE))
                             py_obj_setattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors"), load_ptr(slots, 4 * C_POINTER_SIZE))
                             py_obj_setattr(load_ptr(slots, 0), cstr("_delete"), load_ptr(slots, 5 * C_POINTER_SIZE))
@@ -648,10 +788,16 @@ def _td_init(captures, args):
             saved = load_ptr(slots, _TD_SAVED_ERROR * C_POINTER_SIZE)
             if not ptr_is_null(saved):
                 _td_hold(slots, pins, _TD_SAVED_ERROR, saved)
-            if not ptr_is_null(load_ptr(slots, 7 * C_POINTER_SIZE)):
-                _td_detach(load_ptr(slots, 7 * C_POINTER_SIZE))
-            # A failed constructor never leaks a directory, even delete=False.
-            _td_remove(load_ptr(slots, 6 * C_POINTER_SIZE), global_load_ptr("py_True"))
+            if load_i8(target_sys_platform(), 0) == 119:
+                if not ptr_is_null(load_ptr(slots, 7 * C_POINTER_SIZE)):
+                    _td_windows_cleanup(load_ptr(slots, 7 * C_POINTER_SIZE), 1, 1)
+                if not ptr_is_null(load_ptr(owner, 0)):
+                    _td_remove_created(null(), owner)
+            else:
+                if not ptr_is_null(load_ptr(slots, 7 * C_POINTER_SIZE)):
+                    _td_detach(load_ptr(slots, 7 * C_POINTER_SIZE))
+                # A failed constructor rolls back even with delete=False.
+                _td_remove(load_ptr(slots, 6 * C_POINTER_SIZE), global_load_ptr("py_True"))
             py_clear_exception()
             saved = load_ptr(slots, _TD_SAVED_ERROR * C_POINTER_SIZE)
             if not ptr_is_null(saved):
@@ -689,13 +835,22 @@ def _td_cleanup_manager(manager) -> None:
     _td_hold(slots, pins, 0, manager)
     _td_hold(slots, pins, 1, py_obj_getattr(load_ptr(slots, 0), cstr("_pcc_finalizer_state")))
     if not ptr_is_null(load_ptr(slots, C_POINTER_SIZE)):
-        detached: int = _td_detach(load_ptr(slots, C_POINTER_SIZE))
-        _td_hold(slots, pins, 2, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
-        if not ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)):
-            if detached or py_os_path_exists(load_ptr(slots, 2 * C_POINTER_SIZE)):
-                _td_hold(slots, pins, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
-                if not ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)):
-                    _td_remove(load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE))
+        if load_i8(target_sys_platform(), 0) == 119:
+            _td_hold(slots, pins, 2, py_list_get(load_ptr(slots, C_POINTER_SIZE), _TD_NAME))
+            _td_hold(slots, pins, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
+            ignored: int = py_obj_truthy(load_ptr(slots, 3 * C_POINTER_SIZE)) if not py_err_occurred() else 0
+            if not py_err_occurred():
+                status: int = _td_windows_cleanup(load_ptr(slots, C_POINTER_SIZE), 1, 0)
+                if status < 0 and not ignored and not py_err_occurred():
+                    _td_os_error(status, load_ptr(slots, 2 * C_POINTER_SIZE))
+        else:
+            detached: int = _td_detach(load_ptr(slots, C_POINTER_SIZE))
+            _td_hold(slots, pins, 2, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
+            if not ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)):
+                if detached or py_os_path_exists(load_ptr(slots, 2 * C_POINTER_SIZE)):
+                    _td_hold(slots, pins, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
+                    if not ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)):
+                        _td_remove(load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE))
     _td_finish(slots, pins)
 
 
@@ -825,6 +980,8 @@ def _td_mkdtemp_entry(captures, args):
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
     memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
+    owner = stack_alloc(C_POINTER_SIZE)
+    store_ptr(owner, 0, null())
     index: int = _MKDTEMP_SUFFIX
     while index < _MKDTEMP_ARGUMENT_COUNT:
         _td_hold(slots, pins, index, py_tuple_get(args, index))
@@ -833,7 +990,16 @@ def _td_mkdtemp_entry(captures, args):
         _td_hold(slots, pins, _TD_OUTPUT, _td_mkdtemp(
             load_ptr(slots, _MKDTEMP_SUFFIX * C_POINTER_SIZE),
             load_ptr(slots, _MKDTEMP_PREFIX * C_POINTER_SIZE),
-            load_ptr(slots, _MKDTEMP_DIRECTORY * C_POINTER_SIZE), slots, pins))
+            load_ptr(slots, _MKDTEMP_DIRECTORY * C_POINTER_SIZE), slots, pins, owner))
+    if not ptr_is_null(load_ptr(owner, 0)):
+        closed: int = close_owned(load_ptr(owner, 0))
+        if closed < 0:
+            # The caller did not receive the name, so retain the original
+            # error while rolling back precisely the still-owned directory.
+            _td_remove_created(null(), owner)
+            if not py_err_occurred():
+                _td_os_error(closed, load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE))
+            _td_drop(slots, pins, _TD_OUTPUT)
     return _td_finish(slots, pins)
 
 
@@ -1447,7 +1613,7 @@ def _nt_create_name(slots, pins, descriptor_out):
             else:
                 root = cstr(".")
             if not ptr_is_null(root) and load_i8(root, 0) != 0:
-                probe = _td_mkdir_at(root, cstr(".pcc_probe_"), cstr(""), status)
+                probe = _td_mkdir_at(root, cstr(".pcc_probe_"), cstr(""), status, null())
                 if not ptr_is_null(probe):
                     removed: int = remove_tree(probe)
                     free(probe)
