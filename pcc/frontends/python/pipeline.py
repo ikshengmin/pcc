@@ -2308,6 +2308,23 @@ def _prepare_single_source_compile_closure(
     return auto_srcs, auto_mods, effective_recursive_stdlib
 
 
+def _admit_python_object_inputs(object_inputs, out_path, target_triple, backend, emit_llvm_only):
+    if not object_inputs:
+        return ()
+    if emit_llvm_only:
+        raise PyPipelineError("object_inputs require executable output")
+    if _resolve_native_backend(backend) != "self" or _resolve_self_link_mode() != "pcc":
+        raise PyPipelineError("object_inputs require the pcc-owned self backend and linker")
+    selected_target = (target_triple if target_triple is not None
+                       else _host_target_triple_for_self_backend())
+    try:
+        return _pipeline_self_backend_link.validate_object_inputs(
+            object_inputs, out_path=out_path, target_triple=selected_target,
+        )
+    except _pipeline_self_backend_link.SelfBackendLinkError as exc:
+        raise PyPipelineError(str(exc)) from exc
+
+
 def compile_python(
     src_path: str,
     out_path: str,
@@ -2323,6 +2340,7 @@ def compile_python(
     python_library: bool = False,
     runtime_archive: Optional[str] = None,
     link_args: tuple[str, ...] = (),
+    object_inputs: tuple[str, ...] = (),
     profile: Optional[dict] = None,
 ) -> None:
     """Compile a single ``.py`` file to a native executable.
@@ -2356,10 +2374,18 @@ def compile_python(
     runtime_archive:
         Optional explicit native runtime archive for isolated builds/tests.
         When omitted, the configured repository runtime is located or built.
+    object_inputs:
+        Explicit .o/.obj relocatables for the selected target, validated by
+        content and passed to the owned linker separately from raw flags.
+        Requires the self backend, pcc linker and executable output.
+        Existing output paths require an available file-identity check.
     link_args:
         Raw arguments appended only to the final native linker invocation.
         They are ignored when ``emit_llvm_only`` stops before linking.
     """
+    object_inputs = _admit_python_object_inputs(
+        object_inputs, out_path, target_triple, backend, emit_llvm_only,
+    )
     if python_library and not emit_llvm_only:
         raise PyPipelineError("python_library mode requires emit_llvm_only=True")
     # Imports are deferred so that modules still under construction by
@@ -2442,6 +2468,7 @@ def compile_python(
             recursive_stdlib=effective_recursive_stdlib,
             runtime_archive=runtime_archive,
             link_args=link_args,
+            object_inputs=object_inputs,
             profile=profile,
         )
         _profile_end(profile, "compile_python_total", total_start)
@@ -2467,6 +2494,7 @@ def compile_python(
             recursive_stdlib=True,
             runtime_archive=runtime_archive,
             link_args=link_args,
+            object_inputs=object_inputs,
             profile=profile,
         )
         _profile_end(profile, "compile_python_total", total_start)
@@ -2501,6 +2529,7 @@ def compile_python(
             recursive_stdlib=effective_recursive_stdlib,
             runtime_archive=runtime_archive,
             link_args=link_args,
+            object_inputs=object_inputs,
             profile=profile,
         )
         _profile_end(profile, "compile_python_total", total_start)
@@ -2716,7 +2745,7 @@ def compile_python(
             target_triple=target_triple,
         )
     _profile_end(profile, "ensure_runtime", t)
-    extra_link_inputs: tuple[str, ...] = ()
+    extra_link_inputs: tuple[str, ...] = object_inputs
     extra_link_args: tuple[str, ...] = tuple(link_args)
     if gpu_source_has_kernels and gpu_backend_kind == "metal":
         if gpu_artifact_dir is None:
@@ -2735,7 +2764,7 @@ def compile_python(
             raise PyPipelineError(
                 "Metal GPU host bridge compile failed: " + str(exc)
             ) from exc
-        extra_link_inputs = (str(metal_bridge_obj),)
+        extra_link_inputs = extra_link_inputs + (str(metal_bridge_obj),)
         if gpu_metallib_path is None:
             gpu_metallib_path = str(out_path) + ".metallib"
         extra_link_args = extra_link_args + (
@@ -3631,6 +3660,7 @@ def compile_python_multi(
     recursive_stdlib: bool = False,
     runtime_archive: Optional[str] = None,
     link_args: tuple[str, ...] = (),
+    object_inputs: tuple[str, ...] = (),
     profile: Optional[dict] = None,
 ) -> None:
     if verbose:
@@ -3663,6 +3693,11 @@ def compile_python_multi(
     runtime_archive:
         Optional explicit native runtime archive. This is propagated from
         single-file compilation when package closure selects this path.
+    object_inputs:
+        Explicit .o/.obj relocatables for the selected target, validated by
+        content and passed to the owned linker separately from raw flags.
+        Requires the self backend, pcc linker and executable output.
+        Existing output paths require an available file-identity check.
     link_args:
         Raw arguments appended only to the final native linker invocation.
     target_triple:
@@ -3675,6 +3710,9 @@ def compile_python_multi(
     ``py_cpy_import`` and the link pulls libpython. Single-file
     callers should keep using :func:`compile_python`.
     """
+    object_inputs = _admit_python_object_inputs(
+        object_inputs, out_path, target_triple, backend, emit_llvm_only,
+    )
     if not src_paths:
         raise PyPipelineError("compile_python_multi requires at least one source file")
     total_start = _profile_begin(profile)
@@ -4087,6 +4125,7 @@ def compile_python_multi(
                     needs_native_extension_exports=(
                         any_needs_native_extension_exports
                     ),
+                    extra_link_inputs=object_inputs,
                     extra_link_args=tuple(link_args),
                     profile=profile,
                 )
@@ -4100,6 +4139,7 @@ def compile_python_multi(
                     needs_native_extension_exports=(
                         any_needs_native_extension_exports
                     ),
+                    extra_link_inputs=object_inputs,
                     extra_link_args=tuple(link_args),
                     profile=profile,
                     coordinator_timing=coordinator_timing,
@@ -4169,6 +4209,7 @@ def compile_python_multi(
                 needs_native_extension_exports=(
                     any_needs_native_extension_exports
                 ),
+                extra_link_inputs=object_inputs,
                 extra_link_args=tuple(link_args),
                 profile=profile,
             )
@@ -4233,6 +4274,7 @@ def compile_python_multi(
             needs_native_extension_exports=(
                 any_needs_native_extension_exports
             ),
+            extra_link_inputs=object_inputs,
             extra_link_args=tuple(link_args),
             profile=profile,
         )
@@ -4371,6 +4413,7 @@ def compile_python_multi(
             verbose,
             needs_libpython=any_needs_libpython,
             needs_native_extension_exports=any_needs_native_extension_exports,
+            extra_link_inputs=object_inputs,
             extra_link_args=tuple(link_args),
             profile=profile,
             consume_ir_texts=True,
@@ -4407,6 +4450,7 @@ def compile_python_multi(
             backend=native_backend,
             needs_libpython=any_needs_libpython,
             needs_native_extension_exports=any_needs_native_extension_exports,
+            extra_link_inputs=object_inputs,
             extra_link_args=tuple(link_args),
             profile=profile,
         )

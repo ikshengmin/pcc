@@ -21,6 +21,75 @@ class SelfBackendLinkError(RuntimeError):
 _failed_process_detail = failed_process_detail
 
 
+def validate_object_inputs(object_inputs, *, out_path, target_triple):
+    """Admit explicit external relocatables by content, never linker flags."""
+    from pcc.backend.self_backend_target_match import (
+        is_aarch64_darwin_triple, is_aarch64_linux_triple,
+        is_x86_64_linux_triple, is_x86_64_windows_triple,
+    )
+
+    if isinstance(object_inputs, (str, bytes)):
+        raise SelfBackendLinkError("object_inputs must be a sequence of object paths")
+    if not (is_aarch64_darwin_triple(target_triple)
+            or is_aarch64_linux_triple(target_triple)
+            or is_x86_64_linux_triple(target_triple)
+            or is_x86_64_windows_triple(target_triple)):
+        raise SelfBackendLinkError("unsupported object-input target: " + target_triple)
+    protected = tuple(str(out_path) + suffix for suffix in (
+        "", ".tmp", ".pcc-link.tmp", ".tmp.pcc-link.tmp",
+    ))
+    paths = []
+    for value in object_inputs:
+        try:
+            path = os.fspath(value)
+            if (not isinstance(path, str) or path.startswith(("-", "@"))
+                    or not path.lower().endswith((".o", ".obj"))):
+                raise ValueError("expected an explicit .o or .obj path")
+            if not os.path.isfile(path):
+                raise ValueError("object input is not a regular file")
+            canonical = os.path.normcase(os.path.realpath(path))
+            if any(canonical == os.path.normcase(os.path.realpath(output)) for output in protected):
+                raise ValueError("link output aliases object input")
+            for output in protected:
+                if os.path.exists(output):
+                    # Native os.path does not yet expose file identity. Refuse
+                    # existing outputs when hardlink identity cannot be checked.
+                    samefile = getattr(os.path, "samefile", None)
+                    if samefile is None:
+                        raise ValueError("cannot verify existing output file identity")
+                    if samefile(path, output):
+                        raise ValueError("link output aliases object input")
+            with open(path, "rb") as stream:
+                data = stream.read()
+            if is_x86_64_windows_triple(target_triple):
+                from pcc.backend.coff_x86_64 import parse_object as parse_coff
+                parse_coff(data)
+                # IMAGE_FILE_EXECUTABLE_IMAGE / IMAGE_FILE_DLL are images,
+                # even if their other COFF fields resemble a relocatable.
+                if data[18] & 0x02 or data[19] & 0x20:
+                    raise ValueError("COFF image is not a relocatable object")
+            elif is_aarch64_linux_triple(target_triple) or is_x86_64_linux_triple(target_triple):
+                from pcc.backend.elf_x86_64 import parse_relocatable
+                obj = parse_relocatable(data)
+                machine = 183 if is_aarch64_linux_triple(target_triple) else 62
+                if obj.machine != machine:
+                    raise ValueError("object machine differs from selected ELF target")
+            else:
+                from pcc.backend import macho_spec
+                obj = macho_spec.parse_object(data)
+                if (obj.header["filetype"] != macho_spec.MH_OBJECT
+                        or obj.header["cputype"] != macho_spec.CPU_TYPE_ARM64
+                        or obj.header["cpusubtype"] != macho_spec.CPU_SUBTYPE_ARM64_ALL):
+                    raise ValueError("object input is not an arm64-all MH_OBJECT")
+        except Exception as exc:
+            raise SelfBackendLinkError(
+                "invalid object input " + repr(value) + " for " + target_triple
+                + ": " + str(exc)
+            ) from exc
+        paths.append(path)
+    return tuple(paths)
+
+
 def link_paths(
     ll_paths,
     out_path: str,

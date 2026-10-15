@@ -557,7 +557,7 @@ def test_native_win64_home_space_and_rooted_callback_five_collectors(tmp_path, e
             compile_python(
                 str(source), str(executable), backend="self", libpython_mode="off",
                 ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
-                link_args=(str(helper),),
+                object_inputs=(str(helper),), target_triple=TARGET,
             )
         finally:
             captured = capfd.readouterr()

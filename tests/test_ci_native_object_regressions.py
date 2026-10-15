@@ -718,7 +718,8 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
     assert len(calls) == 1
     source, binary, options = calls[0]
     assert options == {"backend": "self", "libpython_mode": "off", "ir_scaffold_mode": "on",
-                       "runtime_archive": runtime["path"], "link_args": (str(work / "win64_home_callback.obj"),)}
+                       "runtime_archive": runtime["path"], "object_inputs": (str(work / "win64_home_callback.obj"),),
+                       "target_triple": probe.TARGET}
     record = json.loads((work / "win64-home-callback.json").read_text())
     assert record["status"] == ("PASS" if failure is None else "FAIL")
     assert len(executions) == (0 if failure == "compile" else 3 if failure == "collector" else 5)
