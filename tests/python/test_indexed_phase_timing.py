@@ -1023,6 +1023,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
     monkeypatch.setattr(timing_module.time, "perf_counter_ns", clock)
     timer = CoarsePhaseTiming() if enabled else None
     artifacts, runtime = [("sample", "PCO", "object")], object()
+    object_inputs = ("extra.o",)
 
     def operation(name):
         operations.append(name)
@@ -1039,7 +1040,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
     def link(*args, **kwargs):
         assert args == (artifacts, "out", runtime, False)
         expected = dict(needs_libpython=False, needs_native_extension_exports=False,
-                        extra_link_args=("flag",), profile=None)
+                        extra_link_inputs=object_inputs, extra_link_args=("flag",), profile=None)
         if enabled:
             expected["coordinator_timing"] = timer
         assert kwargs == expected
@@ -1049,6 +1050,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
         emit_llvm_only=False, native_backend="self", libpython_mode="off", any_needs_libpython=False,
         any_needs_native_extension_exports=False, runtime_archive="runtime", target_triple=None,
         module_direct_artifacts=artifacts, module_ir_texts=[("sample", "")],
+        object_inputs=object_inputs,
         total_ir_bytes_before_passes=7, out_path="out", verbose=False, link_args=["flag"],
         profile=None, total_start=0, direct_native_object_dir="work", coordinator_timing=timer,
         PyPipelineError=RuntimeError, _reject_mixed_extension_object_models=lambda **kwargs: None,
