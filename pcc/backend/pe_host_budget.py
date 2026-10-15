@@ -474,6 +474,30 @@ class PEHostBudget(CompactStackMapBudget):
     def check_copy(self, size, copies=1, label="PE buffer copy"):
         self.check_peak(copies * (size + max(self.bytearray_header, self.bytes_header) + 1), label=label)
 
+    def check_image_join(self, size, section_count, padding_bytes):
+        """Admit all final-join owners before making the chunk list or pads."""
+        if (any(type(value) is not int or value < 0
+                for value in (size, section_count, padding_bytes))
+                or padding_bytes > 511 * section_count or padding_bytes > size):
+            raise PreciseStackMapError("invalid PE image join sizes")
+        chunks = 1 + 2 * section_count  # header, then payload/padding pairs
+        # CPython 3.13--3.15 bytes.join reuses an exact list, exports its
+        # bytes/bytearray items without copying, and allocates one result.
+        # Its ten stack Py_buffers coexist with a heap array above ten items.
+        # Py_buffer has a stable ABI since 3.11; this is its native layout.
+        # https://github.com/python/cpython/blob/v3.13.0/Objects/stringlib/join.h
+        # https://github.com/python/cpython/blob/v3.13.0/Include/pybuffer.h
+        buffer_size = struct.calcsize("PPnniiPPPPP")
+        join_buffers = self._rounded((10 + chunks) * buffer_size)
+        # Reserve every pad independently even when empty/one-byte bytes are
+        # shared. The extra quantum per pad bounds independent rounding.
+        pads = padding_bytes + section_count * (self.bytes_header + self.allocation_quantum)
+        result = self._rounded(size + self.bytes_header)
+        # Keep all existing section/map/header owners charged. The list bound
+        # includes old/new growth, and spare integers cover sizing counters.
+        self.check_peak(result + pads + self._list_bytes(chunks) + join_buffers
+                        + 8 * self.integer_bytes, label="PE final image join")
+
 
 def host_pe_budget():
     """Return a host-only operation budget, or preserve the legacy PE caps."""

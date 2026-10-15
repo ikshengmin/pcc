@@ -615,14 +615,25 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
                                   (5, reloc_directory), (9, (tls_directory, 40 if tls_directory else 0)),
                                   (12, iat_directory)):
         struct.pack_into("<II", image, opt + 112 + index * 8, address, size)
-    for index, (name, address, payload, flags) in enumerate(sections):
-        raw = len(image)
+    file_size = headers
+    padding_bytes = 0
+    for _name, _address, payload, _flags in sections:
         size = _align(len(payload), 512)
-        _append(image, payload, compact_budget)
-        _zeros(image, size - len(payload), compact_budget)
+        file_size += size
+        padding_bytes += size - len(payload)
+    if compact_budget is not None:
+        compact_budget.check_image_join(file_size, len(sections), padding_bytes)
+    # Only the small header is mutable here. All section contents are final:
+    # one join avoids growing a full-image bytearray and copying it to bytes.
+    # Keep the section buffers alive; the budget charges them through return.
+    chunks = [image]
+    raw = headers
+    for index, (name, address, payload, flags) in enumerate(sections):
+        size = _align(len(payload), 512)
+        chunks.append(payload)
+        chunks.append(b"\0" * (size - len(payload)))
         struct.pack_into("<8sIIIIIIHHI", image, opt + 240 + index * 40,
                          name.encode().ljust(8, b"\0"), len(payload), address, size, raw,
                          0, 0, 0, 0, flags)
-    if compact_budget is not None:
-        compact_budget.check_copy(len(image), label="PE returned image")
-    return bytes(image)
+        raw += size
+    return b"".join(chunks)
