@@ -22,15 +22,15 @@ def test_explicit_pe_budget_preserves_bytes_above_aggregate_legacy_cap(monkeypat
     monkeypatch.setattr(wire, "MAX_RECORDS", 3)
     with pytest.raises(coff.CoffError, match="too many stack-map records"):
         pe.link_executable(objects)
-    budget = _pe_budget(work=28)
+    budget = _pe_budget(work=32)
     budget.retained_bytes = 19
     assert pe.link_executable(objects, compact_budget=budget) == expected
-    assert budget.record_visits == 28  # 4 records times the existing 7 visits.
+    assert budget.record_visits == 32  # 4 records, including the suffix planning pass.
     assert budget.retained_bytes == 19
     # The same budget retains cumulative work across a second operation.
     with pytest.raises(coff.CoffError, match="record work budget exceeded"):
         pe.link_executable(objects, compact_budget=budget)
-    assert budget.record_visits == 28 and budget.retained_bytes == 19
+    assert budget.record_visits == 32 and budget.retained_bytes == 19
 
 
 def test_pe_budget_failure_keeps_retained_storage_and_charged_work():
@@ -169,7 +169,7 @@ def test_pe_link_validates_retained_merged_and_final_payloads_without_extra_copy
     assert pe.link_executable(objects, compact_budget=budget) == expected
     assert validations == [False, True]
     assert budget.retained_bytes == 19 and not budget._buffers
-    assert budget.record_visits == 14
+    assert budget.record_visits == 16
 
 
 def _dir64_sites(image):

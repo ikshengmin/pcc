@@ -1580,6 +1580,7 @@ def merge_stack_map_payloads(
     *,
     compact_budget=None,
     _consume_payloads=False,
+    _share_suffixes=False,
 ) -> tuple[bytes, tuple[tuple[int, int], ...]]:
     """Merge relocatable stack-map payloads without materializing locations.
 
@@ -1598,9 +1599,19 @@ def merge_stack_map_payloads(
     separately retained aliases. Completed entries become None even if a
     later input fails; the caller must clear the remaining list on failure.
     Ordinary tuple callers keep their inputs and the original behavior.
+    Budgeted host PE callers may additionally share exact root-vector
+    suffixes. Its per-input planning pass and scratch are explicitly charged;
+    other callers retain the original whole-vector implementation.
     """
     if not payloads:
         raise PreciseStackMapError("cannot merge an empty stack-map collection")
+    if _share_suffixes:
+        import sys as execution_runtime
+
+        if (execution_runtime.implementation.name != "cpython"
+                or compact_budget is None or _consume_payloads
+                or any(type(payload) is not bytes for payload in payloads)):
+            raise PreciseStackMapError("suffix stack-map merge requires a non-consuming host budget")
     construction_copies = 2
     if _consume_payloads:
         import sys as execution_runtime
@@ -1637,7 +1648,7 @@ def merge_stack_map_payloads(
     for payload in payloads:
         if compact_budget is None:
             _count, scanned, table_start, table_count = _scan_stack_map_payload(payload)
-        elif _consume_payloads:
+        elif _consume_payloads or _share_suffixes:
             # The scanner admits its current payload and complete function
             # list. Carry all other live merge owners into that admission;
             # the previous input's scan/cache have already been retired.
@@ -1676,6 +1687,17 @@ def merge_stack_map_payloads(
         # Real compiler PCOs repeat these ranges at many safepoints; avoid
         # rebuilding and hashing the same location bytes for each occurrence.
         source_index_cache: dict[int, int] = {}
+        if _share_suffixes:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                from .stackmap_host_suffix import plan_suffixes
+                scan_entries = len(scanned)
+                source_index_cache, table_locations, merge_locations = plan_suffixes(
+                    payload, scanned, table_start, table_count, table,
+                    table_index, table_locations, merge_locations,
+                    budget=compact_budget, input_bytes=input_bytes,
+                    function_bytes=function_bytes, function_count=len(functions),
+                )
         for function_id, fn_start, fn_end in scanned:
             if len(functions) >= MAX_FUNCTIONS:
                 raise PreciseStackMapError("too many stack-map functions")
@@ -1800,6 +1822,13 @@ def merge_stack_map_payloads(
                 payload = None
                 input_bytes -= retired_size
                 consumed_index += 1
+        elif _share_suffixes:
+            # The next scanner/planner must not overlap this input's range
+            # cache or descriptor list. Output chunks remain independently
+            # owned by functions/table and are charged at the next scan.
+            scanned = None
+            source_index_cache = None
+            scan_entries = 0
     if compact_budget is not None:
         # These per-input owners are no longer needed at the joined-output
         # high-water point; root chunks remain owned by table/table_index.

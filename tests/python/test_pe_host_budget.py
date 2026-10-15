@@ -536,7 +536,7 @@ def test_dense_absolute_fixups_link_identically_inside_the_same_small_budget(wit
     assert image == expected
     assert 7 * (count + 3) * value.metadata_entry_bytes > value.limit_bytes
     assert value.metadata_counts["pages"] < value.metadata_counts["fixups"] // 100
-    assert value.retained_bytes == 0 and value.record_visits == (7 if with_map_tls else 0)
+    assert value.retained_bytes == 0 and value.record_visits == (8 if with_map_tls else 0)
 
     header = struct.unpack_from("<I", image, 60)[0]
     optional = header + 24

@@ -301,8 +301,16 @@ def _merge_stack_maps(objects, compact_budget=None):
             payloads.append(section.data)
     if not payloads:
         return b"", ()
+    # Reverse-key planning has a CPython allocation model. Native and
+    # unbudgeted callers retain the existing exact-vector merger.
+    import sys as execution_runtime
+    share_suffixes = False
+    if execution_runtime.implementation.name == "cpython":
+        share_suffixes = compact_budget is not None
     try:
-        payload, offsets = merge_stack_map_payloads(tuple(payloads), compact_budget=compact_budget)
+        payload, offsets = merge_stack_map_payloads(
+            tuple(payloads), compact_budget=compact_budget, _share_suffixes=share_suffixes,
+        )
         if compact_budget is not None:
             compact_budget.retain(payload, "PE merged stack map")
         validate_stack_map_payload(payload, expected_arch=ARCH_X86_64, compact_budget=compact_budget)

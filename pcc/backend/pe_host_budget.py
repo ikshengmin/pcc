@@ -509,5 +509,7 @@ def host_pe_budget():
     allowance = _windows_allowance()
     if allowance is None or allowance < 32:
         return None
-    # Input validation 2N, merge N, post-merge 2N, final address validation 2N.
+    # Keep the existing work allowance. Suffix planning charges its additional
+    # N visits alongside input validation 2N, merge N, post-merge 2N and final
+    # address validation 2N; it does not increase this operational limit.
     return PEHostBudget(allowance, 7 * (allowance // 32), **profile)
