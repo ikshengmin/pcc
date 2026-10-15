@@ -1579,6 +1579,7 @@ def merge_stack_map_payloads(
     payloads: tuple[bytes, ...],
     *,
     compact_budget=None,
+    _consume_payloads=False,
 ) -> tuple[bytes, tuple[tuple[int, int], ...]]:
     """Merge relocatable stack-map payloads without materializing locations.
 
@@ -1591,9 +1592,23 @@ def merge_stack_map_payloads(
     materialized them as Python objects several times (measured ~82% of link
     CPU in dataclass construction).  The merged table is still fully decoded
     and validated by the final link before publication.
+
+    The private CPython-only consuming mode transfers an exact list of
+    detached bytes from its exclusive owner. The caller must charge any
+    separately retained aliases. Completed entries become None even if a
+    later input fails; the caller must clear the remaining list on failure.
+    Ordinary tuple callers keep their inputs and the original behavior.
     """
     if not payloads:
         raise PreciseStackMapError("cannot merge an empty stack-map collection")
+    if _consume_payloads:
+        import sys as execution_runtime
+
+        if (execution_runtime.implementation.name != "cpython"
+                or compact_budget is None or type(payloads) is not list
+                or any(type(payload) is not bytes for payload in payloads)):
+            raise PreciseStackMapError("consuming stack-map merge requires owned host bytes")
+    consumed_index = 0
     input_bytes = 0
     if compact_budget is not None:
         input_bytes = sum(len(payload) for payload in payloads)
@@ -1742,6 +1757,18 @@ def merge_stack_map_payloads(
             functions.append((function_id, bytes(blob)))
             if compact_budget is not None:
                 del blob
+        if _consume_payloads:
+            # This private CPython path transfers an owned list. All surviving
+            # function chunks and root keys are detached bytes; the scan and
+            # source-index cache hold only integers. Retire the actual slot
+            # and loop reference before reducing the remaining raw-input term.
+            # Keep input headers, list storage and caller retention charged.
+            if execution_runtime.implementation.name == "cpython":
+                retired_size = len(payload)
+                payloads[consumed_index] = None
+                payload = None
+                input_bytes -= retired_size
+                consumed_index += 1
     if compact_budget is not None:
         # These per-input owners are no longer needed at the joined-output
         # high-water point; root chunks remain owned by table/table_index.

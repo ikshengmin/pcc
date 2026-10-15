@@ -1098,19 +1098,18 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         if stack_payloads:
             snapshots = sum(ledger.immutable(len(item)) for item in stack_payloads)
             snapshot_raw = sum(len(item) for item in stack_payloads)
-            tuple_bytes = ledger.rounded(_TUPLE) + ledger.rounded(len(stack_payloads) * _WORD)
-            ledger.keep(tuple_bytes, label="Mach-O stack-map merge pointer snapshot")
-            payload_tuple = tuple(stack_payloads)
             previous = ledger.budget.retained_bytes
             # The merger counts raw payload lengths, not Python bytes
             # headers or allocator rounding. Keep those owners charged here.
+            # The private detached list is transferred without a tuple alias:
+            # completed inputs can retire while later inputs are still merged.
             ledger.budget.retained_bytes = previous + ledger.retained - snapshot_raw
             try:
-                stack_payload, stack_offsets = merge_stack_map_payloads(payload_tuple, compact_budget=ledger.budget)
+                stack_payload, stack_offsets = merge_stack_map_payloads(
+                    stack_payloads, compact_budget=ledger.budget, _consume_payloads=True,
+                )
             finally:
                 ledger.budget.retained_bytes = previous
-                payload_tuple = None
-                ledger.retained -= tuple_bytes
             ledger.retained -= snapshots
             stack_payloads.clear()
             ledger.keep(ledger.immutable(len(stack_payload)) + _model_bytes(stack_offsets, ledger.budget))
@@ -1192,7 +1191,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         archive_buffers.clear()
         raw = packed = payload = descriptor = section = target = part = members = None
         pulled = member = item = row_parts = rows = frozen = stack_payload = None
-        stack_offsets = payload_tuple = _pending = None
+        stack_offsets = _pending = None
         definitions = local_renames = defined = referenced = weak_references = strong_references = None
         symbol_indices = symbol_at = input_keys = input_plan = None
         appearance = symbol = owner = None
