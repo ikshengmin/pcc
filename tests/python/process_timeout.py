@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -103,12 +104,22 @@ def run_process_group_timeout(
             reason="TIMEOUT",
         )
     except BaseException:
-        _finish_after_process_group_kill(
+        result = _finish_after_process_group_kill(
             proc,
             cmd=cmd,
             timeout=timeout,
             reason="INTERRUPT",
         )
+        # The caller never receives this result. Preserve the drained evidence
+        # in its captured streams before propagating the original exception.
+        for stream, output in ((sys.stdout, result.stdout), (sys.stderr, result.stderr)):
+            try:
+                stream.write(output)
+                stream.flush()
+            except BaseException:
+                # A broken capture sink must neither replace the interruption
+                # nor prevent the other stream from being published.
+                pass
         raise
     finally:
         for signum, old_handler in old_handlers.items():
