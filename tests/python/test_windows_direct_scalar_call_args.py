@@ -1,6 +1,6 @@
 """Win64 fixed scalar calls omit stores, not the ABI-owned home space.
 
-Host checks cover selector instructions, fixed frames and precise roots. The
+Host checks cover selector instructions, owned COFF bytes, frames and roots. The
 separate integration test executes a home-writing callee and managed callback
 on native Windows with an explicitly selected source-matching runtime.
 """
@@ -65,6 +65,78 @@ def _call(function, args, *, result=VOID, dest=None, callee="callee",
     return win64.call(function, dest, result, callee, indirect, args, vararg)
 
 
+# Independent ISA byte oracles, in RCX/RDX/R8/R9 order. Loads use REX.R
+# for r8/r9; opcode-register immediates use REX.B. i1 has byte storage.
+# Byte/word writes leave upper register bits unchanged; dword writes clear
+# the upper 32 bits. The Win64 argument contract only consumes the low bits.
+_LOCAL_LOAD_BYTES = {
+    1: ("8a4dd8", "8a55d8", "448a45d8", "448a4dd8"),
+    8: ("8a4dd8", "8a55d8", "448a45d8", "448a4dd8"),
+    16: ("668b4dd8", "668b55d8", "66448b45d8", "66448b4dd8"),
+    32: ("8b4dd8", "8b55d8", "448b45d8", "448b4dd8"),
+    64: ("488b4dd8", "488b55d8", "4c8b45d8", "4c8b4dd8"),
+}
+_RETURN_SPILL_BYTES = {
+    1: "888570ffffff", 8: "888570ffffff", 16: "66898570ffffff",
+    32: "898570ffffff", 64: "48898570ffffff",
+}
+_IMMEDIATE_HEADS = {
+    1: ("b1", "b2", "41b0", "41b1"),
+    8: ("b1", "b2", "41b0", "41b1"),
+    16: ("66b9", "66ba", "6641b8", "6641b9"),
+    32: ("b9", "ba", "41b8", "41b9"),
+    64: ("48b9", "48ba", "49b8", "49b9"),
+}
+_SIGNED_I64_IMMEDIATE_HEADS = ("48c7c1", "48c7c2", "49c7c0", "49c7c1")
+# Literal little-endian payloads make the sign-extension boundary explicit:
+# +0xffffffff needs imm64, while -1 may use sign-extended imm32.
+_INTEGER_IMMEDIATE_BYTES = {
+    1: (("0", "00"), ("1", "01")),
+    8: (("0", "00"), ("-1", "ff"), ("127", "7f"), ("128", "80"), ("255", "ff")),
+    16: (("0", "0000"), ("-1", "ffff"), ("4660", "3412"),
+         ("32768", "0080"), ("65535", "ffff")),
+    32: (("0", "00000000"), ("-1", "ffffffff"), ("305419896", "78563412"),
+         ("2147483648", "00000080"), ("4294967295", "ffffffff")),
+    64: (("0", "00000000"), ("-1", "ffffffff"),
+         ("-2147483648", "00000080"), ("2147483647", "ffffff7f"),
+         ("2147483648", "0000008000000000"), ("-2147483649", "ffffff7fffffffff"),
+         ("4294967295", "ffffffff00000000"),
+         ("81985529216486895", "efcdab8967452301"),
+         ("9223372036854775807", "ffffffffffffff7f"),
+         ("-9223372036854775808", "0000000000000080"),
+         ("18446744073709551615", "ffffffffffffffff")),
+}
+_FIXED_I64_SETUP_BYTES = (
+    "48c7c101000000", "48c7c2feffffff", "49c7c003000000", "49c7c104000000",
+)
+
+
+def _assert_owned_coff_call_bytes(lines, setup_hex, spill_hex):
+    from pcc.backend import coff_x86_64 as coff
+
+    # These are selector fragments, not runnable functions or native ABI
+    # qualification. A nonzero prefix also exercises the call relocation PC.
+    assembly = (
+        ".intel_syntax noprefix\n.text\n.globl probe\n.type probe, @function\n"
+        "probe:\n.byte 144, 144, 144\n" + "\n".join(lines)
+        + "\n  ret\n.size probe, .-probe\n"
+    )
+    raw = coff.assemble_object(assembly)
+    obj = coff.parse_object(raw)
+    assert not any(item.name == ".rdata$got" for item in obj.sections)
+    section = next(item for item in obj.sections if item.name == ".text")
+    setup, spill = bytes.fromhex("".join(setup_hex)), bytes.fromhex(spill_hex)
+    assert section.data == b"\x90" * 3 + setup + b"\xe8\0\0\0\0" + spill + b"\xc3"
+    assert len(section.relocations) == 1
+    relocation = section.relocations[0]
+    symbol = obj.symbols[relocation.symbol]
+    assert (relocation.offset, relocation.kind, symbol.name, symbol.section, symbol.value) == (
+        3 + len(setup) + 1, 0x0004, "callee", 0, 0,
+    )
+    assert symbol.external
+    assert coff.emit_object(obj) == raw
+
+
 @pytest.mark.parametrize("position", range(4))
 @pytest.mark.parametrize("width,memory,aliases", (
     (1, "BYTE", ("cl", "dl", "r8b", "r9b")),
@@ -76,8 +148,11 @@ def _call(function, args, *, result=VOID, dest=None, callee="callee",
 @pytest.mark.parametrize("result", (VOID, PTR, I64), ids=("void", "pointer", "integer"))
 def test_integer_width_position_matrix_is_destination_local(position, width, memory, aliases, result):
     function = _frame()
+    narrow = TypeDesc("int", width)
+    function.value_slots["r9"] = SlotInfo(40, narrow)
+    function.value_slots["out"] = SlotInfo(144, result)
     args = [(I64, "1"), (I64, "-2"), (I64, "3"), (I64, "4")]
-    args[position] = (TypeDesc("int", width), "r9")
+    args[position] = (narrow, "r9")
     lines = _call(function, args, result=result, dest="out")
     expected = ["  mov rcx, 1", "  mov rdx, -2", "  mov r8, 3", "  mov r9, 4"]
     expected[position] = f"  mov {aliases[position]}, {memory} PTR [rbp - 40]"
@@ -86,6 +161,25 @@ def test_integer_width_position_matrix_is_destination_local(position, width, mem
         expected.append("  mov QWORD PTR [rbp - 144], rax")
     assert lines == expected
     assert not any("[rsp" in line or "r10" in line or "r11" in line for line in lines)
+    setup = list(_FIXED_I64_SETUP_BYTES)
+    setup[position] = _LOCAL_LOAD_BYTES[width][position]
+    _assert_owned_coff_call_bytes(lines, setup, "" if result.is_void else _RETURN_SPILL_BYTES[64])
+
+    if result.is_int:
+        # Keep the original scalar-return shape coverage, then cover each
+        # accepted narrow return and its exact AL/AX/EAX/RAX memory store.
+        function.value_slots["out"] = SlotInfo(144, narrow)
+        lines = _call(function, args, result=narrow, dest="out")
+        _assert_owned_coff_call_bytes(lines, setup, _RETURN_SPILL_BYTES[width])
+        for literal, payload in _INTEGER_IMMEDIATE_BYTES[width]:
+            immediate_args = list(args)
+            immediate_args[position] = (narrow, literal)
+            immediate_setup = list(_FIXED_I64_SETUP_BYTES)
+            heads = (_SIGNED_I64_IMMEDIATE_HEADS if width == 64 and len(payload) == 8
+                     else _IMMEDIATE_HEADS[width])
+            immediate_setup[position] = heads[position] + payload
+            lines = _call(function, immediate_args, result=narrow, dest="out")
+            _assert_owned_coff_call_bytes(lines, immediate_setup, _RETURN_SPILL_BYTES[width])
 
 
 @pytest.mark.parametrize("count", (1, 2, 3, 4))
