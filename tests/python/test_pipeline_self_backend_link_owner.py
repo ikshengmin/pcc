@@ -368,10 +368,12 @@ def test_linux_pcc_link_route_uses_owned_elf_driver_and_internal_assembly(
 
 
 def test_parallel_codegen_container_does_not_retain_prepass_ir(monkeypatch, tmp_path):
+    """IR lifetime only; runtime admission, codegen and final linking are mocked."""
     import weakref
     class TextBatch(list):
         pass
     references = []
+    calls = []
     def codegen(*_args, **_kwargs):
         batch = TextBatch([("entry", 'target triple = "arm64-apple-darwin23.6.0"\n' "define i32 @main() { ret i32 0 }")])
         references.append(weakref.ref(batch))
@@ -380,13 +382,28 @@ def test_parallel_codegen_container_does_not_retain_prepass_ir(monkeypatch, tmp_
         assert references[0]() is None, "parallel result still owns pre-pass IR"
         assert len(texts) == 1
         assert kwargs["consume_ir_texts"] is True
+        calls.append("link")
     source = tmp_path / "entry.py"
     source.write_text("print(1)\n")
     runtime = tmp_path / "runtime.a"
     runtime.touch()
+
+    def admit_runtime(path, **_options):
+        assert path == str(runtime)
+        calls.append("runtime")
+        return path
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("IR lifetime control attempted runtime provisioning or an external tool")
+
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    monkeypatch.setenv("PCC_SELF_BACKEND_SKIP_LL_TEMP", "1")
+    monkeypatch.setattr(pipeline, "_explicit_runtime_archive", admit_runtime)
+    monkeypatch.setattr(pipeline, "_ensure_runtime", forbidden)
+    monkeypatch.setattr(pipeline.subprocess, "run", forbidden)
     monkeypatch.setattr(pipeline, "_compile_python_multi_codegen_parallel", codegen)
     monkeypatch.setattr(pipeline, "_link_with_self_backend_ir_texts", link)
     pipeline.compile_python_multi([str(source)], str(tmp_path / "output"),
         module_names=["entry"], backend="self", libpython_mode="off",
         ir_scaffold_mode="on", runtime_archive=str(runtime))
+    assert calls == ["runtime", "link"]
