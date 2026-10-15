@@ -511,6 +511,10 @@ def pcc_gc_load_ptr(owner, slot):
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if backend == 3 or backend == 4:
+        # Null and tagged values cannot relocate. Skip GC4 root membership
+        # and resolution before counting a read-barrier check.
+        if backend == 4 and (ptr_is_null(v) != 0 or is_tagged_int(v) != 0):
+            return v
         if backend == 3 and _gc_forwarding_population() <= 0:
             return v
         if backend == 4 and _gc_backend4_should_check_slot(slot) == 0:
@@ -542,6 +546,10 @@ def pcc_gc_load_borrowed_ptr(owner, slot):
         return v
     backend: int = _gc_backend_fast()
     if backend == 3 or backend == 4:
+        # Null and tagged values cannot relocate. Skip GC4 root membership
+        # and resolution before counting a read-barrier check.
+        if backend == 4 and (ptr_is_null(v) != 0 or is_tagged_int(v) != 0):
+            return v
         if backend == 3 and _gc_forwarding_population() <= 0:
             return v
         if backend == 4 and _gc_backend4_should_check_slot(slot) == 0:

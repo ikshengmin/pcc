@@ -449,6 +449,9 @@ enum {
 enum {
     PCC_GC_COUNTER_ALLOCATIONS = 0,
     PCC_GC_COUNTER_WRITE_BARRIERS = 1,
+    /* Read-barrier slow-path entries; fast-path returns are excluded.
+     * Backend 4 null/tagged values skip checks. A counted check need not
+     * forward an object; backend 3 keeps its existing counting behavior. */
     PCC_GC_COUNTER_READ_BARRIERS = 2,
     PCC_GC_COUNTER_SAFEPOINTS = 3,
     PCC_GC_COUNTER_PIN_BALANCE = 4,
