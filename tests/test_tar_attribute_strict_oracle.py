@@ -1,5 +1,7 @@
-"""Pure fake source/IR controls; no compiler, FFI or native execution."""
+"""Source/IR controls and one bounded strict host-IR check; no native execution."""
 
+import ast
+from pathlib import Path
 import re
 import textwrap
 
@@ -133,7 +135,12 @@ def _fixture(name):
     for index, (table, constructor) in enumerate(tables.get(name, ())):
         slot = '.modvar.' + name.replace('.', '_') + '.' + table
         declarations += f'@"{slot}" = global ptr null\n'
-        initialization += f'  %table{index} = call ptr @{constructor}()\n'
+        if name == oracle._UNSAFE and table == 'UNSAFE_INTRINSICS':
+            initialization += ('  %registry_left = call ptr @py_set_new()\n'
+                               '  %registry_right = call ptr @py_set_from_iterable(ptr %metadata)\n'
+                               '  %table0 = call ptr @py_obj_or(ptr %registry_left, ptr %registry_right)\n')
+        else:
+            initialization += f'  %table{index} = call ptr @{constructor}()\n'
         initialization += f'  call void @pcc_gc_store_root(ptr @"{slot}", ptr %table{index})\n'
         initialization += f'  %published{index} = load ptr, ptr @"{slot}"\n'
         initialization += f'  call void @py_module_attr_set(ptr {pool.name(name)}, ptr {pool.name(table)}, ptr %published{index})\n'
@@ -217,6 +224,82 @@ def test_table_oracle_rejects_dormant_or_unbound_tables(name, damage):
         remaining[oracle._FREESTANDING] = remaining[oracle._FREESTANDING].replace('ptr %receiver0,', 'ptr %unrelated,')
     else:
         section = section.replace('ptr %value, ptr %key', 'ptr %unrelated, ptr %key')
+    with pytest.raises(AssertionError):
+        oracle.require_tar_attribute_module(name, _source(), section, remaining, require_definition)
+
+
+@pytest.mark.parametrize('damage', (
+    'left_constructor', 'right_constructor', 'missing_left', 'missing_right',
+    'constructor_arity', 'constructor_return_type', 'constructor_argument_type',
+    'left_operand', 'right_operand', 'ambiguous_operand', 'unknown_root_value',
+    'same_constructor', 'wrong_operator', 'wrong_callee', 'wrong_arity',
+    'wrong_return_type', 'wrong_argument_type', 'detached_result', 'ignored_union',
+    'substituted_global', 'publication', 'class_binding', 'consumer',
+))
+def test_unsafe_registry_requires_its_fresh_owned_set_union(damage):
+    section, remaining = _fixture(oracle._UNSAFE)
+    replacements = {
+        'left_constructor': ('%registry_left = call ptr @py_set_new()',
+                             '%registry_left = call ptr @py_dict_new()'),
+        'right_constructor': ('%registry_right = call ptr @py_set_from_iterable(ptr %metadata)',
+                              '%registry_right = call ptr @py_dict_new()'),
+        'missing_left': ('%registry_left = call ptr @py_set_new()', ''),
+        'missing_right': ('%registry_right = call ptr @py_set_from_iterable(ptr %metadata)', ''),
+        'constructor_arity': ('@py_set_from_iterable(ptr %metadata)', '@py_set_from_iterable()'),
+        'constructor_return_type': ('%registry_right = call ptr @py_set_from_iterable(',
+                                    '%registry_right = call i64 @py_set_from_iterable('),
+        'constructor_argument_type': ('@py_set_from_iterable(ptr %metadata)',
+                                      '@py_set_from_iterable(i64 %metadata)'),
+        'left_operand': ('@py_obj_or(ptr %registry_left,', '@py_obj_or(ptr %unrelated,'),
+        'right_operand': ('@py_obj_or(ptr %registry_left, ptr %registry_right)',
+                          '@py_obj_or(ptr %registry_left, ptr %unrelated)'),
+        'ambiguous_operand': ('%table0 = call ptr @py_obj_or(ptr %registry_left, ptr %registry_right)',
+                              'store ptr %registry_left, ptr %mixed\n'
+                              '  store ptr %registry_right, ptr %mixed\n'
+                              '  %ambiguous = load ptr, ptr %mixed\n'
+                              '  %table0 = call ptr @py_obj_or(ptr %ambiguous, ptr %registry_right)'),
+        'unknown_root_value': ('%table0 = call ptr @py_obj_or(ptr %registry_left, ptr %registry_right)',
+                               'store ptr %registry_left, ptr %mixed\n'
+                               '  store ptr %unrelated, ptr %mixed\n'
+                               '  %ambiguous = load ptr, ptr %mixed\n'
+                               '  %table0 = call ptr @py_obj_or(ptr %ambiguous, ptr %registry_right)'),
+        'same_constructor': ('@py_obj_or(ptr %registry_left, ptr %registry_right)',
+                             '@py_obj_or(ptr %registry_left, ptr %registry_left)'),
+        'wrong_operator': ('@py_obj_or(', '@py_obj_xor('),
+        'wrong_callee': ('@py_obj_or(', '@unrelated('),
+        'wrong_arity': ('@py_obj_or(ptr %registry_left, ptr %registry_right)',
+                        '@py_obj_or(ptr %registry_left)'),
+        'wrong_return_type': ('%table0 = call ptr @py_obj_or(', '%table0 = call i64 @py_obj_or('),
+        'wrong_argument_type': ('@py_obj_or(ptr %registry_left,', '@py_obj_or(i64 %registry_left,'),
+        'detached_result': (', ptr %table0)', ', ptr %unrelated)'),
+        'ignored_union': (', ptr %table0)', ', ptr %registry_left)'),
+        'substituted_global': ('ptr @".modvar.' + oracle._UNSAFE.replace('.', '_') + '.UNSAFE_INTRINSICS", ptr %table0)',
+                               'ptr %unrelated_global, ptr %table0)'),
+        'publication': (', ptr %published0)', ', ptr %unrelated)'),
+        'class_binding': (', ptr %registry)', ', ptr %unrelated)'),
+        'consumer': ('@py_obj_contains(ptr %registry,', '@py_obj_contains(ptr %unrelated,'),
+    }
+    old, new = replacements[damage]
+    assert old in section
+    section = section.replace(old, new)
+    with pytest.raises(AssertionError):
+        oracle.require_tar_attribute_module(oracle._UNSAFE, _source(), section, remaining, require_definition)
+
+
+def test_union_result_does_not_inherit_operand_identity():
+    flow = oracle._Flow('  %result = call ptr @py_obj_or(ptr %left, ptr %right)\n')
+    assert not flow.reaches('%result', {'%left', '%right'})
+
+
+def test_other_table_initializers_do_not_admit_set_union_results():
+    name = oracle.TAR_COMPILER_MODULES[0]
+    section, remaining = _fixture(name)
+    section = section.replace(
+        '%table0 = call ptr @py_set_from_iterable()',
+        '%left = call ptr @py_set_new()\n'
+        '  %right = call ptr @py_set_new()\n'
+        '  %table0 = call ptr @py_obj_or(ptr %left, ptr %right)',
+    )
     with pytest.raises(AssertionError):
         oracle.require_tar_attribute_module(name, _source(), section, remaining, require_definition)
 
@@ -369,3 +452,60 @@ def test_current_printer_shapes_still_reject_unbound_tables_and_literals(name, d
     section, remaining = _current_fixture(name, **shape)
     with pytest.raises(AssertionError):
         oracle.require_tar_attribute_module(name, _source(), section, remaining, require_definition)
+
+
+def test_production_unsafe_registry_union_has_owned_strict_ir(tmp_path):
+    """Use the exact initializer and real exports, without the full closure."""
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
+    from pcc.frontends.python.type_infer import infer_module
+    from tests.owned_ir_validation import verify_ir_text
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / 'pcc/frontends/python/codegen/unsafe_lowering.py').read_text()
+    tree = ast.parse(source)
+    policy = 'pcc.frontends.python.unsafe_intrinsic_policy'
+    imported = next(node for node in tree.body
+                    if isinstance(node, ast.ImportFrom) and node.module == policy)
+    registry = next(node for node in tree.body
+                    if isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == 'UNSAFE_INTRINSICS')
+    # The production expression is deliberately extracted, not restated as a
+    # smaller fixture that could drift away from the self-hosted initializer.
+    probe = tmp_path / 'registry.py'
+    probe.write_text(ast.get_source_segment(source, imported) + '\n'
+                     + ast.get_source_segment(source, registry) + '\n')
+    paths = [str(probe), str(root / (policy.replace('.', '/') + '.py'))]
+    modules, exports, _ = build_closed_world_context(paths, [oracle._UNSAFE, policy])
+    sections = {}
+    for module in modules:
+        typed = infer_module(module, external_exports=exports)
+        codegen = L1CodeGen(typed, ir_scaffold_mode='on')
+        codegen._strict_no_libpython = True
+        codegen._prefer_native_callable_values = True
+        codegen._native_module_exports = exports
+        codegen._skip_program_main = True
+        section = str(codegen.generate(typed))
+        (tmp_path / (module.name + '.ll')).write_text(section)
+        verify_ir_text(section)
+        assert 'strict.nolib.stub' not in section
+        assert not re.search(r'\b(?:call|invoke)\b[^\n]*@"?py_cpy_', section)
+        sections[module.name] = section
+
+    section = sections[oracle._UNSAFE]
+    tables = (('UNSAFE_INTRINSICS', ('py_set_new', 'py_set_from_iterable')),)
+    _, body = oracle._initializer(section, oracle._UNSAFE, tables, require_definition, None)
+    flow = oracle._Flow(body)
+    constructors = {result for result, callee, _args, _line in flow.calls
+                    if result and callee in tables[0][1]}
+    values = oracle._owned_set_union_results(flow)
+    assert len(values) == 1
+    # The new set is not either operand: this was the old oracle's false
+    # failure. Identity-flow must not acquire a generic call-operand shortcut.
+    slot = '@.modvar.' + oracle._UNSAFE.replace('.', '_') + '.UNSAFE_INTRINSICS'
+    assert not flow.reaches(slot, constructors, rooted=True)
+    assert flow.reaches(slot, values, rooted=True)
+    with pytest.raises(AssertionError, match='unbound construction'):
+        oracle._initializer(section.replace('@py_obj_or(', '@py_obj_xor('),
+                            oracle._UNSAFE, tables, require_definition, None)

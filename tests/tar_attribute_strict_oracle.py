@@ -254,6 +254,49 @@ def _imported_table(section, body, module, member):
     raise AssertionError((module, member, 'missing owned import/member consumer'))
 
 
+def _owned_set_union_results(flow):
+    """Prove a fresh set result without making union an identity edge.
+
+    The owned py_obj_or dispatch calls py_set_union only when both actual
+    operands are native sets. Constructor provenance proves that case here;
+    a generic object OR, one missing operand or an unrelated call cannot do so.
+    """
+    constructors = {result for result, callee, args, instruction in flow.calls
+                    if result and instruction.startswith('call ptr ')
+                    and ((callee == 'py_set_new' and not args)
+                         or (callee == 'py_set_from_iterable' and len(args) == 1
+                             and args[0].startswith('ptr ')))}
+
+    def constructor_origin(argument):
+        pending, seen, origins = list(_tokens(argument)), set(), set()
+        while pending:
+            value = pending.pop()
+            if value in seen:
+                continue
+            seen.add(value)
+            if value in constructors:
+                origins.add(value)
+            elif flow.edges.get(value):
+                pending.extend(flow.edges[value])
+            else:
+                # A constructor somewhere upstream is insufficient if the
+                # same root also carries an unknown value or call result.
+                return None
+        return next(iter(origins)) if len(origins) == 1 else None
+
+    values = set()
+    for result, callee, args, instruction in flow.calls:
+        if (not result or callee != 'py_obj_or' or len(args) != 2
+                or not instruction.startswith('call ptr ')
+                or not all(arg.startswith('ptr ') for arg in args)):
+            continue
+        left = constructor_origin(args[0])
+        right = constructor_origin(args[1])
+        if left is not None and right is not None and left != right:
+            values.add(result)
+    return values
+
+
 def _initializer(section, module, tables, require_definition, bodies):
     initializer = '_pcc_py_module_top_' + module.replace('.', '_')
     require_definition(section, initializer, bodies=bodies)
@@ -264,6 +307,11 @@ def _initializer(section, module, tables, require_definition, bodies):
         symbol = '.modvar.' + module.replace('.', '_') + '.' + table
         assert re.search(r'^' + _reference(symbol) + r'\s*=\s*[^\n]*\bglobal ptr\b', section, re.M)
         values = {result for result, callee, _args, _ in flow.calls if result and callee in constructors}
+        if module == _UNSAFE and table == 'UNSAFE_INTRINSICS':
+            # This registry combines its ordinary names with shared intrinsic
+            # metadata. Require the fresh union itself to reach the global:
+            # either operand alone, or a dormant unrelated union, is not enough.
+            values = _owned_set_union_results(flow)
         assert values and flow.reaches('@"' + symbol + '"', values, rooted=True), (table, 'unbound construction')
         names = _literal_symbols(section, table)
         assert any(callee == 'py_module_attr_set' and len(args) == 3
