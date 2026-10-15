@@ -31,6 +31,78 @@ def _digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _image_header_receipt(path):
+    """Bounded metadata for failure evidence, never a loader/admission verdict."""
+    receipt = {"path": str(path), "capture_limit_bytes": 4096}
+    try:
+        with Path(path).open("rb") as stream:
+            receipt["file_size"] = os.fstat(stream.fileno()).st_size
+            data = stream.read(receipt["capture_limit_bytes"])
+        receipt.update({"captured_bytes": len(data), "magic_hex": data[:4].hex(),
+                        "captured_prefix_sha256": hashlib.sha256(data).hexdigest()})
+        if not data.startswith(b"MZ"):
+            receipt["format"] = "ELF" if data.startswith(b"\x7fELF") else "unknown"
+            return receipt
+        receipt["format"] = "PE"
+        if len(data) < 64:
+            raise ValueError("DOS header is truncated")
+        pe = struct.unpack_from("<I", data, 60)[0]
+        receipt["pe_offset"] = pe
+        if pe < 64 or pe + 24 > len(data):
+            raise ValueError("PE header is outside the captured prefix")
+        if data[pe:pe + 4] != b"PE\0\0":
+            raise ValueError("PE signature is missing")
+        machine, count = struct.unpack_from("<HH", data, pe + 4)
+        optional_size, characteristics = struct.unpack_from("<HH", data, pe + 20)
+        receipt.update({"machine": machine, "section_count": count,
+                        "optional_header_size": optional_size, "characteristics": characteristics})
+        optional = pe + 24
+        optional_end = min(optional + optional_size, len(data))
+        if optional + 72 > optional_end:
+            raise ValueError("PE optional header is truncated in the captured prefix")
+        magic = struct.unpack_from("<H", data, optional)[0]
+        receipt["optional_magic"] = magic
+        if magic not in (0x10B, 0x20B):
+            raise ValueError("unrecognized PE optional header magic")
+        receipt.update({
+            "entry_point_rva": struct.unpack_from("<I", data, optional + 16)[0],
+            "image_base": struct.unpack_from("<Q" if magic == 0x20B else "<I", data,
+                                             optional + (24 if magic == 0x20B else 28))[0],
+            "section_alignment": struct.unpack_from("<I", data, optional + 32)[0],
+            "file_alignment": struct.unpack_from("<I", data, optional + 36)[0],
+            "size_of_image": struct.unpack_from("<I", data, optional + 56)[0],
+            "size_of_headers": struct.unpack_from("<I", data, optional + 60)[0],
+            "subsystem": struct.unpack_from("<H", data, optional + 68)[0],
+            "dll_characteristics": struct.unpack_from("<H", data, optional + 70)[0],
+        })
+        directories = optional + (112 if magic == 0x20B else 96)
+        if directories <= optional_end:
+            directory_count = struct.unpack_from("<I", data, directories - 4)[0]
+            captured = min(directory_count, 16, (optional_end - directories) // 8)
+            receipt["directory_count"] = directory_count
+            receipt["directories_truncated"] = captured != directory_count
+            receipt["directories"] = [
+                {"index": index, "rva": rva, "size": size}
+                for index in range(captured)
+                for rva, size in [struct.unpack_from("<II", data, directories + index * 8)]
+            ]
+        sections = optional + optional_size
+        captured = min(count, 32, max(0, (len(data) - sections) // 40))
+        receipt["sections_truncated"] = captured != count
+        receipt["sections"] = []
+        for index in range(captured):
+            section = sections + index * 40
+            virtual_size, rva, raw_size, raw = struct.unpack_from("<IIII", data, section + 8)
+            receipt["sections"].append({
+                "index": index, "name": data[section:section + 8].rstrip(b"\0").decode("ascii", "replace"),
+                "virtual_size": virtual_size, "rva": rva, "raw_size": raw_size, "raw_offset": raw,
+                "characteristics": struct.unpack_from("<I", data, section + 36)[0],
+            })
+    except (OSError, ValueError, struct.error) as exc:
+        receipt["inspection_error"] = str(exc)
+    return receipt
+
+
 @contextlib.contextmanager
 def performance_lock():
     path = ROOT / "build" / ".pcc-performance.lock"
@@ -244,6 +316,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
     environment = _stage_environment(gc_backend, jobs, rss_limit)
     suffix = ".exe" if os.name == "nt" else ""
     records = []
+    incomplete_stage = None
     compiler = [sys.executable, "-m", "pcc"]
     canary = out_dir / "canary.py"
     canary.write_text(
@@ -361,6 +434,12 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                                "dependencies": dependency_receipt(output)})
                 if _digest(compiler[0]) != compiler_digest:
                     raise RuntimeError("input compiler changed during stage " + str(stage))
+                # Preserve completed compilation even when the first native
+                # launch fails. Keep stages/progress reserved for validated
+                # canaries, and never borrow a reused compiler's old canary.
+                incomplete_stage = dict(record, canary_status="pending",
+                                        image=_image_header_receipt(output))
+                incomplete_stage.pop("canary", None)
                 compiler = [str(output)]
                 executable = out_dir / (f"canary{stage}" + suffix)
                 executable.unlink(missing_ok=True)
@@ -394,6 +473,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                                     "compile": canary_compile, "run": canary_run,
                                     "output_sha256": _digest(log)}
                 records.append(record)
+                incomplete_stage = None
                 (out_dir / "progress.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
             fixed = False
             if stage_limit == 3:
@@ -419,6 +499,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
             return receipt
         except BaseException as exc:
             (out_dir / "failure.json").write_text(json.dumps({"source": source, "stages": records,
+                                                              "incomplete_stage": incomplete_stage,
                                                               "error": str(exc)}, indent=2), encoding="utf-8")
             raise
 
