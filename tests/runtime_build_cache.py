@@ -27,6 +27,7 @@ from pcc.frontends.python.pipeline_runtime_archive import target_id, write_targe
 from pcc.tools.runtime_archive_provenance import (
     ProvenanceError,
     capi_inventory_path_for_archive,
+    codegen_checksum,
     manifest_path_for_archive,
     verify_runtime_archive_manifest,
 )
@@ -326,6 +327,11 @@ def _pcc_runtime_cache_key(
         else _pcc_runtime_source_key(pcc_bin, runtime_source=runtime_source)
     )
     digest.update(source_key.encode("ascii"))
+    # Use the same compiler identity as runtime provenance admission. The
+    # partial source key alone omits provider/driver changes and can select an
+    # archive that the explicit-runtime fixture correctly rejects as stale.
+    digest.update(b"\0codegen\0")
+    digest.update(codegen_checksum().encode("ascii"))
     return digest.hexdigest()[:24] + "-" + variant
 
 

@@ -197,7 +197,10 @@ def _top_level_import_targets(
     top_level_only: bool,
     consumed_unsafe_imports: bool = False,
 ) -> list[tuple[str, str]]:
-    source = _without_inactive_runtime_imports(source)
+    source = _without_inactive_runtime_imports(
+        _without_attribute_error_handler_imports(source)
+    )
+    masked_source = _source_import_discovery_text(source)
     targets: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -213,7 +216,7 @@ def _top_level_import_targets(
         targets.append((src, module_name))
 
     for target_mod in _iter_source_import_specs(
-        source,
+        masked_source,
         top_level_only=top_level_only,
     ) + _iter_source_importlib_literal_specs(
         source,
@@ -230,7 +233,7 @@ def _top_level_import_targets(
         add_candidate(target_mod)
 
     for module_spec, imported_names in _iter_source_import_from_specs(
-        source,
+        masked_source,
         top_level_only=top_level_only,
     ):
         if module_spec.startswith("."):
@@ -303,7 +306,7 @@ def _package_import_targets(
     targets: list[tuple[str, str]] = []
     seen_targets: set[str] = set()
     import_specs = _iter_source_import_from_specs(
-        source,
+        _source_import_discovery_text(source),
         top_level_only=top_level_only,
     )
     for module_spec, imported_names in import_specs:
@@ -466,14 +469,48 @@ def _collect_relative_module_closure(
 
     while queue:
         src_path, mod_name = queue.pop(0)
-        for target_src, target_mod in _package_import_targets(
+        local_root = _module_root_from_src(src_path, mod_name)
+        targets = _package_import_targets(
             src_path,
             mod_name,
-            root_dir=root_dir,
+            root_dir=local_root,
+            top_level_only=src_path != entry_src and "." not in mod_name,
             include_relative=True,
-            include_same_package_absolute=recurse_same_package_absolute,
+            include_same_package_absolute=False,
             consumed_unsafe_imports=consumed_unsafe_imports and src_path == entry_src,
-        ):
+        )
+        if recurse_same_package_absolute:
+            # Keep historical same-package lazy edges; absolute resolution uses
+            # the entry's stable search root, independent of importer location.
+            targets.extend(
+                _package_import_targets(
+                    src_path,
+                    mod_name,
+                    root_dir=root_dir,
+                    top_level_only=src_path != entry_src and "." not in mod_name,
+                    include_relative=False,
+                    include_same_package_absolute=True,
+                    consumed_unsafe_imports=(
+                        consumed_unsafe_imports and src_path == entry_src
+                    ),
+                )
+            )
+            # Executable package entries need the same locally resolved eager
+            # absolute-import edges as plain script entries. A dependency can
+            # import a sibling package solely to retain its native ABI exports.
+            with open(src_path, "r", encoding="utf-8") as stream:
+                source = stream.read()
+            targets.extend(
+                _top_level_import_targets(
+                    root_dir,
+                    source,
+                    top_level_only=src_path != entry_src,
+                    consumed_unsafe_imports=(
+                        consumed_unsafe_imports and src_path == entry_src
+                    ),
+                )
+            )
+        for target_src, target_mod in targets:
             if target_mod in seen:
                 continue
             target_src = str(os.path.abspath(target_src))
@@ -494,12 +531,11 @@ def _collect_multi_source_relative_closure(
     """Return explicit sources plus their package-local source closure.
 
     Relative imports retain the historical recursive scan used by the
-    bootstrap compiler closure.  Module-scope absolute imports rooted in the
-    same top-level package are included too; without that second edge,
-    ``from pcc.diagnostics import DiagnosticSpan`` could emit an external class
-    reference while omitting the module that owns its definition.  Absolute
-    imports inside functions stay lazy and stdlib/third-party packages remain
-    outside this closure.
+    bootstrap compiler closure, including top-level package initializers.
+    Module-scope absolute imports follow ordinary local/project/package-site
+    resolution, including other packages that provide native ABI exports.
+    Absolute imports inside dependency functions stay lazy. Ambient stdlib and
+    third-party lookup remains the separate provider-admission path.
 
     When ``recursive_stdlib=True`` (Issue 11.B.1), also pulls in any
     pure-Python stdlib module that's transitively imported by the seed
@@ -517,25 +553,34 @@ def _collect_multi_source_relative_closure(
         mod_name: src_path for src_path, mod_name in zip(ordered_srcs, ordered_mods)
     }
     queue = list(zip(ordered_srcs, ordered_mods))
+    absolute_root = _module_root_from_src(queue[0][0], queue[0][1]) if queue else ""
     queue_i = 0
     while queue_i < len(queue):
         src_path, mod_name = queue[queue_i]
         queue_i += 1
-        if "." not in mod_name:
-            continue
         root_dir = _module_root_from_src(src_path, mod_name)
-        targets = _package_import_targets(
-            src_path,
-            mod_name,
-            root_dir=root_dir,
-            include_relative=True,
-            include_same_package_absolute=False,
+        with open(src_path, "r", encoding="utf-8") as stream:
+            source = stream.read()
+        targets = _top_level_import_targets(
+            absolute_root,
+            source,
+            top_level_only=True,
         )
         targets.extend(
             _package_import_targets(
                 src_path,
                 mod_name,
                 root_dir=root_dir,
+                top_level_only="." not in mod_name,
+                include_relative=True,
+                include_same_package_absolute=False,
+            )
+        )
+        targets.extend(
+            _package_import_targets(
+                src_path,
+                mod_name,
+                root_dir=absolute_root,
                 top_level_only=True,
                 include_relative=False,
                 include_same_package_absolute=True,

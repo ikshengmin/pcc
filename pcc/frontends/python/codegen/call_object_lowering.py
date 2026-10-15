@@ -614,7 +614,11 @@ class CallObjectLoweringMixin:
     def _emit_slot_call_operand(self, expr: Expr, label: str):
         """Evaluate one operand into an independent owning authoritative root."""
         if self._expr_returns_unsafe_raw_pointer(expr):
-            raise L1CodegenError("raw pointer cannot be a slot-call operand: " + type(expr).__name__)
+            raise L1CodegenError(
+                "raw pointer cannot be a slot-call operand: " + type(expr).__name__
+                + " in " + str(self.current_function.name)
+                + " at " + expr.span.file + ":" + str(expr.span.line)
+            )
         # Resume-body operand roots are enrolled in the owning heap frame by
         # _new_slot_call_root, including results created while evaluating a
         # suspending expression. They are restored before resume dispatch.

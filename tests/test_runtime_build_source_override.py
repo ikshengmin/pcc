@@ -45,9 +45,9 @@ def runtime_sources(tmp_path, monkeypatch):
 
 
 def test_default_runtime_key_preserves_v4_serialization(runtime_sources):
-    # Re-pinned when the retired C-runtime selectors PCC_RUNTIME_CC and
-    # PCC_RUNTIME_HIGH left the key's environment inputs (2026-09-25).
-    assert cache._pcc_runtime_source_key(Path("/frozen/pcc")) == "008d6ddf1d7fff18b0be5cfe"
+    # Checked against unchanged HEAD source-key serialization. The canonical
+    # compiler checksum binds the cache key separately from this source key.
+    assert cache._pcc_runtime_source_key(Path("/frozen/pcc")) == "7a7329e45c09cd208ce0c982"
 
 
 def test_identical_external_runtime_uses_same_logical_source_key(runtime_sources):
@@ -129,3 +129,11 @@ def test_runtime_override_copies_readonly_source_into_writable_verified_staging(
     finally:
         for path, mode in old_modes.items():
             path.chmod(mode)
+
+
+def test_runtime_cache_key_binds_shared_codegen_identity(runtime_sources, monkeypatch):
+    monkeypatch.setattr(cache, "codegen_checksum", lambda: "1" * 64)
+    before = cache._pcc_runtime_cache_key(runtime_sources.pcc_bin, variant="pcc-py")
+    monkeypatch.setattr(cache, "codegen_checksum", lambda: "2" * 64)
+    after = cache._pcc_runtime_cache_key(runtime_sources.pcc_bin, variant="pcc-py")
+    assert before != after

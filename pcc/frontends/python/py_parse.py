@@ -2150,9 +2150,8 @@ class Parser:
             line=line,
         )
 
-    def _parse_fstring_parts(self, raw: str, line: int) -> list:
+    def _fstring_source_parts(self, raw: str, line: int) -> list:
         body = self._string_body(raw)
-        is_raw = "r" in self._string_prefix(raw).lower()
         out = []
         literal = []
         i = 0
@@ -2169,7 +2168,7 @@ class Parser:
             if ch == "{":
                 if literal:
                     literal_text = "".join(literal)
-                    out.append(_FStringText(literal_text, is_raw, line))
+                    out.append((literal_text, False))
                     literal = []
                 start = i + 1
                 depth = 0
@@ -2210,7 +2209,7 @@ class Parser:
                         depth += 1
                     elif c in ")]}":
                         if c == "}" and depth == 0:
-                            out.append(self._parse_fstring_expr(body[start:i], line))
+                            out.append((body[start:i], True))
                             i += 1
                             break
                         if depth > 0:
@@ -2232,7 +2231,17 @@ class Parser:
             i += 1
         if literal:
             literal_text = "".join(literal)
-            out.append(_FStringText(literal_text, is_raw, line))
+            out.append((literal_text, False))
+        return out
+
+    def _parse_fstring_parts(self, raw: str, line: int) -> list:
+        is_raw = "r" in self._string_prefix(raw).lower()
+        out = []
+        for text, is_expression in self._fstring_source_parts(raw, line):
+            if is_expression:
+                out.append(self._parse_fstring_expr(text, line))
+            else:
+                out.append(_FStringText(text, is_raw, line))
         return out
 
     def _parse_subscript(self):

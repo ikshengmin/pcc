@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 import sys
 
-from pcc.stdlib.importlib import _resolve_name
-from pcc.stdlib.importlib.machinery import ModuleSpec, SourceFileLoader, _decode_utf8_source
+from . import _resolve_name
+from .machinery import ModuleSpec, SourceFileLoader, _decode_utf8_source
 
 
 def resolve_name(name, package):

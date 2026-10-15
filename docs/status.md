@@ -6,6 +6,31 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Harness compiler integration (local source delta)
+
+Baseline `57a64e8735a53dae2782199bfc03d56d3ae75123` plus this source milestone. Frozen sources, patch, actual logs, runtime and native receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-15/harness-project-closure/index.json`.
+
+- Package/multi-entry collection retains eager cross-package ABI providers with
+  stable entry search precedence and bounded optional/lexical/f-string discovery.
+  Importlib provider siblings use relative imports under native public names.
+  The test runtime cache binds the production compiler checksum.
+- Fifty focused cases pass, including two actual linked native inputs at
+  GC0–4, five existing native f-string cases, host importlib behavior and cache
+  identity checks. One broader integration case remains deselected. Compilation
+  uses current host pcc0, self backend and libpython off; this is not a new-source
+  native pcc1 bootstrap or promotion claim.
+- The unchanged full `/Users/jiamo/my/harness/harness/__main__.py` still refuses
+  `raw pointer cannot be a slot-call operand` in `_run_gui`, `gui_app.py:483`.
+  No full Harness executable was produced. Keep the existing managed/raw-pointer
+  boundary; resolve general typed-call/adapter support without hand-patching
+  Harness. An optional `pcc inspect` of the formatted native fixture timed out
+  at 20 seconds; OS linkage audit of both new fixtures reports libSystem only.
+- Harness is the existing manual Python port and a compile/behavior reference.
+  Upstream-to-T2 generated Harness, current-source pcc1 qualification, full GUI
+  and complete-product acceptance remain open in the translation goal.
+  Application/GUI source bytes are unchanged; owned-process audit is empty.
+
 ## 2026-10-15 cloud continuation
 
 - `1c1905` preserves dict/list/set copy dispatch with owned method-result roots.

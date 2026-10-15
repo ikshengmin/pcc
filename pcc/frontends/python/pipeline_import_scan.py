@@ -82,43 +82,88 @@ def _iter_source_import_specs(source: str, *, top_level_only: bool) -> list[str]
     return out
 
 
+def _literal_import_call_lines(source, markers, *, top_level_only):
+    """Retain raw argument suffixes only for calls outside literals/comments."""
+    scope_lines = _source_module_scope_lines(_source_import_discovery_text(source))
+    out = []
+    continued_quote = ""
+    for raw_line, (_masked_line, at_module_scope) in zip(source.splitlines(), scope_lines):
+        remaining = raw_line
+        calls = []
+        if continued_quote:
+            found, remaining = _source_after_unescaped_delimiter(remaining, continued_quote)
+            if not found:
+                out.append((raw_line, False, calls))
+                continue
+            continued_quote = ""
+        while remaining:
+            selected = ""
+            position = -1
+            for candidate in ["#", "'", '\"'] + markers:
+                candidate_position = remaining.find(candidate)
+                if candidate_position >= 0 and (position < 0 or candidate_position < position):
+                    selected = candidate
+                    position = candidate_position
+            if position < 0 or selected == "#":
+                break
+            remaining = remaining[position:]
+            if selected in markers:
+                remaining = remaining[len(selected):]
+                if not top_level_only or at_module_scope:
+                    calls.append(remaining)
+                continue
+            delimiter = selected * 3 if remaining.startswith(selected * 3) else selected
+            found, remaining = _source_after_unescaped_delimiter(remaining[len(delimiter):], delimiter)
+            if not found:
+                continued_quote = delimiter
+                break
+        out.append((raw_line, not top_level_only or at_module_scope, calls))
+    if "importlib." in source:
+        # Reuse the production parser's replacement-field split. F-string
+        # literal text is data; only its actual expressions execute calls.
+        from pcc.frontends.python.py_lex import Lexer, TK_STRING
+        from pcc.frontends.python.py_parse import Parser
+        parser = Parser("", filename="<import-discovery>")
+        for token in Lexer(source, filename="<import-discovery>").tokenize():
+            if token.kind != TK_STRING or not parser._string_is_f(token.text):
+                continue
+            if top_level_only and not scope_lines[token.line - 1][1]:
+                continue
+            for text, is_expression in parser._fstring_source_parts(token.text, token.line):
+                if is_expression:
+                    expression = parser._split_fstring_expr_parts(text).expr
+                    out.extend(_literal_import_call_lines(
+                        expression, markers, top_level_only=False,
+                    ))
+    return out
+
+
+def _literal_import_name(rest):
+    rest = rest.strip()
+    quote = rest[:1]
+    if quote not in ("'", '\"'):
+        return ""
+    rest = rest[1:]
+    if quote not in rest:
+        return ""
+    name = rest.split(quote, 1)[0]
+    return name if name and not name.startswith(".") else ""
+
+
 def _iter_source_importlib_literal_specs(
     source: str,
     *,
     top_level_only: bool,
 ) -> list[str]:
-    """Return literal modules from importlib.import_module("mod") calls.
-
-    This is intentionally textual and narrow, matching the package-closure
-    scanners above.  It exists so strict no-libpython builds can compile a
-    sibling module named by a literal dynamic import without materialising a
-    CPython module object.
-    """
+    """Retain canonical literal imports from real source calls only."""
     out: list[str] = []
-    marker = "importlib.import_module("
-    lines = (
-        _source_module_scope_lines(source)
-        if top_level_only
-        else [(line, True) for line in source.splitlines()]
-    )
-    for raw_line, at_module_scope in lines:
-        if top_level_only and not at_module_scope:
-            continue
-        stripped = raw_line.strip()
-        if "#" in stripped:
-            stripped = stripped.split("#", 1)[0].strip()
-        if marker not in stripped:
-            continue
-        rest = stripped.split(marker, 1)[1].strip()
-        quote = rest[:1]
-        if quote != "'" and quote != '"':
-            continue
-        rest = rest[1:]
-        if quote not in rest:
-            continue
-        mod_name = rest.split(quote, 1)[0]
-        if mod_name and not mod_name.startswith("."):
-            out.append(mod_name)
+    for _line, _active, calls in _literal_import_call_lines(
+        source, ["importlib.import_module("], top_level_only=top_level_only,
+    ):
+        for rest in calls:
+            name = _literal_import_name(rest)
+            if name:
+                out.append(name)
     return out
 
 
@@ -127,71 +172,35 @@ def _iter_source_importlib_resource_literal_specs(
     *,
     top_level_only: bool,
 ) -> list[str]:
-    """Return literal package anchors named by ``importlib.resources``.
-
-    Resource access imports its package anchor at runtime.  In a closed-world
-    executable that package therefore belongs to the source dependency graph
-    just as surely as a literal ``importlib.import_module`` target does.  Keep
-    discovery finite: only the canonical API spelling and a literal first
-    argument are admitted; computed anchors remain an explicit runtime lookup
-    that succeeds only when another source edge linked the package.
-    """
+    """Retain canonical resource anchors, including multiline first arguments."""
     api_names = (
-        "files",
-        "contents",
-        "is_resource",
-        "open_binary",
-        "open_text",
-        "path",
-        "read_binary",
-        "read_text",
+        "files", "contents", "is_resource", "open_binary", "open_text",
+        "path", "read_binary", "read_text",
     )
     markers = ["importlib.resources." + name + "(" for name in api_names]
     out: list[str] = []
     pending_first_argument = False
-    lines = (
-        _source_module_scope_lines(source)
-        if top_level_only
-        else [(line, True) for line in source.splitlines()]
-    )
-    for raw_line, at_module_scope in lines:
-        if top_level_only and not at_module_scope:
+    for raw_line, active, calls in _literal_import_call_lines(
+        source, markers, top_level_only=top_level_only,
+    ):
+        if not active:
             continue
-        stripped = raw_line.strip()
-        if "#" in stripped:
-            stripped = stripped.split("#", 1)[0].strip()
         if pending_first_argument:
-            if stripped == "":
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
                 continue
             pending_first_argument = False
-            rest = stripped
-            quote = rest[:1]
-            if quote != "'" and quote != '"':
-                continue
-            rest = rest[1:]
-            if quote not in rest:
-                continue
-            package_name = rest.split(quote, 1)[0]
-            if package_name and not package_name.startswith("."):
-                out.append(package_name)
-            continue
-        for marker in markers:
-            if marker not in stripped:
-                continue
-            rest = stripped.split(marker, 1)[1].strip()
-            if rest == "":
+            name = _literal_import_name(stripped)
+            if name:
+                out.append(name)
+        for rest in calls:
+            stripped = rest.strip()
+            if not stripped or stripped.startswith("#"):
                 pending_first_argument = True
-                break
-            quote = rest[:1]
-            if quote != "'" and quote != '"':
                 continue
-            rest = rest[1:]
-            if quote not in rest:
-                continue
-            package_name = rest.split(quote, 1)[0]
-            if package_name and not package_name.startswith("."):
-                out.append(package_name)
-            break
+            name = _literal_import_name(rest)
+            if name:
+                out.append(name)
     return out
 
 

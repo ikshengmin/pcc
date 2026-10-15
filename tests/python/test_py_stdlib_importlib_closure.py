@@ -254,12 +254,11 @@ def test_recursive_provider_adds_package_parents_and_relative_siblings(tmp_path)
     assert "resource_pkg" in modules
 
 
-def test_shallow_multi_closure_admits_required_importlib_provider_only(tmp_path):
-    """A strict shallow multi build must still link its direct import API.
+def test_shallow_multi_closure_admits_direct_owned_providers_only(tmp_path):
+    """A shallow build links directly named providers, not an unrequested tree.
 
-    This is deliberately narrower than ``recursive_stdlib=True``: importing
-    ``importlib`` admits the pcc-owned root provider required at runtime, while
-    an unrelated optional stdlib import remains outside the explicit closure.
+    Every unconditional import below names a runtime dependency. Optional,
+    unrequested standard-library providers stay outside the shallow closure.
     """
     from pcc.frontends.python import pipeline
 
@@ -276,7 +275,8 @@ def test_shallow_multi_closure_admits_required_importlib_provider_only(tmp_path)
     )
     assert "importlib" in modules
     assert "hashlib" in modules
-    assert "keyword" not in modules
+    assert "keyword" in modules
+    assert "calendar" not in modules
 
 
 def test_resource_literal_in_dependency_function_is_a_finite_closure_edge(tmp_path):

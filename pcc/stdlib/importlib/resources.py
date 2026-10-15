@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-from pcc.stdlib.importlib import import_module
+from . import import_module
 
 
 __all__ = [
