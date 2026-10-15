@@ -8,6 +8,7 @@ the process-tree guard remains authoritative for actual RSS.
 
 from dataclasses import dataclass
 import hashlib
+import io
 import os
 import struct
 import sys
@@ -113,35 +114,67 @@ def _release_closed_tracebacks(error):
             pending.append(current.__context__)
 
 
+def _single_buffer_window_supported():
+    """The exact-size BytesIO ownership transfer is verified on these hosts."""
+    if (sys.implementation.name != "cpython"
+            or sys.version_info[:2] not in ((3, 13), (3, 14), (3, 15))
+            or _WORD != 8
+            or hasattr(sys, "gettotalrefcount")
+            or os.environ.get("PYTHONMALLOC", "") == "debug"
+            or os.environ.get("PYTHONMALLOC", "").endswith("_debug")):
+        return False
+    import sysconfig
+    if sysconfig.get_config_var("Py_GIL_DISABLED") != 0:
+        return False
+    return not hasattr(sys, "_is_gil_enabled") or sys._is_gil_enabled()
+
+
 def _read_window(path, ledger, expected_size=None, expected_digest=None):
     """Read exactly the admitted opened file; hash the bytes actually used."""
-    buffer = view = raw = None
+    buffer = view = remaining = raw = None
+    single_buffer = _single_buffer_window_supported()
     try:
         with open(path, "rb", buffering=0) as stream:
             size = os.fstat(stream.fileno()).st_size
             if size < 0 or (expected_size is not None and size != expected_size):
                 raise link.LinkError("PCO input size changed: " + path)
             ledger.check(
-                ledger.mutable(size) + ledger.immutable(size) + 4096,
+                ledger.immutable(size) + (0 if single_buffer else ledger.mutable(size)) + 4096,
                 label="Mach-O PCO read/freeze window",
             )
-            buffer = bytearray(size)
-            view = memoryview(buffer)
+            # Exact bytes initialization takes ownership without copying on
+            # the supported GIL CPython builds. The temporary bytes expression
+            # has no surviving reference, so getbuffer() need not detach it.
+            # Keep its size unchanged, release every exported view, then
+            # getvalue() returns the same immutable backing allocation. The
+            # fixed reservation also covers BytesIO, views and I/O scratch.
+            buffer = io.BytesIO(b"\0" * size) if single_buffer else bytearray(size)
+            view = buffer.getbuffer() if single_buffer else memoryview(buffer)
             cursor = 0
             while cursor < size:
-                count = stream.readinto(view[cursor:])
+                with view[cursor:] as remaining:
+                    count = stream.readinto(remaining)
                 if not count:
                     raise link.LinkError("PCO input became shorter: " + path)
                 cursor += count
             if stream.read(1):
                 raise link.LinkError("PCO input became longer: " + path)
-            raw = bytes(buffer)
+            view.release()
+            view = None
+            raw = buffer.getvalue() if single_buffer else bytes(buffer)
+            if single_buffer:
+                buffer.close()
+            buffer = None
         digest = hashlib.sha256(raw).digest()
         if expected_digest is not None and digest != expected_digest:
             raise link.LinkError("PCO input content changed: " + path)
         return raw, digest
     finally:
-        view = buffer = raw = None
+        if view is not None:
+            view.release()
+        if single_buffer and buffer is not None:
+            buffer.close()
+        view = buffer = remaining = raw = None
 
 
 
@@ -1054,6 +1087,9 @@ def _merge_paths(paths, archives, archive_paths, ledger):
 def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compact_budget=None, caller_owners=()):
     """Private all-PCO path entry; no eager aggregate encoded-input owner."""
     ledger = _Ledger(compact_budget)
+    # Reused budgets can carry an earlier byte refusal into a later wire or
+    # record-work error. Only this operation's refusal belongs in its error.
+    compact_budget.last_rejection = ""
     if type(paths) not in (list, tuple) or type(archives) not in (list, tuple) or type(archive_paths) not in (list, tuple):
         raise link.LinkError("windowed input tables must be lists or tuples")
     if any(type(path) is not str for values in (paths, archive_paths) for path in values):
@@ -1073,7 +1109,9 @@ def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compa
             compact_budget.retained_bytes = previous
     except (native.NativeObjectError, PreciseStackMapError, spec.MachOFormatError) as exc:
         _release_closed_tracebacks(exc)
-        raise link.LinkError("windowed merged object is outside the proven subset: " + str(exc)) from exc
+        sizes = getattr(compact_budget, "last_rejection", "") if isinstance(exc, PreciseStackMapError) else ""
+        detail = "; " + sizes + " ledger_retained=" + str(ledger.retained) if sizes else ""
+        raise link.LinkError("windowed merged object is outside the proven subset: " + str(exc) + detail) from exc
     finally:
         if sections is not None:
             sections.clear()
