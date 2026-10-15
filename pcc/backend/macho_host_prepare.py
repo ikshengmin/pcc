@@ -628,6 +628,33 @@ def _input_relocations(descriptor, packed, section_index, local_rename, base):
                          section_key, minuend_name, None if target_offset == -1 else target_offset)
 
 
+def _canonical_symbol_indices(merged, order, unresolved, ledger):
+    """Number names without constructing a second symbol-row object graph.
+
+    Match native._final_symbol_rows: stable per-section offset order, locals
+    before externals, then sorted undefineds. Sorting must not mutate the
+    original symbol order, which selects the first alias for section targets.
+    """
+    count = sum(len(merged[key].symbols) for key in order) + len(unresolved)
+    retained = ledger.mapping(count)
+    # One sorted pointer array, key array and Timsort merge scratch. The
+    # source names/offsets are retained by the already charged merged model.
+    ledger.check(retained + ledger.sequence(count), label="Mach-O canonical symbol index")
+    result = {}
+    for external in (False, True):
+        for key in order:
+            for symbol in sorted(merged[key].symbols, key=lambda symbol: symbol.offset):
+                if symbol.external == external:
+                    result[symbol.name] = len(result)
+    for name in sorted(unresolved):
+        result[name] = len(result)
+    # The completed dict borrows every key from merged/unresolved, both of
+    # which stay charged and live for its entire lifetime. Charge its table
+    # and new index integers; resize/sort scratch has actually retired.
+    ledger.retained += ledger.rounded(sys.getsizeof(result)) + ledger.integers(len(result))
+    return result
+
+
 def _merge_paths(paths, archives, archive_paths, ledger):
     """Return only detached final sections/rows; retire every input owner."""
     from .macho_archive import ArchiveError, read_archive, select_members
@@ -646,7 +673,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             raise link.LinkError("nothing to link")
 
         symbol_count = sum(len(item.symbols) for item in descriptors)
-        ledger.keep(3 * ledger.budget._set_bytes(symbol_count), label="Mach-O archive symbol state")
+        archive_symbol_bytes = 3 * ledger.budget._set_bytes(symbol_count)
+        ledger.keep(archive_symbol_bytes, label="Mach-O archive symbol state")
         already_defined, undefined = set(), set()
         for descriptor in descriptors:
             _accumulate_external_symbol_state(descriptor.symbols, already_defined, undefined)
@@ -672,15 +700,18 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             raw = None
         members = pulled = member = _pending = None
         already_defined = undefined = None
+        ledger.retained -= archive_symbol_bytes
+        descriptor_bytes = ledger.retained
 
         symbol_count = sum(len(item.symbols) for item in descriptors)
         section_count = sum(len(item.sections) for item in descriptors)
         function_count = sum(len(functions) for item in descriptors for functions in item.stack_functions)
         region_count = sum(len(regions) for item in descriptors for regions in item.regions)
-        # Symbol dictionaries, canonical rows, renames, merged TextSymbols,
-        # provenance and address lookup are all simultaneously live. Their
-        # count is the actual symbol count, never the relocation count.
-        symbol_metadata = 6 * ledger.mapping(symbol_count) + 5 * ledger.budget._set_bytes(symbol_count)
+        # During placement only provenance, local renames and duplicate
+        # definitions need symbol-count mappings. Canonical rows are never
+        # constructed here; final-index/address lookups start after the
+        # provenance and duplicate/reference owners have actually retired.
+        symbol_metadata = 3 * ledger.mapping(symbol_count) + 5 * ledger.budget._set_bytes(symbol_count)
         symbol_metadata += ledger.sequence(symbol_count) + symbol_count * 256
         # Every occurrence can get a distinct collision suffix. Do not use
         # a distinct-name census to charge repeated source name ownership.
@@ -745,9 +776,33 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         appearance = {key: index for index, key in enumerate(order)}
         rank = {"__TEXT": 0, "__DATA_CONST": 1, "__DATA": 2}
         order.sort(key=lambda key: (rank.get(key[0], 3), bool(merged[key].zerofill_size and not merged[key].data_size), appearance[key]))
+        definitions = defined = referenced = weak_references = strong_references = None
+        appearance = bases = input_keys = placements = descriptor = section = symbol = None
+        # Replace the now-retired placement reservation with a conservative
+        # census of the surviving fixed models. Keep every input descriptor
+        # and archive-parser charge, including the caller's prior retention.
+        ledger.retained = descriptor_bytes
+        for owner in (order, plans, local_renames, stack_symbols, unresolved,
+                      weak_unresolved, normal_parts, rebase_parts, stack_payloads):
+            ledger.retained += _model_bytes(owner, ledger.budget)
+        ledger.retained += ledger.mapping(len(merged))
+        for target in merged.values():
+            ledger.retained += 1024 + _model_bytes(target.symbols, ledger.budget)
+            ledger.retained += _model_bytes(target.data_parts, ledger.budget)
+            ledger.retained += _model_bytes(target.data_in_code, ledger.budget)
+        # Future appends can own two payload parts (padding and data), an
+        # ordinary row part, a rebased row part and a stack-map snapshot per
+        # input section. Keep old/new list-growth arrays admitted as well as
+        # one current input's placement lookup during the second pass.
+        ledger.keep(5 * ledger.sequence(section_count)
+                    + ledger.mapping(max(len(item.sections) for item in descriptors))
+                    + 16384, label="Mach-O detached part-table growth")
+        ledger.check(label="Mach-O surviving merge metadata")
+        # Section indices, addresses and the two part tables are keyed by
+        # output sections, never by input symbols or relocation records.
+        ledger.keep(4 * ledger.mapping(len(order)), label="Mach-O detached section indexes")
         section_indices = {key: index for index, key in enumerate(order, 1)}
         addresses, cursor = {}, 0
-        skeletons = []
         for key in order:
             target = merged[key]
             cursor = native._align_up(cursor, target.align_log2)
@@ -755,18 +810,18 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             cursor += target.zerofill_size or target.data_size
             if cursor > native._UINT64_MAX:
                 raise link.LinkError("merged virtual layout exceeds uint64")
-            skeletons.append(Section(target.sectname, target.segname, align_log2=target.align_log2,
-                                     flags=target.flags, symbols=tuple(sorted(target.symbols, key=lambda s: s.offset))))
             normal_parts[key], rebase_parts[key] = [], []
         # Canonical symbol indices depend on section/symbol ordering only.
         # Their addresses are recomputed after the merged stack-map size is
         # known; zerofill and later segments can follow that table.
-        symbol_rows = native._final_symbol_rows(skeletons, unresolved, set(weak_unresolved), [addresses[key] for key in order])
-        symbol_indices = {symbol["name"]: index for index, symbol in enumerate(symbol_rows)}
+        symbol_indices = _canonical_symbol_indices(merged, order, unresolved, ledger)
         symbol_at = {}
-        for key, target in merged.items():
-            for symbol in target.symbols:
-                symbol_at.setdefault((key, symbol.offset), symbol.name)
+        if any(any(item.target_counts) for item in descriptors):
+            ledger.keep(ledger.mapping(sum(len(target.symbols) for target in merged.values())),
+                        label="Mach-O section-target symbol index")
+            for key, target in merged.items():
+                for symbol in target.symbols:
+                    symbol_at.setdefault((key, symbol.offset), symbol.name)
 
         item = symbol = None
         for index, descriptor in enumerate(descriptors):
@@ -877,7 +932,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         descriptors.clear()
         plans.clear()
         definitions = local_renames = defined = referenced = weak_references = strong_references = None
-        symbol_rows = symbol_indices = symbol_at = skeletons = None
+        symbol_indices = symbol_at = None
         input_plan = input_keys = section = target = bases = placements = None
         appearance = _pending = symbol = None
         ledger.retained = ledger.caller_bytes
@@ -892,17 +947,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         # Rebuild only the small canonical symbol index needed by stack rows.
         symbol_indices = {}
         if stack_payloads:
-            ledger.check(ledger.mapping(symbol_count) + ledger.sequence(symbol_count), label="Mach-O stack symbol index")
-            canonical = []
-            for external_symbol in (False, True):
-                for key in order:
-                    canonical.extend(symbol.name for symbol in sorted(merged[key].symbols, key=lambda item: item.offset)
-                                     if symbol.external == external_symbol)
-            canonical.extend(sorted(unresolved))
-            ledger.check(ledger.mapping(len(canonical)) + ledger.sequence(len(canonical)), label="Mach-O stack symbol index")
-            symbol_indices = {name: i for i, name in enumerate(canonical)}
-            ledger.keep(_model_bytes(symbol_indices, ledger.budget))
-            canonical = None
+            symbol_indices = _canonical_symbol_indices(merged, order, unresolved, ledger)
         if stack_payloads:
             snapshots = sum(ledger.immutable(len(item)) for item in stack_payloads)
             snapshot_raw = sum(len(item) for item in stack_payloads)
@@ -1000,9 +1045,9 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         archive_buffers.clear()
         raw = packed = payload = descriptor = section = target = part = members = None
         pulled = member = item = row_parts = rows = frozen = stack_payload = None
-        stack_offsets = canonical = payload_tuple = _pending = None
+        stack_offsets = payload_tuple = _pending = None
         definitions = local_renames = defined = referenced = weak_references = strong_references = None
-        symbol_rows = symbol_indices = symbol_at = skeletons = input_keys = input_plan = None
+        symbol_indices = symbol_at = input_keys = input_plan = None
         appearance = symbol = owner = None
 
 

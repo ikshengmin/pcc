@@ -61,6 +61,121 @@ def _write_inputs(tmp_path, count=32, relocations=1024):
     return paths
 
 
+def _write_symbol_inputs(tmp_path, count=4, symbols=256):
+    paths = []
+    for index in range(count):
+        names = ["_main" if index == offset == 0 else f"_unit{index}_{offset}"
+                 for offset in range(symbols)]
+        value = native.NativeObject.from_sections([
+            obj.Section(
+                "__text", "__TEXT", data=b"\xc0\x03\x5f\xd6" * symbols,
+                flags=obj.TEXT_SECTION_FLAGS, align_log2=2,
+                symbols=tuple(obj.TextSymbol(name, offset * 4)
+                              for offset, name in enumerate(names)),
+            ),
+            obj.Section(
+                "__data", "__DATA", data=b"\0" * 8, align_log2=3,
+                relocations=(obj.Relocation(
+                    0, names[-1], spec.ARM64_RELOC_UNSIGNED, False, 3,
+                ),),
+            ),
+        ])
+        path = tmp_path / f"symbols{index}.pco"
+        path.write_bytes(native.encode_native_object(value))
+        paths.append(str(path))
+    return paths
+
+
+def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path):
+    from pathlib import Path
+    from pcc.backend import macho_host_prepare as host
+
+    paths = _write_symbol_inputs(tmp_path)
+    # The old simultaneous six-map reservation exceeds this allowance even
+    # though the phase-separated owners and final validation fit it.
+    budget = _budget(5_000_000)
+    budget.retained_bytes = 1024
+    prepared = host.prepare_executable_from_paths(paths, compact_budget=budget)
+    assert budget.retained_bytes == 1024
+    actual = macho_exec.link_prepared_executable(prepared, compact_budget=budget)
+    eager = macho_exec.prepare_executable_object(
+        [native.decode_packed_native_object(Path(path).read_bytes()) for path in paths],
+        _consume_inputs=True, _source_view=True, compact_budget=_budget(20_000_000),
+    )
+    expected = macho_exec.link_prepared_executable(eager, compact_budget=_budget(20_000_000))
+    assert actual == expected
+    assert spec.parse_object(actual).header["filetype"] == spec.MH_EXECUTE
+    assert budget.retained_bytes == 1024
+
+
+def test_symbol_planning_owners_retire_before_payload_windows(tmp_path, monkeypatch):
+    import weakref
+    from pcc.backend import macho_host_prepare as host
+
+    paths = _write_symbol_inputs(tmp_path, count=3, symbols=16)
+    original_definitions = host.ShardedSymbolDefinitions
+    original_read = host._read_window
+    original_rows = native._final_symbol_rows
+    definition_owners, row_calls, windows = [], [], []
+
+    class TrackedDefinitions(original_definitions):
+        def __init__(self):
+            super().__init__()
+            definition_owners.append(weakref.ref(self))
+
+    def read(path, ledger, expected_size=None, expected_digest=None):
+        if expected_digest is not None:
+            assert definition_owners and all(owner() is None for owner in definition_owners)
+            assert row_calls == []
+            windows.append(path)
+        return original_read(path, ledger, expected_size, expected_digest)
+
+    def final_rows(*args, **kwargs):
+        row_calls.append(len(windows))
+        return original_rows(*args, **kwargs)
+
+    monkeypatch.setattr(host, "ShardedSymbolDefinitions", TrackedDefinitions)
+    monkeypatch.setattr(host, "_read_window", read)
+    monkeypatch.setattr(native, "_final_symbol_rows", final_rows)
+    host.prepare_executable_from_paths(paths, compact_budget=_budget())
+    assert windows == paths
+    assert row_calls == [len(paths)]
+
+
+def test_canonical_symbol_index_admits_sort_and_preserves_alias_order(monkeypatch):
+    from pcc.backend import macho_host_prepare as host
+
+    key = ("__TEXT", "__text")
+    symbols = [obj.TextSymbol("_late", 8), obj.TextSymbol("_local", 4, external=False),
+               obj.TextSymbol("_first_alias", 0), obj.TextSymbol("_second_alias", 0)]
+    merged = {key: macho_link._MergedSection(*key, obj.TEXT_SECTION_FLAGS, symbols=symbols)}
+    unresolved = ["_z", "_a"]
+    budget = _budget()
+    budget.retained_bytes = 1234
+    ledger = host._Ledger(budget, retained=5678)
+    result = host._canonical_symbol_indices(merged, [key], unresolved, ledger)
+    expected = native._final_symbol_rows(
+        [obj.Section("__text", "__TEXT", symbols=tuple(symbols))],
+        unresolved, set(), [0],
+    )
+    assert result == {symbol["name"]: index for index, symbol in enumerate(expected)}
+    assert merged[key].symbols == symbols
+    assert [symbol.name for symbol in symbols] == ["_late", "_local", "_first_alias", "_second_alias"]
+    for name in result:
+        assert any(name is symbol.name for symbol in symbols) or any(name is value for value in unresolved)
+    assert ledger.retained == 5678 + ledger.rounded(sys.getsizeof(result)) + ledger.integers(len(result))
+    assert budget.retained_bytes == 1234
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("canonical sorting began before its allocation was admitted")
+
+    monkeypatch.setattr(host, "sorted", forbidden, raising=False)
+    tiny = host._Ledger(_budget(1024))
+    with pytest.raises(maps.PreciseStackMapError, match="Mach-O canonical symbol index"):
+        host._canonical_symbol_indices(merged, [key], unresolved, tiny)
+    assert tiny.retained == 0
+
+
 def test_windowed_preparation_admits_more_than_aggregate_raw_bytes(tmp_path):
     from pcc.backend.macho_host_prepare import prepare_executable_from_paths
 
