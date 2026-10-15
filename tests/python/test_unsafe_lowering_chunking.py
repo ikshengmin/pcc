@@ -32,6 +32,23 @@ HELPERS = (
 )
 
 
+# These routes return before the bounded family dispatcher. Keep an explicit
+# inventory rather than accepting every name left over from the family table.
+DIRECT_DISPATCH_INTRINSICS = frozenset({
+    "c_abi_alignof",
+    "c_abi_sizeof",
+    "call_c_abi",
+    "call_void_i32",
+    "directory_close",
+    "directory_entry_type",
+    "directory_error",
+    "directory_next",
+    "directory_open",
+    "windows_full_path",
+    "windows_real_path",
+})
+
+
 def _unsafe_mixin_methods() -> dict[str, ast.FunctionDef]:
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
     mixin = next(
@@ -44,6 +61,36 @@ def _unsafe_mixin_methods() -> dict[str, ast.FunctionDef]:
         for node in mixin.body
         if isinstance(node, ast.FunctionDef)
     }
+
+
+def _direct_dispatch_intrinsics() -> tuple[str, ...]:
+    names = []
+    dispatcher = _unsafe_mixin_methods()["_emit_unsafe_intrinsic_call"]
+    for statement in dispatcher.body:
+        if (isinstance(statement, ast.Assign)
+                and isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Name)
+                and statement.value.func.id == "_unsafe_intrinsic_family"):
+            return tuple(names)
+        if not isinstance(statement, ast.If):
+            continue
+        test = statement.test
+        if not (isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Name)
+                and test.left.id == "intrinsic" and len(test.ops) == 1):
+            continue
+        operand = test.comparators[0]
+        if isinstance(test.ops[0], ast.Eq):
+            literals = [operand]
+        elif isinstance(test.ops[0], ast.In) and isinstance(operand, ast.Tuple):
+            literals = operand.elts
+        else:
+            raise AssertionError("unclassified direct intrinsic guard")
+        assert all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+                   for item in literals)
+        assert isinstance(statement.body[-1], ast.Return)
+        names.extend(item.value for item in literals)
+    raise AssertionError("unsafe dispatcher lost its bounded family lookup")
 
 
 def test_unsafe_intrinsic_families_are_complete_unique_and_fail_closed() -> None:
@@ -60,11 +107,18 @@ def test_unsafe_intrinsic_families_are_complete_unique_and_fail_closed() -> None
         for intrinsic in UNSAFE_INTRINSICS
         if intrinsic.startswith("atomic_") or intrinsic.startswith("define_")
     }
-    assert set(flattened) | specialized == set(UNSAFE_INTRINSICS)
+    direct = _direct_dispatch_intrinsics()
+    assert len(direct) == len(set(direct))
+    assert set(direct) == DIRECT_DISPATCH_INTRINSICS
+    assert set(flattened).isdisjoint(specialized | DIRECT_DISPATCH_INTRINSICS)
+    assert specialized.isdisjoint(DIRECT_DISPATCH_INTRINSICS)
+    assert set(flattened) | specialized | DIRECT_DISPATCH_INTRINSICS == set(UNSAFE_INTRINSICS)
 
     for expected_family, family in enumerate(_UNSAFE_INTRINSIC_FAMILIES):
         for intrinsic in family:
             assert _unsafe_intrinsic_family(intrinsic) == expected_family
+    for intrinsic in specialized | DIRECT_DISPATCH_INTRINSICS:
+        assert _unsafe_intrinsic_family(intrinsic) == -1
     assert _unsafe_intrinsic_family("not_a_real_unsafe_intrinsic") == -1
 
 
