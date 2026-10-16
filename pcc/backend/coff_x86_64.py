@@ -61,50 +61,118 @@ def _width(kind):
     raise CoffError("unsupported AMD64 COFF relocation: " + str(kind))
 
 
+_COFF_CHUNK_BYTES = 8192
+
+
+def _coff_section_payload(data) -> bytes:
+    if type(data) is bytes:
+        return data
+    # Match bytearray.extend's accepted buffers/sequences and snapshot timing.
+    # Production sections already own exact bytes, so they need no copy here.
+    copied = bytearray()
+    copied.extend(data)
+    return bytes(copied)
+
+
+def _append_coff_chunk(chunks: list, pending: list, pending_size: int, raw: bytes) -> int:
+    """Bound small-record owners without copying the growing object prefix.
+
+    Native bytearray.extend allocates and copies its entire previous payload.
+    Small records are copied into one bounded batch, then the final image.
+    """
+    size = len(raw)
+    if not size:
+        return pending_size
+    if size >= _COFF_CHUNK_BYTES:
+        if pending:
+            chunks.append(b"".join(pending))
+            pending.clear()
+        chunks.append(raw)
+        return 0
+    pending.append(raw)
+    pending_size += size
+    if pending_size >= _COFF_CHUNK_BYTES:
+        chunks.append(b"".join(pending))
+        pending.clear()
+        return 0
+    return pending_size
+
+
 def emit_object(obj: CoffObject) -> bytes:
     strings = bytearray(b"\0\0\0\0")
+    string_chunks = [strings]
+    string_pending = []
+    string_pending_size = 0
+    string_size = 4
     names = {}
     for name in [sec.name for sec in obj.sections] + [sym.name for sym in obj.symbols]:
         if "\0" in name:
             raise CoffError("NUL in COFF name")
         if len(name.encode("utf-8")) > 8 and name not in names:
-            names[name] = len(strings)
-            strings.extend(name.encode("utf-8") + b"\0")
-    struct.pack_into("<I", strings, 0, len(strings))
-    data = bytearray(b"\0" * (20 + len(obj.sections) * 40))
+            names[name] = string_size
+            raw_name = name.encode("utf-8") + b"\0"
+            string_pending_size = _append_coff_chunk(
+                string_chunks, string_pending, string_pending_size, raw_name,
+            )
+            string_size += len(raw_name)
+    struct.pack_into("<I", strings, 0, string_size)
+    if string_pending:
+        string_chunks.append(b"".join(string_pending))
+        string_pending.clear()
+    headers = bytearray(b"\0" * (20 + len(obj.sections) * 40))
+    chunks = [headers]
+    pending = []
+    pending_size = 0
+    size = len(headers)
     for index, sec in enumerate(obj.sections):
         if sec.align <= 0 or sec.align & (sec.align - 1) or sec.align > 8192:
             raise CoffError("invalid COFF section alignment")
-        raw = len(data)
-        data.extend(sec.data)
-        reloc = len(data)
+        raw = size
+        payload = _coff_section_payload(sec.data)
+        pending_size = _append_coff_chunk(chunks, pending, pending_size, payload)
+        size += len(payload)
+        reloc = size
         count = len(sec.relocations)
         flags = sec.flags | ((sec.align.bit_length()) << 20)
         if count >= 65535:
             flags |= 0x01000000
-            data.extend(struct.pack("<IIH", count + 1, 0, 0))
+            pending_size = _append_coff_chunk(
+                chunks, pending, pending_size, struct.pack("<IIH", count + 1, 0, 0),
+            )
+            size += 10
         for record in sec.relocations:
             width = _width(record.kind)
             if record.offset < 0 or record.offset + width > len(sec.data):
                 raise CoffError("COFF relocation exceeds section")
             if not 0 <= record.symbol < len(obj.symbols):
                 raise CoffError("COFF relocation symbol out of range")
-            data.extend(struct.pack("<IIH", record.offset, record.symbol, record.kind))
+            pending_size = _append_coff_chunk(
+                chunks, pending, pending_size,
+                struct.pack("<IIH", record.offset, record.symbol, record.kind),
+            )
+            size += 10
         encoded = ("/" + str(names[sec.name])).encode() if sec.name in names else sec.name.encode()
-        struct.pack_into("<8sIIIIIIHHI", data, 20 + index * 40, encoded,
+        struct.pack_into("<8sIIIIIIHHI", headers, 20 + index * 40, encoded,
                          0, 0, len(sec.data), raw, reloc if count else 0, 0,
                          min(count, 65535), 0, flags)
-    symoff = len(data)
+    symoff = size
     for symbol in obj.symbols:
         encoded = (struct.pack("<II", 0, names[symbol.name]) if symbol.name in names
                    else symbol.name.encode().ljust(8, b"\0"))
-        data.extend(struct.pack("<8sIhHBB", encoded, symbol.value, symbol.section,
-                                0x20 if symbol.function else 0,
-                                2 if symbol.external else 3, 0))
-    data.extend(strings)
-    struct.pack_into("<HHIIIHH", data, 0, 0x8664, len(obj.sections), 0,
+        pending_size = _append_coff_chunk(
+            chunks, pending, pending_size,
+            struct.pack("<8sIhHBB", encoded, symbol.value, symbol.section,
+                        0x20 if symbol.function else 0,
+                        2 if symbol.external else 3, 0),
+        )
+    if pending:
+        chunks.append(b"".join(pending))
+        pending.clear()
+    chunks.extend(string_chunks)
+    string_chunks.clear()
+    struct.pack_into("<HHIIIHH", headers, 0, 0x8664, len(obj.sections), 0,
                      symoff, len(obj.symbols), 0, 0)
-    return bytes(data)
+    return b"".join(chunks)
 
 
 def parse_object(data: bytes) -> CoffObject:
