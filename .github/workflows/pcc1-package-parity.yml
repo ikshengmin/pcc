@@ -619,7 +619,7 @@ jobs:
 
       - name: Verify Windows global addressing and PE relocations
         timeout-minutes: 2
-        run: uv run --frozen --no-sync ${{ matrix.platform != 'macos-arm64' && '--python 3.13' || '' }} python -m pytest -x -q --junitxml=build/worker-prior-preflight/focused-host.xml tests/python/test_windows_symbol_immediates.py tests/python/test_windows_global_memory_scratch.py tests/python/test_windows_pe_absolute_relocations.py tests/python/test_pe_stackmap_merge.py tests/python/test_pe_host_budget.py tests/python/test_pe_image_size_limit.py ${{ matrix.platform == 'macos-arm64' && 'tests/python/test_macho_phase_events.py' || '' }}
+        run: uv run --frozen --no-sync ${{ matrix.platform != 'macos-arm64' && '--python 3.13' || '' }} python -m pytest -x -q --junitxml=build/worker-prior-focused-host.xml tests/python/test_windows_symbol_immediates.py tests/python/test_windows_global_memory_scratch.py tests/python/test_windows_pe_absolute_relocations.py tests/python/test_pe_stackmap_merge.py tests/python/test_pe_host_budget.py tests/python/test_pe_image_size_limit.py ${{ matrix.platform == 'macos-arm64' && 'tests/python/test_macho_phase_events.py' || '' }}
 
       # fa62fbd9 receipts: compile alone took 189-278s; the 634 MB whole
       # parse was still incomplete at 300s. 85825b40 receipts (Linux): the
@@ -645,6 +645,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           path: |
+            build/worker-prior-focused-host.xml
             build/worker-prior-preflight/**/*.json
             build/worker-prior-preflight/**/*.jsonl
             build/worker-prior-preflight/**/*.log

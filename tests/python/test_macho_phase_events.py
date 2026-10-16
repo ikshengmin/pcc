@@ -372,7 +372,7 @@ def test_ci_selects_phase_tests_on_mac_with_default_xdist_and_existing_receipts(
     focused = focused.split("      - name:", 1)[0]
     assert "timeout-minutes: 2" in focused
     assert "${{ matrix.platform == 'macos-arm64' && '" + path + "' || '' }}" in focused
-    assert "--junitxml=build/worker-prior-preflight/focused-host.xml" in focused
+    assert "--junitxml=build/worker-prior-focused-host.xml" in focused
     originals = (
         "test_windows_symbol_immediates.py", "test_windows_global_memory_scratch.py",
         "test_windows_pe_absolute_relocations.py", "test_pe_stackmap_merge.py",
@@ -381,3 +381,41 @@ def test_ci_selects_phase_tests_on_mac_with_default_xdist_and_existing_receipts(
     assert all("tests/python/" + name in focused for name in originals)
     assert not any(flag in focused for flag in ("-n0", "--noconftest", "addopts=", "--dist="))
     assert "build/worker-prior-preflight/**/*.xml" in workflow
+    assert "            build/worker-prior-focused-host.xml\n" in workflow
+
+
+def test_focused_junit_publication_preserves_the_gate_fresh_output_root(tmp_path):
+    from _pytest.junitxml import LogXML
+
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/pcc1-package-parity.yml").read_text()
+    preflight = workflow.split("  worker-prior-preflight:\n", 1)[1].split("\n  windows-rss-publication:", 1)[0]
+    focused = preflight.split("      - name: Verify Windows global addressing and PE relocations\n", 1)[1]
+    focused = focused.split("      - name:", 1)[0]
+    junit_path = re.search(r"--junitxml=(\S+)", focused).group(1)
+    output_roots = set(re.findall(r"--out-dir (\S+) --phase preflight", preflight))
+    assert output_roots == {"build/worker-prior-preflight"}
+    out = tmp_path / output_roots.pop()
+    destination = tmp_path / junit_path
+    assert not destination.is_relative_to(out)
+    assert "            " + junit_path + "\n" in preflight
+
+    def publish(path):
+        # Exercise pytest's actual directory-creation behavior. A path-only
+        # assertion missed this ordering interaction in the original change.
+        xml = LogXML(str(path), prefix=None)
+        xml.pytest_sessionstart()
+        xml.pytest_sessionfinish()
+        assert path.is_file()
+
+    publish(destination)
+    phase = "preflight"
+    # Preserve the gate's existing precondition, including its error text.
+    assert not out.exists(), phase + " requires a fresh output root"
+
+    # Reproduce the old placement with the same real publisher: it creates
+    # the forbidden root before the gate, so the unchanged precondition fails.
+    out = tmp_path / "old-placement" / "build" / "worker-prior-preflight"
+    publish(out / "focused-host.xml")
+    with pytest.raises(AssertionError, match="preflight requires a fresh output root"):
+        assert not out.exists(), phase + " requires a fresh output root"
