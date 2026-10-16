@@ -17,6 +17,7 @@ from tests.python.test_precise_stackmap_abi import (
     _stale_managed_ssa_ir,
     _target_final_stackmap_ir,
 )
+from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
 from tests.stackmap_global_index_reference import (
     BASELINE_NATIVE_AST_SHA256,
     without_shared_globals_index,
@@ -247,7 +248,8 @@ entry:
 @pytest.mark.parametrize("triple", ("arm64-apple-darwin", "aarch64-unknown-linux-gnu"))
 @pytest.mark.parametrize("optimize", (False, True))
 @pytest.mark.parametrize("route", ("assembly", "structured-pco"))
-def test_complete_output_matches_original_planner(monkeypatch, shape, triple, optimize, route):
+@pytest.mark.parametrize("reference", ("global-index", "scratch-retirement"))
+def test_complete_output_matches_original_planner(monkeypatch, shape, triple, optimize, route, reference):
     source = source_text(shape, triple)
     outputs = []
     original_batch = planner.build_stack_map_plans
@@ -266,8 +268,13 @@ def test_complete_output_matches_original_planner(monkeypatch, shape, triple, op
         with monkeypatch.context() as patch:
             patch.setattr(emitter, "build_function_stack_map_plan", replan)
             if original:
-                patch.setattr(planner, "_build_function_stack_map_plan_native", old_native_planner())
-                patch.setattr(emitter, "build_stack_map_plans", old_batch)
+                if reference == "global-index":
+                    patch.setattr(planner, "_build_function_stack_map_plan_native", old_native_planner())
+                    patch.setattr(emitter, "build_stack_map_plans", old_batch)
+                else:
+                    # Exercise the real shared-index batch entry with the
+                    # frozen pre-retirement planner, as the CI reference does.
+                    disable_scalar_projections(patch)
             if route == "assembly":
                 result = emitter.emit_aarch64_darwin_asm(source, optimize=optimize)
             else:
@@ -299,3 +306,68 @@ def test_emitter_releases_batch_index_before_tailcall_replanning(monkeypatch):
     emitter.emit_aarch64_darwin_asm(source_text("tail-call"), optimize=True)
     assert len(holders) == 3 and all(holder is holders[0] for holder in holders)
     assert not holders[0] and replanned == ["tail0", "tail1", "tail2"]
+
+
+@pytest.mark.parametrize("shape", ("derived", "all-record-kinds", "tail-call"))
+@pytest.mark.parametrize("holder_kind", ("omitted", "empty", "populated"))
+def test_snapshot_reference_keeps_per_function_indexing(monkeypatch, shape, holder_kind):
+    prepared = prepared_module(source_text(shape, functions=3))
+    expected = plan_values(planner.build_stack_map_plans(
+        prepared.functions, prepared.globals_, target="aarch64-darwin",
+        function_symbol=lambda name: "_" + name,
+    ))
+    iterations = []
+
+    class Globals(list):
+        def __iter__(self):
+            iterations.append(len(self))
+            return super().__iter__()
+
+    globals_ = Globals(prepared.globals_)
+    sentinel = {"must-not-be-used": object()}
+    holder = [sentinel] if holder_kind == "populated" else []
+    native = planner._build_function_stack_map_plan_native
+    liveness = planner._native_managed_liveness
+    projection = planner._scalar_window_is_complete
+    with monkeypatch.context() as patch:
+        disable_scalar_projections(patch)
+        reference = planner._build_function_stack_map_plan_native
+        assert reference is not native
+        plans = []
+        for func in prepared.functions:
+            args = (func, globals_, "_" + func.name)
+            if holder_kind != "omitted":
+                args += (holder,)
+            plans.append(reference(*args))
+        assert plan_values(plans) == expected
+        assert iterations == [len(globals_)] * len(prepared.functions)
+        if holder_kind == "populated":
+            assert len(holder) == 1 and holder[0] is sentinel
+            assert list(sentinel) == ["must-not-be-used"]
+        else:
+            assert holder == []
+    assert planner._build_function_stack_map_plan_native is native
+    assert planner._native_managed_liveness is liveness
+    assert planner._scalar_window_is_complete is projection
+
+
+@pytest.mark.parametrize("share", (False, True))
+def test_snapshot_reference_batch_preserves_per_function_global_mutations(monkeypatch, share):
+    prepared = prepared_module(source_text(functions=2))
+    original = prepared.globals_[0]
+    calls = []
+
+    def symbol(name):
+        calls.append(name)
+        if len(calls) == 2:
+            prepared.globals_[0] = replace(original, initializer="65536")
+        return name
+
+    with monkeypatch.context() as patch:
+        disable_scalar_projections(patch)
+        with pytest.raises(BackendUnavailable, match="exceeds the ABI location bound"):
+            planner.build_stack_map_plans(
+                prepared.functions, prepared.globals_, target="aarch64-darwin",
+                function_symbol=symbol, _share_globals_index=share,
+            )
+    assert len(calls) == 2

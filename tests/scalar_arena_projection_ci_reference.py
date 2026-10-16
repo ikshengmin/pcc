@@ -44,5 +44,14 @@ def disable_scalar_projections(patch, allocator=None):
                       names=[ast.alias(name="annotations")], level=0), *nodes], type_ignores=[])
     namespace = dict(vars(stackmaps))
     exec(compile(ast.fix_missing_locations(tree), "<pre-retirement-stackmap-reference>", "exec"), namespace)
-    for name in names:
-        patch.setattr(stackmaps, name, namespace[name])
+    reference_plan = namespace["_build_function_stack_map_plan_native"]
+
+    def per_function_plan(func, globals_, identity_name, _globals_index=None):
+        # The current emitter passes a shared-index holder during its initial
+        # batch. Keep the frozen three-argument oracle unchanged: it rebuilds
+        # the globals index for every function, including tail-call replans.
+        # The reference must neither read nor populate the candidate's holder.
+        return reference_plan(func, globals_, identity_name)
+
+    patch.setattr(stackmaps, "_native_managed_liveness", namespace["_native_managed_liveness"])
+    patch.setattr(stackmaps, "_build_function_stack_map_plan_native", per_function_plan)
