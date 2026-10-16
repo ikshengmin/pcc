@@ -69,6 +69,7 @@ _path_isdir = extern("py_os_path_isdir", (c_obj,), c_int)
 _path_getmtime = extern("py_os_path_getmtime", (c_obj,), c_obj)
 _path_getsize = extern("py_os_path_getsize", (c_obj,), c_obj)
 _path_abspath = extern("py_os_path_abspath", (c_obj,), c_obj)
+_path_commonpath = extern("py_os_path_commonpath", (c_obj,), c_obj)
 _path_commonprefix = extern("py_os_path_commonprefix", (c_obj,), c_obj)
 _path_normcase = extern("py_os_path_normcase", (c_obj,), c_obj)
 _path_splitdrive = extern("py_os_path_splitdrive", (c_obj,), c_obj)
@@ -934,6 +935,16 @@ class _path:
 
     @staticmethod
     def commonpath(paths) -> str:
+        if _platform_name == "win32":
+            if _native_sys.implementation.name != "pcc":
+                return _native_os.path.commonpath(paths)
+            values = [_native_path_text(value) for value in paths]
+            result = _path_commonpath(values)
+            if _error_pending():
+                raise
+            if ptr_is_null(result):
+                raise MemoryError('owned os.path.commonpath result allocation failed')
+            return result
         if not paths:
             raise ValueError("commonpath() arg is an empty sequence")
         split_paths = [p.split("/") for p in paths]
