@@ -3031,6 +3031,7 @@ def _emit_x86_64_module(
         return _emit_prepared_x86_64_module(
             prepared, ir_text, stack_map_plans_out=stack_map_plans_out,
             phase_timing=phase_timing,
+            _share_globals_index=True,
         )
     finally:
         _WINDOWS_ABI = False
@@ -3056,6 +3057,7 @@ def _append_assembly_chunk(
 
 def _emit_prepared_x86_64_module(
     prepared, ir_text: str, *, stack_map_plans_out=None, phase_timing=None,
+    _share_globals_index: bool = False,
 ) -> str:
     global _MODULE_SYMBOLS, _VARARG_FUNCTIONS, _TLS_GLOBALS
     triple = prepared.triple
@@ -3090,40 +3092,57 @@ def _emit_prepared_x86_64_module(
     if global_lines:
         _append_assembly_chunk(chunks, label_lines, global_lines)
     del global_lines
-    for func in functions:
-        if phase_timing is not None:
-            phase_start = phase_timing.start()
-        plan = build_function_stack_map_plan(
-            func,
-            prepared.globals_,
-            target="x86_64-linux",
-            identity_name=_asm_symbol(func.name),
-        )
-        if phase_timing is not None:
-            phase_timing.add(5, phase_start)
-        stack_map_plans[func.name] = plan
-        if phase_timing is not None:
-            phase_start = phase_timing.start()
-        _append_assembly_chunk(
-            chunks, label_lines,
-            _emit_function(func, plan, phase_timing=phase_timing),
-        )
-        # The stack-map plan retains scalar/root metadata, never the IR.
-        # Release completed functions before the next body adds assembly.
-        get_indexed_function_kernel(func).close_native_tables()
-        if not func.blocks:
-            # Direct indexed functions are consumed above.  Their compatibility
-            # slots are no longer needed by selection; stack-map plans retain
-            # scalar offsets and types, never these lookup dictionaries.
-            # Retire both the direct and equality-bucket projections before
-            # another function or the final assembly/object buffers allocate.
-            clear_text_key_mapping(func.value_slots)
-            func.value_slot_buckets.clear()
-            clear_text_key_mapping(func.alloca_slots)
-            func.alloca_slot_buckets.clear()
-            clear_text_key_mapping(func.value_types)
-        if phase_timing is not None:
-            phase_timing.add(6, phase_start)
+    # The public entry owns prepared.globals_: preparation copied the input,
+    # and ordinary emission never mutates that list. Direct prepared callers
+    # and timing callbacks may expose/mutate it, so retain their original
+    # per-function indexing. Even the owned timer's methods and clock can be
+    # replaced by callers. The planner additionally rejects custom records.
+    globals_index = (
+        [] if _share_globals_index and phase_timing is None else None
+    )
+    try:
+        for func in functions:
+            if phase_timing is not None:
+                phase_start = phase_timing.start()
+            plan = build_function_stack_map_plan(
+                func,
+                prepared.globals_,
+                target="x86_64-linux",
+                identity_name=_asm_symbol(func.name),
+                _globals_index=globals_index,
+            )
+            if phase_timing is not None:
+                phase_timing.add(5, phase_start)
+            stack_map_plans[func.name] = plan
+            if phase_timing is not None:
+                phase_start = phase_timing.start()
+            _append_assembly_chunk(
+                chunks, label_lines,
+                _emit_function(func, plan, phase_timing=phase_timing),
+            )
+            # The stack-map plan retains scalar/root metadata, never the IR.
+            # Release completed functions before the next body adds assembly.
+            get_indexed_function_kernel(func).close_native_tables()
+            if not func.blocks:
+                # Direct indexed functions are consumed above. Their compatibility
+                # slots are no longer needed by selection; stack-map plans retain
+                # scalar offsets and types, never these lookup dictionaries.
+                # Retire both the direct and equality-bucket projections before
+                # another function or the final assembly/object buffers allocate.
+                clear_text_key_mapping(func.value_slots)
+                func.value_slot_buckets.clear()
+                clear_text_key_mapping(func.alloca_slots)
+                func.alloca_slot_buckets.clear()
+                clear_text_key_mapping(func.value_types)
+            if phase_timing is not None:
+                phase_timing.add(6, phase_start)
+    finally:
+        # A saved exception must not retain the module index through its frames.
+        # A later emission or public replanning builds from its current globals.
+        if globals_index is not None:
+            if globals_index:
+                globals_index[0].clear()
+            globals_index.clear()
     if phase_timing is not None:
         phase_start = phase_timing.start()
     if functions:

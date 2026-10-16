@@ -5250,6 +5250,7 @@ def build_function_stack_map_plan(
     *,
     target: str,
     identity_name: str = "",
+    _globals_index: list[dict[str, GlobalDef]] | None = None,
 ) -> FunctionStackMapPlan:
     if target not in ("aarch64-darwin", "x86_64-linux"):
         _fail(func, f"unsupported stack-map target {target!r}")
@@ -5260,7 +5261,23 @@ def build_function_stack_map_plan(
             identity_name,
         )
     kernel = get_indexed_function_kernel(func)
-    globals_by_name = {global_.name: global_ for global_ in globals_}
+    if _globals_index is None or type(globals_) is not list:
+        globals_by_name = {global_.name: global_ for global_ in globals_}
+    elif _globals_index:
+        globals_by_name = _globals_index[0]
+    else:
+        # Only the owned x86 emission loop shares this table. Preserve the
+        # original single name read and duplicate-last behavior while excluding
+        # custom records/keys whose properties, hash or equality can change.
+        globals_by_name = {}
+        shareable = True
+        for global_ in globals_:
+            name = global_.name
+            globals_by_name[name] = global_
+            if type(global_) is not GlobalDef or type(name) is not str:
+                shareable = False
+        if shareable:
+            _globals_index.append(globals_by_name)
     aliases = _pointer_aliases(func)
     entries = _block_entry_states(func, globals_by_name, aliases)
     managed_origins, ambiguous_managed = _managed_value_origins(
