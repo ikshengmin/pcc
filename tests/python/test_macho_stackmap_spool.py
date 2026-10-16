@@ -39,18 +39,20 @@ def _merge(payloads, *, limit=100_000_000, retained=137, single_buffer=True,
             assert state["scanned"] is state["source_index_cache"] is None
             assert state["input_bytes"] == sum(len(value) for value in owned if value is not None)
             assert all(all(type(field) is int for field in row) for row in state["functions"])
-            assert all(type(key) is bytes and len(key) == 32 for key in state["root_index"])
-            assert all(all(type(field) is int for row in bucket for field in row)
-                       for bucket in state["root_index"].values())
+            root_index = state["root_index"]
+            assert type(root_index) is spool._RootIndex
+            assert root_index.rows is None or type(root_index.rows) is bytearray
+            assert root_index.index is None or type(root_index.index) is bytearray
+            assert not hasattr(root_index, "__dict__")
             assert "table" not in state and "chunks" not in state
-            del scanner, state
+            del scanner, state, root_index
         if inspect and label == "spool merge materialize":
             state = sys._getframe(1).f_locals
             assert owned == [None] * len(owned)
             assert state["input_bytes"] == 0
             assert all(state[name] is None for name in (
                 "payload", "blob", "scanned", "source_index_cache", "root_index",
-                "seen_ids", "candidates", "digest", "scratch", "buffer", "view",
+                "seen_ids", "digest", "scratch", "buffer", "view",
             ))
             assert state["work"].written == state["total"] - wire.HEADER_SIZE
             assert state["work"].written <= budget.limit_bytes

@@ -2,7 +2,7 @@
 
 The windowed Mach-O caller transfers an exclusive list of detached bytes.
 Functions and exact whole root vectors are spooled, not retained as heap
-chunks. Only integer descriptors and digest buckets survive between inputs.
+chunks. Integer descriptors and packed indexes survive between inputs.
 Digest matches are always compared byte-for-byte before sharing storage.
 The native and ordinary shared mergers do not use this implementation.
 """
@@ -13,6 +13,7 @@ import sys
 import tempfile
 
 from . import precise_stackmap as wire
+from .macho_host_stackmap_index import _IndexWork, _RootIndex, _SourceIndex
 
 
 _BLOCK_BYTES = 64 * 1024
@@ -102,7 +103,7 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
     base_entries = len(payloads) + 16
     budget.check_peak(input_bytes + _FIXED_BYTES, entries=base_entries,
                       label="spool merge inputs")
-    functions, seen_ids, root_index = [], set(), {}
+    functions, seen_ids, root_index = [], set(), None
     scanned = source_index_cache = payload = blob = buffer = view = None
     result, closing, address_offsets = None, None, []
     scratch = bytearray(_BLOCK_BYTES)
@@ -110,16 +111,25 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
     empty_shape_index, arch = -1, 0
     work = _SpoolWork(budget)
 
-    def admit(extra=0, *, pending_functions=0, pending_vectors=0, label):
-        # Function tuple/integers, seen-id set and sort-pointer workspace;
-        # digest dict, collision bucket, destination integers; source range
-        # cache; and the current scanner's complete descriptors are retained.
+    def index_bytes():
+        return ((root_index.owned_bytes() if root_index is not None else 0)
+                + (source_index_cache.owned_bytes()
+                   if source_index_cache is not None else 0))
+
+    def admit(extra=0, *, pending_functions=0, label):
+        # Function tuples/integers, seen-id set, sort pointers and scanner
+        # descriptors retain the original model. Root/source metadata is now
+        # owned by exact-size bytearrays, not per-entry dict/list/tuple graphs.
+        # Existing fixed/base reserves cover bounded table objects/scalars.
         entries = (base_entries + 4 * (len(functions) + pending_functions)
-                   + 3 * (unique_vectors + pending_vectors)
-                   + 2 * (len(source_index_cache) if source_index_cache is not None else 0)
                    + (len(scanned) if scanned is not None else 0))
-        budget.check_peak(input_bytes + _FIXED_BYTES + extra,
+        budget.check_peak(input_bytes + _FIXED_BYTES + index_bytes() + extra,
                           entries=entries, label=label)
+
+    def admit_index(extra, label):
+        # The replacing buffer is not allocated yet; current buffers remain
+        # counted through index_bytes until the copying frame releases them.
+        admit(extra, label=label)
 
     def output_bound(size, count):
         # A future single output, and therefore disk storage, must itself fit
@@ -128,6 +138,8 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                           label="spool output bound")
 
     try:
+        index_work = _IndexWork(budget)
+        root_index = _RootIndex(budget, index_work, admit_index)
         with tempfile.TemporaryFile(mode="w+b", buffering=0) as roots, \
                 tempfile.TemporaryFile(mode="w+b", buffering=0) as records:
             for consumed_index in range(len(payloads)):
@@ -135,8 +147,8 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                 previous = budget.retained_bytes
                 budget.retained_bytes += (
                     input_bytes - len(payload) + _FIXED_BYTES
-                    + (base_entries + 4 * len(functions) + 3 * unique_vectors)
-                    * budget.metadata_entry_bytes
+                    + (base_entries + 4 * len(functions)) * budget.metadata_entry_bytes
+                    + index_bytes()
                 )
                 try:
                     _count, scanned, table_start, table_count = wire._scan_stack_map_payload(
@@ -148,7 +160,7 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                 if arch and arch != source_arch:
                     raise wire.PreciseStackMapError("cannot merge stack maps for different targets")
                 arch = source_arch
-                source_index_cache = {}
+                source_index_cache = _SourceIndex(budget, index_work, admit_index)
                 with memoryview(payload) as source:
                     for function_id, fn_start, fn_end in scanned:
                         if len(functions) >= wire.MAX_FUNCTIONS:
@@ -186,28 +198,21 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                                     if empty_shape_index < 0:
                                         empty_shape_index = table_locations
                                     destination = empty_shape_index
-                                elif source_key in source_index_cache:
-                                    destination = source_index_cache[source_key]
                                 else:
+                                    destination, source_slot = source_index_cache.find(source_key)
+                                if count and destination < 0:
                                     merge_locations += count
                                     if merge_locations > wire.MAX_LOCATIONS:
                                         raise wire.PreciseStackMapError("too much stack-map location merge work")
                                     work.comparison_limit = 4 * merge_locations
                                     admit(extra=2 * budget.metadata_entry_bytes,
-                                          pending_vectors=1, label="spool merge cache")
+                                          label="spool merge cache")
                                     offset = table_start + index * wire.LOCATION_SIZE
                                     with source[offset:offset + count * wire.LOCATION_SIZE] as candidate:
                                         digest = hashlib.sha256(candidate).digest()
-                                        candidates = root_index.get(digest, ())
-                                        destination = -1
-                                        for existing_count, existing_index in candidates:
-                                            # Charge even unequal-length digest collisions
-                                            # so forged buckets cannot create unbounded work.
-                                            if existing_count != count:
-                                                work.charge_comparison(1)
-                                            elif work.equal(roots, existing_index, candidate, scratch):
-                                                destination = existing_index
-                                                break
+                                        destination, root_slot = root_index.find(
+                                            digest, count, candidate, roots, scratch, work,
+                                        )
                                         if destination < 0:
                                             destination = table_locations
                                             if count > wire.MAX_LOCATIONS - table_locations:
@@ -217,24 +222,25 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                                                          len(functions))
                                             roots.seek(table_locations * wire.LOCATION_SIZE)
                                             work.write_all(roots, candidate)
-                                            root_index.setdefault(digest, []).append((count, destination))
+                                            root_index.append(digest, count, destination, root_slot)
                                             table_locations += count
                                             unique_vectors += 1
-                                        candidates = digest = None
-                                    source_index_cache[source_key] = destination
+                                        digest = None
+                                    source_index_cache.append(source_key, destination, source_slot)
                                 blob[cursor + 28:cursor + 32] = destination.to_bytes(4, "little")
                             work.write_all(records, blob)
                             blob = None
                 # No view, chunk or cache owns input bytes past this point.
                 retired = len(payload)
+                source_index_cache.close()
                 scanned = source_index_cache = None
                 payloads[consumed_index] = None
                 payload = None
                 input_bytes -= retired
 
-            root_index.clear()
+            root_index.close()
             seen_ids.clear()
-            root_index = seen_ids = candidates = digest = None
+            root_index = seen_ids = digest = None
             scratch = None
             total = wire.HEADER_SIZE + function_bytes + table_locations * wire.LOCATION_SIZE
             # Admit before sorting, offset-list growth or output allocation.
@@ -290,7 +296,9 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                 functions.clear()
                 address_offsets.clear()
                 if root_index is not None:
-                    root_index.clear()
+                    root_index.close()
+                if source_index_cache is not None:
+                    source_index_cache.close()
                 if seen_ids is not None:
                     seen_ids.clear()
                 scanned = source_index_cache = payload = blob = None
