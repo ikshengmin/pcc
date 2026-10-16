@@ -270,6 +270,8 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         assert "pcc.frontends.python.worker_resource_host_windows" not in names
         assert "pcc.backend.stackmap_host_budget" not in names
         assert "pcc.frontends.python.worker_resource_host_recovery" not in names
+        assert "pcc.frontends.python.worker_process_host_pool" not in names
+        assert "pcc.frontends.python.worker_resource_host_rss" not in names
         whole = verify_ir_text(
             text, progress=lambda phase, state: _record_closed_world_progress(
                 receipt_path, receipt, started,
@@ -315,8 +317,13 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                     assert re.search(r'\bcall\b[^\n]*' + re.escape(callee), matches[0].group("body"))
                     del matches
             if name == "pcc.frontends.python.worker_process_pool":
-                assert "run_resource_worker_processes" in declared
+                assert {"run_resource_worker_processes", "_host_pool",
+                        "_host_weighted_pool", "_host_chained_pool"} <= set(declared)
                 assert "worker_resource_host_recovery" not in section
+                assert "worker_process_host_pool" not in section
+            if name == "pcc.frontends.python.pipeline_frontend_workers":
+                assert {"_host_coordinator_rss_bytes", "_host_windows_rss_bytes"} <= set(declared)
+                assert "worker_resource_host_rss" not in section
             if name == "pcc.backend.x86_64_encode":
                 initializer = "_pcc_py_module_top_pcc_backend_x86_64_encode"
                 required.append(initializer)
