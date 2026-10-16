@@ -55,7 +55,7 @@ def system_dll(symbol: str) -> str:
         return "KERNEL32.dll"
     if symbol in _WS2:
         return "WS2_32.dll"
-    if symbol in ("RtlGetVersion", "NtCreateFile", "RtlNtStatusToDosError"):
+    if symbol in ("RtlGetVersion", "NtCreateFile", "NtSetInformationFile", "RtlNtStatusToDosError"):
         return "NTDLL.dll"
     if symbol == "ConvertStringSecurityDescriptorToSecurityDescriptorW":
         return "ADVAPI32.dll"

@@ -10,7 +10,7 @@ GetProcessMemoryInfo reference. This is working-set RSS, not commit charge.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int, c_int64, c_ptr, extern
 from pcc.unsafe import (
-    free, int_to_ptr, load_i8, load_i64, load_ptr, malloc, memcpy, memset, null, ptr_add,
+    free, int_to_ptr, load_i8, load_i32, load_i64, load_ptr, malloc, memcpy, memset, null, ptr_add,
     ptr_is_null, ptr_to_int, stack_alloc, store_i32, store_i64, store_ptr,
 )
 
@@ -21,17 +21,23 @@ GetCurrentProcess = extern("GetCurrentProcess", (), c_ptr)
 K32GetProcessMemoryInfo = extern("K32GetProcessMemoryInfo", (c_ptr, c_ptr, c_int), c_int)
 GetFullPathNameW = extern("GetFullPathNameW", (c_ptr, c_int, c_ptr, c_ptr), c_int)
 CreateFileW = extern("CreateFileW", (c_ptr, c_int, c_int, c_ptr, c_int, c_int, c_ptr), c_ptr)
-SetFileInformationByHandle = extern("SetFileInformationByHandle", (c_ptr, c_int, c_ptr, c_int), c_int)
+GetFileInformationByHandleEx = extern("GetFileInformationByHandleEx", (c_ptr, c_int, c_ptr, c_int), c_int)
+NtSetInformationFile = extern("NtSetInformationFile", (c_ptr, c_ptr, c_ptr, c_int, c_int), c_int)
+RtlNtStatusToDosError = extern("RtlNtStatusToDosError", (c_int,), c_int)
 CloseHandle = extern("CloseHandle", (c_ptr,), c_int)
 utf16 = extern("pcc_win_utf16", (c_ptr,), c_ptr)
 GetLastError = extern("GetLastError", (), c_int)
 error_code = extern("pcc_win_error_code", (c_int64,), c_int64)
+component_valid = extern("pcc_win_tempdir_component_valid", (c_ptr, c_int64), c_int64)
+dos_leaf_valid = extern("pcc_win_tempdir_dos_leaf_valid", (c_ptr, c_int64), c_int64)
 
 _COUNTERS_SIZE = 72
 _PEAK_WORKING_SET_OFFSET = 8
 _WORKING_SET_OFFSET = 16
 _RENAME_HEADER_SIZE = 24
 _RENAME_NAME_OFFSET = 20
+_RENAME_IO_STATUS_SIZE = 16
+_RENAME_ATTRIBUTE_TAG_SIZE = 8
 _RENAME_CLEANUP_ERROR_BASE = 65536
 # Caller-owned diagnostic record: three i64 slots, no shared or TLS state.
 _RENAME_DIAGNOSTIC_SIZE = 24
@@ -45,6 +51,7 @@ _RENAME_BUFFER_ALLOCATION = 4
 _RENAME_OPEN_SOURCE = 5
 _RENAME_RENAME = 6
 _RENAME_CLOSE = 7
+_RENAME_SOURCE_INFORMATION = 8
 
 
 @c_abi_export("pcc_windows_rss_bytes")
@@ -171,12 +178,27 @@ def pcc_worker_resource_replace_detailed(source: c_ptr, destination: c_ptr,
                  and load_i8(a, offset + 2) == 116 and load_i8(a, offset + 3) == 0
                  and load_i8(a, offset + 4) == 109 and load_i8(a, offset + 5) == 0
                  and load_i8(a, offset + 6) == 112 and load_i8(a, offset + 7) == 0)
+    leaf_offset: i64 = 0
+    index = 0
+    while valid and index < destination_length * 2:
+        low: i64 = load_i8(b, index)
+        if (low == 92 or low == 47) and load_i8(b, index + 1) == 0:
+            leaf_offset = index + 2
+        index = index + 2
+    leaf = ptr_add(b, leaf_offset)
+    leaf_length: i64 = destination_length * 2 - leaf_offset
+    # NT simple names must not introduce a namespace the Win32 source open
+    # would interpret differently (streams, devices, trailing dots/spaces).
+    if valid:
+        valid = component_valid(leaf, leaf_length)
+    if valid:
+        valid = dos_leaf_valid(leaf, leaf_length)
     if not valid:
         store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_SOURCE_VALIDATION)
         free(a)
         free(b)
         return -22
-    size: i64 = _RENAME_HEADER_SIZE + destination_length * 2
+    size: i64 = _RENAME_HEADER_SIZE + leaf_length
     information = malloc(size)
     if ptr_is_null(information):
         store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_BUFFER_ALLOCATION)
@@ -184,13 +206,21 @@ def pcc_worker_resource_replace_detailed(source: c_ptr, destination: c_ptr,
         free(b)
         return -12
     memset(information, 0, size)
-    # Win64 FILE_RENAME_INFO: Flags@0, RootDirectory@8, Length@16, Name@20.
+    # Win64 FILE_RENAME_INFORMATION: Flags@0, RootDirectory@8, Length@16,
+    # Name@20. Native simple-name + NULL root renames in the source directory.
+    # A full destination (or non-NULL root) asks IopOpenLinkOrRenameTarget to
+    # open a target parent, which can conflict with the retained TemporaryDirectory
+    # owner. Keep that owner's access, sharing and lifetime unchanged.
+    # Win32 SetFileInformationByHandle relative names are cwd-relative, so it
+    # cannot substitute for the native same-directory operation here.
     # REPLACE_IF_EXISTS | POSIX_SEMANTICS; never IGNORE_READONLY_ATTRIBUTE.
     store_i32(information, 0, 3)
-    store_i32(information, 16, destination_length * 2)
-    memcpy(ptr_add(information, _RENAME_NAME_OFFSET), b, destination_length * 2)
-    # DELETE, all share modes, noninheritable, OPEN_EXISTING, NORMAL.
-    handle = CreateFileW(a, 65536, 7, null(), 3, 128, null())
+    store_i32(information, 16, leaf_length)
+    memcpy(ptr_add(information, _RENAME_NAME_OFFSET), leaf, leaf_length)
+    # DELETE | FILE_READ_ATTRIBUTES, all share modes, noninheritable,
+    # OPEN_EXISTING, NORMAL | OPEN_REPARSE_POINT. Attribute access validates
+    # this handle; it changes neither file permissions nor the directory owner.
+    handle = CreateFileW(a, 65664, 7, null(), 3, 2097280, null())
     status: i64 = 0
     if ptr_to_int(handle) == -1:
         code: i64 = GetLastError()
@@ -199,13 +229,34 @@ def pcc_worker_resource_replace_detailed(source: c_ptr, destination: c_ptr,
         store_i64(diagnostic, _RENAME_WINERROR_OFFSET, code)
         status = error_code(code)
     else:
-        # FileRenameInfoEx=22. Unsupported filesystems fail without fallback.
-        if SetFileInformationByHandle(handle, 22, information, size) == 0:
+        # A followed source link could move the same-directory destination to
+        # its target's parent. Inspect the exact no-follow source handle and
+        # reject every reparse tag before any rename can commit.
+        attributes = stack_alloc(_RENAME_ATTRIBUTE_TAG_SIZE)
+        memset(attributes, 0, _RENAME_ATTRIBUTE_TAG_SIZE)
+        if GetFileInformationByHandleEx(handle, 9, attributes, _RENAME_ATTRIBUTE_TAG_SIZE) == 0:
             code: i64 = GetLastError()
             code = code & 4294967295
-            store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_RENAME)
+            store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_SOURCE_INFORMATION)
             store_i64(diagnostic, _RENAME_WINERROR_OFFSET, code)
             status = error_code(code)
+        elif load_i32(attributes, 0) & 1024:
+            store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_SOURCE_VALIDATION)
+            status = -40
+        if status == 0:
+            # CreateFileW without OVERLAPPED returns a synchronous handle.
+            # FileRenameInformationEx=65; unsupported filesystems fail, no fallback.
+            io_status = stack_alloc(_RENAME_IO_STATUS_SIZE)
+            memset(io_status, 0, _RENAME_IO_STATUS_SIZE)
+            native_status: i64 = NtSetInformationFile(handle, io_status, information, size, 65)
+            if native_status != 0:
+                # NT calls do not set Win32 LastError. Preserve the mapped original
+                # DWORD before errno conversion or CloseHandle can clobber TLS.
+                code: i64 = RtlNtStatusToDosError(native_status)
+                code = code & 4294967295
+                store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_RENAME)
+                store_i64(diagnostic, _RENAME_WINERROR_OFFSET, code)
+                status = error_code(code)
         if CloseHandle(handle) == 0:
             code: i64 = GetLastError()
             code = code & 4294967295

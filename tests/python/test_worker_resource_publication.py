@@ -215,10 +215,12 @@ def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
     bootstrap = text.split("  other-platform-native-wheel:\n", 1)[1].split("  pcc1-package-parity:\n", 1)[0]
     assert "runs-on: windows-2022" in publication
     assert "timeout-minutes: 10" in publication and "timeout-minutes: 2" in publication
-    assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
+    assert 'python -m pytest --noconftest -o "addopts=" -x -n6 --dist=loadgroup -vv --tb=short' in publication
     assert "tests/python/test_worker_resource_publication.py" in publication
     assert "tests/python/test_worker_resource_reader.py" in publication
     assert "tests/python/test_worker_resource_publisher.py" in publication
+    assert "tests/python/test_worker_resource_native_windows.py" in publication
+    assert "tests/python/test_worker_resource_windows_filesystem.py" in publication
     assert "--phase stage1" not in publication
     assert "Verify Windows RSS publication" not in bootstrap
     assert "--phase stage1" in bootstrap

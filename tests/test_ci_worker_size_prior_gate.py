@@ -413,16 +413,6 @@ def test_default_command_retains_project_xdist(tmp_path):
                and node.value.id == "ASSEMBLY_PROFILE_INPUTS" for node in ast.walk(identity))
     for path in (*gate.X87_INPUTS[:6], *gate.ASSEMBLY_PROFILE_INPUTS):
         assert workflow.count('      - "' + path + '"') == 2
-    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
-               and node.value.id == "RSS_READER_INPUTS" for node in ast.walk(identity))
-    assert gate.RSS_READER_INPUTS == (
-        gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST, gate.RSS_PUBLISHER_TEST,
-        "pcc/frontends/python/worker_resource_plan.py",
-        "pcc/frontends/python/worker_resource_host_windows.py",
-        "pcc/frontends/python/pipeline_import_scan.py",
-    )
-    for path in (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST, gate.RSS_PUBLISHER_TEST):
-        assert workflow.count('      - "' + path + '"') == 2
     assert gate.PARSE_BUFFER_INPUTS == (
         'tests/python/test_x86_64_parse_buffer_publication.py',
         'tests/python/test_x86_64_parse_buffer_objects.py',
@@ -1071,9 +1061,26 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     publication = workflow_job(text, "windows-rss-publication")
     assert "runs-on: windows-2022" in publication
     assert "timeout-minutes: 10" in publication and "timeout-minutes: 2" in publication
-    assert 'python -m pytest --noconftest -o "addopts=" -x -vv --tb=short' in publication
-    for path in (gate.RSS_PUBLICATION_TEST, gate.RSS_READER_TEST, gate.RSS_PUBLISHER_TEST):
+    assert "python -m pip install pytest pytest-xdist" in publication
+    assert 'python -m pytest --noconftest -o "addopts=" -x -n6 --dist=loadgroup -vv --tb=short' in publication
+    for path in (gate.RSS_PUBLICATION_TEST, gate.RSS_READER_TEST, gate.RSS_PUBLISHER_TEST,
+                 gate.RSS_NATIVE_TEST, gate.RSS_FILESYSTEM_TEST):
         assert path in publication
+        assert text.count('      - "' + path + '"') == 2
+    identity_tree = ast.parse(Path(gate.__file__).read_text())
+    identity = next(node for node in identity_tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "source_identity")
+    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
+               and node.value.id == "RSS_READER_INPUTS" for node in ast.walk(identity))
+    assert gate.RSS_READER_INPUTS == (
+        gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST, gate.RSS_PUBLISHER_TEST,
+        gate.RSS_NATIVE_TEST, gate.RSS_FILESYSTEM_TEST,
+        "pcc/frontends/python/worker_resource_plan.py",
+        "pcc/frontends/python/worker_resource_host_windows.py",
+        "pcc/runtime/py/freestanding_windows_rss.py",
+        "pcc/runtime/py/freestanding_windows_directory.py",
+        "pcc/frontends/python/pipeline_import_scan.py",
+    )
     assert "timeout-minutes: 360" in other and "timeout-minutes: 200" in mac
     assert other.count("- { platform:") == 3
     assert "uv sync --frozen --dev --python 3.13" in other

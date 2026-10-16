@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WINDOWS = ROOT / "pcc/runtime/py/freestanding_windows_rss.py"
 PLATFORM = ROOT / "pcc/runtime/py/freestanding_platform_rss.py"
 ERRORS = ROOT / "pcc/runtime/py/freestanding_windows.py"
+DIRECTORY = ROOT / "pcc/runtime/py/freestanding_windows_directory.py"
 POLICY = ROOT / "pcc/frontends/python/worker_resource_plan.py"
 
 
@@ -41,12 +42,13 @@ class Model:
     """Bounds-checked buffers and clobbering LastError, no native operations."""
     def __init__(self, *, open_error=0, rename_error=0, close_error=0,
                  full_failure=0, full_growth=0, query_size=0, malloc_failure=0,
-                 utf16_failure=0):
+                 utf16_failure=0, information_error=0, source_attributes=128):
         self.memory, self.heap, self.freed = {}, set(), set()
         self.events = []
         self.next_address = 4096
         self.last_error = 0
         self.open_error, self.rename_error, self.close_error = open_error, rename_error, close_error
+        self.information_error, self.source_attributes = information_error, source_attributes
         self.full_failure, self.full_growth, self.query_size = full_failure, full_growth, query_size
         self.malloc_failure, self.utf16_failure = malloc_failure, utf16_failure
         self.malloc_count = self.utf16_count = self.full_count = 0
@@ -58,6 +60,7 @@ class Model:
             "null": lambda: 0, "ptr_add": lambda address, offset: address + offset,
             "ptr_is_null": lambda address: address == 0, "ptr_to_int": int, "int_to_ptr": int,
             "load_i8": lambda address, offset: self.read(address + offset, 1)[0],
+            "load_i32": lambda address, offset: int.from_bytes(self.read(address + offset, 4), "little"),
             "load_ptr": lambda address, offset: int.from_bytes(self.read(address + offset, 8), "little"),
             "store_ptr": lambda address, offset, value: self.write(address + offset, value.to_bytes(8, "little")),
             "store_i32": lambda address, offset, value: self.write(address + offset, value.to_bytes(4, "little")),
@@ -65,10 +68,15 @@ class Model:
             "memset": lambda address, value, size: self.write(address, bytes([value]) * size),
             "memcpy": lambda destination, source, size: self.write(destination, self.read(source, size)),
             "utf16": self.utf16, "GetFullPathNameW": self.full_path,
-            "CreateFileW": self.open, "SetFileInformationByHandle": self.rename,
+            "CreateFileW": self.open, "NtSetInformationFile": self.rename,
+            "GetFileInformationByHandleEx": self.information,
+            "RtlNtStatusToDosError": self.status_to_dos_error,
             "CloseHandle": self.close, "GetLastError": self.get_last_error,
         }
         _definitions(ERRORS, {"error", "error_code"}, self.namespace)
+        _definitions(DIRECTORY, {"tempdir_component_valid", "tempdir_dos_leaf_valid"}, self.namespace)
+        self.namespace["component_valid"] = self.namespace["tempdir_component_valid"]
+        self.namespace["dos_leaf_valid"] = self.namespace["tempdir_dos_leaf_valid"]
         _definitions(WINDOWS, {
             "_worker_resource_full_path", "_worker_resource_full_path_detailed",
             "pcc_worker_resource_replace", "pcc_worker_resource_replace_detailed",
@@ -144,13 +152,24 @@ class Model:
         return len(encoded) // 2 - 1
 
     def open(self, path, access, share, security, disposition, flags, template):
-        assert (access, share, security, disposition, flags, template) == (65536, 7, 0, 3, 128, 0)
+        assert (access, share, security, disposition, flags, template) == (65664, 7, 0, 3, 2097280, 0)
         self.events.append(("open", self.wide_text(path)))
         self.last_error = self.open_error
         return -1 if self.open_error else self.handle
 
-    def rename(self, handle, information_class, information, size):
-        assert handle == self.handle and information_class == 22
+    def information(self, handle, information_class, output, size):
+        assert handle == self.handle and information_class == 9 and size == 8
+        assert self.read(output, size) == bytes(size)
+        self.events.append(("information", handle))
+        self.last_error = self.information_error
+        if self.information_error:
+            return 0
+        self.write(output, self.source_attributes.to_bytes(4, "little") + bytes(4))
+        return 1
+
+    def rename(self, handle, io_status, information, size, information_class):
+        assert handle == self.handle and information_class == 65
+        assert self.read(io_status, 16) == b"\0" * 16
         buffer = self.read(information, size)
         assert int.from_bytes(buffer[:4], "little") == 3
         assert buffer[4:16] == b"\0" * 12
@@ -158,12 +177,18 @@ class Model:
         assert size == 24 + name_size and name_size % 2 == 0
         assert buffer[20 + name_size:] == b"\0" * 4
         destination = buffer[20:20 + name_size].decode("utf-16-le")
+        assert destination and not any(part in destination for part in ("/", "\\", ":"))
         self.events.append(("rename", destination, name_size))
-        self.last_error = self.rename_error
+        self.last_error = 112  # NTSTATUS, not TLS LastError, owns this failure.
         if self.rename_error:
-            return 0
+            return -1073741790  # STATUS_ACCESS_DENIED; mapping is injected below.
         self.committed = True
-        return 1
+        return 0
+
+    def status_to_dos_error(self, status):
+        assert status == -1073741790 and self.rename_error
+        self.events.append(("nt_error", self.rename_error))
+        return self.rename_error if self.rename_error < 2147483648 else self.rename_error - 4294967296
 
     def close(self, handle):
         assert handle == self.handle
@@ -198,7 +223,7 @@ def test_native_windows_report_uses_exact_extended_rename_layout(name):
     assert model.committed
     absolute = "C:\\work\\" + name
     assert ("open", absolute + ".tmp") in model.events
-    assert ("rename", absolute, len(absolute.encode("utf-16-le"))) in model.events
+    assert ("rename", name, len(name.encode("utf-16-le"))) in model.events
     assert not [event for event in model.events if event[0] == "error"]
 
 
@@ -209,13 +234,93 @@ def test_native_windows_rejects_non_report_source_before_open(source):
     assert not model.committed and not any(event[0] == "open" for event in model.events)
 
 
+@pytest.mark.parametrize("destination", [
+    r"D:\reports\worker.rss", r"\\server\share\reports\worker.rss",
+    "D:\\reports\\報告-😀.rss",
+])
+def test_native_windows_same_directory_rename_does_not_use_cwd(destination):
+    model = Model()
+    assert model.run(destination + ".tmp", destination, detailed=True) == 0
+    leaf = ntpath.basename(destination)
+    assert ("open", destination + ".tmp") in model.events
+    assert ("rename", leaf, len(leaf.encode("utf-16-le"))) in model.events
+    assert model.diagnostic == (0, 0, 0)
+
+
+@pytest.mark.parametrize("destination", [
+    "worker.rss.", "worker.rss ", "worker.rss:stream", "CON.rss", "NUL",
+    "COM1.rss", "LPT².rss", "CONIN$.rss", "report?.rss", "report*.rss",
+])
+def test_native_windows_nt_leaf_never_expands_win32_namespace(destination):
+    model = Model()
+    assert model.run(destination + ".tmp", destination, detailed=True) == -22
+    assert model.diagnostic == (3, 0, 0)
+    assert not any(event[0] in ("open", "rename", "close", "error", "nt_error")
+                   for event in model.events)
+
+
+def test_native_windows_nt_rename_import_is_an_owned_named_system_call():
+    from pcc.backend.pe_x86_64 import system_dll
+
+    assert system_dll("NtSetInformationFile") == "NTDLL.dll"
+    source = WINDOWS.read_text()
+    assert 'extern("NtSetInformationFile", (c_ptr, c_ptr, c_ptr, c_int, c_int), c_int)' in source
+    assert 'extern("RtlNtStatusToDosError", (c_int,), c_int)' in source
+    assert 'CreateFileW(a, 65664, 7, null(), 3, 2097280, null())' in source
+    assert 'NtCreateFile(output, 1114241,' in DIRECTORY.read_text()
+    assert 'attributes, status_block, null(), 128, 1, 2 if create else 1,' in DIRECTORY.read_text()
+
+
+@pytest.mark.parametrize("symbol,parameters,result", [
+    ("NtSetInformationFile", "(c_ptr,c_ptr,c_ptr,c_int,c_int)", "c_int"),
+    ("pcc_win_tempdir_component_valid", "(c_ptr,c_int64)", "c_int64"),
+    ("pcc_win_tempdir_dos_leaf_valid", "(c_ptr,c_int64)", "c_int64"),
+])
+def test_native_windows_rename_machine_imports_require_exact_raw_signatures(symbol, parameters, result):
+    from pcc.frontends.python.pipeline_freestanding import freestanding_allowed_external_symbols
+
+    def admitted(name, args, returns):
+        return freestanding_allowed_external_symbols(
+            'call = extern("' + name + '", ' + args + ', ' + returns + ')\n')
+
+    assert symbol in admitted(symbol, parameters, result)
+    assert symbol not in admitted(symbol, parameters, "c_ptr")
+    assert symbol not in admitted(symbol, parameters.replace("c_ptr", "c_int64", 1), result)
+    assert symbol not in admitted(symbol, "()", result)
+    assert symbol + "_other" not in admitted(symbol + "_other", parameters, result)
+
+
+@pytest.mark.parametrize("attributes", [1024, 1024 | 128])
+@pytest.mark.parametrize("close_error,cleanup", [(0, 0), (6, 9), (0xffffffff, 5)])
+def test_native_windows_source_reparse_is_rejected_on_same_handle(attributes, close_error, cleanup):
+    model = Model(source_attributes=attributes, close_error=close_error)
+    assert model.run(detailed=True) == (40 * 65536 + cleanup if close_error else -40)
+    assert model.diagnostic == (3, 0, close_error)
+    assert not model.committed
+    assert [event[0] for event in model.events if event[0] in ("open", "information", "rename", "close")] == [
+        "open", "information", "close"]
+    assert not any(event[0] == "nt_error" for event in model.events)
+
+
+@pytest.mark.parametrize("code,primary", [(5, 13), (32, 13), (50, 5), (0x80000005, 5), (0xffffffff, 5)])
+@pytest.mark.parametrize("close_error,cleanup", [(0, 0), (6, 9), (0xffffffff, 5)])
+def test_native_windows_source_query_failure_preserves_both_errors(code, primary, close_error, cleanup):
+    model = Model(information_error=code, close_error=close_error)
+    assert model.run(detailed=True) == (primary * 65536 + cleanup if close_error else -primary)
+    assert model.diagnostic == (8, code, close_error)
+    assert not model.committed and not any(event[0] == "rename" for event in model.events)
+    assert [event for event in model.events if event[0] == "error"] == (
+        [("error", code)] + ([("error", close_error)] if close_error else []))
+
+
 @pytest.mark.parametrize("site", ["open", "rename"])
 @pytest.mark.parametrize("code,expected", [(2, 2), (5, 13), (32, 13), (33, 13), (50, 5), (87, 22), (4395, 40)])
 def test_native_windows_primary_error_survives_clobbering_cleanup(site, code, expected):
     model = Model(**{site + "_error": code})
     assert model.run() == -expected
     assert not model.committed
-    assert [event for event in model.events if event[0] == "error"] == [("error", code)]
+    assert [event for event in model.events if event[0] in ("error", "nt_error")] == [
+        ("nt_error" if site == "rename" else "error", code)]
     if site == "open":
         assert not any(event[0] == "rename" for event in model.events)
 
@@ -226,8 +331,8 @@ def test_native_windows_close_failure_carries_commit_and_both_errors(rename_erro
     model = Model(rename_error=rename_error, close_error=close_error)
     assert model.run() == primary * 65536 + cleanup
     assert model.committed is (primary == 0)
-    expected = ([] if not rename_error else [("error", rename_error)]) + [("error", close_error)]
-    assert [event for event in model.events if event[0] == "error"] == expected
+    expected = ([] if not rename_error else [("nt_error", rename_error)]) + [("error", close_error)]
+    assert [event for event in model.events if event[0] in ("error", "nt_error")] == expected
 
 
 @pytest.mark.parametrize("options,expected", [
@@ -356,16 +461,21 @@ def test_rss_replace_runtime_module_has_verified_raw_ir(tmp_path, monkeypatch, t
         assert "thread_local" not in text
         assert not re.search(r"\bcall[^\n]*@(?:pcc_gc_|py_)", text)
         if "windows" in target:
-            call = re.search(r"@SetFileInformationByHandle\(ptr [^,]+, i32 ([^,]+),", body)
+            call = re.search(r"@NtSetInformationFile\(ptr [^,]+, ptr [^,]+, ptr [^,]+, i32 [^,]+, i32 ([^)]+)\)", body)
             assert call
             information_class = call.group(1)
-            assert information_class == "22" or re.search(
-                re.escape(information_class) + r" = trunc i64 22 to i32", body)
+            assert information_class == "65" or re.search(
+                re.escape(information_class) + r" = trunc i64 65 to i32", body)
+            assert "@RtlNtStatusToDosError(" in body
+            assert "@pcc_win_tempdir_component_valid(" in body
+            assert "@pcc_win_tempdir_dos_leaf_valid(" in body
+            assert "@GetFileInformationByHandleEx(" in body
+            assert "@SetFileInformationByHandle" not in text
             assert "@CloseHandle(" in body and "@CreateFileW(" in body
             assert "@MoveFileEx" not in text and "@SetFileAttributes" not in text
         else:
             assert "ret i64 -38" in body
-            assert "@SetFileInformationByHandle" not in text
+            assert "@NtSetInformationFile" not in text
 
 
 def _assert_diagnostic_address_lane(body):
@@ -468,7 +578,8 @@ def test_detailed_errors_keep_original_dword_and_failure_stage(site, stage, code
     assert model.run(detailed=True) == expected
     assert model.diagnostic == (stage, code, 0)
     assert not model.committed
-    assert [event for event in model.events if event[0] == "error"] == [("error", code)]
+    assert [event for event in model.events if event[0] in ("error", "nt_error")] == [
+        ("nt_error" if site == "rename" else "error", code)]
 
 
 @pytest.mark.parametrize("primary", [0, 5, 32, 33])
@@ -556,6 +667,10 @@ def test_diagnostic_record_survives_cleanup_reentry_without_shared_state():
     ({"full_failure": 3}, "source_full_path", 5, 0, PermissionError),
     ({"close_error": 6}, "close", 0, 6, RuntimeError),
     ({"rename_error": 33, "close_error": 6}, "rename", 33, 6, RuntimeError),
+    ({"information_error": 32}, "source_information", 32, 0, PermissionError),
+    ({"information_error": 32, "close_error": 6}, "source_information", 32, 6, RuntimeError),
+    ({"source_attributes": 1024}, "source_validation", 0, 0, OSError),
+    ({"source_attributes": 1024, "close_error": 6}, "source_validation", 0, 6, RuntimeError),
 ])
 def test_actual_detailed_leaf_reaches_dispatch_text_without_changing_retry_type(
     monkeypatch, options, stage, primary, cleanup, exception,
@@ -592,7 +707,10 @@ def test_actual_detailed_leaf_reaches_dispatch_text_without_changing_retry_type(
         assert caught.value.errno == 13
         assert getattr(caught.value, "winerror", None) is None
         assert caught.value.filename == "worker.rss.tmp" and caught.value.filename2 == "worker.rss"
-    else:
+    elif exception is RuntimeError:
         assert not isinstance(caught.value, PermissionError)
-        assert ("publication_committed=" + str(primary == 0)) in str(caught.value)
+        assert ("publication_committed=" + str(stage == "close")) in str(caught.value)
+    else:
+        assert exception is OSError and caught.value.errno == 40
+        assert "publication_committed=" not in str(caught.value)
     assert model.heap == model.freed

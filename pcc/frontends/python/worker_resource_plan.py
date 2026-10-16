@@ -566,6 +566,8 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
                 stage = "rename"
             elif stage_code == 7:
                 stage = "close"
+            elif stage_code == 8:
+                stage = "source_information"
             detail = (" stage=" + stage
                       + " winerror=" + str(load_i64(diagnostic, 8))
                       + " handle_cleanup_winerror=" + str(load_i64(diagnostic, 16)))

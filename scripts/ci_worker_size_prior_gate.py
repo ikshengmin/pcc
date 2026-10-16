@@ -158,9 +158,14 @@ ASSEMBLY_PROFILE_INPUTS = (ASSEMBLY_PROFILE_TEST, "scripts/host_assembly_profile
 RSS_READER_TEST = "tests/python/test_worker_resource_reader.py"
 RSS_PUBLICATION_TEST = "tests/python/test_worker_resource_publication.py"
 RSS_PUBLISHER_TEST = "tests/python/test_worker_resource_publisher.py"
+RSS_NATIVE_TEST = "tests/python/test_worker_resource_native_windows.py"
+RSS_FILESYSTEM_TEST = "tests/python/test_worker_resource_windows_filesystem.py"
 RSS_READER_INPUTS = (RSS_READER_TEST, RSS_PUBLICATION_TEST, RSS_PUBLISHER_TEST,
+                     RSS_NATIVE_TEST, RSS_FILESYSTEM_TEST,
                      "pcc/frontends/python/worker_resource_plan.py",
                      "pcc/frontends/python/worker_resource_host_windows.py",
+                     "pcc/runtime/py/freestanding_windows_rss.py",
+                     "pcc/runtime/py/freestanding_windows_directory.py",
                      "pcc/frontends/python/pipeline_import_scan.py")
 STACKMAP_BUDGET_TEST = 'tests/python/test_compact_stackmap_processing_budget.py'
 STACKMAP_HOST_BUDGET_TEST = 'tests/python/test_stackmap_host_budget.py'

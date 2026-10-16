@@ -149,6 +149,8 @@ on:
       - "tests/python/test_worker_resource_publication.py"
       - "tests/python/test_worker_resource_reader.py"
       - "tests/python/test_worker_resource_publisher.py"
+      - "tests/python/test_worker_resource_native_windows.py"
+      - "tests/python/test_worker_resource_windows_filesystem.py"
       - "tests/test_ci_worker_size_prior_gate.py"
       - "scripts/ci_worker_size_prior_gate.py"
       - "tests/python/test_indexed_process_split_real.py"
@@ -348,6 +350,8 @@ on:
       - "tests/python/test_worker_resource_publication.py"
       - "tests/python/test_worker_resource_reader.py"
       - "tests/python/test_worker_resource_publisher.py"
+      - "tests/python/test_worker_resource_native_windows.py"
+      - "tests/python/test_worker_resource_windows_filesystem.py"
       - "tests/test_ci_worker_size_prior_gate.py"
       - "scripts/ci_worker_size_prior_gate.py"
       - "tests/python/test_indexed_process_split_real.py"
@@ -671,12 +675,12 @@ jobs:
           python-version: "3.13"
 
       - name: Install Windows publication test tools
-        run: python -m pip install pytest
+        run: python -m pip install pytest pytest-xdist
 
       - name: Verify Windows RSS publication with a held reader
         timeout-minutes: 2
         # This isolated test needs no POSIX-only repository conftest fixtures.
-        run: python -m pytest --noconftest -o "addopts=" -x -vv --tb=short tests/python/test_worker_resource_publication.py tests/python/test_worker_resource_reader.py tests/python/test_worker_resource_publisher.py
+        run: python -m pytest --noconftest -o "addopts=" -x -n6 --dist=loadgroup -vv --tb=short tests/python/test_worker_resource_publication.py tests/python/test_worker_resource_reader.py tests/python/test_worker_resource_publisher.py tests/python/test_worker_resource_native_windows.py tests/python/test_worker_resource_windows_filesystem.py
 
   other-platform-native-wheel:
     name: Native wheel / ${{ matrix.platform }}
