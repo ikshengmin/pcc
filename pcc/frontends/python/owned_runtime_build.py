@@ -205,21 +205,33 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
         _remove_runtime_build_lock(lock, os.path.join(lock, "owner"))
 
 
-def _manifest_matches_config(receipt: dict, runtime_dir: str, target: str, config: dict) -> bool:
-    if not isinstance(receipt, dict) or receipt.get("target_triple") != target:
-        return False
+def _manifest_configuration_mismatch_reason(
+    receipt: dict, runtime_dir: str, target: str, config: dict,
+) -> str:
+    if not isinstance(receipt, dict):
+        return "runtime manifest is not an object"
+    if receipt.get("target_triple") != target:
+        return "target triple differs"
     members = receipt.get("members")
     if not isinstance(members, list) or not members:
-        return False
+        return "member inventory is missing or invalid"
     expected = {name + ".o" for name in runtime_modules(runtime_dir, target, config["threads"])}
     if len(members) != len(expected):
-        return False
+        return "member inventory count differs"
     actual = set()
     for member in members:
-        if not isinstance(member, dict) or member.get("runtime_build_config") != config:
-            return False
+        if not isinstance(member, dict):
+            return "member inventory contains an invalid record"
+        if member.get("runtime_build_config") != config:
+            return "runtime build configuration differs"
         actual.add(member.get("member"))
-    return actual == expected
+    if actual != expected:
+        return "member inventory differs"
+    return ""
+
+
+def _manifest_matches_config(receipt: dict, runtime_dir: str, target: str, config: dict) -> bool:
+    return not _manifest_configuration_mismatch_reason(receipt, runtime_dir, target, config)
 
 
 def ensure_target_runtime(runtime_dir: str, target: str, *, packaged_archive: str = "",
@@ -228,6 +240,7 @@ def ensure_target_runtime(runtime_dir: str, target: str, *, packaged_archive: st
     from pcc.backend.self_backend_targets import resolve_self_backend_target
     from pcc.tools.runtime_archive_provenance import (
         verify_runtime_archive_manifest, manifest_is_stale_for_current_codegen,
+        manifest_codegen_staleness_reason,
     )
     resolve_self_backend_target(target)
     if target_os_name(target) not in ("darwin", "linux", "win32"):
@@ -267,14 +280,18 @@ def ensure_target_runtime(runtime_dir: str, target: str, *, packaged_archive: st
                     receipt = json.loads(stream.read())
             else:
                 receipt = verify_runtime_archive_manifest(Path(candidate), runtime_root=Path(runtime_dir))
-            if (_manifest_matches_config(receipt, runtime_dir, target, config)
-                    and (installed or not manifest_is_stale_for_current_codegen(receipt))):
+            mismatch = _manifest_configuration_mismatch_reason(receipt, runtime_dir, target, config)
+            if not mismatch and not installed:
+                mismatch = manifest_codegen_staleness_reason(receipt)
+            if not mismatch:
                 return candidate
         except (ValueError, OSError, KeyError, TypeError):
             if explicit:
                 raise
         if explicit:
-            raise ValueError("explicit runtime archive does not match the target/source configuration")
+            raise ValueError(
+                "explicit runtime archive does not match the target/source configuration: " + mismatch
+            )
     require_native_provisioning_allowed()
     os.makedirs(os.path.dirname(output), exist_ok=True)
     build_runtime_archive(runtime_dir, output, target)

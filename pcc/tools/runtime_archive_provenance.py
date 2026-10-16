@@ -448,29 +448,36 @@ def receipt_is_stale_for_current_codegen(
     return recorded != current
 
 
-def manifest_is_stale_for_current_codegen(manifest: object) -> bool:
-    """Return whether any member lacks the current compiler identity.
+def manifest_codegen_staleness_reason(manifest: object) -> str:
+    """Explain a stale identity, or return an empty string for a fresh one.
 
     The caller is responsible for archive/manifest integrity validation.  This
     aggregate deliberately computes the current identity once so a manifest is
-    judged against one frozen value.
+    judged against one frozen value. Diagnostics expose only validated digests,
+    never source paths or arbitrary receipt values.
     """
 
     if not isinstance(manifest, dict):
-        return True
+        return "codegen manifest is not an object"
     members = manifest.get("members")
     if not isinstance(members, list) or not members:
-        return True
+        return "codegen member inventory is missing or invalid"
     current = codegen_checksum()
     if not _is_sha256(current):
-        return True
+        return "current codegen checksum is unavailable"
     for record in members:
-        if receipt_is_stale_for_current_codegen(
-            record,
-            current_checksum=current,
-        ):
-            return True
-    return False
+        if not isinstance(record, dict) or not _is_sha256(record.get("codegen_checksum")):
+            return "recorded codegen checksum is missing or invalid"
+        recorded = record["codegen_checksum"]
+        if recorded != current:
+            return "codegen checksum differs: recorded=" + recorded + "; current=" + current
+    return ""
+
+
+def manifest_is_stale_for_current_codegen(manifest: object) -> bool:
+    """Return whether any member lacks the current compiler identity."""
+
+    return bool(manifest_codegen_staleness_reason(manifest))
 
 
 def _require_regular_archive(archive_path: Path) -> None:

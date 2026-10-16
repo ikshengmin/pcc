@@ -65,7 +65,7 @@ def _selection_options(root):
 def test_native_runtime_switches_configuration_in_both_directions(runtime_root, monkeypatch, target, initial_threads):
     monkeypatch.setattr(selection, "sys", SimpleNamespace(platform="win32" if "windows" in target else "linux"))
     monkeypatch.setattr(pipeline_targets, "host_target_triple", lambda: target)
-    monkeypatch.setattr(provenance, "manifest_is_stale_for_current_codegen", lambda _receipt: False)
+    monkeypatch.setattr(provenance, "manifest_codegen_staleness_reason", lambda _receipt: "")
     options = _selection_options(runtime_root)
     packaged = Path(options["archive_pcc_py"])
     packaged.write_bytes(b"pre-existing runtime")
@@ -117,7 +117,7 @@ def test_explicit_archive_rejects_mismatched_configuration(runtime_root, monkeyp
         receipt["members"].pop()
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(path))
     monkeypatch.setattr(provenance, "verify_runtime_archive_manifest", lambda *_a, **_k: receipt)
-    monkeypatch.setattr(provenance, "manifest_is_stale_for_current_codegen", lambda _receipt: False)
+    monkeypatch.setattr(provenance, "manifest_codegen_staleness_reason", lambda _receipt: "")
     monkeypatch.setattr(owned, "build_runtime_archive", _forbidden)
     with pytest.raises(ValueError, match="target/source configuration"):
         owned.ensure_target_runtime(str(runtime_root), target)
@@ -143,7 +143,7 @@ def test_verified_wheel_reuses_matching_config_without_source_codegen(runtime_ro
     target_id = "win32:x86_64:" + target
     _write_wheel_bundle(archive, _manifest(runtime_root, target), target_id)
     monkeypatch.setattr(provenance, "verify_runtime_archive_manifest", _forbidden)
-    monkeypatch.setattr(provenance, "manifest_is_stale_for_current_codegen", _forbidden)
+    monkeypatch.setattr(provenance, "manifest_codegen_staleness_reason", _forbidden)
     monkeypatch.setattr(owned, "build_runtime_archive", _forbidden)
     if explicit:
         monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
@@ -176,7 +176,7 @@ def test_runtime_dir_override_applies_to_cross_target_cache(runtime_root, tmp_pa
     expected.parent.mkdir(parents=True)
     expected.write_bytes(b"cached archive")
     monkeypatch.setattr(provenance, "verify_runtime_archive_manifest", lambda *_a, **_k: _manifest(runtime_root, target))
-    monkeypatch.setattr(provenance, "manifest_is_stale_for_current_codegen", lambda _receipt: False)
+    monkeypatch.setattr(provenance, "manifest_codegen_staleness_reason", lambda _receipt: "")
     monkeypatch.setattr(owned, "build_runtime_archive", _forbidden)
     assert owned.ensure_target_runtime(str(tmp_path / "absent-default"), target) == str(expected)
 
