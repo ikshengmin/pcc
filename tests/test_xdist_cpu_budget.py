@@ -19,8 +19,80 @@ from xdist.workermanage import WorkerController
 from tests import xdist_cpu_budget as budget
 
 ROOT = Path(__file__).resolve().parents[1]
+_PACKAGE_WORKFLOW = ROOT / ".github/workflows/pcc1-package-parity.yml"
+_PACKAGE_BUDGET_INPUTS = (
+    "tests/conftest.py",
+    "tests/xdist_cpu_budget.py",
+    "tests/test_xdist_cpu_budget.py",
+    "tests/test_test_infrastructure_efficiency.py",
+)
 # Nested six-worker probes run sequentially within the normal six-worker suite.
 pytestmark = pytest.mark.xdist_group("pcc_xdist_budget_contract")
+
+
+def _mapping_block(lines, key, indent):
+    """Read this workflow's literal block mappings without a YAML dependency."""
+
+    marker = " " * indent + key + ":"
+    starts = [index for index, line in enumerate(lines) if line == marker]
+    assert len(starts) == 1, (key, starts)
+    block = []
+    for line in lines[starts[0] + 1 :]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= indent:
+            break
+        block.append(line)
+    return block
+
+
+def _package_event_paths(source, event):
+    events = _mapping_block(source.splitlines(), "on", 0)
+    trigger = _mapping_block(events, event, 2)
+    lines = _mapping_block(trigger, "paths", 4)
+    prefix = "      - "
+    assert all(line.startswith(prefix) for line in lines)
+    # The workflow uses quoted literal strings. Exact entries are important:
+    # GitHub's path filters match a whole path from the repository root.
+    return tuple(json.loads(line[len(prefix) :]) for line in lines)
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+@pytest.mark.parametrize("path", _PACKAGE_BUDGET_INPUTS)
+def test_package_workflow_tracks_each_xdist_budget_input(event, path):
+    patterns = _package_event_paths(
+        _PACKAGE_WORKFLOW.read_text(encoding="utf-8"), event
+    )
+    assert patterns.count(path) == 1
+    assert patterns.count("conftest.py") == 1
+
+
+@pytest.mark.parametrize("path", _PACKAGE_BUDGET_INPUTS)
+@pytest.mark.parametrize("lookalike", ["root", "prefix", "suffix"])
+def test_package_paths_do_not_accept_other_scopes_or_similar_names(path, lookalike):
+    decoy = {
+        "root": Path(path).name,
+        "prefix": "other/" + path,
+        "suffix": path + ".bak",
+    }[lookalike]
+    source = textwrap.dedent(f"""
+        on:
+          push:
+            paths:
+              # {path}
+              - "{decoy}"
+          pull_request:
+            paths:
+              - "{path}"
+        jobs:
+          example:
+            steps:
+              - run: echo "{path}"
+    """)
+    push_patterns = _package_event_paths(source, "push")
+    assert push_patterns == (decoy,)
+    assert path not in push_patterns
+    assert _package_event_paths(source, "pull_request") == (path,)
 
 
 def _implementation(function, **overrides):
