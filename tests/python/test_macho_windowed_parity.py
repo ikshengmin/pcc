@@ -4,11 +4,13 @@ These compare complete prepared state and final Mach-O bytes with the eager
 owned route. They neither execute arm64 output nor qualify a native Stage1.
 """
 
+import copy
 import json
 from pathlib import Path
 import struct
 import sys
 from types import SimpleNamespace
+import weakref
 
 import pytest
 
@@ -392,6 +394,76 @@ def test_budgeted_all_pco_pipeline_uses_windowed_route_and_preserves_image(
     assert receipt["inputs"] == {
         "asm": 0, "native_object": 2, "object": 0, "archive": int(runtime_archive),
     }
+
+
+@pytest.mark.parametrize("alias", ("source", "payload", "snapshot"))
+def test_owned_output_hot_calls_keep_exact_reference_boundaries(
+    tmp_path, monkeypatch, alias,
+):
+    from pcc.backend import macho_host_output as output
+
+    value = native.NativeObject.from_sections([
+        obj.Section("__text", "__TEXT", data=b"\xc0\x03\x5f\xd6" * 4,
+                    align_log2=2, flags=obj.TEXT_SECTION_FLAGS,
+                    symbols=(obj.TextSymbol("_main", 0),)),
+        _stackmap_section("_main"),
+    ])
+    paths = _write_pcos(tmp_path, [value])
+    expected = macho_exec.link_executable([value])
+    validate = maps.validate_stack_map_payload
+    escaped = []
+    escape_snapshot = False
+
+    def checked_validate(payload, **kwargs):
+        result = validate(payload, **kwargs)
+        if escape_snapshot and kwargs.get("final_image"):
+            escaped.append(payload)
+        return result
+
+    def reject_retained_source(source, budget):
+        before = copy.deepcopy(_prepared_state(source))
+        with pytest.raises(macho_link.LinkError, match="exclusively transferred"):
+            output.link_owned_executable(source, compact_budget=budget)
+        # Keep the caller's parameter live after the call: the callee may
+        # borrow it, but must still detect this external owner before mutation.
+        assert _prepared_state(source) == before
+
+    monkeypatch.setattr(maps, "validate_stack_map_payload", checked_validate)
+    # Exercise the same sites before and after adaptive specialization. In
+    # CPython 3.14+ LOAD_FAST_BORROW must not turn an external owner into an
+    # apparently exclusive source, or reject a legitimately transferred one.
+    for _ in range(64):
+        budget = _budget()
+        pending = [host.prepare_executable_from_paths(paths, compact_budget=budget)]
+        source_ref = weakref.ref(pending[0])
+        # Keep the consuming call outside assertion rewriting, which would
+        # retain pending.pop() in a diagnostic temporary across the call.
+        actual = output.link_owned_executable(pending.pop(), compact_budget=budget)
+        assert actual == expected
+        assert source_ref() is None
+        assert not escaped
+
+        budget = _budget()
+        pending = [host.prepare_executable_from_paths(paths, compact_budget=budget)]
+        if alias == "source":
+            reject_retained_source(pending.pop(), budget)
+        elif alias == "payload":
+            payload = pending[0]._payloads[0]
+            before = bytes(memoryview(payload))
+            with pytest.raises(macho_link.LinkError, match="escaped bytes alias"):
+                output.link_owned_executable(pending.pop(), compact_budget=budget)
+            assert payload == before
+            payload = None
+        else:
+            escape_snapshot = True
+            try:
+                with pytest.raises(macho_link.LinkError, match="snapshot alias"):
+                    output.link_owned_executable(pending.pop(), compact_budget=budget)
+            finally:
+                escape_snapshot = False
+            assert len(escaped) == 1
+            validate(escaped[0], final_image=True, compact_budget=_budget())
+            escaped.clear()
 
 
 @pytest.mark.parametrize("surface", ("no-budget", "native", "asm", "mixed", "extras"))

@@ -316,9 +316,10 @@ class _OwnedOutput:
                     raise LinkError("owned zerofill section has file bytes")
                 return bytearray()
             # The caller never acquired the bytes. After taking its list slot,
-            # only this local and getrefcount's temporary may reference it.
+            # only this local and the explicit strong temporary may reference
+            # it. A direct getrefcount(local) can borrow on CPython 3.14+.
             # Shared/interned tiny bytes need at most one byte of copying.
-            if len(payload) > 1 and sys.getrefcount(payload) != 2:
+            if len(payload) > 1 and sys.getrefcount([payload].pop()) != 2:
                 raise LinkError("owned output section has an escaped bytes alias")
             buffer = io.BytesIO(payload)
             payload = None
@@ -362,12 +363,12 @@ class _OwnedOutput:
                 final_image=True, compact_budget=adapter,
             )
             # The adapter itself owns one reference; retire it before testing
-            # buffer + local + getrefcount temporary. An escaping validator,
+            # buffer + local + explicit strong temporary. An escaping validator,
             # trace hook or future cache must refuse rather than cause COW.
             adapter.payload = None
             adapter = None
             _require_uninstrumented_owner()
-            if sys.getrefcount(snapshot) != 3:
+            if sys.getrefcount([snapshot].pop()) != 3:
                 raise LinkError("owned stack-map validation retained a snapshot alias")
             snapshot = None
             replacement = buffer.getbuffer()
@@ -508,7 +509,12 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
     """Consume the private all-PCO source and return ordinary immutable bytes."""
     if type(source) is not OwnedMergedSourceView or source._source_sections:
         raise LinkError("owned output requires a windowed compact source")
-    if sys.getrefcount(source) != 2:
+    # CPython 3.14+ can borrow both a Python parameter and a getrefcount
+    # argument. Give this local its own strong reference, then sample with
+    # another known strong reference. A caller alias still raises the count.
+    # Each singleton list is retired by pop; only bounded scratch is added.
+    source = [source].pop()
+    if sys.getrefcount([source].pop()) != 2:
         raise LinkError("owned output source must be exclusively transferred")
     state = buffer = view = image = blob = None
     try:
