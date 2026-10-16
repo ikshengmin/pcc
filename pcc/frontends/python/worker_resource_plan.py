@@ -374,6 +374,25 @@ def read_worker_resource(path: str, expected_pid: int, expected_token: str = "")
         return None
 
 
+def _set_tree_state_diagnostic(
+    diagnostic, reason, sampled_at, checked_at, age, not_before, tree_budget,
+    observed_budget, owner_pid, owner_parent, owner_rss, active_pid,
+    active_parent, active_rss, line_count, row_number,
+):
+    # Keep this publication body out of the reader's finally AST: every early
+    # return otherwise regenerates its dict construction and method calls.
+    # The caller retains the original optional-evidence exception boundary.
+    diagnostic.clear()
+    diagnostic.update({
+        "reason": reason, "sampled_at": sampled_at,
+        "checked_at": checked_at, "age": age, "not_before": not_before,
+        "expected_budget": tree_budget, "observed_budget": observed_budget,
+        "owner_pid": owner_pid, "owner_parent": owner_parent, "owner_rss": owner_rss,
+        "active_pid": active_pid, "active_parent": active_parent, "active_rss": active_rss,
+        "line_count": line_count, "row_number": row_number,
+    })
+
+
 def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
                     not_before: float = 0.0, include_owner: bool = False,
                     diagnostic=None):
@@ -484,15 +503,12 @@ def read_tree_state(path: str, tree_budget: int, owner_pid: int, active_pids,
     finally:
         if diagnostic is not None:
             try:
-                diagnostic.clear()
-                diagnostic.update({
-                    "reason": reason, "sampled_at": sampled_at,
-                    "checked_at": checked_at, "age": age, "not_before": not_before,
-                    "expected_budget": tree_budget, "observed_budget": observed_budget,
-                    "owner_pid": owner_pid, "owner_parent": owner_parent, "owner_rss": owner_rss,
-                    "active_pid": active_pid, "active_parent": active_parent, "active_rss": active_rss,
-                    "line_count": line_count, "row_number": row_number,
-                })
+                _set_tree_state_diagnostic(
+                    diagnostic, reason, sampled_at, checked_at, age, not_before,
+                    tree_budget, observed_budget, owner_pid, owner_parent,
+                    owner_rss, active_pid, active_parent, active_rss,
+                    line_count, row_number,
+                )
             except Exception:
                 pass  # Optional evidence must never change the reader outcome.
 

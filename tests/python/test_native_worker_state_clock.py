@@ -23,23 +23,33 @@ from tests.python.process_timeout import run_process_group_timeout
 
 def _reader_source():
     body = inspect.getsource(policy.read_tree_state)
+    helper = inspect.getsource(policy._set_tree_state_diagnostic)
     program = (
         "import os\nimport sys\nimport time\n"
         + "TREE_STATE_SCHEMA = " + repr(policy.TREE_STATE_SCHEMA) + "\n"
         + "STATE_MAX_AGE_SECONDS = " + repr(policy.STATE_MAX_AGE_SECONDS) + "\n\n"
-        + body + "\n"
+        + helper + "\n" + body + "\n"
         + '''
 def main():
     if sys.implementation.name != "pcc":
         raise RuntimeError("native worker clock reader requires pcc")
     state_path = sys.argv[1]
     budget = int(sys.argv[2])
+    rejected_detail = {}
+    if read_tree_state("", budget, os.getpid(), [], diagnostic=rejected_detail) is not None:
+        raise RuntimeError("empty state path was not rejected")
+    if rejected_detail["reason"] != "empty_path" or rejected_detail["line_count"] != 0:
+        raise RuntimeError("native diagnostic helper did not publish rejection fields")
     before = time.monotonic()
-    state = read_tree_state(state_path, budget, os.getpid(), [])
+    accepted_detail = {}
+    state = read_tree_state(state_path, budget, os.getpid(), [], diagnostic=accepted_detail)
     if state is None:
         raise RuntimeError("host worker state is missing, stale, or incompatible")
     if state != (0, {}):
         raise RuntimeError("unexpected native worker-state accounting")
+    if (accepted_detail["reason"] != "accepted" or accepted_detail["owner_rss"] != 1048576
+            or accepted_detail["expected_budget"] != budget):
+        raise RuntimeError("native diagnostic helper did not publish accepted fields")
     inclusive = read_tree_state(state_path, budget, os.getpid(), [], include_owner=True)
     if inclusive != (0, {os.getpid(): 1048576}):
         raise RuntimeError("native reader did not retain same-snapshot owner RSS")
@@ -61,6 +71,13 @@ def test_native_reader_source_is_the_exact_production_body():
     body, program = _reader_source()
     assert body == inspect.getsource(policy.read_tree_state)
     assert program.count(body) == 1
+    helper = inspect.getsource(policy._set_tree_state_diagnostic)
+    assert program.count(helper) == 1
+    namespace = {}
+    exec(program[:program.index("def main():")], namespace)
+    detail = {}
+    assert namespace["read_tree_state"]("", 1000, 11, [], diagnostic=detail) is None
+    assert detail["reason"] == "empty_path"
     assert "STATE_MAX_AGE_SECONDS = " + repr(policy.STATE_MAX_AGE_SECONDS) in program
     compile(program, "native-worker-clock-reader.py", "exec")
 
@@ -94,6 +111,8 @@ def test_native_worker_state_reader_matches_host_clock(
         "production_module": str(Path(policy.__file__).resolve()),
         "production_module_sha256": hashlib.sha256(Path(policy.__file__).read_bytes()).hexdigest(),
         "production_reader_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "production_diagnostic_helper_sha256": hashlib.sha256(
+            inspect.getsource(policy._set_tree_state_diagnostic).encode()).hexdigest(),
         "generated_source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "runtime_archive": str(explicit_owned_runtime),
         "runtime_sha256": hashlib.sha256(explicit_owned_runtime.read_bytes()).hexdigest(),
