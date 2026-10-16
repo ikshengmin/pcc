@@ -1362,7 +1362,7 @@ def _append_argument_intervals(
     global_last_use: dict[int, int],
     hard_barriers: list[int],
     call_barriers: list[int],
-    reload_offsets: list[int],
+    reload_offsets: set[int],
     intervals: list[tuple[int, int, int, bool]],
     fixed_registers: dict[int, int],
 ) -> None:
@@ -1424,7 +1424,7 @@ def _append_phi_intervals(
     first_live: dict[int, int],
     hard_barriers: list[int],
     call_barriers: list[int],
-    reload_offsets: list[int],
+    reload_offsets: set[int],
     intervals: list[tuple[int, int, int, bool]],
 ) -> None:
     """Add a block's scalar phi results as candidates.
@@ -1688,6 +1688,9 @@ def note_aarch64_reload_destinations(func: ParsedFunction, plan) -> None:
     """
 
     offsets: list[int] = []
+    # Keep the public first-seen order, but do not rescan every earlier slot
+    # for each safepoint's repeated reload. Only membership uses this set.
+    seen: set[int] = set()
     records = getattr(plan, "packed_records", None)
     if records is not None:
         index = 0
@@ -1696,14 +1699,16 @@ def note_aarch64_reload_destinations(func: ParsedFunction, plan) -> None:
             # One name per type: pcc types a local once per function.
             packed: CompilerInt3 = records.reload_scalars.get3_unchecked(index)
             offset = -packed.second
-            if offset not in offsets:
+            if offset not in seen:
+                seen.add(offset)
                 offsets.append(offset)
             index += 1
     else:
         for record in getattr(plan, "records", ()):
             for planned in record.reloads:
                 offset = -planned.destination_offset
-                if offset not in offsets:
+                if offset not in seen:
+                    seen.add(offset)
                     offsets.append(offset)
     func.aarch64_reload_slot_offsets = offsets
 
@@ -1740,9 +1745,13 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     # move between registers and slots); the block-local modes keep both in
     # their slots.
     phi_input_ids: set[int] = set()
-    reload_offsets: list[int] = (
-        func.aarch64_reload_slot_offsets if callee_saved else []
-    )
+    # The list remains the externally visible, deterministic first-seen
+    # projection. This function-local index is never used for iteration or
+    # allocation order and is not cached on a reused ParsedFunction.
+    reload_offsets: set[int] = set()
+    if callee_saved:
+        for reload_offset in func.aarch64_reload_slot_offsets:
+            reload_offsets.add(reload_offset)
     block_id = 0
     while not callee_saved and block_id < len(kernel.block_names):
         phi_fact = kernel.block_phi_fact(block_id)
@@ -2063,6 +2072,8 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             func, kernel, phi_input_ids, global_last_use, hard_barriers,
             call_barriers, reload_offsets, pool_intervals, fixed_registers,
         )
+        # All reload membership consumers are finished before alias grouping.
+        reload_offsets.clear()
         group_intervals, group_members = _merge_alias_groups(
             pool_intervals, alias_pairs
         )
