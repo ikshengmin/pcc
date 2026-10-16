@@ -16,7 +16,8 @@ import traceback
 
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
-from .macho_host_stackmap import merge_owned_stack_map_payloads
+from .macho_host_stackmap import merge_staged_stack_map_payloads
+from .macho_host_stackmap_inputs import _StagedStackMapInputs
 from .macho_obj import DataInCodeRegion, Relocation, Section, TextSymbol
 from .macho_parallel import ShardedSymbolDefinitions, SymbolDefinition
 from .precise_stackmap import (
@@ -789,7 +790,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
     descriptors, archive_buffers, members = [], [], []
     archive_reservation = archive_survivors = 0
     merged, order, plans = {}, [], []
-    normal_parts, rebase_parts, stack_payloads = {}, {}, []
+    normal_parts, rebase_parts, stack_payloads = {}, {}, None
     raw = packed = payload = descriptor = section = target = part = None
     out_sections, output_rows = [], []
     try:
@@ -926,7 +927,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         # and archive-parser charge, including the caller's prior retention.
         ledger.retained = descriptor_bytes
         for owner in (order, plans, local_renames, stack_symbols, unresolved,
-                      weak_unresolved, normal_parts, rebase_parts, stack_payloads):
+                      weak_unresolved, normal_parts, rebase_parts):
             ledger.retained += _model_bytes(owner, ledger.budget)
         ledger.retained += ledger.mapping(len(merged))
         for target in merged.values():
@@ -963,6 +964,15 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         else:
             symbol_at = {}
 
+        stack_count = sum(1 for item in descriptors for section in item.sections
+                          if link._section_key(section) == _STACK_KEY)
+        if stack_count:
+            stack_size = sum(link._section_size(section) for item in descriptors
+                             for section in item.sections
+                             if link._section_key(section) == _STACK_KEY)
+            stack_payloads = _StagedStackMapInputs(
+                stack_count, stack_size, compact_budget=ledger.budget, admit=ledger.keep,
+            )
         item = symbol = None
         # enumerate caches its last result tuple and would keep a retired
         # descriptor alive across the debit at the bottom of this loop.
@@ -982,9 +992,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
                 key = link._section_key(section)
                 size = link._section_size(section) if not link._is_zerofill(section) else 0
                 if key == _STACK_KEY:
-                    ledger.keep(ledger.immutable(size), label="Mach-O detached stack-map snapshot")
                     start = section.data_offset if packed is not None else section["offset"]
-                    stack_payloads.append(bytes(memoryview(raw)[start:start + size]))
+                    stack_payloads.append(raw, start, size)
                     continue
                 merged_key, base, padding = input_plan[section_index]
                 target = merged[merged_key]
@@ -1080,10 +1089,12 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         input_plan = input_keys = section = target = bases = placements = None
         appearance = _pending = symbol = None
         ledger.retained = ledger.caller_bytes
-        for owner in (normal_parts, rebase_parts, stack_payloads, stack_symbols,
+        for owner in (normal_parts, rebase_parts, stack_symbols,
                       unresolved, weak_unresolved, order, section_indices, addresses):
             ledger.retained += _model_bytes(owner, ledger.budget)
         ledger.retained += ledger.mapping(len(merged))
+        if stack_payloads is not None:
+            ledger.retained += stack_payloads.metadata_bytes
         for target in merged.values():
             ledger.retained += 1024 + _model_bytes(target.data_parts, ledger.budget)
             ledger.retained += _model_bytes(target.symbols, ledger.budget)
@@ -1096,23 +1107,21 @@ def _merge_paths(paths, archives, archive_paths, ledger):
                 merged, order, unresolved, stack_symbols, ledger,
             )
         if stack_payloads:
-            snapshots = sum(ledger.immutable(len(item)) for item in stack_payloads)
-            snapshot_raw = sum(len(item) for item in stack_payloads)
+            stack_payloads.seal()
             previous = ledger.budget.retained_bytes
-            # The merger counts raw payload lengths, not Python bytes
-            # headers or allocator rounding. Keep those owners charged here.
-            # The private detached list is transferred without a tuple alias:
-            # completed inputs can retire while later inputs are still merged.
-            ledger.budget.retained_bytes = previous + ledger.retained - snapshot_raw
+            # Detached inputs are file-owned. The merger charges its one
+            # materialized window; all other live preparation owners remain.
+            ledger.budget.retained_bytes = previous + ledger.retained
             try:
-                stack_payload, stack_offsets = merge_owned_stack_map_payloads(
+                stack_payload, stack_offsets = merge_staged_stack_map_payloads(
                     stack_payloads, compact_budget=ledger.budget,
                     single_buffer=_single_buffer_window_supported(),
                 )
             finally:
                 ledger.budget.retained_bytes = previous
-            ledger.retained -= snapshots
-            stack_payloads.clear()
+            # The merger closes input storage before output materialization.
+            ledger.retained -= stack_payloads.metadata_bytes
+            stack_payloads = None
             ledger.keep(ledger.immutable(len(stack_payload)) + _model_bytes(stack_offsets, ledger.budget))
             merged[_STACK_KEY].data_parts.append(stack_payload)
             merged[_STACK_KEY].data_size = len(stack_payload)
@@ -1183,19 +1192,23 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             target.data = b""
         normal_parts.clear()
         rebase_parts.clear()
-        stack_payloads.clear()
         out_sections.clear()
         output_rows.clear()
         raise
     finally:
-        descriptors.clear()
-        archive_buffers.clear()
-        raw = packed = payload = descriptor = section = target = part = members = None
-        pulled = member = item = row_parts = rows = frozen = stack_payload = None
-        stack_offsets = _pending = None
-        definitions = local_renames = defined = referenced = weak_references = strong_references = None
-        symbol_indices = symbol_at = input_keys = input_plan = None
-        appearance = symbol = owner = None
+        try:
+            if stack_payloads is not None:
+                stack_payloads.close()
+        finally:
+            stack_payloads = None
+            descriptors.clear()
+            archive_buffers.clear()
+            raw = packed = payload = descriptor = section = target = part = members = None
+            pulled = member = item = row_parts = rows = frozen = stack_payload = None
+            stack_offsets = _pending = None
+            definitions = local_renames = defined = referenced = weak_references = strong_references = None
+            symbol_indices = symbol_at = input_keys = input_plan = None
+            appearance = symbol = owner = None
 
 
 def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compact_budget=None, caller_owners=()):

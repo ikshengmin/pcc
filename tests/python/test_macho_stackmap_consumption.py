@@ -278,21 +278,23 @@ def test_real_owner_retirement_admits_at_unchanged_tight_limit():
 
 
 @pytest.mark.parametrize("single_buffer", [False, True])
-def test_host_transfers_exact_list_and_preserves_full_image(tmp_path, monkeypatch, single_buffer):
+def test_host_transfers_staged_inputs_and_preserves_full_image(tmp_path, monkeypatch, single_buffer):
     paths = _write_sparse_stack_inputs(tmp_path)
-    original = host.merge_owned_stack_map_payloads
+    original = host.merge_staged_stack_map_payloads
     transfers = []
 
     def merge(payloads, **kwargs):
-        assert type(payloads) is list and all(type(value) is bytes for value in payloads)
+        assert type(payloads) is host._StagedStackMapInputs and payloads.sealed
+        assert all(type(row) is tuple and len(row) == 2 for row in payloads.rows)
         assert kwargs["single_buffer"] is single_buffer
         transferred = len(payloads)
         result = original(payloads, **kwargs)
-        assert payloads == [None] * transferred
+        assert payloads.rows == [] and payloads.stream is None
+        assert payloads.consumed == transferred and payloads.read == payloads.written == payloads.total
         transfers.append(transferred)
         return result
 
-    monkeypatch.setattr(host, "merge_owned_stack_map_payloads", merge)
+    monkeypatch.setattr(host, "merge_staged_stack_map_payloads", merge)
     monkeypatch.setattr(host, "_single_buffer_window_supported", lambda: single_buffer)
     budget = _budget(20_000_000)
     budget.retained_bytes = 1024
@@ -309,7 +311,7 @@ def test_host_transfers_exact_list_and_preserves_full_image(tmp_path, monkeypatc
 
 def test_host_clears_partial_transfer_and_restores_budget_on_failure(tmp_path, monkeypatch):
     paths = _write_sparse_stack_inputs(tmp_path)
-    original_merge = host.merge_owned_stack_map_payloads
+    original_merge = host.merge_staged_stack_map_payloads
     original_scan = maps._scan_stack_map_payload
     transferred = []
     scans = 0
@@ -324,15 +326,16 @@ def test_host_clears_partial_transfer_and_restores_budget_on_failure(tmp_path, m
             return original_scan(payload, **kwargs)
         scans += 1
         if scans == 2:
-            assert transferred[0][0] is None
+            assert transferred[0].rows[0] is None
             raise maps.PreciseStackMapError("injected second payload refusal")
         return original_scan(payload, **kwargs)
 
-    monkeypatch.setattr(host, "merge_owned_stack_map_payloads", merge)
+    monkeypatch.setattr(host, "merge_staged_stack_map_payloads", merge)
     monkeypatch.setattr(maps, "_scan_stack_map_payload", scan)
     budget = _budget(20_000_000)
     budget.retained_bytes = 1024
     with pytest.raises(macho_link.LinkError, match="injected second payload refusal"):
         host.prepare_executable_from_paths(paths, compact_budget=budget)
-    assert scans == 2 and transferred == [[]]
+    assert scans == 2 and len(transferred) == 1
+    assert transferred[0].rows == [] and transferred[0].stream is None
     assert budget.retained_bytes == 1024

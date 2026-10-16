@@ -14,6 +14,7 @@ import tempfile
 
 from . import precise_stackmap as wire
 from .macho_host_stackmap_index import _IndexWork, _RootIndex, _SourceIndex
+from .macho_host_stackmap_inputs import _StagedStackMapInputs
 
 
 _BLOCK_BYTES = 64 * 1024
@@ -84,22 +85,45 @@ class _SpoolWork:
         return True
 
 
-def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
+def merge_staged_stack_map_payloads(payloads, *, compact_budget, single_buffer):
+    """Consume a private same-handle input spool, retaining one input window."""
+    if (sys.implementation.name != "cpython" or compact_budget is None
+            or type(payloads) is not _StagedStackMapInputs or not payloads.sealed):
+        raise wire.PreciseStackMapError("staged stack-map merge requires owned host storage")
+    try:
+        return merge_owned_stack_map_payloads(
+            payloads, compact_budget=compact_budget, single_buffer=single_buffer,
+            _staged=True,
+        )
+    finally:
+        try:
+            payloads.close()
+        finally:
+            payloads = None
+
+
+def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer,
+                                   _staged=False):
     """Return the original merger's exact bytes and relocation offsets.
 
     ``single_buffer`` is supplied only by the caller's verified GIL CPython
     3.13--3.15/64-bit guard. Other hosts retain a two-buffer freeze admission.
-    As with the shared consuming API, only completed input slots are retired;
-    the caller must clear remaining inputs on failure and charge any aliases.
+    The ordinary list entry retires only completed input slots; its caller
+    must clear remaining inputs on failure and charge any aliases. The private
+    staged entry instead supplies one owned input window and closes storage.
     """
     if not payloads:
         raise wire.PreciseStackMapError("cannot merge an empty stack-map collection")
-    if (sys.implementation.name != "cpython" or compact_budget is None
-            or type(payloads) is not list
-            or any(type(payload) is not bytes for payload in payloads)):
+    if sys.implementation.name != "cpython" or compact_budget is None:
         raise wire.PreciseStackMapError("consuming stack-map merge requires owned host bytes")
+    valid = (type(payloads) is _StagedStackMapInputs and payloads.sealed) if _staged else (
+        type(payloads) is list and all(type(payload) is bytes for payload in payloads)
+    )
+    if not valid:
+        raise wire.PreciseStackMapError("consuming stack-map merge requires owned host bytes")
+    staged = _staged
     budget = compact_budget
-    input_bytes = sum(map(len, payloads))
+    input_bytes = 0 if staged else sum(map(len, payloads))
     base_entries = len(payloads) + 16
     budget.check_peak(input_bytes + _FIXED_BYTES, entries=base_entries,
                       label="spool merge inputs")
@@ -143,7 +167,14 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
         with tempfile.TemporaryFile(mode="w+b", buffering=0) as roots, \
                 tempfile.TemporaryFile(mode="w+b", buffering=0) as records:
             for consumed_index in range(len(payloads)):
-                payload = payloads[consumed_index]
+                if staged:
+                    payload = payloads.read_next(
+                        consumed_index, compact_budget=budget, admit=admit,
+                        single_buffer=single_buffer,
+                    )
+                    input_bytes = budget._rounded(sys.getsizeof(payload))
+                else:
+                    payload = payloads[consumed_index]
                 previous = budget.retained_bytes
                 budget.retained_bytes += (
                     input_bytes - len(payload) + _FIXED_BYTES
@@ -231,13 +262,18 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer):
                             work.write_all(records, blob)
                             blob = None
                 # No view, chunk or cache owns input bytes past this point.
-                retired = len(payload)
+                retired = input_bytes if staged else len(payload)
                 source_index_cache.close()
                 scanned = source_index_cache = None
-                payloads[consumed_index] = None
+                if staged:
+                    payloads.retire(consumed_index)
+                else:
+                    payloads[consumed_index] = None
                 payload = None
                 input_bytes -= retired
 
+            if staged:
+                payloads.close()
             root_index.close()
             seen_ids.clear()
             root_index = seen_ids = digest = None
