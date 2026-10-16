@@ -1,0 +1,614 @@
+"""Private consuming CPython finalization with file-owned output assembly.
+
+The ordinary/native bytes API and its serializer remain the reference. This
+route takes an exclusive windowed source, patches its exact-sized backings,
+and retires the preparation graph before allocating the final image.
+"""
+
+import io
+import os
+import struct
+import sys
+import tempfile
+
+from . import macho_exec as executable
+from . import macho_codesign as codesign
+from . import precise_stackmap as stackmap
+from .macho_host_prepare import (
+    _release_closed_tracebacks,
+    _single_buffer_window_supported,
+)
+from .macho_host_relocations import _model_bytes
+from .macho_link import LinkError
+from .native_object import OwnedMergedSourceView
+
+
+_BLOCK = 64 * 1024
+_FIXED = 16 * 1024
+_BYTES_IO_HEADER = sys.getsizeof(io.BytesIO())
+_VIEW_HEADER = sys.getsizeof(memoryview(b""))
+_SOURCE_FIELDS = (
+    "_source_sections", "_payloads", "_raw_relocations", "_sections",
+    "_symbols", "_section_index", "_symbol_index",
+)
+
+
+def _list_storage(count, budget, *, lists=1, sorting=False):
+    # CPython append growth is (n + n//8 + 6)&~3. Count both the old
+    # and replacement pointer arrays, even when realloc can grow in place.
+    # key-sort additionally has n keys and up to n merge-scratch pointers.
+    capacity = count + count // 8 + 6 * lists
+    return (lists * budget._rounded(sys.getsizeof([]))
+            + 2 * budget._rounded(capacity * 8)
+            + (2 * count * 8 if sorting else 0))
+
+
+def _dict_storage(count, budget):
+    # Insert-only generic-key tables cover the smaller unicode-key tables.
+    # CPython 3.13--3.15 uses 2/3 usable slots and doubles at used*3. Each
+    # keys allocation includes its 32-byte header, indices and 3-word entries.
+    # No borrowed key/value object is charged a second time here.
+    header = budget._rounded(sys.getsizeof({}))
+    if not count:
+        return header
+    capacity = 8
+    while capacity * 2 // 3 < count:
+        capacity *= 2
+
+    def table(slots):
+        width = 1 if slots <= 128 else 2 if slots <= 32768 else 4 if slots <= 1 << 31 else 8
+        return budget._rounded(32 + slots * width + (slots * 2 // 3) * 24)
+
+    return header + table(capacity) + (table(capacity // 2) if capacity > 8 else 0)
+
+
+class _SetStorage:
+    """Monotone table-only peak, O(1) amortized per admitted fixup."""
+
+    def __init__(self, budget):
+        self.budget = budget
+        self.capacity = 8
+        self.peak = budget._rounded(sys.getsizeof(set()))
+
+    def reserve(self, count):
+        budget = self.budget
+        header = budget._rounded(sys.getsizeof(set()))
+        while True:
+            threshold = ((self.capacity - 1) * 3 + 4) // 5
+            if threshold > count:
+                break
+            target = threshold * (2 if threshold > 50000 else 4)
+            following = 8
+            while following <= target:
+                following *= 2
+            self.peak = max(self.peak, header
+                            + budget._rounded(self.capacity * 16)
+                            + budget._rounded(following * 16))
+            self.capacity = following
+        self.peak = max(self.peak, header + budget._rounded(self.capacity * 16))
+        return self.peak
+
+
+def _symbol_projections(source, budget):
+    """New shallow owners in _prepare_executable_image, excluding source data."""
+    defined = sum((s["n_type"] & 0x0e) == 0x0e for s in source._symbols)
+    imports = sum((s["n_type"] & 0x0e) == 0 for s in source._symbols)
+    count = len(source._symbols)
+    integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
+    pair = budget._rounded(sys.getsizeof((None, None)))
+    # defined/thread_block_offset/sym_addr; veneer_index/veneer_used/
+    # string_offsets; stub_addr/got_addr/import_ordinal, respectively.
+    total = (3 * _dict_storage(defined, budget)
+             + 3 * _dict_storage(count, budget)
+             + 3 * _dict_storage(imports, budget))
+    # weak/relocated/imports sets plus both unreferenced-import temporaries;
+    # code_imports_set and branch_targets_set also contain defined names.
+    total += (5 * _SetStorage(budget).reserve(imports)
+              + 2 * _SetStorage(budget).reserve(count)
+              + _SetStorage(budget).reserve(defined))  # dropped_symbols
+    # names_all, branch_targets, string-table input/chunks and nlist_parts;
+    # imports, code_imports, unreferenced/missing imports, import_entries;
+    # defined_items, local/external_defs, ordered and input-name temporary.
+    total += (5 * _list_storage(count, budget, sorting=True)
+              + 5 * _list_storage(imports, budget, sorting=True)
+              + 5 * _list_storage(defined, budget, sorting=True))
+    # New map values, import entries/packing argument tuple, defined-item
+    # pairs and the separate address/name key tuples used by symbol sorting.
+    total += ((2 * defined + 3 * count + 4 * imports) * integer
+              + 2 * defined * pair + imports * 8)
+    names_bytes = 1 + sum(len(s["name"]) + 1 for s in source._symbols)
+    import_bytes = 1 + sum(len(s["name"]) + 1 for s in source._symbols
+                           if (s["n_type"] & 0x0e) == 0)
+    # String-table chunks plus joined strtab, with one encoding temporary.
+    total += (sum(budget._rounded(sys.getsizeof(b"") + len(s["name"]) + 1)
+                  for s in source._symbols)
+              + 2 * names_bytes + 16)
+    # 16-byte nlist objects and their final joined wire bytes.
+    total += count * (budget._rounded(sys.getsizeof(b"") + 16) + 16)
+    # sym_blob's old/new overallocated bytearray, its bytes conversion and
+    # chained-fixups concatenation intermediates. Page starts are separate.
+    total += (2 * budget._rounded(import_bytes + import_bytes // 8 + 8)
+              + import_bytes + 3 * (4 * imports + import_bytes + 64))
+    return total
+
+
+def _section_projections(count, budget):
+    integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
+    # The managed-buffer struct is smaller than PyMemoryViewObject: it
+    # contains the same Py_buffer plus fewer header/pointer fields. Use
+    # another full view size. _BytesIOBuffer has object head, one pointer
+    # to the BytesIO owner and the two-word GC preheader.
+    buffer_headers = (budget._rounded(_BYTES_IO_HEADER)
+                      + 2 * budget._rounded(_VIEW_HEADER)
+                      + budget._rounded(sys.getsizeof(object()) + 3 * 8))
+    # _Out + its ten-field attributes, derived address integers, BytesIO /
+    # managed-buffer / primary-view headers, region triples/labels and up to
+    # four simultaneous 80-byte section-command encodings. Source payloads
+    # and source names themselves remain in the separate source model.
+    per_section = (budget._rounded(sys.getsizeof(executable._Out("", "", 0, 0, None)))
+                   + _dict_storage(10, budget) + 12 * integer
+                   + buffer_headers + _list_storage(3, budget)
+                   # Region sort's (offset, len(payload), label) key tuple;
+                   # its new len integer is one of the twelve above.
+                   + budget._rounded(sys.getsizeof((None, None, None)))
+                   + budget._rounded(sys.getsizeof("") + 40) + 4 * 80)
+    # Output lists and sorted/concatenated temporary lists, section_addr and
+    # both private id-indexed owner maps. Each section_addr value is a pair.
+    return (count * (per_section + budget._rounded(sys.getsizeof((None, None))))
+            + 10 * _list_storage(count, budget, sorting=True)
+            + 3 * _dict_storage(count, budget))
+
+
+def _source_bytes(source, budget):
+    # These are fixed source models, never _Out/fixup graphs whose repeated
+    # references could multiply one backing by the relocation count.
+    return sum(_model_bytes(getattr(source, name), budget) for name in _SOURCE_FIELDS)
+
+
+def _clear_source(source):
+    for name in _SOURCE_FIELDS:
+        value = getattr(source, name)
+        if type(value) in (dict, list):
+            value.clear()
+        setattr(source, name, () if type(value) is tuple else {} if type(value) is dict else [])
+
+
+def _signature_workspace(size):
+    # build_signature keeps a digest object/list slot per 4 KiB page while
+    # joining, then hashes, cd_blob, blob and padded bytes. Eight complete
+    # signature lengths cover both phases, including rounded digest headers
+    # and simultaneous old/new list pointer arrays. No image copy is credited.
+    return 8 * size + _FIXED
+
+
+def _owned_output_supported():
+    # Debug/profiling callbacks may take a frame-local reference between a
+    # refcount check and the subsequent C operation. Reject instrumentation,
+    # including monitoring tools with only local events (global mask zero).
+    if (not _single_buffer_window_supported() or stackmap._NATIVE_RECORD_READS
+            or sys.gettrace() is not None or sys.getprofile() is not None):
+        return False
+    return all(sys.monitoring.get_tool(tool) is None for tool in range(6))
+
+
+def _require_uninstrumented_owner():
+    if not _owned_output_supported():
+        raise LinkError("owned output requires an uninstrumented verified CPython buffer model")
+
+
+class _ValidationBudget:
+    def __init__(self, budget, payload):
+        self.budget = budget
+        self.payload = payload
+
+    def unretained_payload_bytes(self, payload):
+        return 0 if payload is self.payload else len(payload)
+
+    def check_peak(self, *args, **kwargs):
+        return self.budget.check_peak(*args, **kwargs)
+
+    def charge_records(self, count):
+        return self.budget.charge_records(count)
+
+    def check_validation_cache(self, payload, records, functions, cache, locations):
+        self.check_peak(
+            self.unretained_payload_bytes(payload) + locations * self.budget.integer_bytes,
+            records=records, entries=functions + len(cache) + 1,
+            label="validation cache",
+        )
+
+
+class _OwnedOutput:
+    def __init__(self, source, budget, caller_owners):
+        self.budget = budget
+        self.caller_bytes = _model_bytes(caller_owners, budget)
+        self.source_bytes = _source_bytes(source, budget)
+        self.buffers = {}
+        self.views = {}
+        self.regions = []
+        self.extra_raw = 0
+        self.order_raw = 0
+        self.fixup_count = 0
+        self.io_remaining = 0
+        self.output_count = len(source._sections)
+        self.symbol_raw = _symbol_projections(source, budget)
+        self.section_raw = _section_projections(self.output_count, budget)
+        self.fixup_raw = 0
+        self.seen_storage = _SetStorage(budget)
+        self.check(label="Mach-O owned preparation projections")
+
+    def known_bytes(self):
+        return (self.caller_bytes + self.source_bytes + self.extra_raw
+                + self.symbol_raw + self.section_raw + self.fixup_raw
+                + self.order_raw + _FIXED)
+
+    def check(self, extra=0, *, label):
+        self.budget.check_peak(self.known_bytes() + extra, label=label)
+
+    def reserve_buffers(self, size, outputs):
+        # The existing synthesized stubs/GOT/island constructors temporarily
+        # hold their zero bytes and bytearray together. Keep their final bytes
+        # until the preparation frame has actually returned.
+        following = _section_projections(self.output_count + outputs, self.budget)
+        self.check(2 * size + following - self.section_raw,
+                   label="Mach-O owned synthesized sections")
+        self.extra_raw += size
+        self.output_count += outputs
+        self.section_raw = following
+
+    def reserve_fixup(self, count=1):
+        total = self.fixup_count + count
+        budget = self.budget
+        integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
+        quad = budget._rounded(sys.getsizeof((None, None, None, None)))
+        # One source site tuple (three/four fields) and its segment tuple,
+        # each with up to three new integers. Four source lists and two
+        # segment lists retain each site once; sorted(fixups) adds a list and
+        # key/merge scratch. by_page retains another pointer per fixup, with
+        # its independent list headers/growth padding covered by reserve_pages.
+        following = (total * (2 * quad + 6 * integer)
+                     + _list_storage(total, budget, lists=4)
+                     + _list_storage(total, budget, lists=2)
+                     + _list_storage(total, budget, sorting=True)
+                     + 2 * budget._rounded((total + total // 8) * 8)
+                     + self.seen_storage.reserve(total))
+        self.check(following - self.fixup_raw, label="Mach-O owned fixup projections")
+        self.fixup_count += count
+        self.fixup_raw = following
+
+    def reserve_order(self, count):
+        # Host CompilerIntArena is a list of encoded <=64-bit integers.
+        # Four pointer words/entry cover list growth overlap and sort scratch.
+        needed = (count * self.budget._rounded(self.budget.integer_bytes)
+                  + _list_storage(count, self.budget, sorting=True))
+        self.check(max(0, needed - self.order_raw), label="Mach-O owned relocation order")
+        self.order_raw = max(self.order_raw, needed)
+
+    def reserve_pages(self, count):
+        budget = self.budget
+        integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
+        # Per-page dict key and page-start offset integers; independent
+        # grouping-list headers and growth padding; page_starts and the
+        # packed-piece join list; each tiny bytes header, plus all starts /
+        # segment-info / final fixups wire copies (12 bytes per page).
+        needed = (_dict_storage(count, budget)
+                  + count * (2 * integer + _list_storage(0, budget)
+                             + budget._rounded(sys.getsizeof(b"") + 2) + 12)
+                  + 2 * _list_storage(count, budget))
+        self.check(needed, label="Mach-O owned fixup page tables")
+        self.extra_raw += needed
+
+    def retire_relocations(self, source):
+        before = _model_bytes(source._raw_relocations, self.budget)
+        source._raw_relocations.clear()
+        self.source_bytes -= before - _model_bytes(source._raw_relocations, self.budget)
+        self.order_raw = 0
+
+    def take(self, source, section, zerofill):
+        payload = buffer = view = None
+        try:
+            _require_uninstrumented_owner()
+            payload = OwnedMergedSourceView.take_section_data(source, section)
+            if type(payload) is not bytes:
+                raise LinkError("owned output payload is not exact bytes")
+            if zerofill:
+                if payload:
+                    raise LinkError("owned zerofill section has file bytes")
+                return bytearray()
+            # The caller never acquired the bytes. After taking its list slot,
+            # only this local and getrefcount's temporary may reference it.
+            # Shared/interned tiny bytes need at most one byte of copying.
+            if len(payload) > 1 and sys.getrefcount(payload) != 2:
+                raise LinkError("owned output section has an escaped bytes alias")
+            buffer = io.BytesIO(payload)
+            payload = None
+            view = buffer.getbuffer()
+            self.buffers[id(view)] = buffer
+            self.views[id(view)] = view
+            buffer = None
+            return view
+        finally:
+            payload = None
+            if buffer is not None:
+                if view is not None:
+                    view.release()
+                buffer.close()
+
+    def validate(self, out):
+        old_view = out.data
+        size = len(old_view)
+        buffer = self.buffers.pop(id(old_view))
+        self.views.pop(id(old_view))
+        snapshot = adapter = replacement = None
+        previous = self.budget.retained_bytes
+        try:
+            # No subview is handed to callers. The original validator is
+            # called only after the private writable export is gone.
+            old_view.release()
+            out.data = None
+            # Same-length truncate is an export barrier, not a resize. Unlike
+            # getvalue, it rejects a hidden child view before any copying.
+            buffer.truncate(size)
+            snapshot = buffer.getvalue()
+            if len(snapshot) < 2:
+                raise LinkError("owned stack-map snapshot is too short")
+            self.check(label="Mach-O owned final stack-map validation")
+            self.budget.retained_bytes = (
+                previous + self.known_bytes()
+            )
+            adapter = _ValidationBudget(self.budget, snapshot)
+            stackmap.validate_stack_map_payload(
+                snapshot, expected_arch=stackmap.ARCH_AARCH64,
+                final_image=True, compact_budget=adapter,
+            )
+            # The adapter itself owns one reference; retire it before testing
+            # buffer + local + getrefcount temporary. An escaping validator,
+            # trace hook or future cache must refuse rather than cause COW.
+            adapter.payload = None
+            adapter = None
+            _require_uninstrumented_owner()
+            if sys.getrefcount(snapshot) != 3:
+                raise LinkError("owned stack-map validation retained a snapshot alias")
+            snapshot = None
+            replacement = buffer.getbuffer()
+            self.buffers[id(replacement)] = buffer
+            self.views[id(replacement)] = replacement
+            out.data = replacement
+            buffer = None
+        except BaseException as exc:
+            _release_closed_tracebacks(exc)
+            raise
+        finally:
+            self.budget.retained_bytes = previous
+            if adapter is not None:
+                adapter.payload = None
+            snapshot = adapter = old_view = replacement = None
+            if buffer is not None:
+                buffer.close()
+
+    def plan(self, size, outputs, metadata, reserve, text_size):
+        self.check(label="Mach-O owned region transfer")
+        # Only called after every address and chained pointer has been patched.
+        regions = self.regions
+        for out in outputs:
+            if not out.zerofill_size:
+                regions.append([out.fileoff, out.data, out.segname + "," + out.sectname])
+        for offset, payload, label in metadata:
+            regions.append([offset, payload, label])
+        header_size = len(metadata[0][1])
+        self.parser_bytes = (
+            3 * header_size + (header_size // 8 + 16) * self.budget.metadata_entry_bytes
+        )
+        regions.sort(key=lambda item: (item[0], len(item[1]), item[2]))
+        end = 0
+        for offset, payload, label in regions:
+            if type(offset) is not int or offset < end or offset + len(payload) > size:
+                raise LinkError("owned output region overlaps or exceeds image: " + label)
+            if payload:
+                end = offset + len(payload)
+        self.budget.check_peak(size + reserve + self.caller_bytes + _FIXED,
+                               label="Mach-O owned output wire extent")
+        return size, reserve, text_size
+
+    def charge_io(self, size):
+        if size < 0 or size > self.io_remaining:
+            raise LinkError("owned output spool I/O work bound exceeded")
+        self.io_remaining -= size
+
+    def spool(self, stream, source, size):
+        # This method is entered only after _prepare_executable_image returns:
+        # no _Out, relocation generator, rows or fixup closure survives there.
+        _clear_source(source)
+        self.source_bytes = 0
+        self.symbol_raw = 0
+        self.section_raw = 0
+        self.fixup_raw = 0
+        self.fixup_count = 0
+        self.extra_raw = 0
+        self.order_raw = 0
+        raw = sum(len(item[1]) for item in self.regions)
+        # Bound requested transfers too, not only actual positive progress.
+        # Limited short I/O is supported; pathological tiny progress refuses
+        # after a linear amount of work, before issuing the next request.
+        self.io_remaining = 2 * (raw + size) + 2 * _BLOCK
+        self.budget.check_peak(raw + self.caller_bytes + _FIXED,
+                               entries=4 * len(self.regions), label="Mach-O owned output spool")
+        # A new anonymous inode, not an existing file with potentially stale
+        # gap bytes. ftruncate sets the exact bounded extent; gaps read as zero.
+        if os.fstat(stream.fileno()).st_size != 0:
+            raise LinkError("owned output spool must be newly empty")
+        if size > self.budget.limit_bytes:
+            raise LinkError("owned output spool exceeds byte budget")
+        os.ftruncate(stream.fileno(), size)
+        written = 0
+        payload = region = view = None
+        try:
+            for index in range(len(self.regions)):
+                region = self.regions[index]
+                offset, payload, _label = region
+                stream.seek(offset)
+                with memoryview(payload) as view:
+                    cursor = 0
+                    while cursor < len(view):
+                        end = min(len(view), cursor + _BLOCK)
+                        self.charge_io(end - cursor)
+                        with view[cursor:end] as part:
+                            count = stream.write(part)
+                        if type(count) is not int or not 0 < count <= end - cursor:
+                            raise LinkError("owned output spool made invalid write progress")
+                        written += count
+                        if written > raw:
+                            raise LinkError("owned output spool write bound exceeded")
+                        cursor += count
+                key = id(payload)
+                if key in self.views:
+                    self.views.pop(key).release()
+                    self.buffers.pop(key).close()
+                region[1] = None
+                self.regions[index] = None
+                region = payload = view = None
+            self.regions.clear()
+            if written != raw:
+                raise LinkError("owned output spool byte count changed")
+            stream.seek(0)
+        finally:
+            payload = region = view = None
+
+    def close(self):
+        failure = None
+        try:
+            for view in self.views.values():
+                try:
+                    view.release()
+                except BaseException as exc:
+                    _release_closed_tracebacks(exc)
+                    if failure is None:
+                        failure = exc.with_traceback(None)
+        finally:
+            self.views.clear()
+            try:
+                for buffer in self.buffers.values():
+                    try:
+                        buffer.close()
+                    except BaseException as exc:
+                        _release_closed_tracebacks(exc)
+                        if failure is None:
+                            failure = exc.with_traceback(None)
+            finally:
+                self.buffers.clear()
+                self.regions.clear()
+                view = buffer = None
+        if failure is not None:
+            raise failure
+
+
+def link_owned_executable(source, *, compact_budget, phase_callback=None,
+                          entry="_main", identifier=b"pcc-linked", minos=(12, 0),
+                          caller_owners=()):
+    """Consume the private all-PCO source and return ordinary immutable bytes."""
+    if type(source) is not OwnedMergedSourceView or source._source_sections:
+        raise LinkError("owned output requires a windowed compact source")
+    if sys.getrefcount(source) != 2:
+        raise LinkError("owned output source must be exclusively transferred")
+    state = buffer = view = image = blob = None
+    try:
+        _require_uninstrumented_owner()
+        state = _OwnedOutput(source, compact_budget, caller_owners)
+        plan = executable._prepare_executable_image(
+            source, entry=entry, identifier=identifier, minos=minos,
+            compact_budget=compact_budget, _owned_output=state,
+        )
+        size, reserve, text_size = plan
+        with tempfile.TemporaryFile(mode="w+b", buffering=0) as stream:
+            state.spool(stream, source, size)
+            source = None
+            total = size + reserve
+            compact_budget.check_peak(total + state.caller_bytes + _FIXED,
+                                       label="Mach-O owned final backing")
+            buffer = io.BytesIO(b"\0" * total)
+            view = buffer.getbuffer()
+            cursor = 0
+            while cursor < size:
+                end = min(size, cursor + _BLOCK)
+                state.charge_io(end - cursor)
+                with view[cursor:end] as part:
+                    count = stream.readinto(part)
+                if type(count) is not int or not 0 < count <= end - cursor:
+                    raise LinkError("owned output spool made invalid read progress")
+                cursor += count
+            state.charge_io(1)
+            if stream.read(1):
+                raise LinkError("owned output spool extent changed")
+        compact_budget.check_peak(
+            total + state.caller_bytes + state.parser_bytes + _signature_workspace(reserve),
+            label="Mach-O owned signature workspace",
+        )
+        if phase_callback is not None:
+            phase_callback("sign_begin")
+        try:
+            with view[:size] as prefix:
+                blob = codesign.build_signature(
+                    prefix, identifier=identifier, exec_seg_base=0,
+                    exec_seg_limit=text_size, exec_seg_flags=1,
+                )
+        finally:
+            if phase_callback is not None:
+                phase_callback("sign_end")
+        if len(blob) != reserve:
+            raise LinkError("owned output signature size changed")
+        view[size:] = blob
+        blob = None
+        view.release()
+        view = None
+        buffer.truncate(total)
+        image = buffer.getvalue()
+        buffer.close()
+        buffer = None
+        return image
+    except (stackmap.PreciseStackMapError, LinkError) as exc:
+        _release_closed_tracebacks(exc)
+        sizes = compact_budget.last_rejection
+        if sizes and (isinstance(exc, stackmap.PreciseStackMapError)
+                      or isinstance(exc.__cause__, stackmap.PreciseStackMapError)):
+            raise LinkError(
+                "Mach-O compact stack-map budget rejected: " + str(exc) + "; " + sizes
+            ) from exc
+        raise
+    except BaseException as exc:
+        _release_closed_tracebacks(exc)
+        raise
+    finally:
+        try:
+            if view is not None:
+                view.release()
+        finally:
+            try:
+                if buffer is not None:
+                    buffer.close()
+            finally:
+                try:
+                    if source is not None:
+                        _clear_source(source)
+                    if state is not None:
+                        state.close()
+                finally:
+                    source = state = buffer = view = image = blob = None
+
+
+def check_signature_verification(image, signature, budget, *, caller_owners=()):
+    """Account the unchanged public parser/re-hash path on verified CPython."""
+    if not _single_buffer_window_supported():
+        raise LinkError("owned signature verification requires verified CPython")
+    header_size = 32 + struct.unpack_from("<I", image, 20)[0]
+    try:
+        budget.check_peak(
+            len(image) + _signature_workspace(signature.datasize)
+            + 3 * header_size + _model_bytes(caller_owners, budget),
+            entries=header_size // 8 + 16,
+            label="owned Mach-O signature verification workspace",
+        )
+    except stackmap.PreciseStackMapError as exc:
+        raise LinkError(
+            "Mach-O compact stack-map budget rejected: " + str(exc)
+            + "; " + budget.last_rejection
+        ) from exc

@@ -638,6 +638,7 @@ def _prepare_executable_image(
     identifier: bytes = b"pcc-linked",
     link_receipt=None,
     compact_budget=None,
+    _owned_output=None,
 ):
     """Resolve addresses into immutable output regions, without allocating an image."""
 
@@ -809,7 +810,17 @@ def _prepare_executable_image(
         # obj.data[0:size] for it would splice the mach header + __text into
         # __bss and the section's globals would read instruction bytes. It
         # occupies vm space only; dyld zeroes it.
-        if compact_budget is not None and not is_zf:
+        out = None
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if _owned_output is not None:
+                out = _Out(
+                    segname, sectname, sec["flags"], sec["align"],
+                    _owned_output.take(obj, sec, is_zf),
+                )
+                if source_view and not is_zf:
+                    source_raw_bytes -= min(source_raw_bytes, len(out.data))
+        if out is None and compact_budget is not None and not is_zf:
             # Count the original buffers, mutable output accumulated so far,
             # and both a possible payload slice and its new mutable copy.
             _check_compact_copy_peak(
@@ -819,19 +830,20 @@ def _prepare_executable_image(
                 + 2 * sec["size"],
                 "Mach-O mutable section output",
             )
-        if source_view:
+        if out is None and source_view:
             # The owned view is single-use: retire each source payload once
             # it is copied, so the image is not held twice at its peak.
             payload = OwnedMergedSourceView.take_section_data(obj, sec)
-        else:
+        elif out is None:
             payload = obj.section_data(sec)
-        out = _Out(
-            segname, sectname, sec["flags"], sec["align"],
-            bytearray() if is_zf
-            else bytearray(payload),
-        )
-        if source_view and not is_zf:
-            source_raw_bytes -= min(source_raw_bytes, len(payload))
+        if out is None:
+            out = _Out(
+                segname, sectname, sec["flags"], sec["align"],
+                bytearray() if is_zf
+                else bytearray(payload),
+            )
+            if source_view and not is_zf:
+                source_raw_bytes -= min(source_raw_bytes, len(payload))
         payload = None
         out.zerofill_size = sec["size"] if is_zf else 0
         if segname == "__TEXT":
@@ -879,6 +891,10 @@ def _prepare_executable_image(
     # stubs and GOT are plain sections and no indirect table is emitted.
     # (Measured: with the special types and no indirect table the process is
     # SIGKILLed with no diagnostic; as plain sections the same binary runs.)
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.reserve_buffers((_STUB_SIZE + 8) * len(code_imports), 2)
     stubs = _Out("__TEXT", "__stubs", spec.S_REGULAR
                  | spec.S_ATTR_PURE_INSTRUCTIONS | spec.S_ATTR_SOME_INSTRUCTIONS,
                  2, bytearray(b"\0" * (_STUB_SIZE * len(code_imports))))
@@ -913,6 +929,13 @@ def _prepare_executable_image(
             veneer_island_count = _needed
     else:
         veneer_island_count = 0
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.reserve_buffers(
+                _veneer_table_bytes * veneer_island_count,
+                max(1, veneer_island_count),
+            )
     veneer_islands = [_make_veneer_island() for _ in range(veneer_island_count)]
     veneers = veneer_islands[0] if veneer_islands else _make_veneer_island()
 
@@ -1031,6 +1054,13 @@ def _prepare_executable_image(
     # zero padding and make executable size grow with virtual-only storage.
     linkedit_off = data_file_end
 
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.reserve_pages(
+                2 + (data_const_end - data_const_off + data_file_end - data_off) // PAGE,
+            )
+
     # --- symbol addresses --------------------------------------------------
     section_addr = {}
     for index, sec in enumerate(sections, start=1):
@@ -1101,6 +1131,10 @@ def _prepare_executable_image(
         pending_addend = 0
         if source_view:
             rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if _owned_output is not None:
+                    _owned_output.reserve_order(len(rows) // 12)
             relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
                 obj, sec,
             )
@@ -1181,6 +1215,10 @@ def _prepare_executable_image(
                     veneer_used[name] = dest
                     delta = thunk - at
                     if not -(1 << 27) <= delta < (1 << 27):
+                        import sys as execution_runtime
+                        if execution_runtime.implementation.name == "cpython":
+                            if _owned_output is not None:
+                                _owned_output.reserve_fixup()
                         unreachable_veneers.append((name, at, thunk, delta))
                         continue
                 _write_patch_word(out.data, at_off, _branch26(word, delta))
@@ -1234,6 +1272,10 @@ def _prepare_executable_image(
                         # (e.g. __tlv_bootstrap). Field is zeroed; dyld fills
                         # it via the chain.
                         struct.pack_into("<Q", out.data, at_off, 0)
+                        import sys as execution_runtime
+                        if execution_runtime.implementation.name == "cpython":
+                            if _owned_output is not None:
+                                _owned_output.reserve_fixup()
                         tlv_bind_sites.append(
                             (out, at_off, import_ordinal[name]))
                     elif (
@@ -1247,6 +1289,10 @@ def _prepare_executable_image(
                                 "does not fit a chained bind"
                             )
                         struct.pack_into("<Q", out.data, at_off, 0)
+                        import sys as execution_runtime
+                        if execution_runtime.implementation.name == "cpython":
+                            if _owned_output is not None:
+                                _owned_output.reserve_fixup()
                         data_bind_sites.append(
                             (out, at_off, import_ordinal[name], addend))
                     else:
@@ -1264,6 +1310,10 @@ def _prepare_executable_image(
                     # data sections carry rebases — a pointer in __TEXT would
                     # be in a read-only, non-fixup segment.
                     if out.segname in ("__DATA", "__DATA_CONST"):
+                        import sys as execution_runtime
+                        if execution_runtime.implementation.name == "cpython":
+                            if _owned_output is not None:
+                                _owned_output.reserve_fixup()
                         rebase_sites.append(
                             (out, at_off, absolute - TEXT_BASE))
                         struct.pack_into("<Q", out.data, at_off,
@@ -1306,6 +1356,13 @@ def _prepare_executable_image(
     # the release after this function returns.
     if not source_view:
         del obj
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            # Every ordered iterator has exhausted and closed its integer
+            # arena. Retire the final local row/generator aliases as well.
+            rows = relocations = None
+            _owned_output.retire_relocations(obj)
 
     # The relocatable linker rebuilds stack-map tables semantically.  Check
     # the resolved table once more after native address relocations, before
@@ -1315,6 +1372,11 @@ def _prepare_executable_image(
         if (out.segname, out.sectname) != ("__DATA", "__pcc_stackmaps"):
             continue
         try:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if _owned_output is not None:
+                    _owned_output.validate(out)
+                    continue
             if compact_budget is None:
                 validate_stack_map_payload(
                     bytes(out.data),
@@ -1406,6 +1468,10 @@ def _prepare_executable_image(
         return (high8 << 36) | (image_off & ((1 << 36) - 1))
 
     seg_fixups: dict[int, list] = {}
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.reserve_fixup(len(code_imports))
     if code_imports:
         seg_fixups[dc_index] = [
             (got.addr + i * 8, got, i * 8, _bind_word(import_ordinal[name]))
@@ -1722,6 +1788,18 @@ def _prepare_executable_image(
         "flags": mh_flags, "reserved": 0,
     })
 
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            return _owned_output.plan(
+                sig_off,
+                text_sections + ([got] if code_imports else []) + data_out,
+                ((0, header + bytes(cmds), "header/load commands"),
+                 (fixups_off, fixups, "chained fixups"),
+                 (symtab_off, nlists, "symbol table"),
+                 (strtab_off, strtab, "string table")),
+                sig_size, text_filesize,
+            )
     if compact_budget is not None:
         # The mutable output and all immutable OutputRegion snapshots coexist
         # until this preparation frame returns. Source buffers are borrowed.

@@ -314,11 +314,27 @@ def _owned_macho_link_in_process(
             elif event == "sign_end":
                 sign_times[1] += (time.monotonic() - sign_times[0]) * 1000.0
 
-        if compact_budget is None:
+        owned_output = False
+        if windowed:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                from pcc.backend.macho_host_output import (
+                    _owned_output_supported,
+                    link_owned_executable,
+                )
+                owned_output = _owned_output_supported()
+                if owned_output:
+                    image = link_owned_executable(
+                        pending.pop(), entry="_main", phase_callback=link_phase,
+                        compact_budget=compact_budget,
+                        caller_owners=(ordered, pcc_native_object_inputs, pcc_asm_inputs,
+                                       pcc_internal_input_manifest, extra_link_inputs),
+                    )
+        if not owned_output and compact_budget is None:
             image = link_prepared_executable(
                 pending.pop(), entry="_main", phase_callback=link_phase,
             )
-        else:
+        elif not owned_output:
             image = link_prepared_executable(
                 pending.pop(), entry="_main", phase_callback=link_phase,
                 compact_budget=compact_budget,
@@ -333,10 +349,20 @@ def _owned_macho_link_in_process(
         # memoryview slicing can still copy, so do not assume one buffer in
         # the conservative raw-byte estimate.
         if compact_budget is not None:
-            compact_budget.check_peak(
-                2 * len(image) + signature.datasize,
-                label="owned Mach-O signature verification snapshot",
-            )
+            if owned_output:
+                import sys as execution_runtime
+                if execution_runtime.implementation.name == "cpython":
+                    from pcc.backend.macho_host_output import check_signature_verification
+                    check_signature_verification(
+                        image, signature, compact_budget,
+                        caller_owners=(ordered, pcc_native_object_inputs, pcc_asm_inputs,
+                                       pcc_internal_input_manifest, extra_link_inputs),
+                    )
+            else:
+                compact_budget.check_peak(
+                    2 * len(image) + signature.datasize,
+                    label="owned Mach-O signature verification snapshot",
+                )
         expected_signature = build_signature(
             memoryview(image)[:signature.dataoff], identifier=signature.identifier,
             exec_seg_base=signature.exec_seg_base, exec_seg_limit=signature.exec_seg_limit,
