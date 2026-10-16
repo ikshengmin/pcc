@@ -62,6 +62,7 @@ _http_download = extern("py_http_download_to_file", (c_obj, c_obj), c_int64)
 _file_digest = extern("py_sha256_file_hex", (c_obj,), c_obj)
 _file_digest_bounded = extern("py_sha256_file_hex_bounded", (c_obj, c_int64), c_obj)
 
+_path_basename = extern("py_os_path_basename", (c_obj,), c_obj)
 _path_split = extern("py_os_path_split", (c_obj,), c_obj)
 _path_isfile = extern("py_os_path_isfile", (c_obj,), c_int)
 _path_isdir = extern("py_os_path_isdir", (c_obj,), c_int)
@@ -706,11 +707,16 @@ class _path:
 
 
     @staticmethod
-    def basename(p: str) -> str:
-        i = len(p) - 1
-        while i >= 0 and p[i] != "/":
-            i = i - 1
-        return p[i + 1 :]
+    def basename(p):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.basename(p)
+        value = _native_path_text(p)
+        result = _path_basename(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.basename result allocation failed')
+        return result
 
 
     @staticmethod
