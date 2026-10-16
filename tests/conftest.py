@@ -46,6 +46,12 @@ _TSAN_PROBE_CACHE: dict[str, str | None] = {}
 
 import pytest  # noqa: E402
 
+from tests.xdist_cpu_budget import (  # noqa: E402, F401
+    pytest_configure,
+    pytest_configure_node,
+    pytest_runtest_setup,
+    pytest_xdist_node_collection_finished,
+)
 from tests.runtime_fixture_provenance import _verified_test_runtime_archive  # noqa: E402
 from tests.runtime_build_cache import (  # noqa: E402
     cached_pcc_python_runtime,
@@ -300,19 +306,6 @@ def _pcc_gate_blocked_reason(item) -> str | None:
         elif probe == "pcc1":
             _provision_pcc1()  # provisioning step, never a deselect reason
     return None
-
-
-def pytest_configure(config):
-    """Publish xdist's outer width so pcc does not multiply parallelism."""
-
-    if not hasattr(config, "workerinput"):
-        return
-    raw_count = str(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "") or "").strip()
-    try:
-        worker_count = max(1, int(raw_count))
-    except ValueError:
-        worker_count = 1
-    os.environ.setdefault("PCC_OUTER_PARALLELISM", str(worker_count))
 
 
 def pytest_collection_modifyitems(config, items):

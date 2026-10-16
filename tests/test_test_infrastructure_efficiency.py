@@ -57,6 +57,8 @@ _NESTED_PYTEST_STRATEGIES = {
     "tests/python/test_pytest_live_report_tool.py": '"/dev/null"',
     # Inner runs only collect a temporary source tree, bounded by timeout=15.
     "tests/python/test_install_pcc1_toolchain.py": '"--collect-only"',
+    # Inner runs execute only generated, compiler-free probes with timeout=30.
+    "tests/test_xdist_cpu_budget.py": "test_real_xdist_budget_contract",
 }
 _NESTED_PYTEST_ARGV = re.compile(r"""["']-m["'],\s*["']pytest["']""")
 
@@ -333,9 +335,7 @@ def test_default_xdist_keeps_bounded_workers_for_compiler_heavy_suite():
     assert "-n 6 --dist=loadgroup -m 'not integration'" in config
     conftest = (ROOT / "tests/conftest.py").read_text(encoding="utf-8")
     assert "def pytest_xdist_auto_num_workers" not in conftest
-    assert (
-        'os.environ.setdefault("PCC_OUTER_PARALLELISM", str(worker_count))' in conftest
-    )
+    assert "from tests.xdist_cpu_budget import (" in conftest
     assert "items[:] = warmup + remaining" in conftest
     matrix = (ROOT / "tests/python/test_gc_backend_under_env.py").read_text(
         encoding="utf-8"
