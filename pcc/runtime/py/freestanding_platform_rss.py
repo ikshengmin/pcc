@@ -7,7 +7,9 @@ from pcc.unsafe import (
     cstr,
     darwin_current_rss_bytes,
     darwin_peak_rss_bytes,
+    int_to_ptr,
     load_i8,
+    memset,
     open_readonly,
     read,
     stack_alloc,
@@ -92,4 +94,12 @@ def pcc_os_peak_rss_bytes() -> i64:
 def pcc_worker_resource_replace(source: c_ptr, destination: c_ptr) -> i64:
     # Only the Windows publisher uses this extended-rename contract. Other
     # targets keep their existing py_os_replace path, never a host fallback.
+    return -38
+
+
+@c_abi_export("pcc_worker_resource_replace_detailed")
+def pcc_worker_resource_replace_detailed(source: c_ptr, destination: c_ptr,
+                                         diagnostic_address: i64) -> i64:
+    # Same unsupported-operation result as the original platform stub.
+    memset(int_to_ptr(diagnostic_address), 0, 24)
     return -38

@@ -539,10 +539,41 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
         # c_str leases both owners before exposing either UTF-8 view. Ordinary
         # MoveFileEx does not request extended replace-open-destination
         # semantics, even when the reader grants all three sharing modes.
-        native_publish = extern("pcc_worker_resource_replace", (c_str, c_str), c_int64)
-        status = native_publish(temporary, path)
+        from pcc.unsafe import load_i64, stack_alloc
+
+        # This record belongs to this call, even if string-lease cleanup reenters.
+        # Runtime layout: failure stage@0, primary DWORD@8, close DWORD@16.
+        # Application stack_alloc yields an integer address; c_int64 unboxes
+        # that address. c_ptr would instead pass the managed integer object.
+        diagnostic = stack_alloc(24)
+        native_publish = extern("pcc_worker_resource_replace_detailed", (c_str, c_str, c_int64), c_int64)
+        status = native_publish(temporary, path, diagnostic)
+        detail = ""
+        if status != 0:
+            stage_code = load_i64(diagnostic, 0)
+            stage = "unknown"
+            if stage_code == 1:
+                stage = "destination_full_path"
+            elif stage_code == 2:
+                stage = "source_full_path"
+            elif stage_code == 3:
+                stage = "source_validation"
+            elif stage_code == 4:
+                stage = "rename_buffer_allocation"
+            elif stage_code == 5:
+                stage = "open_source"
+            elif stage_code == 6:
+                stage = "rename"
+            elif stage_code == 7:
+                stage = "close"
+            detail = (" stage=" + stage
+                      + " winerror=" + str(load_i64(diagnostic, 8))
+                      + " handle_cleanup_winerror=" + str(load_i64(diagnostic, 16)))
         if status < 0:
-            raise OSError(-status, "worker RSS atomic replacement failed", temporary, None, path)
+            # Keep the errno/type and absent winerror attribute used by the
+            # existing native retry policy; raw DWORDs are diagnostic text only.
+            raise OSError(-status, "worker RSS atomic replacement failed:" + detail,
+                          temporary, None, path)
         if status > 0:
             primary_errno = status // 65536
             cleanup_errno = status % 65536
@@ -550,7 +581,7 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
             raise RuntimeError(
                 "worker RSS handle cleanup failed: publication_committed=" + committed
                 + " primary_errno=" + str(primary_errno)
-                + " handle_cleanup_errno=" + str(cleanup_errno))
+                + " handle_cleanup_errno=" + str(cleanup_errno) + detail)
         return
 
     native_replace = extern("py_os_replace", (c_obj, c_obj), c_obj)

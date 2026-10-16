@@ -612,6 +612,14 @@ int64_t   pcc_os_peak_rss_bytes(void);
  * no commit and confirmed cleanup; positive primary_errno*65536+close_errno
  * means close failed (primary==0 means committed). Positive must not retry. */
 int64_t   pcc_worker_resource_replace(const char *source, const char *destination);
+/* Same status; diagnostic_address is the integer address of three writable
+ * int64_t slots, initialized
+ * per call: stage, primary Win32 DWORD, close Win32 DWORD. No shared state.
+ * Stages: 0 none, 1 destination path, 2 source path, 3 source validation,
+ * 4 rename buffer allocation, 5 open source, 6 rename, 7 close. A zero DWORD
+ * denotes no captured API error (e.g. owned validation/allocation failure). */
+int64_t   pcc_worker_resource_replace_detailed(const char *source, const char *destination,
+                                               int64_t diagnostic_address);
 /* G-P3-LONGRUN: malloc-heap statistics for backends 0-3 fragmentation
  * (C-only; -1 on failure). in_use = bytes handed to the program;
  * capacity = bytes the allocator holds from the OS. */

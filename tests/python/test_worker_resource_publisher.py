@@ -259,15 +259,15 @@ def test_host_and_native_windows_dispatch_to_their_extended_rename(monkeypatch, 
     def ordinary(source, destination):
         calls.append(("ordinary", source, destination))
 
-    def native(source, destination):
+    def native(source, destination, diagnostic=None):
         calls.append(("native", source, destination))
         return 0
 
-    native_types = SimpleNamespace(c_obj=object(), c_int64=object(), c_str=object())
+    native_types = SimpleNamespace(c_obj=object(), c_int64=object(), c_ptr=object(), c_str=object())
 
     def declare(symbol, arguments, result):
-        if symbol == "pcc_worker_resource_replace":
-            assert arguments == (native_types.c_str, native_types.c_str)
+        if symbol == "pcc_worker_resource_replace_detailed":
+            assert arguments == (native_types.c_str, native_types.c_str, native_types.c_int64)
             assert result is native_types.c_int64
             return native
         if symbol == "py_os_replace":
@@ -288,6 +288,9 @@ def test_host_and_native_windows_dispatch_to_their_extended_rename(monkeypatch, 
             return SimpleNamespace(replace_worker_resource=rename)
         if name == "pcc.extern":
             return native_types
+        if name == "pcc.unsafe":
+            return SimpleNamespace(stack_alloc=lambda size: [0, 0, 0],
+                                   load_i64=lambda output, offset: output[offset // 8])
         assert name != "ctypes" and not name.startswith("pcc.")
         return original_import(name, *args, **options)
 
@@ -298,7 +301,7 @@ def test_host_and_native_windows_dispatch_to_their_extended_rename(monkeypatch, 
     host = (implementation, platform) == ("cpython", "win32")
     native = implementation == "pcc"
     assert calls == [("host" if host else "native" if native else "ordinary", "worker.rss.tmp", "worker.rss")]
-    assert imports == (["sys", HOST_MODULE] if host else ["sys", "pcc.extern"] if native else ["sys"])
+    assert imports == (["sys", HOST_MODULE] if host else ["sys", "pcc.extern", "pcc.unsafe"] if native else ["sys"])
 
 
 def test_actual_publisher_dispatcher_preserves_native_import_boundary():
@@ -325,8 +328,10 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
     assert dispatch.body[4].end_lineno < native_import.lineno
     native_windows = dispatch.body[-6]
     assert ast.unparse(native_windows.test) == "execution_runtime.platform == 'win32'"
-    assert ast.unparse(native_windows.body[0]) == (
-        "native_publish = extern('pcc_worker_resource_replace', (c_str, c_str), c_int64)")
+    declaration = next(node for node in native_windows.body if isinstance(node, ast.Assign)
+                       and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "native_publish")
+    assert ast.unparse(declaration) == (
+        "native_publish = extern('pcc_worker_resource_replace_detailed', (c_str, c_str, c_int64), c_int64)")
     assert isinstance(native_windows.body[-1], ast.Return)
     tail = [ast.unparse(node) for node in dispatch.body[-5:]]
     assert tail == [
@@ -353,17 +358,18 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
 def _native_import_control(policy, events, *, platform="linux", pending=False, call_error=None):
     """Inert declaration provider; never imports PCC or calls a native symbol."""
     original_import = builtins.__import__
-    types = SimpleNamespace(c_obj=object(), c_int64=object(), c_str=object())
+    types = SimpleNamespace(c_obj=object(), c_int64=object(), c_ptr=object(), c_str=object())
 
     class Result:
         def __del__(self):
             events.append(("release",))
 
-    def replace(source, destination):
+    def replace(source, destination, diagnostic=None):
         events.append(("replace", source, destination))
         if call_error is not None:
             raise call_error
         if platform == "win32":
+            diagnostic[:] = [5, 32, 0] if pending else [0, 0, 0]
             return -13 if pending else 0
         return Result()
 
@@ -374,8 +380,8 @@ def _native_import_control(policy, events, *, platform="linux", pending=False, c
 
     def declare(symbol, arguments, result):
         events.append(("declare", symbol))
-        if symbol == "pcc_worker_resource_replace":
-            assert arguments == (types.c_str, types.c_str) and result is types.c_int64
+        if symbol == "pcc_worker_resource_replace_detailed":
+            assert arguments == (types.c_str, types.c_str, types.c_int64) and result is types.c_int64
             return replace
         if symbol == "py_os_replace":
             assert arguments == (types.c_obj, types.c_obj) and result is types.c_obj
@@ -391,6 +397,9 @@ def _native_import_control(policy, events, *, platform="linux", pending=False, c
             return SimpleNamespace(implementation=SimpleNamespace(name="pcc"), platform=platform)
         if name == "pcc.extern":
             return types
+        if name == "pcc.unsafe":
+            return SimpleNamespace(stack_alloc=lambda size: [0, 0, 0],
+                                   load_i64=lambda output, offset: output[offset // 8])
         assert name != "ctypes" and not name.startswith("pcc.")
         return original_import(name, *args, **options)
 
@@ -417,6 +426,8 @@ def test_native_report_abi_preserves_platform_error_and_ownership_contract(monke
         if platform == "win32":
             assert isinstance(caught.value, PermissionError) and caught.value.errno == 13
             assert caught.value.filename == "worker.rss.tmp" and caught.value.filename2 == "worker.rss"
+            assert "stage=open_source winerror=32 handle_cleanup_winerror=0" in str(caught.value)
+            assert getattr(caught.value, "winerror", None) is None
         else:
             assert caught.value is failure
     else:
@@ -426,8 +437,8 @@ def test_native_report_abi_preserves_platform_error_and_ownership_contract(monke
         if platform != "win32":
             assert events[-1] == ("release",) and events.count(("release",)) == 1
     if platform == "win32":
-        assert events == [("import", "sys"), ("import", "pcc.extern"),
-                          ("declare", "pcc_worker_resource_replace"),
+        assert events == [("import", "sys"), ("import", "pcc.extern"), ("import", "pcc.unsafe"),
+                          ("declare", "pcc_worker_resource_replace_detailed"),
                           ("replace", "worker.rss.tmp", "worker.rss")]
         return
     assert events[:6] == [

@@ -10,8 +10,8 @@ GetProcessMemoryInfo reference. This is working-set RSS, not commit charge.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int, c_int64, c_ptr, extern
 from pcc.unsafe import (
-    free, load_i8, load_i64, load_ptr, malloc, memcpy, memset, null, ptr_add,
-    ptr_is_null, ptr_to_int, stack_alloc, store_i32, store_ptr,
+    free, int_to_ptr, load_i8, load_i64, load_ptr, malloc, memcpy, memset, null, ptr_add,
+    ptr_is_null, ptr_to_int, stack_alloc, store_i32, store_i64, store_ptr,
 )
 
 
@@ -24,7 +24,8 @@ CreateFileW = extern("CreateFileW", (c_ptr, c_int, c_int, c_ptr, c_int, c_int, c
 SetFileInformationByHandle = extern("SetFileInformationByHandle", (c_ptr, c_int, c_ptr, c_int), c_int)
 CloseHandle = extern("CloseHandle", (c_ptr,), c_int)
 utf16 = extern("pcc_win_utf16", (c_ptr,), c_ptr)
-error = extern("pcc_win_error", (), c_int64)
+GetLastError = extern("GetLastError", (), c_int)
+error_code = extern("pcc_win_error_code", (c_int64,), c_int64)
 
 _COUNTERS_SIZE = 72
 _PEAK_WORKING_SET_OFFSET = 8
@@ -32,6 +33,18 @@ _WORKING_SET_OFFSET = 16
 _RENAME_HEADER_SIZE = 24
 _RENAME_NAME_OFFSET = 20
 _RENAME_CLEANUP_ERROR_BASE = 65536
+# Caller-owned diagnostic record: three i64 slots, no shared or TLS state.
+_RENAME_DIAGNOSTIC_SIZE = 24
+_RENAME_STAGE_OFFSET = 0
+_RENAME_WINERROR_OFFSET = 8
+_RENAME_CLOSE_WINERROR_OFFSET = 16
+_RENAME_DESTINATION_PATH = 1
+_RENAME_SOURCE_PATH = 2
+_RENAME_SOURCE_VALIDATION = 3
+_RENAME_BUFFER_ALLOCATION = 4
+_RENAME_OPEN_SOURCE = 5
+_RENAME_RENAME = 6
+_RENAME_CLOSE = 7
 
 
 @c_abi_export("pcc_windows_rss_bytes")
@@ -57,14 +70,26 @@ def pcc_os_peak_rss_bytes() -> i64:
 
 @c_abi_export("pcc_windows_worker_resource_full_path")
 def _worker_resource_full_path(path: c_ptr, output: c_ptr) -> i64:
-    """Return the UTF-16 character count and one owned absolute path buffer."""
+    """Keep the original path-helper ABI and ownership contract."""
+    winerror_output = stack_alloc(8)
+    return _worker_resource_full_path_detailed(path, output, winerror_output)
+
+
+@c_abi_export("pcc_windows_worker_resource_full_path_detailed")
+def _worker_resource_full_path_detailed(path: c_ptr, output: c_ptr,
+                                       winerror_output: c_ptr) -> i64:
+    """Return the original path status and snapshot any failing WinAPI DWORD."""
+    store_i64(winerror_output, 0, 0)
     store_ptr(output, 0, null())
     wide = utf16(path)
     if ptr_is_null(wide):
         return -22
     size: i64 = GetFullPathNameW(wide, 0, null(), null())
     if size <= 0:
-        failure: i64 = error()
+        code: i64 = GetLastError()
+        code = code & 4294967295
+        store_i64(winerror_output, 0, code)
+        failure: i64 = error_code(code)
         free(wide)
         return failure
     # Bound both allocation arithmetic and the DWORD rename-buffer length.
@@ -77,7 +102,12 @@ def _worker_resource_full_path(path: c_ptr, output: c_ptr) -> i64:
         free(wide)
         return -12
     actual: i64 = GetFullPathNameW(wide, size, absolute, null())
-    failure = error() if actual == 0 else -36
+    failure: i64 = -36
+    if actual == 0:
+        code: i64 = GetLastError()
+        code = code & 4294967295
+        store_i64(winerror_output, 0, code)
+        failure = error_code(code)
     free(wide)
     if actual <= 0 or actual >= size:
         free(absolute)
@@ -96,13 +126,35 @@ def pcc_worker_resource_replace(source: c_ptr, destination: c_ptr) -> i64:
     A positive status encodes primary_errno * 65536 + close_errno: zero primary
     means committed; nonzero primary means rename failed. Neither may retry.
     """
+    diagnostic = stack_alloc(_RENAME_DIAGNOSTIC_SIZE)
+    return pcc_worker_resource_replace_detailed(source, destination, ptr_to_int(diagnostic))
+
+
+@c_abi_export("pcc_worker_resource_replace_detailed")
+def pcc_worker_resource_replace_detailed(source: c_ptr, destination: c_ptr,
+                                         diagnostic_address: i64) -> i64:
+    """Use the original status protocol plus a caller-owned 24-byte record.
+
+    The caller provides three writable i64 slots: failure stage, primary
+    Win32 DWORD, close Win32 DWORD. Zero means no corresponding failure/API
+    code. The record is initialized for every call, including all early exits.
+    Capture each DWORD before mapping errno or performing another API/cleanup.
+    Nothing can overwrite a different invocation's record during cleanup.
+    """
+    # Application raw addresses cross extern as integers, never managed c_ptr.
+    diagnostic = int_to_ptr(diagnostic_address)
+    memset(diagnostic, 0, _RENAME_DIAGNOSTIC_SIZE)
     paths = stack_alloc(16)
     memset(paths, 0, 16)
-    destination_length: i64 = _worker_resource_full_path(destination, ptr_add(paths, 8))
+    winerror_output = ptr_add(diagnostic, _RENAME_WINERROR_OFFSET)
+    destination_length: i64 = _worker_resource_full_path_detailed(
+        destination, ptr_add(paths, 8), winerror_output)
     if destination_length < 0:
+        store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_DESTINATION_PATH)
         return destination_length
-    source_length: i64 = _worker_resource_full_path(source, paths)
+    source_length: i64 = _worker_resource_full_path_detailed(source, paths, winerror_output)
     if source_length < 0:
+        store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_SOURCE_PATH)
         free(load_ptr(paths, 8))
         return source_length
     a = load_ptr(paths, 0)
@@ -120,12 +172,14 @@ def pcc_worker_resource_replace(source: c_ptr, destination: c_ptr) -> i64:
                  and load_i8(a, offset + 4) == 109 and load_i8(a, offset + 5) == 0
                  and load_i8(a, offset + 6) == 112 and load_i8(a, offset + 7) == 0)
     if not valid:
+        store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_SOURCE_VALIDATION)
         free(a)
         free(b)
         return -22
     size: i64 = _RENAME_HEADER_SIZE + destination_length * 2
     information = malloc(size)
     if ptr_is_null(information):
+        store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_BUFFER_ALLOCATION)
         free(a)
         free(b)
         return -12
@@ -139,13 +193,26 @@ def pcc_worker_resource_replace(source: c_ptr, destination: c_ptr) -> i64:
     handle = CreateFileW(a, 65536, 7, null(), 3, 128, null())
     status: i64 = 0
     if ptr_to_int(handle) == -1:
-        status = error()
+        code: i64 = GetLastError()
+        code = code & 4294967295
+        store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_OPEN_SOURCE)
+        store_i64(diagnostic, _RENAME_WINERROR_OFFSET, code)
+        status = error_code(code)
     else:
         # FileRenameInfoEx=22. Unsupported filesystems fail without fallback.
         if SetFileInformationByHandle(handle, 22, information, size) == 0:
-            status = error()  # Preserve this error before close/free.
+            code: i64 = GetLastError()
+            code = code & 4294967295
+            store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_RENAME)
+            store_i64(diagnostic, _RENAME_WINERROR_OFFSET, code)
+            status = error_code(code)
         if CloseHandle(handle) == 0:
-            cleanup_error: i64 = 0 - error()
+            code: i64 = GetLastError()
+            code = code & 4294967295
+            store_i64(diagnostic, _RENAME_CLOSE_WINERROR_OFFSET, code)
+            if status == 0:
+                store_i64(diagnostic, _RENAME_STAGE_OFFSET, _RENAME_CLOSE)
+            cleanup_error: i64 = 0 - error_code(code)
             status = (0 - status) * _RENAME_CLEANUP_ERROR_BASE + cleanup_error
     free(information)
     free(a)
