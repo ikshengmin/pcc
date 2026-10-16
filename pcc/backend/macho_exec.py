@@ -1122,6 +1122,10 @@ def _prepare_executable_image(
     # addresses that must follow the ASLR slide, so each needs a REBASE
     # chained fixup. (_Out, offset_in_out, target_offset_from_image_base)
     rebase_sites: list[tuple] = []
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.phase("relocations_begin")
     _S_TLV_VARS = 0x13
     for sec_index, sec in enumerate(sections, start=1):
         mapping = section_addr.get(sec_index)
@@ -1363,6 +1367,8 @@ def _prepare_executable_image(
             # arena. Retire the final local row/generator aliases as well.
             rows = relocations = None
             _owned_output.retire_relocations(obj)
+            _owned_output.phase("relocations_end")
+            _owned_output.phase("stackmap_validate_begin")
 
     # The relocatable linker rebuilds stack-map tables semantically.  Check
     # the resolved table once more after native address relocations, before
@@ -1411,6 +1417,11 @@ def _prepare_executable_image(
                     compact_budget.retained_bytes = previous_retained_bytes
         except PreciseStackMapError as exc:
             raise LinkError(f"final stack-map table is invalid: {exc}") from exc
+
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.phase("stackmap_validate_end")
 
     if unreachable_veneers:
         # The island itself is out of reach, which means __text exceeds what
@@ -1467,6 +1478,10 @@ def _prepare_executable_image(
         high8 = 0  # our addresses fit in 36 bits from the image base
         return (high8 << 36) | (image_off & ((1 << 36) - 1))
 
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.phase("fixups_begin")
     seg_fixups: dict[int, list] = {}
     import sys as execution_runtime
     if execution_runtime.implementation.name == "cpython":
@@ -1644,6 +1659,11 @@ def _prepare_executable_image(
     symtab_off = _align(fixups_off + len(fixups), 8)
 
     # --- symbol table ------------------------------------------------------
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.phase("fixups_end")
+            _owned_output.phase("symbols_begin")
     nlist_parts: list[bytes] = []
     # Symbols in dropped unwind sections have no address; they are not in
     # sym_addr and must not appear in the symbol table either.
@@ -1699,6 +1719,10 @@ def _prepare_executable_image(
         }))
     nlists = b"".join(nlist_parts)
     nlist_parts.clear()
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.phase("symbols_end")
     strtab_off = symtab_off + len(nlists)
     sig_off = _align(strtab_off + len(strtab), 16)
     # __LINKEDIT must COVER the code signature: dyld's strict validation

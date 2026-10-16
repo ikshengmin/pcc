@@ -17,6 +17,7 @@ import traceback
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
 from .macho_host_join import _consume_parts, _join_instrumentation_absent
+from .macho_host_phase import emit_phase
 from .macho_host_stackmap import merge_staged_stack_map_payloads
 from .macho_host_stackmap_inputs import _StagedStackMapInputs
 from .macho_obj import DataInCodeRegion, Relocation, Section, TextSymbol
@@ -783,7 +784,7 @@ def _section_target_symbol_index(merged, ledger):
     return result
 
 
-def _merge_paths(paths, archives, archive_paths, ledger):
+def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
     """Return only detached final sections/rows; retire every input owner."""
     from .macho_archive import ArchiveError, read_archive, select_members
     from .macho_exec import _accumulate_external_symbol_state
@@ -795,6 +796,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
     raw = packed = payload = descriptor = section = target = part = None
     out_sections, output_rows = [], []
     try:
+        emit_phase(_phase_callback, "input_scan_begin")
         ledger.keep(ledger.sequence(len(paths)) + ledger.sequence(len(archives) + len(archive_paths)))
         for path in paths:
             descriptors.append(_read_descriptor(path, ledger))
@@ -847,6 +849,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             raw = None
         ledger.retained += archive_survivors - archive_reservation - archive_symbol_bytes
         descriptor_bytes = ledger.retained
+        emit_phase(_phase_callback, "input_scan_end")
+        emit_phase(_phase_callback, "placement_begin")
 
         symbol_count = sum(len(item.symbols) for item in descriptors)
         section_count = sum(len(item.sections) for item in descriptors)
@@ -977,6 +981,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         item = symbol = None
         # enumerate caches its last result tuple and would keep a retired
         # descriptor alive across the debit at the bottom of this loop.
+        emit_phase(_phase_callback, "placement_end")
+        emit_phase(_phase_callback, "input_detach_begin")
         for index in range(len(descriptors)):
             descriptor = descriptors[index]
             if descriptor.archive_object is None:
@@ -1089,6 +1095,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
         symbol_indices = symbol_at = None
         input_plan = input_keys = section = target = bases = placements = None
         appearance = _pending = symbol = None
+        emit_phase(_phase_callback, "input_detach_end")
+        emit_phase(_phase_callback, "merge_index_begin")
         ledger.retained = ledger.caller_bytes
         for owner in (normal_parts, rebase_parts, stack_symbols,
                       unresolved, weak_unresolved, order, section_indices, addresses):
@@ -1107,6 +1115,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             symbol_indices = _canonical_stack_symbol_indices(
                 merged, order, unresolved, stack_symbols, ledger,
             )
+        emit_phase(_phase_callback, "merge_index_end")
         if stack_payloads:
             stack_payloads.seal()
             previous = ledger.budget.retained_bytes
@@ -1114,6 +1123,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             # materialized window; all other live preparation owners remain.
             ledger.budget.retained_bytes = previous + ledger.retained
             try:
+                emit_phase(_phase_callback, "stackmap_merge_begin")
                 stack_payload, stack_offsets = merge_staged_stack_map_payloads(
                     stack_payloads, compact_budget=ledger.budget,
                     single_buffer=_single_buffer_window_supported(),
@@ -1134,6 +1144,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             normal_parts[_STACK_KEY].append(part)
             ledger.keep(ledger.immutable(len(part)))
             part = rows = None
+            emit_phase(_phase_callback, "stackmap_merge_end")
+        emit_phase(_phase_callback, "final_layout_begin")
         cursor = 0
         for key in order:
             target = merged[key]
@@ -1144,6 +1156,8 @@ def _merge_paths(paths, archives, archive_paths, ledger):
                 raise link.LinkError("merged virtual layout exceeds uint64")
         ledger.keep(2 * ledger.sequence(len(order)), label="Mach-O final output tables")
         consuming_join = _single_buffer_window_supported() and _join_instrumentation_absent()
+        emit_phase(_phase_callback, "final_layout_end")
+        emit_phase(_phase_callback, "section_joins_begin")
         for key in order:
             target = merged[key]
             ledger.keep(ledger.sequence(len(target.symbols)) + ledger.sequence(len(target.data_in_code)) + 256,
@@ -1207,6 +1221,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
                                         zerofill_size=target.zerofill_size if not payload else 0))
             output_rows.append(rows)
             payload = rows = None
+        emit_phase(_phase_callback, "section_joins_end")
         return out_sections, output_rows, unresolved, weak_unresolved
     except BaseException as exc:
         _release_closed_tracebacks(exc)
@@ -1234,7 +1249,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             appearance = symbol = owner = None
 
 
-def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compact_budget=None, caller_owners=()):
+def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compact_budget=None, caller_owners=(), _phase_callback=None):
     """Private all-PCO path entry; no eager aggregate encoded-input owner."""
     ledger = _Ledger(compact_budget)
     # Reused budgets can carry an earlier byte refusal into a later wire or
@@ -1249,12 +1264,17 @@ def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compa
     ledger.caller_bytes = external
     sections = rows = undefined = weak = None
     try:
-        sections, rows, undefined, weak = _merge_paths(paths, archives, archive_paths, ledger)
+        sections, rows, undefined, weak = _merge_paths(
+            paths, archives, archive_paths, ledger, _phase_callback,
+        )
         previous = compact_budget.retained_bytes
         compact_budget.retained_bytes = previous + external
         try:
-            return native.OwnedMergedSourceView(sections, undefined=undefined, weak_undefined=weak,
-                                                _compact_rows=rows, compact_budget=compact_budget)
+            emit_phase(_phase_callback, "source_view_begin")
+            result = native.OwnedMergedSourceView(sections, undefined=undefined, weak_undefined=weak,
+                                                 _compact_rows=rows, compact_budget=compact_budget)
+            emit_phase(_phase_callback, "source_view_end")
+            return result
         finally:
             compact_budget.retained_bytes = previous
     except (native.NativeObjectError, PreciseStackMapError, spec.MachOFormatError) as exc:

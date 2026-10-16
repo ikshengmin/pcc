@@ -19,6 +19,7 @@ from .macho_host_prepare import (
     _single_buffer_window_supported,
 )
 from .macho_host_relocations import _model_bytes
+from .macho_host_phase import emit_phase
 from .macho_link import LinkError
 from .native_object import OwnedMergedSourceView
 
@@ -219,7 +220,8 @@ class _ValidationBudget:
 
 
 class _OwnedOutput:
-    def __init__(self, source, budget, caller_owners):
+    def __init__(self, source, budget, caller_owners, phase_callback=None):
+        self.phase_callback = phase_callback
         self.budget = budget
         self.caller_bytes = _model_bytes(caller_owners, budget)
         self.source_bytes = _source_bytes(source, budget)
@@ -236,6 +238,9 @@ class _OwnedOutput:
         self.fixup_raw = 0
         self.seen_storage = _SetStorage(budget)
         self.check(label="Mach-O owned preparation projections")
+
+    def phase(self, event):
+        emit_phase(self.phase_callback, event)
 
     def known_bytes(self):
         return (self.caller_bytes + self.source_bytes + self.extra_raw
@@ -358,15 +363,18 @@ class _OwnedOutput:
                 previous + self.known_bytes()
             )
             adapter = _ValidationBudget(self.budget, snapshot)
+            self.phase("stackmap_payload_validate_begin")
             stackmap.validate_stack_map_payload(
                 snapshot, expected_arch=stackmap.ARCH_AARCH64,
                 final_image=True, compact_budget=adapter,
             )
+            self.phase("stackmap_payload_validate_end")
             # The adapter itself owns one reference; retire it before testing
             # buffer + local + explicit strong temporary. An escaping validator,
             # trace hook or future cache must refuse rather than cause COW.
             adapter.payload = None
             adapter = None
+            self.phase("stackmap_thaw_begin")
             _require_uninstrumented_owner()
             if sys.getrefcount([snapshot].pop()) != 3:
                 raise LinkError("owned stack-map validation retained a snapshot alias")
@@ -376,6 +384,7 @@ class _OwnedOutput:
             self.views[id(replacement)] = replacement
             out.data = replacement
             buffer = None
+            self.phase("stackmap_thaw_end")
         except BaseException as exc:
             _release_closed_tracebacks(exc)
             raise
@@ -505,7 +514,7 @@ class _OwnedOutput:
 
 def link_owned_executable(source, *, compact_budget, phase_callback=None,
                           entry="_main", identifier=b"pcc-linked", minos=(12, 0),
-                          caller_owners=()):
+                          caller_owners=(), _phase_callback=None):
     """Consume the private all-PCO source and return ordinary immutable bytes."""
     if type(source) is not OwnedMergedSourceView or source._source_sections:
         raise LinkError("owned output requires a windowed compact source")
@@ -519,18 +528,25 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
     state = buffer = view = image = blob = None
     try:
         _require_uninstrumented_owner()
-        state = _OwnedOutput(source, compact_budget, caller_owners)
+        emit_phase(_phase_callback, "output_model_begin")
+        state = _OwnedOutput(source, compact_budget, caller_owners, _phase_callback)
+        emit_phase(_phase_callback, "output_model_end")
+        emit_phase(_phase_callback, "output_prepare_begin")
         plan = executable._prepare_executable_image(
             source, entry=entry, identifier=identifier, minos=minos,
             compact_budget=compact_budget, _owned_output=state,
         )
+        emit_phase(_phase_callback, "output_prepare_end")
         size, reserve, text_size = plan
         with tempfile.TemporaryFile(mode="w+b", buffering=0) as stream:
+            emit_phase(_phase_callback, "output_spool_begin")
             state.spool(stream, source, size)
             source = None
+            emit_phase(_phase_callback, "output_spool_end")
             total = size + reserve
             compact_budget.check_peak(total + state.caller_bytes + _FIXED,
                                        label="Mach-O owned final backing")
+            emit_phase(_phase_callback, "final_backing_begin")
             buffer = io.BytesIO(b"\0" * total)
             view = buffer.getbuffer()
             cursor = 0
@@ -545,10 +561,12 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
             state.charge_io(1)
             if stream.read(1):
                 raise LinkError("owned output spool extent changed")
+        emit_phase(_phase_callback, "final_backing_end")
         compact_budget.check_peak(
             total + state.caller_bytes + state.parser_bytes + _signature_workspace(reserve),
             label="Mach-O owned signature workspace",
         )
+        emit_phase(_phase_callback, "sign_begin")
         if phase_callback is not None:
             phase_callback("sign_begin")
         try:
@@ -560,6 +578,7 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
         finally:
             if phase_callback is not None:
                 phase_callback("sign_end")
+        emit_phase(_phase_callback, "sign_end")
         if len(blob) != reserve:
             raise LinkError("owned output signature size changed")
         view[size:] = blob

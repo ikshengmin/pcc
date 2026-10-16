@@ -558,7 +558,8 @@ def test_indexed_split_workflow_is_independent_of_macos_stage1_opt_in():
     assert stage1.count('PCC_HOST_INDEXED_PROCESS_SPLIT: "1"') == 1
     assert ('      - name: Build current pcc1\n        env:\n'
             '          # Opt in only this Stage1 build; the bridge gate runs independently.\n'
-            '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n        run: uv run') in stage1
+            '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n'
+            '          PCC_MACHO_LINK_PHASE_EVENTS: "1"\n        run: uv run') in stage1
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in stage1
     assert "timeout-minutes: 200" in stage1
     assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in other

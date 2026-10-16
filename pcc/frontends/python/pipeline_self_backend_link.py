@@ -234,10 +234,21 @@ def _owned_macho_link_in_process(
         compact_budget = None
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
+            phase_events = None
+            if os.environ.get("PCC_MACHO_LINK_PHASE_EVENTS", "") == "1":
+                try:
+                    from pcc.backend.macho_host_phase import phase_callback_from_environment
+                    phase_events = phase_callback_from_environment()
+                    if phase_events is not None:
+                        phase_events("link_begin")
+                except BaseException:
+                    phase_events = None
             from pcc.backend.stackmap_host_budget import (
                 host_compact_stackmap_budget,
             )
             compact_budget = host_compact_stackmap_budget()
+            if phase_events is not None:
+                phase_events("host_budget_available" if compact_budget is not None else "host_budget_unavailable")
         started = time.monotonic()
         phases = {"assemble_pool": 0.0, "decode_pco": 0.0, "prepare_link": 0.0,
                   "sign": 0.0, "validate": 0.0, "write": 0.0}
@@ -260,16 +271,25 @@ def _owned_macho_link_in_process(
                 from pcc.backend.macho_host_prepare import prepare_executable_from_paths
                 compact_budget.check_peak(0, entries=len(ordered), label="Mach-O ordered path projection")
                 before_link = time.monotonic()
+                if phase_events is not None:
+                    phase_events("prepare_inputs_begin")
                 pending = [prepare_executable_from_paths(
                     [path for _kind, path in ordered],
                     archive_paths=() if runtime_archive is None else (runtime_archive,),
                     compact_budget=compact_budget,
                     caller_owners=(ordered, pcc_native_object_inputs, pcc_asm_inputs,
                                    pcc_internal_input_manifest, extra_link_inputs),
+                    _phase_callback=phase_events,
                 )]
+                if phase_events is not None:
+                    phase_events("prepare_inputs_end")
                 native_count = len(ordered)
                 windowed = True
         if not windowed:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if phase_events is not None:
+                    phase_events("reference_prepare_begin")
             for kind, path in ordered:
                 item_started = time.monotonic()
                 if kind == "ASM":
@@ -304,6 +324,10 @@ def _owned_macho_link_in_process(
                     objects, archives=archives, _consume_inputs=True, _source_view=True,
                     compact_budget=compact_budget,
                 )]
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if phase_events is not None:
+                    phase_events("reference_prepare_end")
         objects.clear()
         archives.clear()
         sign_times = [0.0, 0.0]
@@ -323,13 +347,21 @@ def _owned_macho_link_in_process(
                     link_owned_executable,
                 )
                 owned_output = _owned_output_supported()
+                if phase_events is not None:
+                    phase_events("owned_output_selected" if owned_output else "reference_output_selected")
                 if owned_output:
                     image = link_owned_executable(
                         pending.pop(), entry="_main", phase_callback=link_phase,
                         compact_budget=compact_budget,
                         caller_owners=(ordered, pcc_native_object_inputs, pcc_asm_inputs,
                                        pcc_internal_input_manifest, extra_link_inputs),
+                        _phase_callback=phase_events,
                     )
+        if not owned_output:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if phase_events is not None:
+                    phase_events("reference_link_begin")
         if not owned_output and compact_budget is None:
             image = link_prepared_executable(
                 pending.pop(), entry="_main", phase_callback=link_phase,
@@ -339,7 +371,16 @@ def _owned_macho_link_in_process(
                 pending.pop(), entry="_main", phase_callback=link_phase,
                 compact_budget=compact_budget,
             )
+        if not owned_output:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if phase_events is not None:
+                    phase_events("reference_link_end")
         before_validate = time.monotonic()
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if phase_events is not None:
+                phase_events("signature_verify_begin")
         phases["sign"] = sign_times[1]
         phases["prepare_link"] = (before_validate - before_link) * 1000.0 - sign_times[1]
         signature = parse_signature(image)
@@ -371,6 +412,11 @@ def _owned_macho_link_in_process(
         if image[signature.dataoff:] != expected_signature:
             raise SelfBackendLinkError("owned linker produced stale signature page hashes")
         before_write = time.monotonic()
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if phase_events is not None:
+                phase_events("signature_verify_end")
+                phase_events("write_begin")
         phases["validate"] = (before_write - before_validate) * 1000.0
         temporary = str(tmp_out_path) + ".owned.tmp"
         with open(temporary, "wb") as stream:
@@ -378,6 +424,10 @@ def _owned_macho_link_in_process(
         os.chmod(temporary, 0o755)
         os.replace(temporary, str(tmp_out_path))
         finished = time.monotonic()
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if phase_events is not None:
+                phase_events("write_end")
         phases["write"] = (finished - before_write) * 1000.0
         if link_profile_path:
             payload = {
@@ -393,6 +443,10 @@ def _owned_macho_link_in_process(
             }
             with open(link_profile_path, "w", encoding="utf-8") as stream:
                 stream.write(json.dumps(payload, sort_keys=True) + "\n")
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if phase_events is not None:
+                phase_events("link_end")
     except SelfBackendLinkError:
         raise
     except Exception as exc:
