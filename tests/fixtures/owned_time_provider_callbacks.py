@@ -1,5 +1,8 @@
 import asyncio
 import time
+from time import monotonic_ns as imported_monotonic_ns
+from time import perf_counter_ns as imported_perf_counter_ns
+from time import time_ns as imported_time_ns
 
 
 def main() -> None:
@@ -12,6 +15,17 @@ def main() -> None:
         second = clock()
         assert isinstance(first, float)
         assert second >= first
+    assert time.time_ns() > 0 and imported_time_ns() > 0
+    assert time.monotonic_ns() > 0 and imported_monotonic_ns() > 0
+    assert time.perf_counter_ns() > 0 and imported_perf_counter_ns() > 0
+    for clock in (time.time_ns, imported_time_ns, time.monotonic_ns,
+                  imported_monotonic_ns, time.perf_counter_ns, imported_perf_counter_ns):
+        value = clock()
+        assert type(value) is int and value > 0
+    for clock in (time.monotonic_ns, imported_monotonic_ns,
+                  time.perf_counter_ns, imported_perf_counter_ns):
+        first = clock()
+        assert clock() >= first
     formatter = time.strftime
     assert formatter("owned-clock") == "owned-clock"
     sleeper = time.sleep

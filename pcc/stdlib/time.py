@@ -21,6 +21,9 @@ from pcc.stdlib import _structseq
 _time_time: "extern" = extern("py_time_time", (), c_obj)
 _time_monotonic: "extern" = extern("py_time_monotonic", (), c_obj)
 _time_perf_counter: "extern" = extern("py_time_perf_counter", (), c_obj)
+_time_time_ns: "extern" = extern("py_time_time_ns", (), c_obj)
+_time_monotonic_ns: "extern" = extern("py_time_monotonic_ns", (), c_obj)
+_time_perf_counter_ns: "extern" = extern("py_time_perf_counter_ns", (), c_obj)
 _time_strftime: "extern" = extern("py_time_strftime", (c_obj,), c_obj)
 _time_sleep: "extern" = extern("py_time_sleep", (c_obj,), c_obj)
 
@@ -42,6 +45,25 @@ def perf_counter() -> float:
     if _native_sys.implementation.name != "pcc":
         return float(_native_time.perf_counter())
     return float(_time_perf_counter())
+
+
+def time_ns() -> int:
+    """Integer nanoseconds from the existing owned wall-clock ABI."""
+    if _native_sys.implementation.name != "pcc":
+        return int(_native_time.time_ns())
+    return int(_time_time_ns())
+
+
+def monotonic_ns() -> int:
+    if _native_sys.implementation.name != "pcc":
+        return int(_native_time.monotonic_ns())
+    return int(_time_monotonic_ns())
+
+
+def perf_counter_ns() -> int:
+    if _native_sys.implementation.name != "pcc":
+        return int(_native_time.perf_counter_ns())
+    return int(_time_perf_counter_ns())
 
 
 def strftime(fmt: str, /, *time_tuple) -> str:

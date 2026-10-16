@@ -16,6 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 NAMES = ('tm_year', 'tm_mon', 'tm_mday', 'tm_hour', 'tm_min', 'tm_sec',
          'tm_wday', 'tm_yday', 'tm_isdst', 'tm_zone', 'tm_gmtoff')
+NS_CLOCKS = ('time_ns', 'monotonic_ns', 'perf_counter_ns')
 
 
 def functions(path, names, namespace):
@@ -206,6 +207,39 @@ def test_owned_clock_wrapper_uses_abi_result_and_propagates_error(name):
     assert caught.value is error
 
 
+@pytest.mark.parametrize('name', NS_CLOCKS)
+@pytest.mark.parametrize('value', (0, 1, 2**53 + 1, 2**63 - 1))
+@pytest.mark.parametrize('implementation', ('pcc', 'cpython'))
+def test_owned_nanosecond_clocks_preserve_integer_result_and_error(name, value, implementation):
+    calls = []
+    def clock():
+        calls.append(name)
+        return value
+    def wrong_route():
+        raise AssertionError('clock used the wrong execution owner')
+    owned = implementation == 'pcc'
+    native_time = SimpleNamespace(**{name: wrong_route if owned else clock})
+    ns = functions(ROOT / 'pcc/stdlib/time.py', (name,), {
+        '_time_' + name: clock if owned else wrong_route,
+        '_native_time': native_time,
+        '_native_sys': SimpleNamespace(implementation=SimpleNamespace(name=implementation)),
+    })
+    assert name in ns, 'owned time provider is missing ' + name
+    result = ns[name]()
+    assert type(result) is int and result == value
+    assert calls == [name]
+    error = RuntimeError('nanosecond clock ABI error')
+    def fail():
+        raise error
+    if owned:
+        ns['_time_' + name] = fail
+    else:
+        setattr(native_time, name, fail)
+    with pytest.raises(RuntimeError) as caught:
+        ns[name]()
+    assert caught.value is error
+
+
 def test_owned_format_and_sleep_wrappers_preserve_abi_protocol():
     calls = []
     def formatter(fmt):
@@ -228,7 +262,8 @@ def test_owned_format_and_sleep_wrappers_preserve_abi_protocol():
     assert calls == [('format', 'owned-clock'), ('sleep', 0), ('sleep', -1)]
 
 
-def test_owned_time_provider_context_emits_owned_calls_without_recursion(tmp_path):
+@pytest.mark.parametrize('target', ('x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu'))
+def test_owned_time_provider_context_emits_owned_calls_without_recursion(tmp_path, target):
     import re
     from pcc.frontends.python.codegen.layer1 import L1CodeGen
     from pcc.frontends.python.pipeline_context import build_closed_world_context
@@ -240,9 +275,11 @@ def test_owned_time_provider_context_emits_owned_calls_without_recursion(tmp_pat
     paths = [str(ROOT / 'pcc/stdlib' / name)
              for name in ('time.py', 'sys.py', '_structseq.py')]
     modules, exports, derived = build_closed_world_context(paths, names)
+    assert all(exports['time'][name]['kind'] == 'function' for name in NS_CLOCKS)
     external = {name: value for name, value in exports.items() if name != 'time'}
     module = infer_module(modules[0], external_exports=external, derived_class_map=derived)
     generator = L1CodeGen(module, emit_cpy_main_exitcode=False, ir_scaffold_mode='on')
+    generator._target_triple = target
     generator._strict_no_libpython = True
     generator._prefer_native_callable_values = True
     generator._skip_program_main = True
@@ -250,9 +287,11 @@ def test_owned_time_provider_context_emits_owned_calls_without_recursion(tmp_pat
     generator._native_module_exports = external
     text = str(generator.generate())
     (tmp_path / 'time.ll').write_text(text)
+    from tests.owned_ir_validation import verify_ir_text
+    verify_ir_text(text)
     assert '@py_compiled_module_import_by_name(' in text
     assert not re.search(r'call[^\n]*@py_cpy_', text)
-    for name in ('time', 'monotonic', 'perf_counter', 'strftime', 'sleep'):
+    for name in ('time', 'monotonic', 'perf_counter', 'strftime', 'sleep') + NS_CLOCKS:
         body = re.search(r'^define [^\n]*@user_time_' + name + r'\([^\n]*\n.*?^}',
                          text, re.M | re.S).group()
         assert re.search(r'call ptr[^\n]*@py_time_' + name + r'\(', body)
@@ -262,6 +301,54 @@ def test_owned_time_provider_context_emits_owned_calls_without_recursion(tmp_pat
             finish = re.search(r'^err.finish:\n(.*?)(?=\n\n)', body, re.M | re.S).group(1)
             assert 'ret double 0x0000000000000000' in finish
             assert 'unreachable' not in finish
+
+
+@pytest.mark.parametrize('target', ('x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu'))
+def test_owned_nanosecond_consumers_use_real_compiled_time_bindings(tmp_path, target):
+    import re
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
+    from pcc.frontends.python.type_infer import infer_module
+    from tests.owned_ir_validation import verify_ir_text
+
+    consumer = tmp_path / 'ns_consumer.py'
+    consumer.write_text(
+        'import time\n'
+        'from time import time_ns as wall, monotonic_ns as mono, perf_counter_ns as perf\n'
+        'def direct():\n'
+        '    return (time.time_ns(), time.monotonic_ns(), time.perf_counter_ns())\n'
+        'def imported():\n'
+        '    return (wall(), mono(), perf())\n'
+        'def callbacks():\n'
+        '    return (time.time_ns, time.monotonic_ns, time.perf_counter_ns, wall, mono, perf)\n'
+    )
+    names = ['ns_consumer', 'time', 'sys', 'pcc.stdlib._structseq']
+    paths = [str(consumer)] + [str(ROOT / 'pcc/stdlib' / name)
+                              for name in ('time.py', 'sys.py', '_structseq.py')]
+    modules, exports, derived = build_closed_world_context(paths, names)
+    assert all(exports['time'][name]['kind'] == 'function' for name in NS_CLOCKS)
+    external = {name: value for name, value in exports.items() if name != 'ns_consumer'}
+    module = infer_module(modules[0], external_exports=external, derived_class_map=derived)
+    generator = L1CodeGen(module, emit_cpy_main_exitcode=False, ir_scaffold_mode='on')
+    generator._target_triple = target
+    generator._strict_no_libpython = True
+    generator._prefer_native_callable_values = True
+    generator._skip_program_main = True
+    generator._sibling_module_inits = names
+    generator._native_module_exports = external
+    text = str(generator.generate())
+    (tmp_path / 'ns_consumer.ll').write_text(text)
+    verify_ir_text(text)
+    assert '@py_compiled_module_import_by_name(' in text
+    assert not re.search(r'call[^\n]*@py_cpy_', text)
+    for name in ('direct', 'imported', 'callbacks'):
+        body = re.search(r'^define [^\n]*@user_ns_consumer_' + name + r'\([^\n]*\n.*?^}',
+                         text, re.M | re.S).group()
+        assert re.search(r'call[^\n]*@py_(?:obj_getattr|module_attr_get)\(', body)
+        if name != 'callbacks':
+            assert len(re.findall(r'call[^\n]*@py_obj_call_slots\(', body)) == 3
+        # A standalone builtin shortcut would miss the provider's namespace.
+        assert not re.search(r'call[^\n]*@py_time_\w+_ns\(', body)
 
 
 @pytest.mark.integration
@@ -290,6 +377,11 @@ def test_owned_time_provider_preserves_plain_cpython_calls():
     for clock in (owned_time.monotonic, owned_time.perf_counter):
         first = clock()
         assert isinstance(first, float)
+        assert clock() >= first
+    assert type(owned_time.time_ns()) is int and owned_time.time_ns() > 0
+    for clock in (owned_time.monotonic_ns, owned_time.perf_counter_ns):
+        first = clock()
+        assert type(first) is int and first > 0
         assert clock() >= first
     assert owned_time.strftime('owned-clock') == time.strftime('owned-clock')
     assert owned_time.sleep(0) is None
