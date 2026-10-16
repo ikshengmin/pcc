@@ -601,7 +601,10 @@ def test_detached_sections_retire_before_next_second_pass_read(tmp_path, monkeyp
     assert all(section() is None for group in groups for section in group)
 
 
-@pytest.mark.parametrize("phase", ("Mach-O compact relocation join", "Mach-O final section metadata"))
+@pytest.mark.parametrize("phase", (
+    "Mach-O compact relocation join", "Mach-O final section metadata",
+    "Mach-O consuming join workspace", "Mach-O consuming join backing",
+))
 def test_output_failure_releases_owned_rows_and_payloads(tmp_path, monkeypatch, phase):
     from pcc.backend import macho_host_prepare as host
 

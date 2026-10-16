@@ -16,6 +16,7 @@ import traceback
 
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
+from .macho_host_join import _consume_parts, _join_instrumentation_absent
 from .macho_host_stackmap import merge_staged_stack_map_payloads
 from .macho_host_stackmap_inputs import _StagedStackMapInputs
 from .macho_obj import DataInCodeRegion, Relocation, Section, TextSymbol
@@ -1142,6 +1143,7 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             if cursor > native._UINT64_MAX:
                 raise link.LinkError("merged virtual layout exceeds uint64")
         ledger.keep(2 * ledger.sequence(len(order)), label="Mach-O final output tables")
+        consuming_join = _single_buffer_window_supported() and _join_instrumentation_absent()
         for key in order:
             target = merged[key]
             ledger.keep(ledger.sequence(len(target.symbols)) + ledger.sequence(len(target.data_in_code)) + 256,
@@ -1149,34 +1151,55 @@ def _merge_paths(paths, archives, archive_paths, ledger):
             ledger.check(ledger.sequence(len(normal_parts[key]) + len(rebase_parts[key])), label="Mach-O compact row join pointers")
             row_parts = normal_parts[key] + rebase_parts[key]
             size = sum(len(part) for part in row_parts)
-            ledger.check(ledger.immutable(size) + ledger.sequence(len(row_parts)), label="Mach-O compact relocation join")
-            rows = b"".join(row_parts)
-            ledger.retained += ledger.immutable(size) - sum(ledger.immutable(len(part)) for part in row_parts)
-            row_parts.clear()
-            normal_parts[key].clear()
-            rebase_parts[key].clear()
+            if consuming_join and len(row_parts) > 1:
+                # row_parts is the sole remaining list owner before the
+                # helper debits any bytes. Clearing just its slots would not
+                # retire chunks still present in either original part table.
+                normal_parts[key].clear()
+                rebase_parts[key].clear()
+                rows = _consume_parts(row_parts, ledger)
+            else:
+                ledger.check(ledger.immutable(size) + ledger.sequence(len(row_parts)), label="Mach-O compact relocation join")
+                rows = b"".join(row_parts)
+                ledger.retained += ledger.immutable(size) - sum(ledger.immutable(len(part)) for part in row_parts)
+                row_parts.clear()
+                normal_parts[key].clear()
+                rebase_parts[key].clear()
             has_section_targets = any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
                                       for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))
             size = sum(len(part) for part in target.data_parts)
-            joined_size = ledger.mutable(size) if has_section_targets else ledger.immutable(size)
-            ledger.check(joined_size, label="Mach-O detached payload join")
-            payload = bytearray().join(target.data_parts) if has_section_targets else b"".join(target.data_parts)
-            ledger.retained += joined_size - sum(ledger.immutable(len(part)) for part in target.data_parts)
-            target.data_parts.clear()
-            if has_section_targets:
+            def patch_targets(data):
                 for offset, section_number, _pcrel, length, external, kind in native._FINAL_LINK_RELOCATION.iter_unpack(rows):
                     if external or kind == spec.ARM64_RELOC_ADDEND:
                         continue
                     width = 1 << length
-                    value = int.from_bytes(payload[offset:offset + width], "little") + addresses[order[section_number - 1]]
+                    # A subview must not survive an overflow exception and
+                    # keep the helper's mutable backing exported.
+                    with memoryview(data)[offset:offset + width] as field:
+                        value = int.from_bytes(field, "little") + addresses[order[section_number - 1]]
                     if value >= 1 << (8 * width):
                         raise native.NativeObjectError("section-target value does not fit relocation width")
-                    payload[offset:offset + width] = value.to_bytes(width, "little")
-                ledger.check(ledger.immutable(size), label="Mach-O final section-target freeze")
-                frozen = bytes(payload)
-                payload = frozen
-                frozen = None
-                ledger.retained += ledger.immutable(size) - joined_size
+                    data[offset:offset + width] = value.to_bytes(width, "little")
+
+            if consuming_join and (len(target.data_parts) > 1 or has_section_targets):
+                payload = _consume_parts(target.data_parts, ledger,
+                                         patch=patch_targets if has_section_targets else None)
+            else:
+                # Zero/one exact immutable part already has a no-copy join;
+                # unsupported/instrumented hosts retain the original two-owner
+                # mutable/freeze admission and behavior.
+                joined_size = ledger.mutable(size) if has_section_targets else ledger.immutable(size)
+                ledger.check(joined_size, label="Mach-O detached payload join")
+                payload = bytearray().join(target.data_parts) if has_section_targets else b"".join(target.data_parts)
+                ledger.retained += joined_size - sum(ledger.immutable(len(part)) for part in target.data_parts)
+                target.data_parts.clear()
+                if has_section_targets:
+                    patch_targets(payload)
+                    ledger.check(ledger.immutable(size), label="Mach-O final section-target freeze")
+                    frozen = bytes(payload)
+                    payload = frozen
+                    frozen = None
+                    ledger.retained += ledger.immutable(size) - joined_size
             out_sections.append(Section(target.sectname, target.segname, data=payload,
                                         align_log2=target.align_log2, flags=target.flags,
                                         symbols=tuple(sorted(target.symbols, key=lambda symbol: symbol.offset)),
