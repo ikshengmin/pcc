@@ -184,6 +184,8 @@ on:
       - "pcc/runtime/include/py_runtime.h"
       - "tests/test_ci_native_object_regressions.py"
       - "scripts/ci_native_object_regressions.py"
+      - "scripts/ci_stage1_artifact_export.py"
+      - "tests/test_ci_stage1_artifact_export.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
       - "tests/python/test_gc_relocation_sweep_verdict.py"
@@ -381,6 +383,8 @@ on:
       - "pcc/runtime/include/py_runtime.h"
       - "tests/test_ci_native_object_regressions.py"
       - "scripts/ci_native_object_regressions.py"
+      - "scripts/ci_stage1_artifact_export.py"
+      - "tests/test_ci_stage1_artifact_export.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
       - "tests/python/test_gc_relocation_sweep_verdict.py"
@@ -709,7 +713,7 @@ jobs:
         run: uv sync --frozen --dev --python 3.13
 
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
-        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py' || '' }}
 
       # A push qualifies Stage1 and the native canary under all five
       # collectors. Stage2 codegen alone needs ~66k-116k pcc1 task-s today
@@ -806,6 +810,29 @@ jobs:
           verified, _manifest = _verified_test_runtime_archive(archive)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("archive=" + str(verified) + "\nready=true\n")
+              output.write("source_sha256=" + source["source_sha256"] + "\n")
+
+      - name: Export the admitted Linux x86-64 Stage1 identity
+        id: stage1_export
+        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outputs.ready == 'true' }}
+        env:
+          PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
+          PCC_STAGE1_EXPORT_SOURCE_SHA256: ${{ steps.platform_runtime.outputs.source_sha256 }}
+        # Retain the existing bytes before unrelated later gates can fail.
+        # This package claims Stage1 identity, not complete qualification.
+        run: uv run --frozen --no-sync --python 3.13 python scripts/ci_stage1_artifact_export.py --runtime-archive "$PCC_RUNTIME_ARCHIVE" --source-sha256 "$PCC_STAGE1_EXPORT_SOURCE_SHA256"
+
+      - name: Preserve the existing Linux x86-64 Stage1 bundle
+        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.stage1_export.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage1-native-${{ matrix.platform }}-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            build/stage1-native-export/stage1-native.tar.gz
+            build/stage1-native-export/manifest.json
 
       - name: Verify the compiled sibling platform machine provider
         if: ${{ !cancelled() && steps.platform_runtime.outputs.ready == 'true' }}
