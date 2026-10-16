@@ -63,7 +63,7 @@ TEST_INPUTS = (
     "pyproject.toml",
 )
 WINDOWS_SYSTEM_LIBRARIES = {
-    "kernel32.dll", "ws2_32.dll", "ntdll.dll", "shell32.dll", "psapi.dll", "bcrypt.dll",
+    "kernel32.dll", "ws2_32.dll", "ntdll.dll", "shell32.dll", "psapi.dll", "bcrypt.dll", "advapi32.dll",
 }
 
 

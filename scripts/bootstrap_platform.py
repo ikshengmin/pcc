@@ -233,7 +233,7 @@ def dependency_receipt(path):
             if end < 0:
                 raise RuntimeError("unterminated PE import name")
             libraries.append(data[name_at:end].decode("ascii").lower())
-    allowed = {"kernel32.dll", "ntdll.dll", "ws2_32.dll", "shell32.dll", "psapi.dll", "bcrypt.dll"}
+    allowed = {"kernel32.dll", "ntdll.dll", "ws2_32.dll", "shell32.dll", "psapi.dll", "bcrypt.dll", "advapi32.dll"}
     if set(libraries) - allowed:
         raise RuntimeError("non-system compiler dependencies: " + repr(libraries))
     return {"format": "PE32+", "system_dlls": sorted(libraries),
