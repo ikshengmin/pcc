@@ -175,6 +175,10 @@ on:
       - "tests/python/test_dict_method_result_ownership.py"
       - "tests/python/test_runtime_abi_chunking.py"
       - "tests/python/test_gc_relocation_page_cursor_model.py"
+      - "tests/python/test_gc4_copy_page_probe_native.py"
+      - "tests/python/test_gc_relocation_membership_lifecycle.py"
+      - "tests/python/test_freestanding_gc_relocation_copy.py"
+      - "tests/python/fixtures/gc4_copy_page_probe_native.c"
       - "pcc/runtime/py/freestanding_gc_relocation_selector.py"
       - "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py"
       - "tests/python/test_owned_cleanup_helpers.py"
@@ -380,6 +384,10 @@ on:
       - "tests/python/test_dict_method_result_ownership.py"
       - "tests/python/test_runtime_abi_chunking.py"
       - "tests/python/test_gc_relocation_page_cursor_model.py"
+      - "tests/python/test_gc4_copy_page_probe_native.py"
+      - "tests/python/test_gc_relocation_membership_lifecycle.py"
+      - "tests/python/test_freestanding_gc_relocation_copy.py"
+      - "tests/python/fixtures/gc4_copy_page_probe_native.c"
       - "pcc/runtime/py/freestanding_gc_relocation_selector.py"
       - "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py"
       - "tests/python/test_owned_cleanup_helpers.py"
@@ -725,7 +733,7 @@ jobs:
         run: uv sync --frozen --dev --python 3.13
 
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
-        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py' || '' }}
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_gc4_copy_page_probe_native.py tests/python/test_gc_relocation_membership_lifecycle.py' || '' }}
 
       # A push qualifies Stage1 and the native canary under all five
       # collectors. Stage2 codegen alone needs ~66k-116k pcc1 task-s today

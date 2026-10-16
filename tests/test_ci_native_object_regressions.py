@@ -502,7 +502,7 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     host_commands = [line.removeprefix("        run: ") for line in host_step.splitlines()
                      if line.startswith("        run: ")]
     assert len(host_commands) == 1
-    host_command, export_condition = host_commands[0].split(" ${{ ", 1)
+    host_command, linux_condition = host_commands[0].split(" ${{ ", 1)
     assert host_command.split() == [
         "uv", "run", "--frozen", "--no-sync", "--python", "3.13", "python", "-m", "pytest", "-x", "-q",
         "tests/python/test_stage2_export_capture.py",
@@ -510,10 +510,17 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "tests/python/test_owned_elf_assembler_dispatch.py",
         "tests/test_ci_native_object_regressions.py",
     ]
-    assert export_condition == (
-        "matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py' || '' }}")
+    linux_only = (
+        "tests/test_ci_stage1_artifact_export.py",
+        "tests/python/test_gc4_copy_page_probe_native.py",
+        "tests/python/test_gc_relocation_membership_lifecycle.py",
+    )
+    assert linux_condition == (
+        "matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}")
     for path in (*[node.split("::")[0] for node in (*gate.NODES, *gate.WINDOWS_NODES)],
-                 "scripts/ci_native_object_regressions.py", "tests/test_ci_native_object_regressions.py"):
+                 "scripts/ci_native_object_regressions.py", "tests/test_ci_native_object_regressions.py",
+                 *linux_only, "tests/python/test_freestanding_gc_relocation_copy.py",
+                 "tests/python/fixtures/gc4_copy_page_probe_native.c"):
         assert text.count('      - "' + path + '"') == 2
     for suffix in ("json", "jsonl", "stdout", "stderr", "tsv", "xml"):
         assert "build/worker-prior-gate/**/*." + suffix in other

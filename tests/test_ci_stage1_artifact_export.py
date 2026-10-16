@@ -448,7 +448,12 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
     ]
     host = job.split("      - name: Verify host Stage2 export-retention", 1)[1].split("      #", 1)[0]
     assert "tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py" in host
-    assert "${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py' || '' }}" in host
+    linux_only = (
+        "tests/test_ci_stage1_artifact_export.py",
+        "tests/python/test_gc4_copy_page_probe_native.py",
+        "tests/python/test_gc_relocation_membership_lifecycle.py",
+    )
+    assert "${{ matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}" in host
     assert "python -m pytest -x -q" in host and "-n0" not in host and "addopts" not in host
     for path in ("scripts/ci_stage1_artifact_export.py", "tests/test_ci_stage1_artifact_export.py"):
         assert workflow.count('      - "' + path + '"') == 2
