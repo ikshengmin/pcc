@@ -162,7 +162,7 @@ def test_windows_status_is_captured_before_free(scenario, counts, winerror, enco
         "ptr_is_null": lambda value: value is None,
         "null": lambda: None,
     }
-    _functions(RUNTIME / "freestanding_windows.py", {"error", "getcwd", "getcwd_c"}, namespace)
+    _functions(RUNTIME / "freestanding_windows.py", {"error", "error_code", "getcwd", "getcwd_c"}, namespace)
     result = namespace["getcwd_c"](buffer, 8192)
     assert result is (buffer if expected is None else None)
     assert errors == ([] if expected is None else [expected])

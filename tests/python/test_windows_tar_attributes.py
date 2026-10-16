@@ -820,7 +820,7 @@ class _WindowsBoundaries:
         self.cells[pointer + offset] = value & 0xffffffff
 
     def module(self):
-        return _definitions(WINDOWS, ("error", "filetime_from_seconds", "utime_file"), dict(
+        return _definitions(WINDOWS, ("error", "error_code", "filetime_from_seconds", "utime_file"), dict(
             ptr_is_null=lambda pointer: pointer == 0, null=lambda: 0,
             ptr_to_int=lambda pointer: pointer, ptr_add=lambda pointer, offset: pointer + offset,
             load_i64=lambda pointer, offset: self.cells[pointer + offset],
