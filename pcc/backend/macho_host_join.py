@@ -228,6 +228,94 @@ class _StagedRelocationRows:
         finally:
             payload = source = part = None
 
+    def write_owned_parts(self, parts):
+        """Consume ordered, record-aligned chunks without a joined backing.
+
+        Return their retired immutable charge and whether the section needs
+        target patching. Only the private preparation path transfers this list;
+        all other part tables must already have released their references.
+        """
+        from .macho_spec import ARM64_RELOC_ADDEND
+        from .native_object import (
+            _FINAL_LINK_RELOCATION,
+            _validate_final_link_relocation_count,
+        )
+        payload = source = part = digest = None
+        try:
+            if (self.stream is None or self.sealed or self._busy
+                    or self.appended >= self.count or type(parts) is not list):
+                raise PreciseStackMapError("Mach-O staged row write state changed")
+            if not _join_instrumentation_absent():
+                raise PreciseStackMapError("Mach-O staged rows require an uninstrumented host")
+            size = retired = 0
+            # Validate the complete transfer before writing or clearing slots.
+            # A known strong local, one list slot and the sampled argument are
+            # the only three references allowed, also on borrowing CPython.
+            for index in range(len(parts)):
+                payload = [parts[index]].pop()
+                if type(payload) is not bytes or len(payload) % _FINAL_LINK_RELOCATION.size:
+                    raise PreciseStackMapError("Mach-O staged row extent changed")
+                if payload and sys.getrefcount([payload].pop()) != 3:
+                    raise PreciseStackMapError("Mach-O staged rows require exclusively owned bytes")
+                size += len(payload)
+                retired += self.budget._rounded(sys.getsizeof(b"") + len(payload))
+                payload = None
+            count = size // _FINAL_LINK_RELOCATION.size
+            _validate_final_link_relocation_count(count)
+            backing = self.budget._rounded(sys.getsizeof(b"") + size)
+            if backing > self.budget.limit_bytes or size > 0x7FFFFFFFFFFFFFFF - self.logical_bytes:
+                raise PreciseStackMapError("Mach-O staged row storage budget exceeded")
+            offset = self.logical_bytes
+            if (os.fstat(self.stream.fileno()).st_size != offset
+                    or self.stream.seek(offset) != offset):
+                raise PreciseStackMapError("Mach-O staged row extent changed")
+            digest = hashlib.sha256()
+            has_targets = False
+            written = 0
+            for index in range(len(parts)):
+                payload = [parts[index]].pop()
+                parts[index] = None
+                if payload and sys.getrefcount([payload].pop()) != 2:
+                    raise PreciseStackMapError("Mach-O staged rows require exclusively owned bytes")
+                if not has_targets:
+                    has_targets = any(not row[4] and row[5] != ARM64_RELOC_ADDEND
+                                      for row in _FINAL_LINK_RELOCATION.iter_unpack(payload))
+                digest.update(payload)
+                with memoryview(payload) as source:
+                    cursor = 0
+                    while cursor < len(payload):
+                        with source[cursor:min(len(payload), cursor + _BLOCK)] as part:
+                            amount = self.stream.write(part)
+                            capacity = len(part)
+                        if type(amount) is not int or not 0 < amount <= capacity:
+                            raise PreciseStackMapError("short Mach-O staged row write")
+                        cursor += amount
+                        written += amount
+                if not _join_instrumentation_absent():
+                    raise PreciseStackMapError("Mach-O staged row instrumentation changed")
+                if payload and sys.getrefcount([payload].pop()) != 2:
+                    raise PreciseStackMapError("Mach-O staged rows require exclusively owned bytes")
+                payload = None
+            parts.clear()
+            if written != size or os.fstat(self.stream.fileno()).st_size != offset + size:
+                raise PreciseStackMapError("Mach-O staged row extent changed")
+            if not _join_instrumentation_absent():
+                raise PreciseStackMapError("Mach-O staged row instrumentation changed")
+            self.rows[self.appended] = (offset, size, count, digest.digest())
+            self.appended += 1
+            self.logical_bytes += size
+            self.max_window_bytes = max(self.max_window_bytes, backing)
+            return retired, has_targets
+        except BaseException as exc:
+            self._abort(exc)
+            if isinstance(exc, OSError):
+                raise PreciseStackMapError("Mach-O staged row storage failed: " + str(exc)) from exc
+            raise
+        finally:
+            if type(parts) is list:
+                parts.clear()
+            payload = source = part = digest = parts = None
+
     def _descriptor(self, index):
         from .native_object import _FINAL_LINK_RELOCATION
         if (self.stream is None or not self.sealed or type(index) is not int

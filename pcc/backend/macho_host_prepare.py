@@ -862,6 +862,20 @@ def _section_target_symbol_index(merged, ledger):
     return result
 
 
+def _patch_section_targets(data, rows, addresses, order):
+    for offset, section_number, _pcrel, length, external, kind in native._FINAL_LINK_RELOCATION.iter_unpack(rows):
+        if external or kind == spec.ARM64_RELOC_ADDEND:
+            continue
+        width = 1 << length
+        # A subview must not survive an overflow exception and keep the
+        # consuming helper's mutable backing exported.
+        with memoryview(data)[offset:offset + width] as field:
+            value = int.from_bytes(field, "little") + addresses[order[section_number - 1]]
+        if value >= 1 << (8 * width):
+            raise native.NativeObjectError("section-target value does not fit relocation width")
+        data[offset:offset + width] = value.to_bytes(width, "little")
+
+
 def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *, _staged_rows=False):
     """Return only detached final sections/rows; retire every input owner."""
     from .macho_archive import ArchiveError, read_archive, select_members
@@ -873,7 +887,7 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
     normal_parts, rebase_parts, stack_payloads = {}, {}, None
     raw = packed = payload = descriptor = section = target = part = None
     out_sections, output_rows = [], []
-    row_storage = failure = None
+    row_storage = row_targets = failure = None
     try:
         emit_phase(_phase_callback, "input_scan_begin")
         ledger.keep(ledger.sequence(len(paths)) + ledger.sequence(len(archives) + len(archive_paths)))
@@ -1244,49 +1258,73 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
         emit_phase(_phase_callback, "section_joins_begin")
         if _staged_rows:
             row_storage = _StagedRelocationRows(len(order), ledger.budget, ledger.keep)
+            ledger.keep(ledger.sequence(len(order)), label="Mach-O staged row target flags")
+            row_targets = [False] * len(order)
+            # Retire the complete row-part graph before any payload join.
+            # No section needs a joined relocation backing merely to persist
+            # it. A section-target patch later borrows one verified replay.
+            for join_index in range(len(order)):
+                key = order[join_index]
+                ledger.check(ledger.sequence(len(normal_parts[key]) + len(rebase_parts[key])),
+                             label="Mach-O compact row join pointers")
+                row_parts = normal_parts[key] + rebase_parts[key]
+                normal_parts[key].clear()
+                rebase_parts[key].clear()
+                row_size = sum(map(len, row_parts))
+                row_part_count = len(row_parts)
+                emit_section_phase(_phase_callback, "section_rows_begin", join_index, key,
+                                   row_size, row_part_count, True)
+                retired, row_targets[join_index] = row_storage.write_owned_parts(row_parts)
+                ledger.retained -= retired
+                row_parts = None
+                emit_section_phase(_phase_callback, "section_rows_end", join_index, key,
+                                   row_size, row_part_count, True)
+            from .macho_host_output import _require_uninstrumented_owner
+            _require_uninstrumented_owner()
+            row_storage.seal()
         for join_index in range(len(order)):
             key = order[join_index]
             target = merged[key]
             ledger.keep(ledger.sequence(len(target.symbols)) + ledger.sequence(len(target.data_in_code)) + 256,
                         label="Mach-O final section metadata")
-            ledger.check(ledger.sequence(len(normal_parts[key]) + len(rebase_parts[key])), label="Mach-O compact row join pointers")
-            row_parts = normal_parts[key] + rebase_parts[key]
-            size = sum(len(part) for part in row_parts)
-            row_part_count = len(row_parts)
-            consume_rows = consuming_join and row_part_count > 1
-            emit_section_phase(_phase_callback, "section_rows_begin", join_index, key,
-                               size, row_part_count, consume_rows)
-            if consume_rows:
-                # row_parts is the sole remaining list owner before the
-                # helper debits any bytes. Clearing just its slots would not
-                # retire chunks still present in either original part table.
-                normal_parts[key].clear()
-                rebase_parts[key].clear()
-                rows = _consume_parts(row_parts, ledger)
+            if row_storage is not None:
+                has_section_targets = row_targets[join_index]
             else:
-                ledger.check(ledger.immutable(size) + ledger.sequence(len(row_parts)), label="Mach-O compact relocation join")
-                rows = b"".join(row_parts)
-                ledger.retained += ledger.immutable(size) - sum(ledger.immutable(len(part)) for part in row_parts)
-                row_parts.clear()
-                normal_parts[key].clear()
-                rebase_parts[key].clear()
-            emit_section_phase(_phase_callback, "section_rows_end", join_index, key,
-                               size, row_part_count, consume_rows)
-            has_section_targets = any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
-                                      for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))
+                ledger.check(ledger.sequence(len(normal_parts[key]) + len(rebase_parts[key])), label="Mach-O compact row join pointers")
+                row_parts = normal_parts[key] + rebase_parts[key]
+                size = sum(len(part) for part in row_parts)
+                row_part_count = len(row_parts)
+                consume_rows = consuming_join and row_part_count > 1
+                emit_section_phase(_phase_callback, "section_rows_begin", join_index, key,
+                                   size, row_part_count, consume_rows)
+                if consume_rows:
+                    # Clear both original tables before debiting any chunks.
+                    normal_parts[key].clear()
+                    rebase_parts[key].clear()
+                    rows = _consume_parts(row_parts, ledger)
+                else:
+                    ledger.check(ledger.immutable(size) + ledger.sequence(len(row_parts)), label="Mach-O compact relocation join")
+                    rows = b"".join(row_parts)
+                    ledger.retained += ledger.immutable(size) - sum(ledger.immutable(len(part)) for part in row_parts)
+                    row_parts.clear()
+                    normal_parts[key].clear()
+                    rebase_parts[key].clear()
+                emit_section_phase(_phase_callback, "section_rows_end", join_index, key,
+                                   size, row_part_count, consume_rows)
+                has_section_targets = any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
+                                          for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))
             size = sum(len(part) for part in target.data_parts)
             def patch_targets(data):
-                for offset, section_number, _pcrel, length, external, kind in native._FINAL_LINK_RELOCATION.iter_unpack(rows):
-                    if external or kind == spec.ARM64_RELOC_ADDEND:
-                        continue
-                    width = 1 << length
-                    # A subview must not survive an overflow exception and
-                    # keep the helper's mutable backing exported.
-                    with memoryview(data)[offset:offset + width] as field:
-                        value = int.from_bytes(field, "little") + addresses[order[section_number - 1]]
-                    if value >= 1 << (8 * width):
-                        raise native.NativeObjectError("section-target value does not fit relocation width")
-                    data[offset:offset + width] = value.to_bytes(width, "little")
+                if row_storage is None:
+                    _patch_section_targets(data, rows, addresses, order)
+                else:
+                    with row_storage.window(join_index, check=lambda: ledger.check(
+                            row_storage.backing_bytes(join_index),
+                            label="Mach-O section-target row replay")) as staged:
+                        try:
+                            _patch_section_targets(data, staged, addresses, order)
+                        finally:
+                            staged = None
 
             payload_part_count = len(target.data_parts)
             consume_payload = consuming_join and (payload_part_count > 1 or has_section_targets)
@@ -1318,15 +1356,7 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                                         zerofill_size=target.zerofill_size if not payload else 0))
             if row_storage is None:
                 output_rows.append(rows)
-            else:
-                # patch_targets is the last consumer of this section's rows.
-                # Retire every caller alias before the helper proves ownership
-                # and debits the immutable backing from the resident ledger.
-                holder = [rows]
-                patch_targets = rows = None
-                ledger.retained -= row_storage.write_owned(holder.pop())
-                holder = None
-            payload = rows = None
+            payload = rows = patch_targets = None
             emit_section_phase(_phase_callback, "section_payload_end", join_index, key,
                                size, payload_part_count, consume_payload)
         emit_phase(_phase_callback, "section_joins_end")
@@ -1336,7 +1366,6 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
         # final write. Do not hand a live file to an instrumented return path.
         from .macho_host_output import _require_uninstrumented_owner
         _require_uninstrumented_owner()
-        row_storage.seal()
         result = (out_sections, row_storage, unresolved, weak_unresolved)
         row_storage = None  # caller owns the handle only after result exists
         return result
@@ -1360,13 +1389,13 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                 if stack_payloads is not None:
                     stack_payloads.close()
         finally:
-            row_storage = failure = None
+            row_storage = row_targets = failure = None
             stack_payloads = None
             descriptors.clear()
             archive_buffers.clear()
             raw = packed = payload = descriptor = section = target = part = members = None
             pulled = member = item = row_parts = rows = frozen = stack_payload = None
-            stack_offsets = _pending = patch_targets = holder = None
+            stack_offsets = _pending = patch_targets = None
             definitions = local_renames = defined = referenced = weak_references = strong_references = None
             symbol_indices = symbol_at = input_keys = input_plan = None
             appearance = symbol = owner = None

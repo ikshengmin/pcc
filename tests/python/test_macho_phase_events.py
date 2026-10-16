@@ -1431,3 +1431,284 @@ def test_staged_prepare_phase_return_hook_error_closes_undelivered_owner(tmp_pat
             assert trace.tb_frame.f_locals.get("result") is None
             assert trace.tb_frame.f_locals.get("row_storage") is None
         trace = trace.tb_next
+
+
+@pytest.mark.parametrize("counts", ((), (0,), (1,), (6000, 2, 8000)))
+def test_staged_row_parts_preserve_order_without_allocating_a_join(monkeypatch, counts):
+    from pcc.backend import macho_host_join as join
+    from tests.python.test_macho_consuming_join import _track_buffers
+    files = _staged_file(monkeypatch)
+    buffers = _track_buffers(monkeypatch)
+    store, ledger = _staged_rows()
+    parts = [_staged_row_bytes(count, seed=index + 7) for index, count in enumerate(counts)]
+    expected = b"".join(_staged_row_bytes(count, seed=index + 7)
+                        for index, count in enumerate(counts))
+    charge = sum(ledger.immutable(len(part)) for part in parts)
+    retired, targets = store.write_owned_parts(parts)
+    assert retired == charge and targets is False and parts == []
+    assert buffers == [] and store.logical_bytes == len(expected)
+    store.seal()
+    with store.window(0, check=lambda: None) as raw:
+        assert raw == expected
+        raw = None
+    assert len(buffers) == 1 and buffers[0].closed
+    assert all(len(set(buffer.addresses)) <= 1 for buffer in buffers)
+    assert max((size for file in files for _, size in file.calls), default=0) <= join._BLOCK
+    store.close()
+    assert files[0].inner.closed
+
+
+@pytest.mark.parametrize("target", (False, True))
+def test_staged_row_parts_classify_section_targets_but_not_addend_companions(target):
+    from pcc.backend import macho_spec as spec
+    store, _ledger = _staged_rows()
+    parts = [native._FINAL_LINK_RELOCATION.pack(0, 5, 0, 2, 0, spec.ARM64_RELOC_ADDEND),
+             native._FINAL_LINK_RELOCATION.pack(0, 0, 1, 2, 1, spec.ARM64_RELOC_PAGE21)]
+    if target:
+        parts.append(native._FINAL_LINK_RELOCATION.pack(8, 1, 0, 3, 0, spec.ARM64_RELOC_UNSIGNED))
+    try:
+        assert store.write_owned_parts(parts)[1] is target
+        store.seal()
+        assert store.row_count(0) == 2 + target
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("failure", ("alias", "duplicate", "alignment", "mutable"))
+def test_staged_row_parts_validate_complete_transfer_before_writing(monkeypatch, failure):
+    files = _staged_file(monkeypatch)
+    store, _ledger = _staged_rows()
+    alias = _staged_row_bytes(3) if failure in ("alias", "duplicate") else None
+    parts = [_staged_row_bytes(2)]
+    parts.extend([alias, alias] if failure == "duplicate" else [alias] if failure == "alias"
+                 else [b"bad"] if failure == "alignment" else [bytearray(12)])
+    with pytest.raises(maps.PreciseStackMapError, match="exclusively owned|extent changed") as caught:
+        store.write_owned_parts(parts)
+    assert parts == [] and store.stream is None and files[0].calls == []
+    trace = caught.value.__traceback__
+    while trace:
+        if trace.tb_frame.f_code.co_name == "write_owned_parts":
+            assert all(trace.tb_frame.f_locals[name] is None
+                       for name in ("payload", "source", "part", "digest", "parts"))
+        trace = trace.tb_next
+
+
+@pytest.mark.parametrize("failure", ("short", "write-close", "extent"))
+def test_staged_row_parts_failed_io_closes_and_preserves_original_error(monkeypatch, failure):
+    files = _staged_file(monkeypatch, mode="write" if failure == "short" else
+                         "close" if failure == "write-close" else None)
+    store, _ledger = _staged_rows()
+    original_write = files[0].write
+    if failure != "short":
+        def fail(value):
+            if failure == "write-close":
+                child = value[:]
+                raise OSError("original row parts write failure")
+            original_write(value)
+            return len(value)  # falsely claims the complete write
+        files[0].write = fail
+    with pytest.raises(maps.PreciseStackMapError, match="short|original row parts write|extent changed") as caught:
+        store.write_owned_parts([_staged_row_bytes(30), _staged_row_bytes(40)])
+    assert "secondary row close" not in str(caught.value)
+    assert store.stream is None and files[0].inner.closed
+
+
+def test_staged_row_parts_midwrite_alias_refuses_retirement(monkeypatch):
+    files = _staged_file(monkeypatch)
+    store, _ledger = _staged_rows()
+    write = files[0].write
+    escaped = []
+    def escape(value):
+        if not escaped:
+            escaped.append(value.obj)
+        return write(value)
+    files[0].write = escape
+    parts = [_staged_row_bytes(30), _staged_row_bytes(40)]
+    with pytest.raises(maps.PreciseStackMapError, match="exclusively owned"):
+        store.write_owned_parts(parts)
+    assert escaped and parts == [] and store.stream is None
+    assert store.logical_bytes == 0 and files[0].inner.closed
+
+
+@pytest.mark.parametrize("counts", ((), (0,), (1,)))
+def test_staged_row_parts_recheck_instrumentation_after_final_extent(monkeypatch, counts):
+    files = _staged_file(monkeypatch)
+    store, _ledger = _staged_rows()
+    fileno = files[0].fileno
+    calls = []
+    previous = sys.getprofile()
+    def hook(_frame, _event, _arg):
+        return hook
+    def instrument():
+        calls.append(True)
+        if len(calls) == 2:
+            sys.setprofile(hook)
+        return fileno()
+    files[0].fileno = instrument
+    try:
+        with pytest.raises(maps.PreciseStackMapError, match="instrumentation changed"):
+            store.write_owned_parts([_staged_row_bytes(count) for count in counts])
+    finally:
+        sys.setprofile(previous)
+    assert store.stream is None and store.logical_bytes == 0 and files[0].inner.closed
+
+
+@pytest.mark.parametrize("fixture", ("companions", "stackmaps"))
+def test_staged_preparation_seals_all_rows_before_first_payload_join(tmp_path, monkeypatch, fixture):
+    from tests.python.test_macho_windowed_parity import _companion_inputs, _write_pcos
+    paths = (_write_pcos(tmp_path, _companion_inputs()) if fixture == "companions"
+             else _stack_inputs(tmp_path, count=3, records=32, data_bytes=64))
+    expected = macho_exec.link_prepared_executable(
+        host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000)),
+        compact_budget=_budget(50_000_000),
+    )
+    stores = _capture_row_stores(monkeypatch)
+    original = host._consume_parts
+    joins, phases = [], []
+    def consume(parts, ledger, **kwargs):
+        store, = stores
+        assert store.sealed and store.appended == store.count
+        assert store.active_bytes == 0
+        joins.append(len(parts))
+        return original(parts, ledger, **kwargs)
+    def phase(event, **fields):
+        phases.append((event, fields))
+    monkeypatch.setattr(host, "_consume_parts", consume)
+    budget = _budget(50_000_000)
+    pending = [host.prepare_executable_from_paths(paths, compact_budget=budget,
+                                                 _staged_rows=True, _phase_callback=phase)]
+    assert joins
+    last_row = max(index for index, (event, _) in enumerate(phases) if event == "section_rows_end")
+    first_payload = next(index for index, (event, _) in enumerate(phases) if event == "section_payload_begin")
+    assert last_row < first_payload
+    row_events = [fields for event, fields in phases if event == "section_rows_end"]
+    assert [fields["section_index"] for fields in row_events] == list(range(stores[0].count))
+    assert all(fields["consuming"] is True for fields in row_events)
+    actual = output.link_owned_executable(pending.pop(), compact_budget=budget)
+    assert actual == expected
+    assert stores[0].stream is None
+
+
+def test_staged_preparation_replays_targets_after_stackmap_resize(tmp_path, monkeypatch):
+    from pcc.backend import macho_spec as spec
+    from tests.python.test_macho_consuming_join import _section_targets
+    from tests.python.test_macho_windowed_parity import _write_pcos
+    paths = _write_pcos(tmp_path, _section_targets())
+    expected = _prepared_state(host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000)))
+    stores = _capture_row_stores(monkeypatch)
+    read = host._StagedRelocationRows._read
+    early_reads, joined = [], []
+    def replay(self, index, check):
+        if not joined:
+            early_reads.append(index)
+        return read(self, index, check)
+    def phase(event, **_fields):
+        if event == "section_joins_end":
+            joined.append(True)
+    monkeypatch.setattr(host._StagedRelocationRows, "_read", replay)
+    source = host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000),
+                                                _staged_rows=True, _phase_callback=phase)
+    try:
+        assert _prepared_state(source) == expected
+        targets = [index for index, rows in enumerate(expected[3])
+                   if any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
+                          for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))]
+        assert targets and early_reads == targets
+        assert stores[0].active_bytes == 0
+    finally:
+        host.close_staged_source_rows(source)
+
+
+@pytest.mark.parametrize("close_failure", (False, True))
+def test_staged_preparation_partial_spool_failure_never_starts_payloads(tmp_path, monkeypatch, close_failure):
+    paths = _stack_inputs(tmp_path, count=3, records=8, data_bytes=64)
+    stores = _capture_row_stores(monkeypatch)
+    write = host._StagedRelocationRows.write_owned_parts
+    original = OSError("original partial pre-spool failure")
+    class FailedClose:
+        def __init__(self, stream):
+            self.stream = stream
+        def close(self):
+            self.stream.close()
+            raise OSError("secondary pre-spool close failure")
+    def fail(self, parts):
+        if self.appended:
+            if close_failure:
+                self.stream = FailedClose(self.stream)
+            raise original
+        return write(self, parts)
+    monkeypatch.setattr(host._StagedRelocationRows, "write_owned_parts", fail)
+    monkeypatch.setattr(host, "_consume_parts", lambda *_args, **_kwargs: pytest.fail("payload join after failed spool"))
+    budget = _budget(50_000_000)
+    budget.retained_bytes = 137
+    with pytest.raises(OSError) as caught:
+        host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=True)
+    assert caught.value is original and stores[0].stream is None
+    assert budget.retained_bytes == 137
+
+
+@pytest.mark.parametrize("failure", ("budget", "read", "overflow"))
+def test_staged_preparation_target_replay_failure_retires_rows_and_payloads(tmp_path, monkeypatch, failure):
+    from tests.python.test_macho_consuming_join import _section_targets, _track_buffers
+    from tests.python.test_macho_windowed_parity import _write_pcos
+    paths = _write_pcos(tmp_path, _section_targets())
+    stores = _capture_row_stores(monkeypatch)
+    buffers = _track_buffers(monkeypatch)
+    checked = []
+    if failure == "budget":
+        check = host._Ledger.check
+        def refuse(self, extra=0, *, label="Mach-O input window"):
+            if label == "Mach-O section-target row replay":
+                assert extra > 0 and stores[0].active_bytes == 0
+                checked.append(len(buffers))
+                raise maps.PreciseStackMapError("injected target row replay budget refusal")
+            return check(self, extra, label=label)
+        monkeypatch.setattr(host._Ledger, "check", refuse)
+        message = "injected target row replay budget refusal"
+    elif failure == "read":
+        def fail(*_args, **_kwargs):
+            raise OSError("injected target row replay read failure")
+        monkeypatch.setattr(host._StagedRelocationRows, "_read", fail)
+        message = "injected target row replay read failure"
+    else:
+        patch = host._patch_section_targets
+        def overflow(data, *args):
+            data[:8] = b"\xff" * 8
+            patch(data, *args)
+        monkeypatch.setattr(host, "_patch_section_targets", overflow)
+        message = "section-target value does not fit relocation width"
+    budget = _budget(50_000_000)
+    budget.retained_bytes = 137
+    with pytest.raises(output.LinkError, match=message) as caught:
+        host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=True)
+    assert stores and stores[0].stream is None and stores[0].active_bytes == 0
+    assert all(buffer.closed for buffer in buffers) and budget.retained_bytes == 137
+    if failure == "budget":
+        assert checked == [len(buffers)]  # no replay backing was allocated
+    trace = caught.value.__traceback__
+    while trace:
+        if trace.tb_frame.f_code.co_name == "_merge_paths":
+            assert trace.tb_frame.f_locals["row_storage"] is None
+            assert trace.tb_frame.f_locals["row_targets"] is None
+        trace = trace.tb_next
+
+
+@pytest.mark.parametrize("instrument", ("trace", "profile"))
+@pytest.mark.parametrize("point", ("section_rows_begin", "section_rows_end"))
+def test_staged_preparation_instrumentation_during_prespool_fails_closed(tmp_path, monkeypatch, instrument, point):
+    paths = _stack_inputs(tmp_path, count=3, records=8, data_bytes=64)
+    stores = _capture_row_stores(monkeypatch)
+    setter = sys.settrace if instrument == "trace" else sys.setprofile
+    previous = sys.gettrace() if instrument == "trace" else sys.getprofile()
+    def hook(_frame, _event, _arg):
+        return hook
+    def phase(event, **_fields):
+        if event == point:
+            setter(hook)
+    try:
+        with pytest.raises(output.LinkError, match="uninstrumented|instrumentation"):
+            host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000),
+                                               _staged_rows=True, _phase_callback=phase)
+    finally:
+        setter(previous)
+    assert stores and all(store.stream is None for store in stores)
