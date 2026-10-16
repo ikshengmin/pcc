@@ -208,6 +208,13 @@ class _PackedElfRelocations:
         return ElfRelocation(offset, info >> 32, info & 0xFFFFFFFF, addend)
 
 
+def _x86_packed_classification_rows(relocations):
+    """Keep the decoder's generator owner without constructing public records."""
+    for position in range(relocations.offset, relocations.offset + relocations.size, _RELA.size):
+        _offset, info, addend = _RELA.unpack_from(relocations.payload, position)
+        yield info >> 32, info & 0xFFFFFFFF, addend
+
+
 @dataclass(frozen=True)
 class ElfSection:
     name: str
@@ -1256,6 +1263,27 @@ def _link_static_executable_image(
             finally:
                 # An exception traceback must not retain this source's view.
                 del relocations
+        elif (type(machine) is int and machine == EM_X86_64
+                and type(relocations) is _PackedElfRelocations
+                and type(getattr(relocations, "payload", None)) is bytes
+                and type(relocations.offset) is int and type(relocations.size) is int
+                and type(_RELA) is struct.Struct and _RELA.format == "<QQq"):
+            # Keep a generator as the decoder-error owner, including if a
+            # symbol callback changes a later payload. Body errors release it.
+            relocation_sources = [relocations]
+            del relocations
+            for symbol_index, relocation_type, addend in _x86_packed_classification_rows(relocation_sources.pop()):
+                # Match assignment of the first projected row before callbacks.
+                relocation = None
+                if relocation_type not in got_reloc_types:
+                    continue
+                identity = _symbol_identity(objects, definitions, object_index, symbol_index)
+                kind = "tpoff" if relocation_type == R_X86_64_GOTTPOFF else "address"
+                key = (identity, kind)
+                if key not in got_seen:
+                    got_seen.add(key)
+                    got_identities.append(key)
+            del relocation_sources
         else:
             # Transfer the temporary iterable directly to for's one GET_ITER.
             # The exact list is empty before callbacks or exceptions can run.

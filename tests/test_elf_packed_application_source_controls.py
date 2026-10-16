@@ -12,6 +12,8 @@ import struct
 from types import SimpleNamespace
 import weakref
 
+from tests.elf_x86_packed_classification_reference import without_x86_packed_classification
+
 
 BASE_OWNER_SHA256 = "5b2f6cf4155252d7ad9c326b037f5979cbd6620434f078ac53cdc7825c8cd3df"
 
@@ -23,6 +25,7 @@ def _text(path):
 
 
 def _without_packed_application(source):
+    source = without_x86_packed_classification(source)
     root = Path(__file__).resolve().parents[1]
     tree = ast.parse(_text(root / "tests/elf_packed_application_preimage.py"))
     fields = {node.targets[0].id: ast.literal_eval(node.value)
@@ -295,7 +298,8 @@ def test_packed_application_bound_source_and_fake_controls():
         return [node for node in ast.walk(owner) if isinstance(node, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
     assert len(assignments(before, "relocation")) == 2
-    assert len(assignments(source, "relocation")) == 3
+    assert len(assignments(without_x86_packed_classification(source), "relocation")) == 3
+    assert len(assignments(source, "relocation")) == 4
     assert all(isinstance(node.value, ast.Constant) and node.value.value is None
                for node in assignments(source, "relocation"))
     assert all(any(isinstance(node, ast.Name) and node.id == name for node in ast.walk(ast.parse(before)))
