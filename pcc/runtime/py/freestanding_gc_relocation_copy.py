@@ -57,6 +57,12 @@ pcc_gc_install_forwarding_preallocated_unlocked = extern(
 pcc_gc_forwarding_install_plan_finish = extern(
     "pcc_gc_forwarding_install_plan_finish", (c_ptr,), c_void
 )
+pcc_gc_relocation_member_count = extern(
+    "pcc_gc_relocation_member_count", (c_ptr,), c_int64
+)
+pcc_gc_relocation_member_forget = extern(
+    "pcc_gc_relocation_member_forget", (c_ptr,), c_void
+)
 pcc_gc_object_known_size = extern(
     "pcc_gc_object_known_size", (c_ptr,), c_int64
 )
@@ -238,6 +244,7 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
                 global_store_ptr("pcc_gc_relocation_set_head", nxt)
             else:
                 store_ptr(prev, 8, nxt)
+            pcc_gc_relocation_member_forget(from_obj)
             store_ptr(relocation_node, 8, null())
             store_ptr(finish_plan, 0, relocation_node)
             break
@@ -245,15 +252,51 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
         relocation_node = nxt
     if ptr_is_null(from_page) == 0:
         page_has_candidate: i64 = 0
-        scan = global_load_ptr("pcc_gc_relocation_set_head")
-        while ptr_is_null(scan) == 0 and page_has_candidate == 0:
-            scan_znode = pcc_gc_backend4_zpage_find(load_ptr(scan, 0))
-            if (
-                ptr_is_null(scan_znode) == 0
-                and ptr_eq(load_ptr(scan_znode, 8), from_page) != 0
+        membership_complete: i64 = 1
+        remaining: i64 = pcc_gc_relocation_member_count(from_obj)
+        if remaining < 0:
+            membership_complete = 0
+        elif remaining > 0:
+            # Only one entry was removed. The source is still attached until
+            # after this decision, so a duplicate keeps its page selected.
+            page_has_candidate = 1
+        else:
+            # Exact membership lets a negative query inspect this page's
+            # owners, rather than every unrelated relocation entry. Flags
+            # are not membership: read barriers can clear candidate bits.
+            page_owner = load_ptr(from_page, 112)
+            while (
+                ptr_is_null(page_owner) == 0
+                and page_has_candidate == 0
+                and membership_complete != 0
             ):
-                page_has_candidate = 1
-            scan = load_ptr(scan, 8)
+                owner = load_ptr(page_owner, 0)
+                if ptr_eq(owner, from_obj) == 0:
+                    remaining = pcc_gc_relocation_member_count(owner)
+                    if remaining < 0:
+                        membership_complete = 0
+                    elif remaining > 0:
+                        # Keep the original discoverability predicate even
+                        # if an owner index is missing a page-linked owner.
+                        scan_znode = pcc_gc_backend4_zpage_find(owner)
+                        if (
+                            ptr_is_null(scan_znode) == 0
+                            and ptr_eq(load_ptr(scan_znode, 8), from_page) != 0
+                        ):
+                            page_has_candidate = 1
+                page_owner = load_ptr(page_owner, 48)
+        if membership_complete == 0:
+            # A failed index insertion or inconsistent count makes the whole
+            # epoch unknown. The authoritative list remains the fallback.
+            scan = global_load_ptr("pcc_gc_relocation_set_head")
+            while ptr_is_null(scan) == 0 and page_has_candidate == 0:
+                scan_znode = pcc_gc_backend4_zpage_find(load_ptr(scan, 0))
+                if (
+                    ptr_is_null(scan_znode) == 0
+                    and ptr_eq(load_ptr(scan_znode, 8), from_page) != 0
+                ):
+                    page_has_candidate = 1
+                scan = load_ptr(scan, 8)
         if page_has_candidate == 0:
             prev_page = null()
             page_node = global_load_ptr(

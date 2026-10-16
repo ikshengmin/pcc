@@ -6,6 +6,8 @@ The tables are open-addressed arrays of 16-byte slots::
 
 NULL keys mark empty slots. Keys are never NULL on insertion and backward-
 shift deletion leaves no tombstones, so a separate occupancy byte is redundant.
+The relocation-member index uses the value word as an i64 multiplicity;
+rehashing and backward-shift deletion preserve that word without dereferencing it.
 
 They deliberately depend only on ``pcc.unsafe`` raw memory operations and the
 freestanding allocator ABI.  ``src/py_gc_index_table.c`` remains a host-C
@@ -101,12 +103,16 @@ define_global_i64("pcc_py_gc_zpage_page_cap", 0)
 define_global_i64("pcc_py_gc_zpage_page_count", 0)
 define_global_i64("pcc_py_gc_zpage_page_used", 0)
 
-# Key-only filter of objects that joined the GC4 relocation set. The set is a
-# singly-linked list and every backend-4 free removes its object from it, so
-# a selected cycle made each free walk the whole set. Entries are added where
-# an object joins the set and dropped once a walk or an empty set proves it is
-# gone; a stale entry costs only that walk. A failed insertion marks the
-# filter incomplete, which keeps every walk until the set is empty again.
+# Exact multiplicities for the GC4 relocation list, using each existing
+# 16-byte slot's value word. Selector admission can create duplicate list
+# entries after a read barrier clears the candidate hint, so membership is
+# not a boolean. count/used still count distinct keys, not list entries.
+# These raw internal APIs require the GC graph lock: note follows one
+# committed insertion, forget follows one committed unlink, and clear is
+# allowed only after the caller proves the whole relocation list empty.
+# Allocation failure, overflow, or inconsistent bookkeeping makes the epoch
+# incomplete. Queries then require the original list walk until an explicit
+# empty-list clear; a later successful operation cannot repair missing history.
 define_global_ptr_null("pcc_py_gc_relocation_member_slots")
 define_global_i64("pcc_py_gc_relocation_member_cap", 0)
 define_global_i64("pcc_py_gc_relocation_member_count", 0)
@@ -1493,9 +1499,68 @@ def pcc_gc_zpage_page_index_clear() -> None:
     )
 
 
+@c_abi_export("pcc_gc_relocation_member_count")
+def pcc_gc_relocation_member_count(obj: c_ptr) -> i64:
+    """Exact linked multiplicity under the graph lock, or -1 if unknown."""
+    if load_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0) != 0:
+        return -1
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    slots = global_load_ptr("pcc_py_gc_relocation_member_slots")
+    cap: i64 = load_i64(global_addr("pcc_py_gc_relocation_member_cap"), 0)
+    count: i64 = load_i64(global_addr("pcc_py_gc_relocation_member_count"), 0)
+    used: i64 = load_i64(global_addr("pcc_py_gc_relocation_member_used"), 0)
+    if ptr_is_null(slots) != 0:
+        if cap == 0 and count == 0 and used == 0:
+            return 0
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return -1
+    if (
+        cap < 8
+        or (cap & (cap - 1)) != 0
+        or count < 0
+        or used != count
+        or used > logical_shift_right_i64(cap, 1)
+    ):
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return -1
+    if count == 0:
+        return 0
+    result: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
+    if result < 0:
+        return 0
+    multiplicity: i64 = load_i64(slots, result * 16 + 8)
+    if multiplicity <= 0:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return -1
+    return multiplicity
+
+
 @c_abi_export("pcc_gc_relocation_member_note")
 def pcc_gc_relocation_member_note(obj: c_ptr) -> None:
-    # Callers hold the GC graph lock, as for every index instance.
+    # Exactly one committed list insertion, including a duplicate occurrence.
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return
+    multiplicity: i64 = pcc_gc_relocation_member_count(obj)
+    if multiplicity < 0:
+        return
+    if multiplicity == 9223372036854775807:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return
+    if multiplicity > 0:
+        slots = global_load_ptr("pcc_py_gc_relocation_member_slots")
+        cap: i64 = load_i64(global_addr("pcc_py_gc_relocation_member_cap"), 0)
+        result: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
+        if result < 0:
+            store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+            return
+        store_i64(slots, result * 16 + 8, multiplicity + 1)
+        return
+
+    # The generic insertion leaves an existing value unchanged and may
+    # rehash on a new key. Only a newly inserted key can start at one, and
+    # its final slot must be found in the reloaded table after any rehash.
     inserted: i64 = pcc_gc_index_py_insert(
         global_addr("pcc_py_gc_relocation_member_slots"),
         global_addr("pcc_py_gc_relocation_member_cap"),
@@ -1507,29 +1572,44 @@ def pcc_gc_relocation_member_note(obj: c_ptr) -> None:
         0,
         256,
     )
-    if inserted < 0:
+    if inserted != 1:
         store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return
+    slots = global_load_ptr("pcc_py_gc_relocation_member_slots")
+    cap = load_i64(global_addr("pcc_py_gc_relocation_member_cap"), 0)
+    result = pcc_gc_index_py_find_slot(slots, cap, obj)
+    if result < 0:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return
+    store_i64(slots, result * 16 + 8, 1)
 
 
 @c_abi_export("pcc_gc_relocation_member_maybe")
 def pcc_gc_relocation_member_maybe(obj: c_ptr) -> i64:
     """0 only when obj is certainly outside the relocation set."""
-    if load_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0) != 0:
-        return 1
-    if load_i64(global_addr("pcc_py_gc_relocation_member_count"), 0) <= 0:
-        return 0
-    found = pcc_gc_index_py_find(
-        global_addr("pcc_py_gc_relocation_member_slots"),
-        global_addr("pcc_py_gc_relocation_member_cap"),
-        obj,
-        1,
-    )
-    return 0 if ptr_is_null(found) != 0 else 1
+    return 0 if pcc_gc_relocation_member_count(obj) == 0 else 1
 
 
 @c_abi_export("pcc_gc_relocation_member_forget")
 def pcc_gc_relocation_member_forget(obj: c_ptr) -> None:
-    pcc_gc_index_py_remove(
+    # Exactly one committed unlink. This path never allocates or frees the
+    # table, including the last key, so a copy commit can safely call it.
+    multiplicity: i64 = pcc_gc_relocation_member_count(obj)
+    if multiplicity < 0:
+        return
+    if multiplicity == 0:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+        return
+    if multiplicity > 1:
+        slots = global_load_ptr("pcc_py_gc_relocation_member_slots")
+        cap: i64 = load_i64(global_addr("pcc_py_gc_relocation_member_cap"), 0)
+        result: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
+        if result < 0:
+            store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
+            return
+        store_i64(slots, result * 16 + 8, multiplicity - 1)
+        return
+    removed = pcc_gc_index_py_remove(
         global_addr("pcc_py_gc_relocation_member_slots"),
         global_addr("pcc_py_gc_relocation_member_cap"),
         global_addr("pcc_py_gc_relocation_member_count"),
@@ -1537,11 +1617,16 @@ def pcc_gc_relocation_member_forget(obj: c_ptr) -> None:
         obj,
         1,
     )
+    if ptr_is_null(removed) != 0:
+        store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 1)
 
 
 @c_abi_export("pcc_gc_relocation_member_clear")
 def pcc_gc_relocation_member_clear() -> None:
-    # Only for an empty relocation set: no object can be a member.
+    # Caller holds the graph lock and has proved the relocation list empty.
+    # Preserve explicit clear's original table-release policy, including
+    # when reset switches away from GC4. This may free memory: never call
+    # from the preallocated copy commit, whose physical frees are deferred.
     pcc_gc_index_py_clear(
         global_addr("pcc_py_gc_relocation_member_slots"),
         global_addr("pcc_py_gc_relocation_member_cap"),

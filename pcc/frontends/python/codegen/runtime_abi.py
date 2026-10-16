@@ -2244,6 +2244,8 @@ def _cross_object_signatures_part_4():
 
 def _cross_object_signatures_part_5():
     return {
+    "pcc_gc_relocation_member_count": (("c_ptr",), "c_int64"),
+    "pcc_gc_relocation_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promote_cext_owner_referents": (
         ("c_ptr",),
         "c_void",

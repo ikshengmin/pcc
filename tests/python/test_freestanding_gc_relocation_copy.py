@@ -45,6 +45,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_install_forwarding_preallocated_unlocked",
     "pcc_gc_memoryview_refresh_owned_buffer",
     "pcc_gc_object_known_size",
+    "pcc_gc_relocation_member_count",
+    "pcc_gc_relocation_member_forget",
     "pcc_gc_relocate_copy_payload_prepared_locked",
     "pcc_gc_relocation_payload_plan_finish",
     "pcc_gc_relocation_payload_plan_prepare",

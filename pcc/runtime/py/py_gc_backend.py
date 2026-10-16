@@ -1146,8 +1146,6 @@ def _relocation_set_remove(obj) -> None:
         return
     if pcc_gc_relocation_member_maybe(obj) == 0:
         return
-    # The walk below proves obj absent (or unlinks its node) either way.
-    pcc_gc_relocation_member_forget(obj)
     prev = null()
     node = _relocation_set_head()
     while ptr_is_null(node) == 0:
@@ -1172,6 +1170,9 @@ def _relocation_set_remove(obj) -> None:
                 _set_relocation_set_head(nxt)
             else:
                 store_ptr(prev, 8, nxt)
+            # Remove one occurrence only after its list node is unlinked.
+            # Candidate-bit clearing can leave duplicate selected entries.
+            pcc_gc_relocation_member_forget(obj)
             if ptr_is_null(_forwarding_find(obj)) != 0:
                 flags: int = load_i32(obj, 12)
                 store_i32(obj, 12, flags & ~2048)
@@ -4706,6 +4707,7 @@ def pcc_gc_reset_relocation_set() -> None:
             store_ptr(node, 8, batch)
             batch = node
             obj = load_ptr(node, 0)
+            pcc_gc_relocation_member_forget(obj)
             if ptr_is_null(obj) == 0:
                 if is_tagged_int(obj) == 0:
                     if ptr_is_null(_forwarding_find(obj)) != 0:
@@ -4713,6 +4715,10 @@ def pcc_gc_reset_relocation_set() -> None:
                         store_i32(obj, 12, flags & ~2048)
             examined = examined + 1
         complete: int = ptr_is_null(_relocation_set_head())
+        if complete != 0:
+            # A failed membership insertion is recoverable only once every
+            # authoritative relocation entry has actually been removed.
+            pcc_gc_relocation_member_clear()
         _object_graph_unlock()
         _relocation_reset_finish(batch, null())
         if complete != 0:
