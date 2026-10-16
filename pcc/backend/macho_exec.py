@@ -1477,6 +1477,33 @@ def _prepare_executable_image(
             (got.addr + i * 8, got, i * 8, _bind_word(import_ordinal[name]))
             for i, name in enumerate(code_imports)
         ]
+    has_tlv_bind_sites = bool(tlv_bind_sites)
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            # These private lists have no reader after conversion except the
+            # saved TLV flag. Retire each old tuple only after its replacement
+            # has been appended; keep the public/native path as the oracle.
+            for index in range(len(tlv_bind_sites)):
+                out, off, ordinal = tlv_bind_sites[index]
+                seg_fixups.setdefault(data_index, []).append(
+                    (out.addr + off, out, off, _bind_word(ordinal)))
+                tlv_bind_sites[index] = None
+            tlv_bind_sites.clear()
+            for index in range(len(data_bind_sites)):
+                out, off, ordinal, addend = data_bind_sites[index]
+                seg_index = dc_index if out.segname == "__DATA_CONST" else data_index
+                seg_fixups.setdefault(seg_index, []).append(
+                    (out.addr + off, out, off, _bind_word(ordinal) | (addend << 24)))
+                data_bind_sites[index] = None
+            data_bind_sites.clear()
+            for index in range(len(rebase_sites)):
+                out, off, image_off = rebase_sites[index]
+                seg_index = dc_index if out.segname == "__DATA_CONST" else data_index
+                seg_fixups.setdefault(seg_index, []).append(
+                    (out.addr + off, out, off, _rebase_word(image_off)))
+                rebase_sites[index] = None
+            rebase_sites.clear()
     if tlv_bind_sites:
         seg_fixups.setdefault(data_index, []).extend(
             (out.addr + off, out, off, _bind_word(ordinal))
@@ -1567,6 +1594,15 @@ def _prepare_executable_image(
         seg_vmaddr, seg_size, seg_file_off = seg_vm[seg_index]
         seg_infos[seg_index] = _build_seg_info(
             fixups, seg_vmaddr, seg_size, seg_file_off)
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if _owned_output is not None:
+                fixups.clear()
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            seg_fixups.clear()
+            fixups = None
 
     sym_blob = bytearray(b"\0")
     import_entries = []
@@ -1779,7 +1815,7 @@ def _prepare_executable_image(
     # is inert and the first TLV access calls the raw __tlv_bootstrap thunk,
     # which aborts.
     mh_flags = 0x00200085
-    if tlv_bind_sites:
+    if has_tlv_bind_sites:
         mh_flags |= 0x00800000
     header = spec.MACH_HEADER_64.pack({
         "magic": spec.MH_MAGIC_64, "cputype": spec.CPU_TYPE_ARM64,
