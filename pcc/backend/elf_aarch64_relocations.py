@@ -53,6 +53,19 @@ def _signed(value: int, bits: int) -> int:
     return value & ((1 << bits) - 1)
 
 
+def _write_instruction_word(image: bytearray, offset: int, word: int) -> None:
+    # The owned bytearray path needs one fixed-size copy, not generic format
+    # packing and four element stores. Keep subclass/protocol handling and
+    # invalid-value diagnostics in struct. Recheck the current bounds: earlier
+    # arithmetic/read callbacks may have resized an otherwise exact bytearray.
+    # Calling struct itself is not a hook contract for these exact primitives.
+    if (type(image) is bytearray and type(offset) is int and type(word) is int
+            and 0 <= offset <= len(image) - 4 and 0 <= word <= 0xFFFFFFFF):
+        image[offset:offset + 4] = word.to_bytes(4, "little")
+    else:
+        struct.pack_into("<I", image, offset, word)
+
+
 # Each guarded chunk is less than 1 MiB, so fallthrough can skip it with B.
 # Chunking also keeps very large numeric layout plans within branch26 reach.
 _VENEERS_PER_CHUNK = 65535
@@ -203,4 +216,4 @@ def apply_relocation(image: bytearray, offset: int, kind: int,
         if low & ((1 << scale) - 1):
             raise ValueError("misaligned AArch64 load/store relocation")
         word = (word & ~0x003FFC00) | ((low >> scale) << 10)
-    struct.pack_into("<I", image, offset, word)
+    _write_instruction_word(image, offset, word)

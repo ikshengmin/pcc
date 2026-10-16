@@ -149,6 +149,10 @@ def test_only_seven_load_store_kinds_reach_exact_integer_scale_dispatch(monkeypa
         observed.append(value)
         return type(value)
 
+    # This inventory observes scale dispatch only; the independent final-word
+    # writer also checks exact primitive types and has its own regressions.
+    monkeypatch.setattr(arm, "_write_instruction_word", lambda image, offset, word:
+                        struct.pack_into("<I", image, offset, word))
     monkeypatch.setattr(arm, "type", observe_type, raising=False)
     for kind in sorted(kinds):
         try:
