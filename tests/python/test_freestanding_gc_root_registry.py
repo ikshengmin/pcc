@@ -110,7 +110,7 @@ def test_root_registry_has_one_strict_source_owner_and_one_lock_contract():
 
 def test_continuation_unregister_frees_only_after_graph_unlock():
     strict = REGISTRY_SOURCE.read_text(encoding="utf-8")
-    strict_body = strict.split("def pcc_gc_unregister_continuation_root", 1)[
+    strict_body = strict.split("def pcc_gc_unregister_continuation_root(", 1)[
         1
     ].split("\n\n@", 1)[0]
     assert "dead = null()" in strict_body

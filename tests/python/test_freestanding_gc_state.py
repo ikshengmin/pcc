@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STATE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_state.py"
 SELECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_relocation_selector.py"
+ROOT_OPERATIONS_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_operations.py"
 SUBSTRATE_SOURCE = RUNTIME_DIR / "py" / "py_substrate.py"
 
 
@@ -206,9 +207,11 @@ def test_production_archive_plan_includes_freestanding_gc_state():
 
 def test_gc_state_storage_types_are_registered_in_runtime_abi():
     definitions = _state_definitions(STATE_SOURCE)
-    selector_definitions = _state_definitions(SELECTOR_SOURCE)
-    assert set(definitions).isdisjoint(selector_definitions)
-    definitions.update(selector_definitions)
+    for owner_source in (SELECTOR_SOURCE, ROOT_OPERATIONS_SOURCE):
+        owner_definitions = _state_definitions(owner_source)
+        assert set(definitions).isdisjoint(owner_definitions)
+        definitions.update(owner_definitions)
+    assert definitions["pcc_gc_foreign_lease_active"] == ("define_global_i64", 0)
     expected = {
         name: (
             "i32" if kind == "define_global_i32"
@@ -237,7 +240,11 @@ def test_raw_gc_state_uses_string_kinds_not_managed_llvm_type_registry():
         )
         for name, (kind, _value) in _state_definitions(STATE_SOURCE).items()
     }
-    assert set(expected).isdisjoint(RUNTIME_GLOBALS)
+    # The application safepoint gate intentionally imports this existing
+    # raw flag through declare_runtime_global; no other raw state may leak.
+    assert set(expected) & set(RUNTIME_GLOBALS) == {"pcc_gc_backend4_auto_step_pending"}
+    assert expected["pcc_gc_backend4_auto_step_pending"] == "i32"
+    assert str(RUNTIME_GLOBALS["pcc_gc_backend4_auto_step_pending"]) == "i32"
     assert all(isinstance(name, str) for name in runtime_abi.FREESTANDING_GC_RUNTIME_GLOBALS)
 
 

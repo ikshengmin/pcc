@@ -1694,7 +1694,6 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_metric_pause_hist3',
         'pcc_gc_metric_pause_sum_us',
         'pcc_gc_metric_pin',
-        'pcc_gc_foreign_lease_active',
         'pcc_gc_metric_safepoint',
         'pcc_gc_metric_step',
         'pcc_gc_metric_store',
@@ -1772,6 +1771,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_finish_commits',
         'pcc_gc_object_list_revision',
         'pcc_gc_root_registry_revision',
+        'pcc_gc_foreign_lease_active',
     }
 )
 
