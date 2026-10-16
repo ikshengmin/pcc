@@ -5036,9 +5036,16 @@ def _build_function_stack_map_plan_native(
     func: ParsedFunction,
     globals_: list[GlobalDef],
     identity_name: str,
+    _globals_index: list[dict[str, GlobalDef]] | None = None,
 ) -> FunctionStackMapPlan:
     kernel = get_indexed_function_kernel(func)
-    globals_by_name = {global_.name: global_ for global_ in globals_}
+    if _globals_index is None:
+        globals_by_name = {global_.name: global_ for global_ in globals_}
+    elif _globals_index:
+        globals_by_name = _globals_index[0]
+    else:
+        globals_by_name = {global_.name: global_ for global_ in globals_}
+        _globals_index.append(globals_by_name)
     aliases = _native_pointer_aliases(kernel)
     roots = _native_root_states(func, globals_by_name, aliases, kernel)
     origins = _native_managed_origins(func, aliases, roots, kernel)
@@ -5671,7 +5678,31 @@ def build_stack_map_plans(
     *,
     target: str,
     function_symbol=None,
+    _share_globals_index: bool = False,
 ) -> tuple[FunctionStackMapPlan, ...]:
+    # Only the emitter's initial AArch64 batch opts in: its symbol callback is
+    # pure and globals do not change inside that batch. Public callers retain
+    # per-function indexing, including mutations made by function_symbol.
+    if _share_globals_index and target == "aarch64-darwin":
+        globals_index: list[dict[str, GlobalDef]] = []
+        plans: list[FunctionStackMapPlan] = []
+        try:
+            for func in functions:
+                identity_name = (
+                    function_symbol(func.name)
+                    if function_symbol is not None
+                    else func.name
+                )
+                plans.append(_build_function_stack_map_plan_native(
+                    func, globals_, identity_name, globals_index,
+                ))
+            return tuple(plans)
+        finally:
+            # Do not retain the name table across emission, timing callbacks,
+            # or tail-call replanning. Clear entries even on a failed plan.
+            if globals_index:
+                globals_index[0].clear()
+            globals_index.clear()
     return tuple(
         build_function_stack_map_plan(
             func,

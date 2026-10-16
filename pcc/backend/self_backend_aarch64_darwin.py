@@ -690,6 +690,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
             globals_,
             target="aarch64-darwin",
             function_symbol=_function_symbol,
+            _share_globals_index=True,
         )
     }
     if phase_timing is not None:

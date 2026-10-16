@@ -301,6 +301,9 @@ def test_frozen_lifetime_oracle_and_only_seven_close_insertions():
         if name == "_native_managed_liveness":
             from tests.managed_liveness_dirty_rows_reference import without_dirty_row_schedule
             new = without_dirty_row_schedule(new)
+        else:
+            from tests.stackmap_global_index_reference import without_shared_globals_index
+            new = without_shared_globals_index(new)
         old_calls = [ast.unparse(node) for node in ast.walk(old) if isinstance(node, ast.Call)
                      and isinstance(node.func, ast.Attribute) and node.func.attr == "close"]
         new_calls = [ast.unparse(node) for node in ast.walk(new) if isinstance(node, ast.Call)
