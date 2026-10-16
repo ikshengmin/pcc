@@ -18,6 +18,10 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_relocation_selector_single_thread_rank_sift_down",
+    "pcc_gc_relocation_selector_single_thread_rank_begin",
+    "pcc_gc_relocation_selector_single_thread_ranked_page",
+    "pcc_gc_relocation_selector_single_thread_page_best_batch",
     "pcc_gc_backend4_candidate_fresh_skips_count",
     "pcc_gc_backend4_relocation_add_refusals_count",
     "pcc_gc_backend4_select_relocation_pages",

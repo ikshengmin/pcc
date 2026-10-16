@@ -16,6 +16,7 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     null,
+    ptr_add,
     ptr_eq,
     ptr_is_null,
     stack_alloc,
@@ -870,6 +871,198 @@ def pcc_gc_select_relocation_set(budget: i64) -> i64:
     return selected
 
 
+@c_abi_export("pcc_gc_relocation_selector_single_thread_rank_sift_down")
+def _single_thread_rank_sift_down(state, index: i64) -> None:
+    # A stable priority key: descending score, then ascending global ordinal.
+    # Heapify is linear; a low page budget pays only for the roots it consumes.
+    arena = load_ptr(state, 0)
+    count: i64 = load_i64(state, 8)
+    item = ptr_add(arena, index * 24)
+    node = load_ptr(item, 0)
+    score: i64 = load_i64(item, 8)
+    ordinal: i64 = load_i64(item, 16)
+    child: i64 = index * 2 + 1
+    while child < count:
+        best = ptr_add(arena, child * 24)
+        if child + 1 < count:
+            right = ptr_add(arena, (child + 1) * 24)
+            if (
+                load_i64(right, 8) > load_i64(best, 8)
+                or (
+                    load_i64(right, 8) == load_i64(best, 8)
+                    and load_i64(right, 16) < load_i64(best, 16)
+                )
+            ):
+                child = child + 1
+                best = right
+        child_score: i64 = load_i64(best, 8)
+        child_ordinal: i64 = load_i64(best, 16)
+        if child_score < score or (child_score == score and child_ordinal >= ordinal):
+            break
+        item = ptr_add(arena, index * 24)
+        store_ptr(item, 0, load_ptr(best, 0))
+        store_i64(item, 8, child_score)
+        store_i64(item, 16, child_ordinal)
+        index = child
+        child = index * 2 + 1
+    item = ptr_add(arena, index * 24)
+    store_ptr(item, 0, node)
+    store_i64(item, 8, score)
+    store_i64(item, 16, ordinal)
+
+
+@c_abi_export("pcc_gc_relocation_selector_single_thread_rank_begin")
+def _single_thread_page_rank_begin(state) -> i64:
+    # Per-call raw state: arena @0, heap count @8, full-scan fresh delta
+    # @16, preflight seen/active @24/@32; page-local residual cursor/best/score/active
+    # @40/@48/@56/@64. Never retain raw owners across a managed callback.
+    store_ptr(state, 0, null())
+    store_i64(state, 8, 0)
+    store_i64(state, 16, 0)
+    store_i64(state, 24, 0)
+    store_i64(state, 32, 0)
+    store_i64(state, 64, 0)
+    if (
+        load_i64(global_addr("pcc_gc_backend4_selector_scan_owner"), 0) != 0
+        or load_i64(global_addr("pcc_gc_backend4_selector_page_owner"), 0) != 0
+        or load_i64(global_addr("pcc_gc_backend4_relocation_reset_owner"), 0) != 0
+        or load_i64(global_addr("pcc_gc_backend4_reseed_commit_owner"), 0) != 0
+    ):
+        return 0
+    count: i64 = 0
+    cursor = _zpage_head()
+    while ptr_is_null(cursor) == 0:
+        count = count + 1
+        # Check before multiplying or allocating. Allocation failure occurs
+        # before candidate_score has any diagnostic or deferral side effects.
+        if count > 384307168202282325:
+            return 0
+        cursor = load_ptr(cursor, 16)
+    if count == 0:
+        return 1
+    arena = malloc(count * 24)
+    if ptr_is_null(arena) != 0:
+        return 0
+    store_ptr(state, 0, arena)
+    before: i64 = load_i64(
+        global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0
+    )
+    count = 0
+    cursor = _zpage_head()
+    while ptr_is_null(cursor) == 0:
+        examined: i64 = 0
+        pcc_py_gc_minor_graph_lock()
+        while ptr_is_null(cursor) == 0 and examined < 16:
+            node = cursor
+            cursor = load_ptr(node, 16)
+            examined = examined + 1
+            score: i64 = _backend4_zpage_candidate_score(node, 1)
+            if score <= 0:
+                continue
+            record = ptr_add(arena, count * 24)
+            store_ptr(record, 0, node)
+            store_i64(record, 8, score)
+            store_i64(record, 16, count)
+            count = count + 1
+        pcc_py_gc_minor_graph_unlock()
+        if ptr_is_null(cursor) == 0:
+            pcc_thread_safepoint()
+    store_i64(
+        state, 16,
+        load_i64(global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0) - before,
+    )
+    store_i64(state, 8, count)
+    index: i64 = count // 2 - 1
+    while index >= 0:
+        _single_thread_rank_sift_down(state, index)
+        index = index - 1
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_selector_single_thread_ranked_page")
+def _single_thread_ranked_page(state, result) -> i64:
+    store_ptr(result, 0, null())
+    store_i64(result, 8, 0)
+    store_i64(result, 16, 0)
+    if load_i64(state, 32) == 0:
+        if load_i64(state, 24) != 0:
+            # Fresh owners remain ineligible and are scored even on selected
+            # pages by the original full scan. Preserve that counter's meaning.
+            skips: i64 = load_i64(
+                global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0
+            )
+            store_i64(
+                global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0,
+                skips + load_i64(state, 16),
+            )
+        store_i64(state, 24, 1)
+        store_i64(state, 32, 1)
+        _selector_scan_reset()
+    arena = load_ptr(state, 0)
+    examined: i64 = 0
+    while load_i64(state, 8) > 0 and examined < 16:
+        node = load_ptr(arena, 0)
+        count: i64 = load_i64(state, 8) - 1
+        store_i64(state, 8, count)
+        if count > 0:
+            last = ptr_add(arena, count * 24)
+            store_ptr(arena, 0, load_ptr(last, 0))
+            store_i64(arena, 8, load_i64(last, 8))
+            store_i64(arena, 16, load_i64(last, 16))
+            _single_thread_rank_sift_down(state, 0)
+        examined = examined + 1
+        if load_i32(load_ptr(node, 8), 108) != 0:
+            continue
+        if _backend4_zpage_candidate_score(node, 1) > 0:
+            store_ptr(result, 0, node)
+            store_i64(result, 8, examined)
+            store_i64(result, 16, 1)
+            store_i64(state, 32, 0)
+            return 1
+    store_i64(result, 8, examined)
+    if load_i64(state, 8) == 0:
+        store_i64(result, 16, 1)
+        store_i64(state, 32, 0)
+    return 0
+
+
+@c_abi_export("pcc_gc_relocation_selector_single_thread_page_best_batch")
+def _single_thread_page_best_batch(page, state, result) -> i64:
+    # A page's next48 chain has exactly the order of next16 filtered by page.
+    # Keep the 16-owner lock interval and actual page-local scoring side
+    # effects for residual passes (e.g. forwarding or fresh owners).
+    store_ptr(result, 0, null())
+    store_i64(result, 8, 0)
+    store_i64(result, 16, 0)
+    if load_i64(state, 64) == 0:
+        store_ptr(state, 40, load_ptr(page, 112))
+        store_ptr(state, 48, null())
+        store_i64(state, 56, -1)
+        store_i64(state, 64, 1)
+    cursor = load_ptr(state, 40)
+    examined: i64 = 0
+    while ptr_is_null(cursor) == 0 and examined < 16:
+        node = cursor
+        cursor = load_ptr(node, 48)
+        examined = examined + 1
+        score: i64 = _backend4_zpage_candidate_score(node, 1)
+        if score > load_i64(state, 56):
+            store_ptr(state, 48, node)
+            store_i64(state, 56, score)
+    store_ptr(state, 40, cursor)
+    store_i64(result, 8, examined)
+    if ptr_is_null(cursor) == 0:
+        return 0
+    best = load_ptr(state, 48)
+    store_i64(state, 64, 0)
+    store_i64(result, 16, 1)
+    _selector_scan_reset()
+    if ptr_is_null(best) == 0 and _backend4_zpage_candidate_score(best, 1) > 0:
+        store_ptr(result, 0, best)
+        return 1
+    return 0
+
+
 @c_abi_export("pcc_gc_backend4_select_relocation_pages")
 def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
     if pcc_gc_config_ensure() != 4 or page_budget <= 0:
@@ -879,6 +1072,15 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         return 0
     selected: i64 = 0
     pages: i64 = 0
+    rank_state = stack_alloc(72)
+    store_ptr(rank_state, 0, null())
+    ranked: i64 = 0
+    if page_budget > 1 and pcc_threads_enabled() == 0:
+        # The linked provider proves polls cannot run a managed mutator.
+        # Selection only changes chosen pages; every unselected page score
+        # stays fixed until this call returns. Threaded/resumed scans keep
+        # the registered original path, including its restart protocol.
+        ranked = _single_thread_page_rank_begin(rank_state)
     while pages < page_budget:
         page_token = null()
         preflight_seed = null()
@@ -887,9 +1089,13 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         preflight_complete: i64 = 0
         while preflight_complete == 0:
             pcc_py_gc_minor_graph_lock()
-            has_preflight: i64 = _best_relocation_page_batch(
-                owner_thread_id, null(), 1, 1, preflight_result
-            )
+            has_preflight: i64 = 0
+            if ranked != 0:
+                has_preflight = _single_thread_ranked_page(rank_state, preflight_result)
+            else:
+                has_preflight = _best_relocation_page_batch(
+                    owner_thread_id, null(), 1, 1, preflight_result
+                )
             preflight_complete = load_i64(preflight_result, 16)
             if preflight_complete != 0 and has_preflight > 0:
                 page_token = load_ptr(load_ptr(preflight_result, 0), 8)
@@ -971,6 +1177,10 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
                         store_ptr(current_result, 0, preflight_seed)
                         has_current = 1
                     preflight_seed = null()
+                elif ranked != 0:
+                    has_current = _single_thread_page_best_batch(
+                        page_token, rank_state, current_result
+                    )
                 else:
                     has_current = _best_relocation_page_batch(
                         owner_thread_id,
@@ -1046,4 +1256,6 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         if page_selected <= 0:
             break
         pages = pages + 1
+    if ptr_is_null(load_ptr(rank_state, 0)) == 0:
+        free(load_ptr(rank_state, 0))
     return selected
