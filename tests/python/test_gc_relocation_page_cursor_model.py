@@ -35,6 +35,7 @@ def _load_functions(path, namespace, names=None):
 class _SelectorMemory:
     def __init__(self, threads_enabled=1):
         self.cells = {}
+        self.allocation_sizes = {}
         self.freed = set()
         self.next_pointer = 1024
         self.nodes = set()
@@ -42,6 +43,7 @@ class _SelectorMemory:
         self.members = []
         self.refused = set()
         self.heap_visits = 0
+        self.heap_visits_by_lock = {False: 0, True: 0}
         self.scan_starts = []
         self.scan_member_counts = []
         self.commit_chunks = 0
@@ -56,11 +58,19 @@ class _SelectorMemory:
         # run a managed mutation callback in the threads-off no-poll interval.
         self.threads_enabled = threads_enabled
         self.runtime_guard_polls = []
+        self.runtime_guard_kinds = []
+        self.rank_entry_pending = False
+        self.rank_building = False
+        self.rank_score_count = 0
+        self.rank_score_batches = []
+        self.ranked_page_batches = []
+        self.page_best_batches = []
         self.namespace = {
             "i64": int,
             "null": lambda: 0,
             "ptr_eq": lambda left, right: int(left == right),
             "ptr_is_null": lambda value: int(value == 0),
+            "ptr_add": self.ptr_add,
             "is_tagged_int": lambda value: 0,
             "global_addr": lambda name: name,
             "global_load_ptr": self.global_get,
@@ -110,6 +120,10 @@ class _SelectorMemory:
         )
         scan = self.namespace["_best_relocation_page_batch"]
         commit = self.namespace["_select_page_objects_batch"]
+        rank_begin = self.namespace["_single_thread_page_rank_begin"]
+        ranked_page = self.namespace["_single_thread_ranked_page"]
+        page_best = self.namespace["_single_thread_page_best_batch"]
+        candidate_score = self.namespace["_backend4_zpage_candidate_score"]
 
         def bounded_scan(owner, page, unselected, large, result):
             assert self.locked
@@ -127,13 +141,63 @@ class _SelectorMemory:
             self.commit_chunks += 1
             return outcome
 
+        def begin_rank(state):
+            assert not self.locked and self.threads_enabled == 0
+            self.rank_building = True
+            try:
+                return rank_begin(state)
+            finally:
+                self.rank_building = False
+
+        def locked_score(node, large):
+            assert self.locked
+            if self.rank_building:
+                self.rank_score_count += 1
+            return candidate_score(node, large)
+
+        def bounded_ranked_page(state, result):
+            assert self.locked and self.threads_enabled == 0
+            outcome = ranked_page(state, result)
+            examined = self.read(result, 8)
+            assert 0 <= examined <= 16
+            self.ranked_page_batches.append(examined)
+            return outcome
+
+        def bounded_page_best(page, state, result):
+            assert self.locked and self.threads_enabled == 0
+            outcome = page_best(page, state, result)
+            examined = self.read(result, 8)
+            assert 0 <= examined <= 16
+            self.page_best_batches.append(examined)
+            return outcome
+
         self.namespace["_best_relocation_page_batch"] = bounded_scan
         self.namespace["_select_page_objects_batch"] = bounded_commit
+        self.namespace["_single_thread_page_rank_begin"] = begin_rank
+        self.namespace["_backend4_zpage_candidate_score"] = locked_score
+        self.namespace["_single_thread_ranked_page"] = bounded_ranked_page
+        self.namespace["_single_thread_page_best_batch"] = bounded_page_best
 
     def new(self, size):
         self.next_pointer += max(16, size)
         self.cells[self.next_pointer] = {}
+        self.allocation_sizes[self.next_pointer] = size
         return self.next_pointer
+
+    def address(self, pointer, offset, width=8):
+        # Allocation IDs are opaque; interior arena pointers retain both the
+        # allocation identity and byte displacement, including aliasing at +0.
+        if isinstance(pointer, tuple):
+            pointer, displacement = pointer
+            offset += displacement
+        assert pointer in self.allocation_sizes
+        assert pointer not in self.freed, "selector dereferenced freed metadata"
+        assert 0 <= offset and offset + width <= self.allocation_sizes[pointer]
+        return pointer, offset
+
+    def ptr_add(self, pointer, offset):
+        base, displacement = self.address(pointer, offset, width=0)
+        return (base, displacement) if displacement else base
 
     def malloc(self, size):
         assert not self.locked
@@ -149,7 +213,14 @@ class _SelectorMemory:
         return result
 
     def runtime_threads_enabled(self):
-        assert self.locked
+        # The immutable provider is queried once outside the lock to choose
+        # multi-page ranking. Saved-preflight checks still require the lock.
+        if self.locked:
+            self.runtime_guard_kinds.append("preflight")
+        else:
+            assert self.rank_entry_pending
+            self.rank_entry_pending = False
+            self.runtime_guard_kinds.append("rank-entry")
         self.runtime_guard_polls.append(self.polls)
         return self.threads_enabled
 
@@ -159,16 +230,17 @@ class _SelectorMemory:
         self.freed.add(pointer)
 
     def read(self, pointer, offset):
-        assert pointer not in self.freed, "selector dereferenced freed metadata"
         if isinstance(pointer, str):
             return self.cells.get(pointer, {}).get(offset, 0)
-        assert pointer in self.cells
+        pointer, offset = self.address(pointer, offset)
         if pointer in self.nodes and offset == 16:
             self.heap_visits += 1
+            self.heap_visits_by_lock[self.locked] += 1
         return self.cells[pointer].get(offset, 0)
 
     def write(self, pointer, offset, value):
-        assert pointer not in self.freed
+        if not isinstance(pointer, str):
+            pointer, offset = self.address(pointer, offset)
         self.cells.setdefault(pointer, {})[offset] = value
 
     def global_get(self, name):
@@ -189,6 +261,10 @@ class _SelectorMemory:
 
     def unlock(self):
         assert self.locked
+        if self.rank_building:
+            assert 0 <= self.rank_score_count <= 16
+            self.rank_score_batches.append(self.rank_score_count)
+            self.rank_score_count = 0
         self.locked = False
 
     def poll(self):
@@ -240,8 +316,10 @@ class _SelectorMemory:
 
     def select(self, budget, foreign_page_owner=0, foreign_scan_owner=0):
         self.heap_visits = 0
+        self.heap_visits_by_lock = {False: 0, True: 0}
+        self.rank_entry_pending = budget > 1
         selected = self.namespace["pcc_gc_backend4_select_relocation_pages"](budget)
-        assert not self.locked
+        assert not self.locked and not self.rank_entry_pending
         assert self.global_get("pcc_gc_backend4_selector_scan_owner") == foreign_scan_owner
         assert self.global_get("pcc_gc_backend4_selector_page_owner") == foreign_page_owner
         return selected
@@ -306,8 +384,23 @@ def test_threads_off_preserves_mixed_page_score_and_seed_tie_order():
         assert all(memory.read(page, 108) == 1 for page in (high, tied_high, middle))
         assert memory.read(low, 108) == 0
         assert not ({memory.read(node, 0) for node in low_nodes} & set(memory.members))
-        assert memory.heap_visits == 148 * 3 * (1 + threads_enabled)
-        assert len(memory.scan_starts) == 3 * (1 + threads_enabled)
+        assert memory.runtime_guard_kinds == ["rank-entry"] + ["preflight"] * 3
+        if threads_enabled:
+            assert memory.heap_visits == 148 * 3 * 2
+            assert memory.heap_visits_by_lock == {False: 0, True: 888}
+            assert len(memory.scan_starts) == 6
+            assert memory.rank_score_batches == memory.ranked_page_batches == []
+        else:
+            # Ranking counts the static owner list once outside the lock,
+            # then scores it once in bounded locked batches. Selected pages
+            # are skipped in the heap rather than rescanning the owner list.
+            assert memory.heap_visits == 148 * 2
+            assert memory.heap_visits_by_lock == {False: 148, True: 148}
+            assert memory.scan_starts == []
+            assert memory.rank_score_batches == [16] * 9 + [4]
+            assert memory.ranked_page_batches == [1, 2] + [16] * 5 + [14]
+            assert memory.page_best_batches == []
+            assert memory.commit_chunks == 4 + 4 + 3
         outcomes.append(memory.members)
     assert outcomes[0] == outcomes[1]
 
@@ -388,6 +481,9 @@ def test_page_budget_and_score_order_preserve_complete_selected_pages():
     assert memory.read(high, 108) == memory.read(middle, 108) == 1
     assert memory.read(low, 108) == 0
     assert not ({memory.read(node, 0) for node in low_nodes} & set(memory.members))
+    assert memory.heap_visits == 100 * 2 * 2
+    assert len(memory.scan_starts) == 4
+    assert memory.runtime_guard_kinds == ["rank-entry", "preflight", "preflight"]
 
 
 @pytest.mark.parametrize("flags", [64, 16384])
