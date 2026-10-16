@@ -350,7 +350,9 @@ def _td_text(value, default):
     return raw
 
 
-def _td_path_template(root, prefix, suffix):
+# These malloc/free buffers stay raw through the platform-selection join and
+# its caller; they must never acquire a managed reference or root slot.
+def _td_path_template(root, prefix, suffix) -> c_ptr:
     rlen: int = strlen(root)
     if load_i8(prefix, 0) == 47:
         rlen = 0
@@ -373,7 +375,7 @@ def _td_path_template(root, prefix, suffix):
     return path
 
 
-def _td_windows_path_template(root, prefix, suffix):
+def _td_windows_path_template(root, prefix, suffix) -> c_ptr:
     # Use the existing owned Windows drive/UNC join implementation, and fix
     # the absolute spelling BEFORE creation (never resolve a later cwd).
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
@@ -405,7 +407,7 @@ def _td_windows_path_template(root, prefix, suffix):
     return result
 
 
-def _td_mkdir_at(root, prefix, suffix, status, owner):
+def _td_mkdir_at(root, prefix, suffix, status, owner) -> c_ptr:
     previous_failure = load_ptr(status, C_POINTER_SIZE)
     if not ptr_is_null(previous_failure):
         free(previous_failure)
