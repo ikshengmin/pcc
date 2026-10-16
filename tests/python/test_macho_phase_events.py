@@ -13,10 +13,11 @@ import pytest
 from pcc.backend import macho_codesign as codesign
 from pcc.backend import macho_exec, macho_host_output as output
 from pcc.backend import macho_host_phase as events, macho_host_prepare as host
-from pcc.backend import precise_stackmap as maps, stackmap_host_budget
+from pcc.backend import native_object as native, precise_stackmap as maps, stackmap_host_budget
 from pcc.frontends.python import pipeline_self_backend_link as pipeline
 from tests.python.test_macho_owned_output import _stack_inputs, _tracked_buffers
-from tests.python.test_macho_windowed_prepare import _budget
+from tests.python.test_macho_windowed_parity import _prepared_state
+from tests.python.test_macho_windowed_prepare import _budget, _write_symbol_inputs
 
 
 PREFIX = "PCC_MACHO_LINK_PHASE "
@@ -185,7 +186,9 @@ def test_real_pipeline_events_preserve_owned_route_image_and_profile(
     if failure:
         assert stream.writes == (failure != "factory")
         return
-    names = [row["event"] for row in _rows(stream)]
+    all_names = [row["event"] for row in _rows(stream)]
+    names = [name for name in all_names
+             if not name.startswith(("section_rows_", "section_payload_"))]
     assert names == [
         "link_begin", "host_budget_available", "prepare_inputs_begin",
         "input_scan_begin", "input_scan_end", "placement_begin", "placement_end",
@@ -200,7 +203,7 @@ def test_real_pipeline_events_preserve_owned_route_image_and_profile(
         "output_spool_end", "final_backing_begin", "final_backing_end", "sign_begin", "sign_end",
         "signature_verify_begin", "signature_verify_end", "write_begin", "write_end", "link_end",
     ]
-    assert stream.writes == stream.flushes == len(names)
+    assert stream.writes == stream.flushes == len(all_names)
 
 
 @pytest.mark.parametrize("failure", ("validator", "sign"))
@@ -419,3 +422,209 @@ def test_focused_junit_publication_preserves_the_gate_fresh_output_root(tmp_path
     publish(out / "focused-host.xml")
     with pytest.raises(AssertionError, match="preflight requires a fresh output root"):
         assert not out.exists(), phase + " requires a fresh output root"
+
+
+@pytest.mark.parametrize("consuming", (False, True))
+@pytest.mark.parametrize("stackmaps", (False, True))
+def test_join_construction_indexes_retire_without_mutating_aliases_or_ledger(
+    tmp_path, monkeypatch, consuming, stackmaps,
+):
+    paths = (_stack_inputs(tmp_path, count=3, records=8, data_bytes=64) if stackmaps
+             else _write_symbol_inputs(tmp_path, count=3, symbols=8))
+    expected = _prepared_state(macho_exec.prepare_executable_object(
+        [native.decode_packed_native_object(Path(path).read_bytes()) for path in paths],
+        _consume_inputs=True, _source_view=True, compact_budget=_budget(50_000_000),
+    ))
+    monkeypatch.setattr(host, "_single_buffer_window_supported", lambda: consuming)
+    aliases, snapshots, charges, retired = [], [], [], []
+    names = ("stack_offsets", "stack_symbols", "symbol_indices", "section_indices")
+
+    def phase(event, **_details):
+        before = "stackmap_merge_end" if stackmaps else "merge_index_end"
+        if event not in (before, "final_layout_begin"):
+            return
+        # Inspect only this test's stopped production caller. Do not retain the
+        # frame/local mapping across the next ownership-sensitive operation.
+        frame = sys._getframe(2)
+        assert frame.f_code.co_name == "_merge_paths"
+        local = frame.f_locals
+        try:
+            charges.append(local["ledger"].retained)
+            if event == before:
+                for name in names:
+                    if name in local:
+                        value = local[name]
+                        aliases.append(value)
+                        snapshots.append(dict(value) if isinstance(value, dict) else tuple(value))
+            else:
+                retired.append(all(local[name] is None for name in names))
+        finally:
+            del frame, local
+
+    budget = _budget(50_000_000)
+    budget.retained_bytes = 137
+    prepared = host.prepare_executable_from_paths(paths, compact_budget=budget, _phase_callback=phase)
+    assert retired == [True] and len(charges) == 2 and charges[0] == charges[1]
+    assert all(alias == snapshot for alias, snapshot in zip(aliases, snapshots))
+    assert _prepared_state(prepared) == expected
+    assert budget.retained_bytes == 137
+
+
+@pytest.mark.parametrize("consuming", (False, True))
+def test_section_join_events_report_existing_scalar_sizes_and_selected_branches(
+    tmp_path, monkeypatch, consuming,
+):
+    paths = _stack_inputs(tmp_path, count=3, records=8, data_bytes=64)
+    monkeypatch.setattr(host, "_single_buffer_window_supported", lambda: consuming)
+    stream, callback = _sink(monkeypatch)
+    prepared = host.prepare_executable_from_paths(
+        paths, compact_budget=_budget(50_000_000), _phase_callback=callback,
+    )
+    state = _prepared_state(prepared)
+    selected = [row for row in _rows(stream) if "section_index" in row]
+    assert len(selected) == 4 * len(state[0])
+    expected_fields = {"schema", "pid", "sequence", "monotonic_ns", "event", "section_index",
+                       "segment", "section", "size_bytes", "parts", "consuming"}
+    for index, section in enumerate(state[0]):
+        rows = selected[index * 4:(index + 1) * 4]
+        assert [row["event"] for row in rows] == [
+            "section_rows_begin", "section_rows_end", "section_payload_begin", "section_payload_end",
+        ]
+        for row in rows:
+            assert set(row) == expected_fields
+            assert row["section_index"] == index
+            assert (row["segment"], row["section"]) == (section["segname_str"], section["sectname_str"])
+            assert all(type(value) in (str, int, bool) for value in row.values())
+        assert rows[0]["size_bytes"] == rows[1]["size_bytes"] == len(state[3][index])
+        assert rows[2]["size_bytes"] == rows[3]["size_bytes"] == len(state[2][index])
+        assert rows[0]["parts"] == rows[1]["parts"]
+        assert rows[2]["parts"] == rows[3]["parts"]
+        assert rows[0]["consuming"] is (consuming and rows[0]["parts"] > 1)
+        assert rows[2]["consuming"] is (consuming and rows[2]["parts"] > 1)
+    assert all(type(cell.cell_contents) in (int, bool) for cell in callback.__closure__)
+    assert stream.writes == stream.flushes == len(_rows(stream))
+
+
+@pytest.mark.parametrize("point", ("section_rows_begin", "section_rows_end", "section_payload_begin"))
+@pytest.mark.parametrize("instrument", ("trace", "profile"))
+def test_section_join_callbacks_cannot_open_an_instrumented_consuming_window(
+    tmp_path, monkeypatch, point, instrument,
+):
+    from pcc.backend import macho_host_join as join, macho_link
+
+    paths = _stack_inputs(tmp_path, count=3, records=8, data_bytes=64)
+    original = host._consume_parts
+    calls = []
+
+    def consume(parts, ledger, **kwargs):
+        calls.append((join._join_instrumentation_absent(), len(parts)))
+        return original(parts, ledger, **kwargs)
+
+    monkeypatch.setattr(host, "_consume_parts", consume)
+    previous_trace, previous_profile = sys.gettrace(), sys.getprofile()
+    reached = []
+
+    def hook(_frame, _event, _arg):
+        return hook
+
+    def phase(event, **details):
+        # __data has multi-part rows and payload; changing a hook after the
+        # earlier boolean selection must still hit the helper's refusal.
+        if event == point and details.get("section") == "__data":
+            reached.append(event)
+            getattr(sys, "set" + instrument)(hook)
+
+    try:
+        with pytest.raises(macho_link.LinkError, match="uninstrumented host"):
+            host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000),
+                                               _phase_callback=phase)
+    finally:
+        sys.settrace(previous_trace)
+        sys.setprofile(previous_profile)
+    assert reached == [point] and calls[-1] == (False, 3)
+
+
+def test_section_event_adapter_preserves_legacy_sink_and_original_exception():
+    old_events = []
+    events.emit_section_phase(old_events.append, "section_rows_begin", 0,
+                              ("__TEXT", "__text"), 16, 2, True)
+    events.emit_phase(old_events.append, "section_joins_end")
+    assert old_events == ["section_joins_end"]
+
+    def failed(*_args, **_kwargs):
+        raise MemoryError("section diagnostic failed")
+
+    original = ValueError("original join failure")
+    with pytest.raises(ValueError) as caught:
+        try:
+            raise original
+        finally:
+            events.emit_section_phase(failed, "section_rows_end", 0,
+                                      ("__TEXT", "__text"), 16, 2, True)
+    assert caught.value is original
+
+
+@pytest.mark.parametrize("point", ("section_rows_begin", "section_payload_begin"))
+def test_join_failure_keeps_its_scalar_begin_without_a_false_completion(tmp_path, monkeypatch, point):
+    paths = _stack_inputs(tmp_path, count=3, records=8, data_bytes=64)
+    stream, callback = _sink(monkeypatch)
+    consume = host._consume_parts
+    original = ValueError("original section join failure")
+
+    def failed(parts, ledger, **kwargs):
+        last = _rows(stream)[-1]
+        if last["event"] == point and last["section"] == "__data":
+            raise original
+        return consume(parts, ledger, **kwargs)
+
+    monkeypatch.setattr(host, "_consume_parts", failed)
+    with pytest.raises(ValueError) as caught:
+        host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000),
+                                           _phase_callback=callback)
+    assert caught.value is original
+    rows = _rows(stream)
+    assert rows[-1]["event"] == point and rows[-1]["section"] == "__data"
+    assert rows[-1]["consuming"] is True
+    assert "section_joins_end" not in [row["event"] for row in rows]
+
+
+def test_section_diagnostics_never_run_inside_a_mutable_join_export(tmp_path, monkeypatch):
+    from pcc.backend import macho_host_join as join
+    from tests.python.test_macho_consuming_join import _track_buffers
+
+    paths = _stack_inputs(tmp_path, count=3, records=8, data_bytes=64)
+    owners = _track_buffers(monkeypatch)
+    stream, callback = _sink(monkeypatch)
+    joined = []
+    original = host._consume_parts
+
+    def consume(parts, ledger, **kwargs):
+        result = original(parts, ledger, **kwargs)
+        joined.append(len(result))
+        return result
+
+    def phase(event, **details):
+        if event.startswith(("section_rows_", "section_payload_")):
+            assert all(owner.closed for owner in owners)
+        callback(event, **details)
+
+    monkeypatch.setattr(host, "_consume_parts", consume)
+    host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000),
+                                       _phase_callback=phase)
+    assert joined and all(owner.closed and len(set(owner.addresses)) <= 1 for owner in owners)
+    assert len([row for row in _rows(stream) if "section_index" in row]) == 12
+    assert join._join_instrumentation_absent()
+
+
+def test_single_part_section_target_reports_consuming_patch_branch(tmp_path, monkeypatch):
+    from tests.python.test_macho_consuming_join import _section_targets
+    from tests.python.test_macho_windowed_parity import _write_pcos
+
+    paths = _write_pcos(tmp_path, _section_targets())
+    stream, callback = _sink(monkeypatch)
+    host.prepare_executable_from_paths(paths, compact_budget=_budget(50_000_000),
+                                       _phase_callback=callback)
+    rows = [row for row in _rows(stream)
+            if row["event"].startswith("section_payload_") and row["section"] == "__data"]
+    assert [row["event"] for row in rows] == ["section_payload_begin", "section_payload_end"]
+    assert all(row["parts"] == 1 and row["consuming"] is True for row in rows)

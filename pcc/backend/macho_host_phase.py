@@ -21,7 +21,8 @@ def phase_callback_from_environment():
     except BaseException:
         return None
 
-    def record(event):
+    def record(event, *, section_index=None, segment=None, section=None,
+               size_bytes=None, parts=None, consuming=None):
         nonlocal sequence, failed
         if failed:
             return
@@ -33,6 +34,9 @@ def phase_callback_from_environment():
                 "monotonic_ns": time.monotonic_ns(),
                 "event": event,
             }
+            if section_index is not None:
+                row.update(section_index=section_index, segment=segment, section=section,
+                           size_bytes=size_bytes, parts=parts, consuming=consuming)
             sys.stderr.write("PCC_MACHO_LINK_PHASE " + json.dumps(row, separators=(",", ":")) + "\n")
             sys.stderr.flush()
             sequence += 1
@@ -50,4 +54,15 @@ def emit_phase(callback, event):
             callback(event)
         except BaseException:
             # Private sinks share the stderr sink's non-interference rule.
+            pass
+
+
+def emit_section_phase(callback, event, index, key, size, parts, consuming):
+    """Report existing scalar join facts, never a section or backing owner."""
+    if callback is not None:
+        try:
+            callback(event, section_index=index, segment=key[0], section=key[1],
+                     size_bytes=size, parts=parts, consuming=consuming)
+        except BaseException:
+            # Old one-argument private sinks remain valid for ordinary events.
             pass

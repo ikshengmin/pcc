@@ -17,7 +17,7 @@ import traceback
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
 from .macho_host_join import _consume_parts, _join_instrumentation_absent
-from .macho_host_phase import emit_phase
+from .macho_host_phase import emit_phase, emit_section_phase
 from .macho_host_stackmap import merge_staged_stack_map_payloads
 from .macho_host_stackmap_inputs import _StagedStackMapInputs
 from .macho_obj import DataInCodeRegion, Relocation, Section, TextSymbol
@@ -1145,6 +1145,11 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
             ledger.keep(ledger.immutable(len(part)))
             part = rows = None
             emit_phase(_phase_callback, "stackmap_merge_end")
+        # The final stack-map rows no longer borrow these construction indexes.
+        # Drop only our references: names/integers may still belong to output
+        # models. Keep the existing ledger charge conservatively, without a
+        # second model walk or claiming that malloc has returned physical pages.
+        stack_offsets = stack_symbols = symbol_indices = section_indices = None
         emit_phase(_phase_callback, "final_layout_begin")
         cursor = 0
         for key in order:
@@ -1158,14 +1163,19 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
         consuming_join = _single_buffer_window_supported() and _join_instrumentation_absent()
         emit_phase(_phase_callback, "final_layout_end")
         emit_phase(_phase_callback, "section_joins_begin")
-        for key in order:
+        for join_index in range(len(order)):
+            key = order[join_index]
             target = merged[key]
             ledger.keep(ledger.sequence(len(target.symbols)) + ledger.sequence(len(target.data_in_code)) + 256,
                         label="Mach-O final section metadata")
             ledger.check(ledger.sequence(len(normal_parts[key]) + len(rebase_parts[key])), label="Mach-O compact row join pointers")
             row_parts = normal_parts[key] + rebase_parts[key]
             size = sum(len(part) for part in row_parts)
-            if consuming_join and len(row_parts) > 1:
+            row_part_count = len(row_parts)
+            consume_rows = consuming_join and row_part_count > 1
+            emit_section_phase(_phase_callback, "section_rows_begin", join_index, key,
+                               size, row_part_count, consume_rows)
+            if consume_rows:
                 # row_parts is the sole remaining list owner before the
                 # helper debits any bytes. Clearing just its slots would not
                 # retire chunks still present in either original part table.
@@ -1179,6 +1189,8 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
                 row_parts.clear()
                 normal_parts[key].clear()
                 rebase_parts[key].clear()
+            emit_section_phase(_phase_callback, "section_rows_end", join_index, key,
+                               size, row_part_count, consume_rows)
             has_section_targets = any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
                                       for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))
             size = sum(len(part) for part in target.data_parts)
@@ -1195,7 +1207,11 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
                         raise native.NativeObjectError("section-target value does not fit relocation width")
                     data[offset:offset + width] = value.to_bytes(width, "little")
 
-            if consuming_join and (len(target.data_parts) > 1 or has_section_targets):
+            payload_part_count = len(target.data_parts)
+            consume_payload = consuming_join and (payload_part_count > 1 or has_section_targets)
+            emit_section_phase(_phase_callback, "section_payload_begin", join_index, key,
+                               size, payload_part_count, consume_payload)
+            if consume_payload:
                 payload = _consume_parts(target.data_parts, ledger,
                                          patch=patch_targets if has_section_targets else None)
             else:
@@ -1221,6 +1237,8 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
                                         zerofill_size=target.zerofill_size if not payload else 0))
             output_rows.append(rows)
             payload = rows = None
+            emit_section_phase(_phase_callback, "section_payload_end", join_index, key,
+                               size, payload_part_count, consume_payload)
         emit_phase(_phase_callback, "section_joins_end")
         return out_sections, output_rows, unresolved, weak_unresolved
     except BaseException as exc:
