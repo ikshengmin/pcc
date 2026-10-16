@@ -1397,21 +1397,21 @@ class OwnedMergedSourceView:
 
     def __init__(
         self, sections, *, undefined=(), weak_undefined=(),
-        proven_relocations=None, compact_budget=None, _compact_rows=None,
+        proven_relocations=None, compact_budget=None, _compact_rows=None, _row_storage=None,
     ) -> None:
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
-            if _compact_rows is not None:
+            if _compact_rows is not None or _row_storage is not None:
                 from .macho_host_prepare import _initialize_checked_compact_view
                 try:
                     _initialize_checked_compact_view(
                         self, sections, undefined, weak_undefined, _compact_rows,
-                        compact_budget,
+                        compact_budget, _row_storage=_row_storage,
                     )
                 finally:
-                    sections = undefined = weak_undefined = _compact_rows = None
+                    sections = undefined = weak_undefined = _compact_rows = _row_storage = None
                 return
-        if _compact_rows is not None:
+        if _compact_rows is not None or _row_storage is not None:
             raise NativeObjectError("compact source rows require the explicit host budget")
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
@@ -1563,7 +1563,7 @@ class OwnedMergedSourceView:
         if not isinstance(index, int) or not 0 <= index < len(self._raw_relocations):
             raise NativeObjectError("section does not belong to this source view")
         return self._iter_section_relocations(
-            self._raw_relocations[index], ordered, False,
+            self.compact_relocation_rows(section), ordered, False,
         )
 
     def iter_compact_relocations(self, section, *, ordered=True):
@@ -1577,6 +1577,11 @@ class OwnedMergedSourceView:
         index = section.get("_pcc_source_index")
         if not isinstance(index, int) or not 0 <= index < len(self._raw_relocations):
             raise NativeObjectError("section does not belong to this source view")
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if getattr(self, "_host_row_store", None) is not None:
+                from .macho_host_prepare import copy_staged_relocation_rows
+                return copy_staged_relocation_rows(self, index)
         rows = self._raw_relocations[index]
         if len(rows) % _FINAL_LINK_RELOCATION.size:
             raise NativeObjectError("final-link relocation rows are truncated")

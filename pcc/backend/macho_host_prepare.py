@@ -16,7 +16,7 @@ import traceback
 
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
-from .macho_host_join import _consume_parts, _join_instrumentation_absent
+from .macho_host_join import _StagedRelocationRows, _consume_parts, _join_instrumentation_absent
 from .macho_host_phase import emit_phase, emit_section_phase
 from .macho_host_stackmap import merge_staged_stack_map_payloads
 from .macho_host_stackmap_inputs import _StagedStackMapInputs
@@ -341,32 +341,50 @@ def _raw_row_dicts(rows):
         }
 
 
-def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undefined, rows, budget):
-    """Validate immutable final-index rows through the ordinary source rules."""
+def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undefined, rows, budget, _row_storage=None):
+    """Validate each immutable row window through the ordinary source rules."""
     ledger = _Ledger(budget)
-    if type(sections) not in (list, tuple) or type(rows) not in (list, tuple):
+    staged = _row_storage is not None
+    if type(sections) not in (list, tuple):
         raise native.NativeObjectError("compact source tables must be lists or tuples")
-    if len(sections) != len(rows):
+    if staged:
+        if type(_row_storage) is not _StagedRelocationRows or rows is not None:
+            raise native.NativeObjectError("compact source row storage is not privately owned")
+        if _row_storage.count != len(sections):
+            raise native.NativeObjectError("compact row section count changed")
+    elif type(rows) not in (list, tuple):
+        raise native.NativeObjectError("compact source tables must be lists or tuples")
+    elif len(sections) != len(rows):
         raise native.NativeObjectError("compact row section count changed")
-    for section, data in zip(sections, rows):
+    for index, section in enumerate(sections):
         if type(section) is not Section or type(section.data) is not bytes:
             raise native.NativeObjectError("compact source payloads must be immutable sections")
         if type(section.align_log2) is not int or not 0 <= section.align_log2 <= 31:
             raise native.NativeObjectError("compact section alignment must be 0..31")
         if section.relocations:
             raise native.NativeObjectError("compact source also contains object relocations")
-        if type(data) is not bytes or len(data) % native._FINAL_LINK_RELOCATION.size:
-            raise native.NativeObjectError("compact relocation rows are not complete immutable records")
-        native._validate_final_link_relocation_count(len(data) // native._FINAL_LINK_RELOCATION.size)
-    retained = _model_bytes(sections, budget) + _model_bytes(rows, budget)
+        if staged:
+            count = _row_storage.row_count(index)
+        else:
+            data = rows[index]
+            if type(data) is not bytes or len(data) % native._FINAL_LINK_RELOCATION.size:
+                raise native.NativeObjectError("compact relocation rows are not complete immutable records")
+            count = len(data) // native._FINAL_LINK_RELOCATION.size
+        native._validate_final_link_relocation_count(count)
+    retained = _model_bytes(sections, budget)
+    if staged:
+        # Logical file bytes are not resident. Reserve the complete descriptor
+        # owner and the largest single immutable replay before any read.
+        retained += _row_storage.metadata_bytes + _row_storage.max_window_bytes
+        retained += ledger.sequence(len(sections))  # public table placeholders
+    else:
+        retained += _model_bytes(rows, budget)
     retained += _model_bytes(undefined, budget) + _model_bytes(weak_undefined, budget)
     symbols_count = sum(len(section.symbols) for section in sections) + len(undefined)
     ledger.keep(retained + 4 * ledger.mapping(symbols_count) + ledger.mapping(len(sections)))
-    # Duplicate offsets, special-section logical records and companion
-    # projection all coexist with the caller's immutable row/payload owners.
     scratch = 8192
-    for section, data in zip(sections, rows):
-        count = len(data) // 12
+    for index, section in enumerate(sections):
+        count = _row_storage.row_count(index) if staged else len(rows[index]) // 12
         bitmap = (len(section.data) + 7) // 8
         offsets = ledger.mutable(bitmap) if count and bitmap <= max(64, count * 8) else ledger.budget._set_bytes(count)
         special = 0
@@ -390,7 +408,7 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
         addrs.append(cursor)
         cursor += section.vm_size
     payloads = [section.data for section in source_sections]
-    row_counts = [len(data) // 12 for data in rows]
+    row_counts = [_row_storage.row_count(index) for index in range(len(sections))] if staged else [len(data) // 12 for data in rows]
     section_rows = native._final_section_rows(source_sections, payloads, addrs, row_counts)
     symbol_rows = native._final_symbol_rows(source_sections, undefined_names, weak_names, addrs)
 
@@ -399,22 +417,44 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
             _raw_row_dicts(rows[index]), section_rows, symbol_rows, {},
         )
 
+    if staged:
+        def logical(index):
+            # Opening inside the generator matters: ordinary section shape
+            # validation need not iterate its relocation source at all.
+            with _row_storage.window(index, check=lambda: budget.check_peak(
+                    scratch, label="Mach-O compact row validation replay")) as data:
+                raw = folded = None
+                try:
+                    raw = _raw_row_dicts(data)
+                    folded = link._iter_folded_relocation_rows(raw, section_rows, symbol_rows, {})
+                    yield from folded
+                finally:
+                    if folded is not None:
+                        folded.close()
+                    if raw is not None:
+                        raw.close()
+                    folded = raw = data = None
+
     logical_counts = []
+    previous = budget.retained_bytes
+    if staged:
+        budget.retained_bytes = previous + ledger.retained
     try:
         for index in range(len(source_sections)):
             count = 0
             for relocation in logical(index):
                 count += 1
             logical_counts.append(count)
-        previous = budget.retained_bytes
-        budget.retained_bytes = previous + ledger.retained
+        if not staged:
+            budget.retained_bytes = previous + ledger.retained
         try:
             native._validate_source_sections(
                 source_sections, undefined_names, relocation_source=logical,
                 relocation_counts=logical_counts, compact_budget=budget,
             )
         finally:
-            budget.retained_bytes = previous
+            if not staged:
+                budget.retained_bytes = previous
         for index in range(len(source_sections)):
             for relocation in logical(index):
                 if relocation.section is not None:
@@ -434,28 +474,66 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
         view._sections = section_rows
         view._symbols = symbol_rows
         view._symbol_index = {symbol["name"]: index for index, symbol in enumerate(symbol_rows)}
-        view._raw_relocations = list(rows)
+        view._raw_relocations = [b""] * len(sections) if staged else list(rows)
+        if staged:
+            view._host_row_copy_bound = ledger.retained
+            view._host_row_store = _row_storage
     except BaseException as exc:
         _release_closed_tracebacks(exc)
         payloads.clear()
         raise
+    finally:
+        budget.retained_bytes = previous
 
 
+def close_staged_source_rows(view, *, _error=None):
+    """Close only the private row owner; ordinary views have no such owner."""
+    storage = getattr(view, "_host_row_store", None)
+    if storage is not None:
+        try:
+            storage.close(_error=_error)
+        finally:
+            # Empty placeholders must never become an apparently valid
+            # ordinary row table after the private file has been retired.
+            view._raw_relocations.clear()
+            view._host_row_store = None
 
 
-def _initialize_checked_compact_view(view, sections, undefined, weak_undefined, rows, budget):
-    # An outer frame can clear the now-closed validator frame, including
-    # errors before its inner validation try block begins.
+def copy_staged_relocation_rows(view, index):
+    """Public accessor copies belong to the caller, never a section cache.
+
+    Their cumulative backing charge deliberately cannot be retired by this
+    private view: it cannot prove when a caller releases an escaped copy.
+    """
+    storage = view._host_row_store
+    def check():
+        storage.budget.check_peak(
+            view._host_row_copy_bound + storage.public_copy_bytes + storage.backing_bytes(index),
+            label="Mach-O public staged row copy",
+        )
     try:
-        return _initialize_checked_compact_view_inner(view, sections, undefined, weak_undefined, rows, budget)
+        return storage.copy(index, check=check)
+    finally:
+        view = storage = check = None
+
+
+def _initialize_checked_compact_view(view, sections, undefined, weak_undefined, rows, budget, _row_storage=None):
+    try:
+        return _initialize_checked_compact_view_inner(
+            view, sections, undefined, weak_undefined, rows, budget, _row_storage,
+        )
     except BaseException as exc:
         _release_closed_tracebacks(exc)
+        if _row_storage is not None:
+            _row_storage.close(_error=exc)
+            view._host_row_store = None
         for name in ("_payloads", "_raw_relocations", "_sections", "_symbols"):
             if hasattr(view, name):
                 setattr(view, name, [])
         raise
     finally:
-        sections = undefined = weak_undefined = rows = None
+        sections = undefined = weak_undefined = rows = _row_storage = None
+
 
 def _archive_bounds(raw, ledger):
     """Count archive/parser owners without constructing a parser graph.
@@ -784,7 +862,7 @@ def _section_target_symbol_index(merged, ledger):
     return result
 
 
-def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
+def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *, _staged_rows=False):
     """Return only detached final sections/rows; retire every input owner."""
     from .macho_archive import ArchiveError, read_archive, select_members
     from .macho_exec import _accumulate_external_symbol_state
@@ -795,6 +873,7 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
     normal_parts, rebase_parts, stack_payloads = {}, {}, None
     raw = packed = payload = descriptor = section = target = part = None
     out_sections, output_rows = [], []
+    row_storage = failure = None
     try:
         emit_phase(_phase_callback, "input_scan_begin")
         ledger.keep(ledger.sequence(len(paths)) + ledger.sequence(len(archives) + len(archive_paths)))
@@ -1163,6 +1242,8 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
         consuming_join = _single_buffer_window_supported() and _join_instrumentation_absent()
         emit_phase(_phase_callback, "final_layout_end")
         emit_phase(_phase_callback, "section_joins_begin")
+        if _staged_rows:
+            row_storage = _StagedRelocationRows(len(order), ledger.budget, ledger.keep)
         for join_index in range(len(order)):
             key = order[join_index]
             target = merged[key]
@@ -1235,13 +1316,32 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
                                         symbols=tuple(sorted(target.symbols, key=lambda symbol: symbol.offset)),
                                         data_in_code=tuple(sorted(target.data_in_code, key=lambda region: region.offset)),
                                         zerofill_size=target.zerofill_size if not payload else 0))
-            output_rows.append(rows)
+            if row_storage is None:
+                output_rows.append(rows)
+            else:
+                # patch_targets is the last consumer of this section's rows.
+                # Retire every caller alias before the helper proves ownership
+                # and debits the immutable backing from the resident ledger.
+                holder = [rows]
+                patch_targets = rows = None
+                ledger.retained -= row_storage.write_owned(holder.pop())
+                holder = None
             payload = rows = None
             emit_section_phase(_phase_callback, "section_payload_end", join_index, key,
                                size, payload_part_count, consume_payload)
         emit_phase(_phase_callback, "section_joins_end")
-        return out_sections, output_rows, unresolved, weak_unresolved
+        if row_storage is None:
+            return out_sections, output_rows, unresolved, weak_unresolved
+        # The boundary callback may have changed host eligibility after the
+        # final write. Do not hand a live file to an instrumented return path.
+        from .macho_host_output import _require_uninstrumented_owner
+        _require_uninstrumented_owner()
+        row_storage.seal()
+        result = (out_sections, row_storage, unresolved, weak_unresolved)
+        row_storage = None  # caller owns the handle only after result exists
+        return result
     except BaseException as exc:
+        failure = exc
         _release_closed_tracebacks(exc)
         for target in merged.values():
             target.data_parts.clear()
@@ -1253,22 +1353,30 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None):
         raise
     finally:
         try:
-            if stack_payloads is not None:
-                stack_payloads.close()
+            try:
+                if row_storage is not None:
+                    row_storage.close(_error=failure)
+            finally:
+                if stack_payloads is not None:
+                    stack_payloads.close()
         finally:
+            row_storage = failure = None
             stack_payloads = None
             descriptors.clear()
             archive_buffers.clear()
             raw = packed = payload = descriptor = section = target = part = members = None
             pulled = member = item = row_parts = rows = frozen = stack_payload = None
-            stack_offsets = _pending = None
+            stack_offsets = _pending = patch_targets = holder = None
             definitions = local_renames = defined = referenced = weak_references = strong_references = None
             symbol_indices = symbol_at = input_keys = input_plan = None
             appearance = symbol = owner = None
 
 
-def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compact_budget=None, caller_owners=(), _phase_callback=None):
+def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compact_budget=None, caller_owners=(), _phase_callback=None, _staged_rows=False):
     """Private all-PCO path entry; no eager aggregate encoded-input owner."""
+    if _staged_rows:
+        from .macho_host_output import _require_uninstrumented_owner
+        _require_uninstrumented_owner()
     ledger = _Ledger(compact_budget)
     # Reused budgets can carry an earlier byte refusal into a later wire or
     # record-work error. Only this operation's refusal belongs in its error.
@@ -1280,29 +1388,50 @@ def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compa
     external = sum(_model_bytes(owner, compact_budget) for owner in (paths, archives, archive_paths, caller_owners))
     ledger.keep(external, label="Mach-O retained caller metadata")
     ledger.caller_bytes = external
-    sections = rows = undefined = weak = None
+    sections = rows = undefined = weak = row_storage = failure = result = None
     try:
         sections, rows, undefined, weak = _merge_paths(
             paths, archives, archive_paths, ledger, _phase_callback,
+            _staged_rows=_staged_rows,
         )
+        if _staged_rows:
+            row_storage, rows = rows, None
         previous = compact_budget.retained_bytes
         compact_budget.retained_bytes = previous + external
         try:
             emit_phase(_phase_callback, "source_view_begin")
             result = native.OwnedMergedSourceView(sections, undefined=undefined, weak_undefined=weak,
-                                                 _compact_rows=rows, compact_budget=compact_budget)
+                                                 _compact_rows=rows, compact_budget=compact_budget,
+                                                 _row_storage=row_storage)
+            if row_storage is not None:
+                result._host_row_copy_bound += external
+            # Retain our cleanup owner until after the last callback and
+            # eligibility check. A profile return hook can escape emit_phase's
+            # own fail-open try without ever delivering this source view.
             emit_phase(_phase_callback, "source_view_end")
+            if row_storage is not None:
+                _require_uninstrumented_owner()
+            row_storage = None  # only the successfully returned view owns it
             return result
         finally:
             compact_budget.retained_bytes = previous
     except (native.NativeObjectError, PreciseStackMapError, spec.MachOFormatError) as exc:
+        failure = exc
         _release_closed_tracebacks(exc)
         sizes = getattr(compact_budget, "last_rejection", "") if isinstance(exc, PreciseStackMapError) else ""
         detail = "; " + sizes + " ledger_retained=" + str(ledger.retained) if sizes else ""
         raise link.LinkError("windowed merged object is outside the proven subset: " + str(exc) + detail) from exc
+    except BaseException as exc:
+        failure = exc
+        _release_closed_tracebacks(exc)
+        raise
     finally:
-        if sections is not None:
-            sections.clear()
-        if rows is not None:
-            rows.clear()
-        sections = rows = undefined = weak = None
+        try:
+            if row_storage is not None:
+                row_storage.close(_error=failure)
+        finally:
+            if sections is not None:
+                sections.clear()
+            if rows is not None:
+                rows.clear()
+            sections = rows = undefined = weak = row_storage = failure = result = None

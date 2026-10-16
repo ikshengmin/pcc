@@ -15,6 +15,7 @@ from . import macho_exec as executable
 from . import macho_codesign as codesign
 from . import precise_stackmap as stackmap
 from .macho_host_prepare import (
+    close_staged_source_rows,
     _release_closed_tracebacks,
     _single_buffer_window_supported,
 )
@@ -160,18 +161,37 @@ def _section_projections(count, budget):
             + 3 * _dict_storage(count, budget))
 
 
+def _row_storage_bytes(source):
+    storage = getattr(source, "_host_row_store", None)
+    if storage is None:
+        return 0
+    # Reserve the largest single replay throughout preparation. Disk extent
+    # is not resident storage, and active_bytes is covered by this window.
+    return (storage.metadata_bytes + storage.max_window_bytes
+            + storage.public_copy_bytes)
+
+
 def _source_bytes(source, budget):
     # These are fixed source models, never _Out/fixup graphs whose repeated
     # references could multiply one backing by the relocation count.
-    return sum(_model_bytes(getattr(source, name), budget) for name in _SOURCE_FIELDS)
+    return (sum(_model_bytes(getattr(source, name), budget) for name in _SOURCE_FIELDS)
+            + _row_storage_bytes(source))
 
 
-def _clear_source(source):
-    for name in _SOURCE_FIELDS:
-        value = getattr(source, name)
-        if type(value) in (dict, list):
-            value.clear()
-        setattr(source, name, () if type(value) is tuple else {} if type(value) is dict else [])
+def _clear_source(source, *, _error=None):
+    storage = getattr(source, "_host_row_store", None)
+    try:
+        if storage is not None:
+            storage.close(_error=_error)
+    finally:
+        if storage is not None:
+            source._host_row_store = None
+        storage = None
+        for name in _SOURCE_FIELDS:
+            value = getattr(source, name)
+            if type(value) in (dict, list):
+                value.clear()
+            setattr(source, name, () if type(value) is tuple else {} if type(value) is dict else [])
 
 
 def _signature_workspace(size):
@@ -303,8 +323,34 @@ class _OwnedOutput:
         self.check(needed, label="Mach-O owned fixup page tables")
         self.extra_raw += needed
 
+    def row_window(self, source, section):
+        """Return the private replay context, or keep the ordinary row route.
+
+        The caller closes its iterator and clears its rows local before
+        leaving this context. The store then checks that no bytes alias
+        escaped; it never caches replay buffers between sections.
+        """
+        storage = getattr(source, "_host_row_store", None)
+        if storage is None:
+            return None
+        _require_uninstrumented_owner()
+        if storage.public_copy_bytes:
+            raise LinkError("owned output cannot consume staged rows with public copies")
+        index = section.get("_pcc_source_index")
+        if type(index) is not int or not 0 <= index < len(source._sections):
+            raise LinkError("section does not belong to this source view")
+        return storage.window(
+            index, check=lambda: self.check(label="Mach-O owned relocation window"),
+        )
+
     def retire_relocations(self, source):
-        before = _model_bytes(source._raw_relocations, self.budget)
+        before = (_model_bytes(source._raw_relocations, self.budget)
+                  + _row_storage_bytes(source))
+        storage = getattr(source, "_host_row_store", None)
+        if storage is not None:
+            storage.close()
+            source._host_row_store = None
+            storage = None
         source._raw_relocations.clear()
         self.source_bytes -= before - _model_bytes(source._raw_relocations, self.budget)
         self.order_raw = 0
@@ -516,18 +562,29 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
                           entry="_main", identifier=b"pcc-linked", minos=(12, 0),
                           caller_owners=(), _phase_callback=None):
     """Consume the private all-PCO source and return ordinary immutable bytes."""
-    if type(source) is not OwnedMergedSourceView or source._source_sections:
-        raise LinkError("owned output requires a windowed compact source")
-    # CPython 3.14+ can borrow both a Python parameter and a getrefcount
-    # argument. Give this local its own strong reference, then sample with
-    # another known strong reference. A caller alias still raises the count.
-    # Each singleton list is retired by pop; only bounded scratch is added.
-    source = [source].pop()
-    if sys.getrefcount([source].pop()) != 2:
-        raise LinkError("owned output source must be exclusively transferred")
-    state = buffer = view = image = blob = None
+    try:
+        if type(source) is not OwnedMergedSourceView or source._source_sections:
+            raise LinkError("owned output requires a windowed compact source")
+        # CPython 3.14+ can borrow both a Python parameter and a getrefcount
+        # argument. Give this local its own strong reference, then sample with
+        # another known strong reference. A caller alias still raises the count.
+        # Each singleton list is retired by pop; only bounded scratch is added.
+        source = [source].pop()
+        if sys.getrefcount([source].pop()) != 2:
+            raise LinkError("owned output source must be exclusively transferred")
+    except BaseException as exc:
+        # Ordinary borrowed sources retain their original refusal behavior.
+        # A staged source is private and must not leave its file open here.
+        if type(source) is OwnedMergedSourceView:
+            close_staged_source_rows(source, _error=exc)
+        raise
+    state = buffer = view = image = blob = storage = failure = None
     try:
         _require_uninstrumented_owner()
+        storage = getattr(source, "_host_row_store", None)
+        if storage is not None and storage.public_copy_bytes:
+            raise LinkError("owned output cannot consume staged rows with public copies")
+        storage = None
         emit_phase(_phase_callback, "output_model_begin")
         state = _OwnedOutput(source, compact_budget, caller_owners, _phase_callback)
         emit_phase(_phase_callback, "output_model_end")
@@ -591,6 +648,7 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
         buffer = None
         return image
     except (stackmap.PreciseStackMapError, LinkError) as exc:
+        failure = exc
         _release_closed_tracebacks(exc)
         sizes = compact_budget.last_rejection
         if sizes and (isinstance(exc, stackmap.PreciseStackMapError)
@@ -600,6 +658,7 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
             ) from exc
         raise
     except BaseException as exc:
+        failure = exc
         _release_closed_tracebacks(exc)
         raise
     finally:
@@ -612,12 +671,14 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
                     buffer.close()
             finally:
                 try:
-                    if source is not None:
-                        _clear_source(source)
-                    if state is not None:
-                        state.close()
+                    try:
+                        if source is not None:
+                            _clear_source(source, _error=failure)
+                    finally:
+                        if state is not None:
+                            state.close()
                 finally:
-                    source = state = buffer = view = image = blob = None
+                    source = state = buffer = view = image = blob = storage = failure = None
 
 
 def check_signature_verification(image, signature, budget, *, caller_owners=()):

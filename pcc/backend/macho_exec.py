@@ -203,32 +203,75 @@ def _text_span_report_wanted(setting, margin: int) -> bool:
     return setting not in ("0", "off", "")
 
 
-def _unwind_rows_name_handlers(obj, sec, source_view: bool) -> bool:
+def _unwind_rows_name_handlers(
+    obj, sec, source_view: bool, _owned_output=None,
+) -> bool:
     """True when a compact-unwind row points at a personality routine or LSDA.
 
     Every row pcc's backend emits describes a frame-pointer frame, which the
     frame chain already describes, and relocates only its function address.
     """
-    if source_view:
-        rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
-        relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
-            obj, sec, ordered=False,
-        )
-    else:
-        rows = None
-        relocations = obj.iter_relocations(sec, ordered=False)
-    for r in relocations:
+    rows = relocations = row_window = row_error = None
+    try:
         if source_view:
-            start = r * 12  # _COMPACT_RELOCATION: <IIBBBB
-            if _NATIVE_PATCH_WORDS:
-                address = load_i32(rows, abi_constant("object.bytes.data_offset") + start) & 0xFFFFFFFF
-            else:
-                address = _COMPACT_RELOCATION.unpack_from(rows, start)[0]
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if _owned_output is not None:
+                    row_window = _owned_output.row_window(obj, sec)
+                    if row_window is not None:
+                        try:
+                            rows = row_window.__enter__()
+                        except BaseException:
+                            row_window = None
+                            raise
+                        relocations = OwnedMergedSourceView._iter_section_relocation_indices(
+                            obj, rows, ordered=False,
+                        )
+            if relocations is None:
+                rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+                relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
+                    obj, sec, ordered=False,
+                )
         else:
-            address = r["r_address"]
-        if address % _COMPACT_UNWIND_ROW_SIZE in _COMPACT_UNWIND_HANDLER_OFFSETS:
-            return True
-    return False
+            relocations = obj.iter_relocations(sec, ordered=False)
+        for r in relocations:
+            if source_view:
+                start = r * 12  # _COMPACT_RELOCATION: <IIBBBB
+                if _NATIVE_PATCH_WORDS:
+                    address = load_i32(rows, abi_constant("object.bytes.data_offset") + start) & 0xFFFFFFFF
+                else:
+                    address = _COMPACT_RELOCATION.unpack_from(rows, start)[0]
+            else:
+                address = r["r_address"]
+            if address % _COMPACT_UNWIND_ROW_SIZE in _COMPACT_UNWIND_HANDLER_OFFSETS:
+                return True
+        return False
+    except BaseException:
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if row_window is not None:
+                row_error = execution_runtime.exc_info()
+        raise
+    finally:
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if row_window is not None:
+                try:
+                    if relocations is not None:
+                        relocations.close()
+                except BaseException:
+                    if row_error is None:
+                        row_error = execution_runtime.exc_info()
+                        raise
+                finally:
+                    rows = relocations = None
+                    try:
+                        if row_error is None:
+                            row_window.__exit__(None, None, None)
+                        else:
+                            row_window.__exit__(*row_error)
+                    finally:
+                        row_window = row_error = None
 
 
 def _align(value: int, alignment: int) -> int:
@@ -377,10 +420,14 @@ class _Out:
 def _compact_source_raw_bytes(merged) -> int:
     """Known retained source buffers, without projecting any payloads."""
     if isinstance(merged, OwnedMergedSourceView):
-        return (
-            sum(len(payload) for payload in merged._payloads)
-            + sum(len(rows) for rows in merged._raw_relocations)
-        )
+        size = (sum(len(payload) for payload in merged._payloads)
+                + sum(len(rows) for rows in merged._raw_relocations))
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            storage = getattr(merged, "_host_row_store", None)
+            if storage is not None:
+                size += storage.active_bytes + storage.public_copy_bytes
+        return size
     if isinstance(merged, NativeObject):
         # The ordinary link view can normalize section-target pointers into
         # independent mutable payloads while retaining the source object.
@@ -642,6 +689,14 @@ def _prepare_executable_image(
 ):
     """Resolve addresses into immutable output regions, without allocating an image."""
 
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if isinstance(merged, OwnedMergedSourceView):
+            if getattr(merged, "_host_row_store", None) is not None and _owned_output is None:
+                from .macho_host_prepare import close_staged_source_rows
+                close_staged_source_rows(merged)
+                raise LinkError("staged relocation rows require owned output")
+
     minos = _validate_minos(minos)
     if not isinstance(merged, (NativeObject, OwnedMergedSourceView)):
         raise LinkError("prepared executable input must be a NativeObject")
@@ -713,45 +768,87 @@ def _prepare_executable_image(
     imports_set = set(imports)
     for sec in sections:
         # Reference classification is set-based and does not depend on address order.
-        if source_view:
-            rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
-            relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
-                obj, sec, ordered=False,
-            )
-        else:
-            relocations = obj.iter_relocations(sec, ordered=False)
-        for r in relocations:
+        rows = relocations = row_window = row_error = None
+        try:
             if source_view:
-                start = r * 12  # _COMPACT_RELOCATION: <IIBBBB
-                if _NATIVE_PATCH_WORDS:
-                    cursor = abi_constant("object.bytes.data_offset") + start
-                    reloc_symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
-                    reloc_extern = load_i8(rows, cursor + 10) & 0xFF
-                    reloc_type = load_i8(rows, cursor + 11) & 0xFF
-                else:
-                    (
-                        _address, reloc_symbolnum, _pcrel, _length,
-                        reloc_extern, reloc_type,
-                    ) = _COMPACT_RELOCATION.unpack_from(rows, start)
+                import sys as execution_runtime
+                if execution_runtime.implementation.name == "cpython":
+                    if _owned_output is not None:
+                        row_window = _owned_output.row_window(obj, sec)
+                        if row_window is not None:
+                            try:
+                                rows = row_window.__enter__()
+                            except BaseException:
+                                row_window = None
+                                raise
+                            relocations = OwnedMergedSourceView._iter_section_relocation_indices(
+                                obj, rows, ordered=False,
+                            )
+                if relocations is None:
+                    rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+                    relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
+                        obj, sec, ordered=False,
+                    )
             else:
-                reloc_symbolnum = r["r_symbolnum"]
-                reloc_extern = r["r_extern"]
-                reloc_type = r["r_type"]
-            if not reloc_extern:
-                continue
-            nm = names_all[reloc_symbolnum]
-            if nm in imports_set:
-                relocated_imports.add(nm)
-            if reloc_type == spec.ARM64_RELOC_BRANCH26:
-                # Every call target is a candidate for a range-extension
-                # thunk; which ones need one is only known once addresses
-                # exist, and sizing the island from the candidates avoids a
-                # second layout pass (an unused slot is 12 zero bytes).
-                branch_targets_set.add(nm)
-            if reloc_type in (spec.ARM64_RELOC_BRANCH26,
-                              spec.ARM64_RELOC_GOT_LOAD_PAGE21,
-                              spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12):
-                code_imports_set.add(nm)
+                relocations = obj.iter_relocations(sec, ordered=False)
+            for r in relocations:
+                if source_view:
+                    start = r * 12  # _COMPACT_RELOCATION: <IIBBBB
+                    if _NATIVE_PATCH_WORDS:
+                        cursor = abi_constant("object.bytes.data_offset") + start
+                        reloc_symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
+                        reloc_extern = load_i8(rows, cursor + 10) & 0xFF
+                        reloc_type = load_i8(rows, cursor + 11) & 0xFF
+                    else:
+                        (
+                            _address, reloc_symbolnum, _pcrel, _length,
+                            reloc_extern, reloc_type,
+                        ) = _COMPACT_RELOCATION.unpack_from(rows, start)
+                else:
+                    reloc_symbolnum = r["r_symbolnum"]
+                    reloc_extern = r["r_extern"]
+                    reloc_type = r["r_type"]
+                if not reloc_extern:
+                    continue
+                nm = names_all[reloc_symbolnum]
+                if nm in imports_set:
+                    relocated_imports.add(nm)
+                if reloc_type == spec.ARM64_RELOC_BRANCH26:
+                    # Every call target is a candidate for a range-extension
+                    # thunk; which ones need one is only known once addresses
+                    # exist, and sizing the island from the candidates avoids a
+                    # second layout pass (an unused slot is 12 zero bytes).
+                    branch_targets_set.add(nm)
+                if reloc_type in (spec.ARM64_RELOC_BRANCH26,
+                                  spec.ARM64_RELOC_GOT_LOAD_PAGE21,
+                                  spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12):
+                    code_imports_set.add(nm)
+        except BaseException:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if row_window is not None:
+                    row_error = execution_runtime.exc_info()
+            raise
+        finally:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if row_window is not None:
+                    try:
+                        if relocations is not None:
+                            relocations.close()
+                    except BaseException:
+                        if row_error is None:
+                            row_error = execution_runtime.exc_info()
+                            raise
+                    finally:
+                        rows = relocations = None
+                        try:
+                            if row_error is None:
+                                row_window.__exit__(None, None, None)
+                            else:
+                                row_window.__exit__(*row_error)
+                        finally:
+                            row_window = row_error = None
     branch_targets = sorted(branch_targets_set)
     veneer_index = {name: i for i, name in enumerate(branch_targets)}
     unreferenced_imports = sorted(set(imports) - relocated_imports)
@@ -800,7 +897,7 @@ def _prepare_executable_image(
         # drop is reported.
         if (segname, sectname) in _DROPPED_UNWIND_SECTIONS:
             if (segname, sectname) != ("__LD", "__compact_unwind") or (
-                _unwind_rows_name_handlers(obj, sec, source_view)
+                _unwind_rows_name_handlers(obj, sec, source_view, _owned_output)
             ):
                 dropped_unwind.append(f"{segname},{sectname}")
             continue
@@ -1133,226 +1230,269 @@ def _prepare_executable_image(
             continue  # a dropped unwind section carries no live relocations
         out, sec_addr = mapping
         pending_addend = 0
-        if source_view:
-            rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+        rows = relocations = row_window = row_error = None
+        try:
+            if source_view:
+                import sys as execution_runtime
+                if execution_runtime.implementation.name == "cpython":
+                    if _owned_output is not None:
+                        row_window = _owned_output.row_window(obj, sec)
+                        if row_window is not None:
+                            try:
+                                rows = row_window.__enter__()
+                            except BaseException:
+                                row_window = None
+                                raise
+                            relocations = OwnedMergedSourceView._iter_section_relocation_indices(
+                                obj, rows, ordered=True,
+                            )
+                if relocations is None:
+                    rows = OwnedMergedSourceView.compact_relocation_rows(obj, sec)
+                    relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
+                        obj, sec, ordered=True,
+                    )
+            else:
+                relocations = obj.iter_relocations(sec, ordered=True)
             import sys as execution_runtime
             if execution_runtime.implementation.name == "cpython":
-                if _owned_output is not None:
+                if source_view and _owned_output is not None:
                     _owned_output.reserve_order(len(rows) // 12)
-            relocations = OwnedMergedSourceView.iter_compact_relocation_indices(
-                obj, sec,
-            )
-        else:
-            relocations = obj.iter_relocations(sec)
-        for entry_r in relocations:
-            if source_view:
-                start = entry_r * 12  # _COMPACT_RELOCATION: <IIBBBB
-                if _NATIVE_PATCH_WORDS:
-                    cursor = abi_constant("object.bytes.data_offset") + start
-                    reloc_address = load_i32(rows, cursor) & 0xFFFFFFFF
-                    reloc_symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
-                    reloc_extern = load_i8(rows, cursor + 10) & 0xFF
-                    reloc_type = load_i8(rows, cursor + 11) & 0xFF
+            for entry_r in relocations:
+                if source_view:
+                    start = entry_r * 12  # _COMPACT_RELOCATION: <IIBBBB
+                    if _NATIVE_PATCH_WORDS:
+                        cursor = abi_constant("object.bytes.data_offset") + start
+                        reloc_address = load_i32(rows, cursor) & 0xFFFFFFFF
+                        reloc_symbolnum = load_i32(rows, cursor + 4) & 0xFFFFFFFF
+                        reloc_extern = load_i8(rows, cursor + 10) & 0xFF
+                        reloc_type = load_i8(rows, cursor + 11) & 0xFF
+                    else:
+                        (
+                            reloc_address, reloc_symbolnum, _pcrel, _length,
+                            reloc_extern, reloc_type,
+                        ) = _COMPACT_RELOCATION.unpack_from(rows, start)
                 else:
-                    (
-                        reloc_address, reloc_symbolnum, _pcrel, _length,
-                        reloc_extern, reloc_type,
-                    ) = _COMPACT_RELOCATION.unpack_from(rows, start)
-            else:
-                reloc_address = entry_r["r_address"]
-                reloc_symbolnum = entry_r["r_symbolnum"]
-                reloc_extern = entry_r["r_extern"]
-                reloc_type = entry_r["r_type"]
-            if reloc_type == spec.ARM64_RELOC_ADDEND:
-                pending_addend = reloc_symbolnum
-                continue
-            if not reloc_extern:
-                target_index = reloc_symbolnum
-                if 1 <= target_index <= len(sections):
-                    target_sec = sections[target_index - 1]
-                    target_key = (
-                        target_sec["segname_str"],
-                        target_sec["sectname_str"],
-                    )
-                    if target_key in _DROPPED_UNWIND_SECTIONS:
-                        raise LinkError(
-                            "live section targets dropped unwind metadata "
-                            f"{target_key[0]},{target_key[1]} — not safe "
-                            "to drop"
+                    reloc_address = entry_r["r_address"]
+                    reloc_symbolnum = entry_r["r_symbolnum"]
+                    reloc_extern = entry_r["r_extern"]
+                    reloc_type = entry_r["r_type"]
+                if reloc_type == spec.ARM64_RELOC_ADDEND:
+                    pending_addend = reloc_symbolnum
+                    continue
+                if not reloc_extern:
+                    target_index = reloc_symbolnum
+                    if 1 <= target_index <= len(sections):
+                        target_sec = sections[target_index - 1]
+                        target_key = (
+                            target_sec["segname_str"],
+                            target_sec["sectname_str"],
                         )
-                raise LinkError(
-                    "section-target relocations must be normalized to a "
-                    "defined symbol before executable linking"
-                )
-            symbol_index = reloc_symbolnum
-            if not 0 <= symbol_index < len(names_all):
-                raise LinkError(
-                    f"relocation names symbol index {symbol_index}, but the "
-                    f"merged object has {len(names_all)} symbols"
-                )
-            name = names_all[symbol_index]
-            addend, pending_addend = pending_addend, 0
-            at_off = reloc_address
-            at = out.addr + at_off
-            rtype = reloc_type
-            if name in sym_addr:
-                target = sym_addr[name] + addend
-            elif name in dropped_symbols:
-                raise LinkError(
-                    f"live section references {name!r}, which lives in "
-                    "dropped unwind metadata — not safe to drop"
-                )
-            elif name in imports:
-                target = None  # resolved through stub/GOT below
-            else:
-                raise LinkError(f"unresolved symbol {name!r}")
+                        if target_key in _DROPPED_UNWIND_SECTIONS:
+                            raise LinkError(
+                                "live section targets dropped unwind metadata "
+                                f"{target_key[0]},{target_key[1]} — not safe "
+                                "to drop"
+                            )
+                    raise LinkError(
+                        "section-target relocations must be normalized to a "
+                        "defined symbol before executable linking"
+                    )
+                symbol_index = reloc_symbolnum
+                if not 0 <= symbol_index < len(names_all):
+                    raise LinkError(
+                        f"relocation names symbol index {symbol_index}, but the "
+                        f"merged object has {len(names_all)} symbols"
+                    )
+                name = names_all[symbol_index]
+                addend, pending_addend = pending_addend, 0
+                at_off = reloc_address
+                at = out.addr + at_off
+                rtype = reloc_type
+                if name in sym_addr:
+                    target = sym_addr[name] + addend
+                elif name in dropped_symbols:
+                    raise LinkError(
+                        f"live section references {name!r}, which lives in "
+                        "dropped unwind metadata — not safe to drop"
+                    )
+                elif name in imports:
+                    target = None  # resolved through stub/GOT below
+                else:
+                    raise LinkError(f"unresolved symbol {name!r}")
 
-            if rtype == spec.ARM64_RELOC_BRANCH26:
-                dest = stub_addr[name] if target is None else target
-                word = _read_patch_word(out.data, at_off)
-                delta = dest - at
-                if not -(1 << 27) <= delta < (1 << 27):
-                    # Out of b/bl reach: branch to this symbol's thunk in the
-                    # __veneers island instead, and record the real target so
-                    # the thunk body can be emitted below.
-                    thunk = veneer_addr_for(name, at)
-                    veneer_used[name] = dest
-                    delta = thunk - at
-                    if not -(1 << 27) <= delta < (1 << 27):
-                        import sys as execution_runtime
-                        if execution_runtime.implementation.name == "cpython":
-                            if _owned_output is not None:
-                                _owned_output.reserve_fixup()
-                        unreachable_veneers.append((name, at, thunk, delta))
-                        continue
-                _write_patch_word(out.data, at_off, _branch26(word, delta))
-            elif rtype in (spec.ARM64_RELOC_PAGE21,
-                           spec.ARM64_RELOC_GOT_LOAD_PAGE21):
-                # GOT relaxation: a GOT load of a DEFINED symbol needs no GOT
-                # slot — the target is in-image, so adrp points at the
-                # symbol's own page (and the paired PAGEOFF12 rewrites the
-                # ldr into an add below). Only true imports keep a GOT slot.
-                # This is exactly what ld does, and it avoids a multi-page
-                # GOT with rebase chained-fixups whose stride/page-start math
-                # would be a silent-SIGKILL hazard.
-                if rtype == spec.ARM64_RELOC_GOT_LOAD_PAGE21 and target is None:
-                    dest = got_addr[name]
-                else:
-                    dest = target
-                if dest is None:
-                    raise LinkError(f"{name!r} needs a GOT slot for PAGE21")
-                word = _read_patch_word(out.data, at_off)
-                _write_patch_word(
-                    out.data, at_off,
-                    _adrp_imm(word, (dest >> 12) - (at >> 12)),
-                )
-            elif rtype == spec.ARM64_RELOC_PAGEOFF12:
-                if target is None:
-                    raise LinkError(f"{name!r} needs a GOT slot for PAGEOFF12")
-                word = _read_patch_word(out.data, at_off)
-                _write_patch_word(out.data, at_off, _pageoff12(word, target & 0xFFF))
-            elif rtype == spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12:
-                if target is not None:
-                    # Relax: ldr xt,[xn,#imm]  ->  add xt,xn,#imm, so the
-                    # value is the symbol's address directly, not loaded
-                    # from a GOT slot. `ldr (unsigned) x` is 0xF94xxxxx;
-                    # `add (imm) x` is 0x91000000 with the same Rt/Rn.
+                if rtype == spec.ARM64_RELOC_BRANCH26:
+                    dest = stub_addr[name] if target is None else target
                     word = _read_patch_word(out.data, at_off)
-                    rt = word & 0x1F
-                    rn = (word >> 5) & 0x1F
-                    add = 0x91000000 | ((target & 0xFFF) << 10) | (rn << 5) | rt
-                    _write_patch_word(out.data, at_off, add)
-                else:
+                    delta = dest - at
+                    if not -(1 << 27) <= delta < (1 << 27):
+                        # Out of b/bl reach: branch to this symbol's thunk in the
+                        # __veneers island instead, and record the real target so
+                        # the thunk body can be emitted below.
+                        thunk = veneer_addr_for(name, at)
+                        veneer_used[name] = dest
+                        delta = thunk - at
+                        if not -(1 << 27) <= delta < (1 << 27):
+                            import sys as execution_runtime
+                            if execution_runtime.implementation.name == "cpython":
+                                if _owned_output is not None:
+                                    _owned_output.reserve_fixup()
+                            unreachable_veneers.append((name, at, thunk, delta))
+                            continue
+                    _write_patch_word(out.data, at_off, _branch26(word, delta))
+                elif rtype in (spec.ARM64_RELOC_PAGE21,
+                               spec.ARM64_RELOC_GOT_LOAD_PAGE21):
+                    # GOT relaxation: a GOT load of a DEFINED symbol needs no GOT
+                    # slot — the target is in-image, so adrp points at the
+                    # symbol's own page (and the paired PAGEOFF12 rewrites the
+                    # ldr into an add below). Only true imports keep a GOT slot.
+                    # This is exactly what ld does, and it avoids a multi-page
+                    # GOT with rebase chained-fixups whose stride/page-start math
+                    # would be a silent-SIGKILL hazard.
+                    if rtype == spec.ARM64_RELOC_GOT_LOAD_PAGE21 and target is None:
+                        dest = got_addr[name]
+                    else:
+                        dest = target
+                    if dest is None:
+                        raise LinkError(f"{name!r} needs a GOT slot for PAGE21")
                     word = _read_patch_word(out.data, at_off)
                     _write_patch_word(
                         out.data, at_off,
-                        _ldr_uimm12(word, got_addr[name] & 0xFFF, 8),
+                        _adrp_imm(word, (dest >> 12) - (at >> 12)),
                     )
-            elif rtype == spec.ARM64_RELOC_UNSIGNED:
-                in_tlv_desc = (sec["flags"] & spec.SECTION_TYPE) == _S_TLV_VARS
-                if target is None:
-                    if in_tlv_desc and name in import_ordinal:
-                        # Descriptor thunk: a chained-fixup bind to the import
-                        # (e.g. __tlv_bootstrap). Field is zeroed; dyld fills
-                        # it via the chain.
-                        struct.pack_into("<Q", out.data, at_off, 0)
-                        import sys as execution_runtime
-                        if execution_runtime.implementation.name == "cpython":
-                            if _owned_output is not None:
-                                _owned_output.reserve_fixup()
-                        tlv_bind_sites.append(
-                            (out, at_off, import_ordinal[name]))
-                    elif (
-                        name in import_ordinal
-                        and out.segname in ("__DATA", "__DATA_CONST")
-                    ):
-                        addend, = struct.unpack_from("<q", out.data, at_off)
-                        if not 0 <= addend < (1 << 8):
-                            raise LinkError(
-                                f"import {name!r} data pointer addend {addend} "
-                                "does not fit a chained bind"
-                            )
-                        struct.pack_into("<Q", out.data, at_off, 0)
-                        import sys as execution_runtime
-                        if execution_runtime.implementation.name == "cpython":
-                            if _owned_output is not None:
-                                _owned_output.reserve_fixup()
-                        data_bind_sites.append(
-                            (out, at_off, import_ordinal[name], addend))
+                elif rtype == spec.ARM64_RELOC_PAGEOFF12:
+                    if target is None:
+                        raise LinkError(f"{name!r} needs a GOT slot for PAGEOFF12")
+                    word = _read_patch_word(out.data, at_off)
+                    _write_patch_word(out.data, at_off, _pageoff12(word, target & 0xFFF))
+                elif rtype == spec.ARM64_RELOC_GOT_LOAD_PAGEOFF12:
+                    if target is not None:
+                        # Relax: ldr xt,[xn,#imm]  ->  add xt,xn,#imm, so the
+                        # value is the symbol's address directly, not loaded
+                        # from a GOT slot. `ldr (unsigned) x` is 0xF94xxxxx;
+                        # `add (imm) x` is 0x91000000 with the same Rt/Rn.
+                        word = _read_patch_word(out.data, at_off)
+                        rt = word & 0x1F
+                        rn = (word >> 5) & 0x1F
+                        add = 0x91000000 | ((target & 0xFFF) << 10) | (rn << 5) | rt
+                        _write_patch_word(out.data, at_off, add)
                     else:
-                        raise LinkError(f"import {name!r} in a data pointer")
-                elif in_tlv_desc and name in thread_block_offset:
-                    # Descriptor offset field: the variable's offset within
-                    # the thread block, not its vmaddr.
-                    struct.pack_into("<Q", out.data, at_off,
-                                     thread_block_offset[name])
-                else:
-                    inline, = struct.unpack_from("<q", out.data, at_off)
-                    absolute = target + inline
-                    # Store the offset from the image base; the rebase fixup
-                    # below adds the runtime base back (surviving ASLR). Only
-                    # data sections carry rebases — a pointer in __TEXT would
-                    # be in a read-only, non-fixup segment.
-                    if out.segname in ("__DATA", "__DATA_CONST"):
-                        import sys as execution_runtime
-                        if execution_runtime.implementation.name == "cpython":
-                            if _owned_output is not None:
-                                _owned_output.reserve_fixup()
-                        rebase_sites.append(
-                            (out, at_off, absolute - TEXT_BASE))
-                        struct.pack_into("<Q", out.data, at_off,
-                                         absolute - TEXT_BASE)
-                    else:
-                        raise LinkError(
-                            f"absolute pointer relocation in "
-                            f"{out.segname},{out.sectname} requires a "
-                            "chained rebase in a writable data segment"
+                        word = _read_patch_word(out.data, at_off)
+                        _write_patch_word(
+                            out.data, at_off,
+                            _ldr_uimm12(word, got_addr[name] & 0xFFF, 8),
                         )
-            elif rtype == spec.ARM64_RELOC_TLVP_LOAD_PAGE21:
-                # The TLV descriptor is a defined symbol in __thread_vars, so
-                # this adrp points at its own page exactly like a relaxed GOT
-                # load. (`target` is the descriptor address.)
-                if target is None:
-                    raise LinkError(f"TLV descriptor {name!r} is not defined")
-                word = _read_patch_word(out.data, at_off)
-                _write_patch_word(
-                    out.data, at_off,
-                    _adrp_imm(word, (target >> 12) - (at >> 12)),
-                )
-            elif rtype == spec.ARM64_RELOC_TLVP_LOAD_PAGEOFF12:
-                # Relax `ldr xt,[xn,#off]` to `add xt,xn,#off`: the value is
-                # the descriptor's address directly (ld does the same).
-                if target is None:
-                    raise LinkError(f"TLV descriptor {name!r} is not defined")
-                word = _read_patch_word(out.data, at_off)
-                rt = word & 0x1F
-                rn = (word >> 5) & 0x1F
-                _write_patch_word(
-                    out.data, at_off,
-                    0x91000000 | ((target & 0xFFF) << 10) | (rn << 5) | rt,
-                )
-            else:
-                raise LinkError(f"relocation type {rtype} not applied")
+                elif rtype == spec.ARM64_RELOC_UNSIGNED:
+                    in_tlv_desc = (sec["flags"] & spec.SECTION_TYPE) == _S_TLV_VARS
+                    if target is None:
+                        if in_tlv_desc and name in import_ordinal:
+                            # Descriptor thunk: a chained-fixup bind to the import
+                            # (e.g. __tlv_bootstrap). Field is zeroed; dyld fills
+                            # it via the chain.
+                            struct.pack_into("<Q", out.data, at_off, 0)
+                            import sys as execution_runtime
+                            if execution_runtime.implementation.name == "cpython":
+                                if _owned_output is not None:
+                                    _owned_output.reserve_fixup()
+                            tlv_bind_sites.append(
+                                (out, at_off, import_ordinal[name]))
+                        elif (
+                            name in import_ordinal
+                            and out.segname in ("__DATA", "__DATA_CONST")
+                        ):
+                            addend, = struct.unpack_from("<q", out.data, at_off)
+                            if not 0 <= addend < (1 << 8):
+                                raise LinkError(
+                                    f"import {name!r} data pointer addend {addend} "
+                                    "does not fit a chained bind"
+                                )
+                            struct.pack_into("<Q", out.data, at_off, 0)
+                            import sys as execution_runtime
+                            if execution_runtime.implementation.name == "cpython":
+                                if _owned_output is not None:
+                                    _owned_output.reserve_fixup()
+                            data_bind_sites.append(
+                                (out, at_off, import_ordinal[name], addend))
+                        else:
+                            raise LinkError(f"import {name!r} in a data pointer")
+                    elif in_tlv_desc and name in thread_block_offset:
+                        # Descriptor offset field: the variable's offset within
+                        # the thread block, not its vmaddr.
+                        struct.pack_into("<Q", out.data, at_off,
+                                         thread_block_offset[name])
+                    else:
+                        inline, = struct.unpack_from("<q", out.data, at_off)
+                        absolute = target + inline
+                        # Store the offset from the image base; the rebase fixup
+                        # below adds the runtime base back (surviving ASLR). Only
+                        # data sections carry rebases — a pointer in __TEXT would
+                        # be in a read-only, non-fixup segment.
+                        if out.segname in ("__DATA", "__DATA_CONST"):
+                            import sys as execution_runtime
+                            if execution_runtime.implementation.name == "cpython":
+                                if _owned_output is not None:
+                                    _owned_output.reserve_fixup()
+                            rebase_sites.append(
+                                (out, at_off, absolute - TEXT_BASE))
+                            struct.pack_into("<Q", out.data, at_off,
+                                             absolute - TEXT_BASE)
+                        else:
+                            raise LinkError(
+                                f"absolute pointer relocation in "
+                                f"{out.segname},{out.sectname} requires a "
+                                "chained rebase in a writable data segment"
+                            )
+                elif rtype == spec.ARM64_RELOC_TLVP_LOAD_PAGE21:
+                    # The TLV descriptor is a defined symbol in __thread_vars, so
+                    # this adrp points at its own page exactly like a relaxed GOT
+                    # load. (`target` is the descriptor address.)
+                    if target is None:
+                        raise LinkError(f"TLV descriptor {name!r} is not defined")
+                    word = _read_patch_word(out.data, at_off)
+                    _write_patch_word(
+                        out.data, at_off,
+                        _adrp_imm(word, (target >> 12) - (at >> 12)),
+                    )
+                elif rtype == spec.ARM64_RELOC_TLVP_LOAD_PAGEOFF12:
+                    # Relax `ldr xt,[xn,#off]` to `add xt,xn,#off`: the value is
+                    # the descriptor's address directly (ld does the same).
+                    if target is None:
+                        raise LinkError(f"TLV descriptor {name!r} is not defined")
+                    word = _read_patch_word(out.data, at_off)
+                    rt = word & 0x1F
+                    rn = (word >> 5) & 0x1F
+                    _write_patch_word(
+                        out.data, at_off,
+                        0x91000000 | ((target & 0xFFF) << 10) | (rn << 5) | rt,
+                    )
+                else:
+                    raise LinkError(f"relocation type {rtype} not applied")
+
+        except BaseException:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if row_window is not None:
+                    row_error = execution_runtime.exc_info()
+            raise
+        finally:
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if row_window is not None:
+                    try:
+                        if relocations is not None:
+                            relocations.close()
+                    except BaseException:
+                        if row_error is None:
+                            row_error = execution_runtime.exc_info()
+                            raise
+                    finally:
+                        rows = relocations = None
+                        try:
+                            if row_error is None:
+                                row_window.__exit__(None, None, None)
+                            else:
+                                row_window.__exit__(*row_error)
+                        finally:
+                            row_window = row_error = None
 
     # All addresses now live in the output sections and fixup tables. The
     # indexed view is a separate owned object and can be retired here. The

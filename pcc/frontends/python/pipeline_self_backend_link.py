@@ -230,6 +230,8 @@ def _owned_macho_link_in_process(
     from pcc.backend.native_object import NativeObject, decode_packed_native_object
     from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
+    pending = []
+    link_failure = None
     try:
         compact_budget = None
         import sys as execution_runtime
@@ -269,6 +271,8 @@ def _owned_macho_link_in_process(
         if execution_runtime.implementation.name == "cpython":
             if compact_budget is not None and ordered and not extra_link_inputs and all(kind == "PCO" for kind, _path in ordered):
                 from pcc.backend.macho_host_prepare import prepare_executable_from_paths
+                from pcc.backend.macho_host_output import _owned_output_supported
+                staged_rows = _owned_output_supported()
                 compact_budget.check_peak(0, entries=len(ordered), label="Mach-O ordered path projection")
                 before_link = time.monotonic()
                 if phase_events is not None:
@@ -280,6 +284,7 @@ def _owned_macho_link_in_process(
                     caller_owners=(ordered, pcc_native_object_inputs, pcc_asm_inputs,
                                    pcc_internal_input_manifest, extra_link_inputs),
                     _phase_callback=phase_events,
+                    _staged_rows=staged_rows,
                 )]
                 if phase_events is not None:
                     phase_events("prepare_inputs_end")
@@ -347,6 +352,8 @@ def _owned_macho_link_in_process(
                     link_owned_executable,
                 )
                 owned_output = _owned_output_supported()
+                if not owned_output and getattr(pending[0], "_host_row_store", None) is not None:
+                    raise SelfBackendLinkError("owned host eligibility changed while staged relocation rows were pending")
                 if phase_events is not None:
                     phase_events("owned_output_selected" if owned_output else "reference_output_selected")
                 if owned_output:
@@ -447,9 +454,11 @@ def _owned_macho_link_in_process(
         if execution_runtime.implementation.name == "cpython":
             if phase_events is not None:
                 phase_events("link_end")
-    except SelfBackendLinkError:
+    except SelfBackendLinkError as exc:
+        link_failure = exc
         raise
     except Exception as exc:
+        link_failure = exc
         # This link runs in-process, so the traceback -- not a child exit
         # code -- is the diagnosis.  `failed_process_detail` describes a
         # failed *child process*; on this path it reduces a real linker bug
@@ -461,6 +470,18 @@ def _owned_macho_link_in_process(
             + "\n"
             + traceback.format_exc()
         ) from exc
+
+    except BaseException as exc:
+        link_failure = exc
+        raise
+    finally:
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            from pcc.backend.macho_host_prepare import close_staged_source_rows
+            for source in pending:
+                close_staged_source_rows(source, _error=link_failure)
+        pending.clear()
+        link_failure = None
 
 
 def run_link_command(
