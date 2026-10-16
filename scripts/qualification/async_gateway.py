@@ -61,6 +61,14 @@ def _account(events, planned):
     return results
 
 
+def _process_succeeded(row):
+    """Call reports alone cannot prove successful teardown or process exit."""
+    watchdog = row.get("watchdog", {})
+    return (row.get("returncode") == 0
+            and watchdog.get("status") == "COMPLETE"
+            and watchdog.get("returncode") == 0)
+
+
 def _run(args, name, repo, nodes, environment, *, collect=False):
     output = args.output / name
     output.mkdir()
@@ -200,12 +208,14 @@ def main(argv=None):
                 final_cases[node] = case
     report["final_cases"] = final_cases
     inventories_complete = all(
-        report.get(area + "_inventory", {}).get("returncode") == 0
+        _process_succeeded(report.get(area + "_inventory", {}))
         and not report[area + "_inventory"]["deselected"]
         for area in ("async", "gateway"))
     report["all_nodes_reported"] = bool(final_cases) and inventories_complete and all(
         case["state"] != "UNRUN" for case in final_cases.values())
-    report["complete_execution"] = report["all_nodes_reported"] and all(
+    report["execution_processes_succeeded"] = bool(report["groups"]) and all(
+        _process_succeeded(row) for row in report["groups"])
+    report["complete_execution"] = report["all_nodes_reported"] and report["execution_processes_succeeded"] and all(
         case["state"] == "PASS" for case in final_cases.values())
     _write(args.output / "summary.json", report)
     return 0 if report["complete_execution"] else 1
