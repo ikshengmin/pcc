@@ -354,9 +354,15 @@ static int membership_state_case(const char *mode) {
             empty_table == pcc_py_gc_relocation_member_slots, retained_before_clear, peak_bytes);
     } else if (!strcmp(mode, "member-collisions")) {
         void *collisions[4]; int found = 0;
-        for (int i = 0; i < 4096 && found < 4; i++)
-            if (((uint64_t)pcc_gc_index_py_hash_ptr(&keys[i]) & 255) == 255)
-                collisions[found++] = &keys[i];
+        /* These APIs hash/compare keys without dereferencing them. Use fixed,
+         * non-null, aligned opaque identities: an ASLR-positioned array's
+         * 4096-address window need not contain four keys in bucket 255.
+         * Keep selection through the emitted hash and test the real table. */
+        for (uintptr_t raw = 8; raw <= 4096 * 8 && found < 4; raw += 8) {
+            void *key = (void *)raw;
+            if (((uint64_t)pcc_gc_index_py_hash_ptr(key) & 255) == 255)
+                collisions[found++] = key;
+        }
         if (found != 4) { fprintf(stderr, "could not construct collision cluster\n"); return 3; }
         for (int i = 0; i < 4; i++) pcc_gc_relocation_member_note(collisions[i]);
         pcc_gc_relocation_member_note(collisions[2]); pcc_gc_relocation_member_note(collisions[2]);
