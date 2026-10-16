@@ -107,9 +107,10 @@ class Runtime:
             'py_obj_repr':lambda o:Obj('str',repr(o.value)),
             'py_obj_truthy':lambda o:int(bool(o.value)),
             'py_int_from_i64':lambda n:n, 'py_int_value_i64':lambda n:n,
-            'py_list_new':self.new_list, 'py_list_get':lambda o,i:o.value[i],
+            'py_list_new':self.new_list, 'py_list_get':self.list_get,
             'py_list_len':lambda o:len(o.value),
-            'py_list_set':lambda o,i,v:o.value.__setitem__(i,v),
+            'py_list_set':self.list_set, 'py_list_append':self.list_append,
+            'py_list_setitem':self.list_setitem,
             'py_tuple_new':lambda n:Obj('tuple',[None]*n),
             'py_tuple_get':lambda o,i:o.value[i],
             'py_tuple_len':lambda o:len(o.value),
@@ -228,7 +229,23 @@ class Runtime:
         if not self.leases[key]:del self.leases[key]
         return 0
     def swap_error(self,s):previous=self.read(s,0);self.write(s,0,self.error);self.error=previous
-    def new_list(self,n):return None if self.fail_state else Obj('list',[self.none]*n)
+    def new_list(self,n):
+        # py_list_new reserves capacity; its initial logical length is zero.
+        if self.fail_state:return None
+        result=Obj('list',[]);result.capacity=max(4,n);return result
+    def list_get(self,o,i):
+        if i<0:i+=len(o.value)
+        return o.value[i] if 0<=i<len(o.value) else None
+    def list_set(self,o,i,v):
+        # Internal py_list_set is deliberately non-raising on invalid indices.
+        if i<0:i+=len(o.value)
+        if 0<=i<len(o.value):o.value[i]=v
+    def list_setitem(self,o,i,v):
+        if i<0:i+=len(o.value)
+        if 0<=i<len(o.value):o.value[i]=v;return 0
+        self.error=Obj('exception',(5,'list assignment index out of range'));return -1
+    def list_append(self,o,v):
+        o.value.append(v);o.capacity=max(o.capacity,len(o.value))
     def getattr(self,o,name):
         name=self.raw(name).decode()
         if name in o.attrs:return o.attrs[name]

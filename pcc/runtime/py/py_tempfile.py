@@ -69,6 +69,8 @@ py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
+py_list_setitem = extern("py_list_setitem", (c_ptr, c_int64, c_ptr), c_int64)
+py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
@@ -759,11 +761,21 @@ def _td_init(captures, args):
     if not ptr_is_null(load_ptr(slots, 6 * C_POINTER_SIZE)):
         _td_hold(slots, pins, 7, py_list_new(4))
         state = load_ptr(slots, 7 * C_POINTER_SIZE)
-        if not ptr_is_null(state):
-            py_list_set(state, _TD_NAME, load_ptr(slots, 6 * C_POINTER_SIZE))
-            py_list_set(state, _TD_IGNORE, load_ptr(slots, 4 * C_POINTER_SIZE))
-            py_list_set(state, _TD_DELETE, load_ptr(slots, 5 * C_POINTER_SIZE))
-            py_list_set(state, _TD_WEAKREF, _td_none())
+        if not ptr_is_null(state) and not py_err_occurred():
+            # py_list_new reserves capacity, not logical elements. Populate
+            # owned slots before exposing the finalizer state to callbacks.
+            py_list_append(state, load_ptr(slots, 6 * C_POINTER_SIZE))
+            if not py_err_occurred():
+                py_list_append(state, load_ptr(slots, 4 * C_POINTER_SIZE))
+            if not py_err_occurred():
+                py_list_append(state, load_ptr(slots, 5 * C_POINTER_SIZE))
+            if not py_err_occurred():
+                py_list_append(state, _td_none())
+            if not py_err_occurred():
+                state_length: int = py_list_len(state)
+                if not py_err_occurred() and state_length != 4:
+                    _td_error(19, cstr("TemporaryDirectory finalizer state initialization failed"))
+        if not ptr_is_null(state) and not py_err_occurred():
             _td_hold(slots, pins, 9, py_tuple_new(1))
             if not ptr_is_null(load_ptr(slots, 9 * C_POINTER_SIZE)):
                 py_tuple_set_item(load_ptr(slots, 9 * C_POINTER_SIZE), 0, state)
@@ -772,17 +784,25 @@ def _td_init(captures, args):
                 if not ptr_is_null(load_ptr(slots, 10 * C_POINTER_SIZE)):
                     _td_hold(slots, pins, 11, py_weakref_new(load_ptr(slots, 0),
                         load_ptr(slots, 10 * C_POINTER_SIZE)))
-                    if not ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)):
-                        py_list_set(state, _TD_WEAKREF, load_ptr(slots, 11 * C_POINTER_SIZE))
+                    if not ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)) and not py_err_occurred():
                         if _td_register(state, load_ptr(owner, 0)) == 0:
                             store_ptr(owner, 0, null())  # Registry takes ownership.
-                            py_obj_setattr(load_ptr(slots, 0), cstr("name"), load_ptr(slots, 6 * C_POINTER_SIZE))
-                            py_obj_setattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors"), load_ptr(slots, 4 * C_POINTER_SIZE))
-                            py_obj_setattr(load_ptr(slots, 0), cstr("_delete"), load_ptr(slots, 5 * C_POINTER_SIZE))
-                            py_obj_setattr(load_ptr(slots, 0), cstr("_pcc_finalizer_state"), state)
+                            # Do not form state -> weakref -> callback -> state
+                            # until rollback can find and detach its record.
+                            # The internal void setter cannot report a failed
+                            # moving-root/store transaction; use its checked ABI.
+                            installed: int = -1
                             if not py_err_occurred():
-                                py_incref(_td_none())
-                                _td_hold(slots, pins, _TD_OUTPUT, _td_none())
+                                installed = py_list_setitem(state, _TD_WEAKREF,
+                                    load_ptr(slots, 11 * C_POINTER_SIZE))
+                            if installed == 0 and not py_err_occurred():
+                                py_obj_setattr(load_ptr(slots, 0), cstr("name"), load_ptr(slots, 6 * C_POINTER_SIZE))
+                                py_obj_setattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors"), load_ptr(slots, 4 * C_POINTER_SIZE))
+                                py_obj_setattr(load_ptr(slots, 0), cstr("_delete"), load_ptr(slots, 5 * C_POINTER_SIZE))
+                                py_obj_setattr(load_ptr(slots, 0), cstr("_pcc_finalizer_state"), state)
+                                if not py_err_occurred():
+                                    py_incref(_td_none())
+                                    _td_hold(slots, pins, _TD_OUTPUT, _td_none())
         if ptr_is_null(load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE)):
             # Preserve the constructor error while cleanup executes. A pending
             # exception must neither skip rollback nor be replaced by it.
