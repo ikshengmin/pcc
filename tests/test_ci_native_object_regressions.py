@@ -495,7 +495,23 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     command = "uv run --frozen --no-sync --python 3.13 python scripts/ci_native_object_regressions.py --out-dir build/worker-prior-gate"
     assert "run: " + command in step
     assert "download-artifact" not in step and "continue-on-error" not in step
-    assert "tests/test_ci_native_object_regressions.py\n" in other
+    host_name = "Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts"
+    host_header = "      - name: " + host_name + "\n"
+    assert other.count(host_header) == 1
+    host_step = other.split(host_header, 1)[1].split("      - name:", 1)[0]
+    host_commands = [line.removeprefix("        run: ") for line in host_step.splitlines()
+                     if line.startswith("        run: ")]
+    assert len(host_commands) == 1
+    host_command, export_condition = host_commands[0].split(" ${{ ", 1)
+    assert host_command.split() == [
+        "uv", "run", "--frozen", "--no-sync", "--python", "3.13", "python", "-m", "pytest", "-x", "-q",
+        "tests/python/test_stage2_export_capture.py",
+        "tests/python/test_aarch64_call_target_reuse.py",
+        "tests/python/test_owned_elf_assembler_dispatch.py",
+        "tests/test_ci_native_object_regressions.py",
+    ]
+    assert export_condition == (
+        "matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py' || '' }}")
     for path in (*[node.split("::")[0] for node in (*gate.NODES, *gate.WINDOWS_NODES)],
                  "scripts/ci_native_object_regressions.py", "tests/test_ci_native_object_regressions.py"):
         assert text.count('      - "' + path + '"') == 2
