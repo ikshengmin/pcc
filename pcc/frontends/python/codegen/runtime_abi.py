@@ -1485,6 +1485,7 @@ def _runtime_signatures_part_33():
 
 def _runtime_signatures_part_34():
     return {
+    "pcc_worker_resource_replace": (_I64, [_CSTR, _CSTR], False),
     "pcc_os_heap_in_use_bytes": (_I64, [], False),
     "pcc_os_heap_capacity_bytes": (_I64, [], False),
     "py_enumerate_list": (_PYOBJ, [_PYOBJ, _I64], False),

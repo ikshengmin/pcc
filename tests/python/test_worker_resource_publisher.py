@@ -248,7 +248,7 @@ def test_buffer_setup_failure_precedes_handle_open(monkeypatch):
 @pytest.mark.parametrize("implementation,platform", [
     ("cpython", "win32"), ("cpython", "linux"), ("pcc", "win32"), ("pypy", "win32"),
 ])
-def test_only_windows_cpython_dispatches_to_extended_rename(monkeypatch, implementation, platform):
+def test_host_and_native_windows_dispatch_to_their_extended_rename(monkeypatch, implementation, platform):
     policy = _load_leaf(POLICY_PATH)
     original_import = builtins.__import__
     imports, calls = [], []
@@ -261,10 +261,15 @@ def test_only_windows_cpython_dispatches_to_extended_rename(monkeypatch, impleme
 
     def native(source, destination):
         calls.append(("native", source, destination))
+        return 0
 
-    native_types = SimpleNamespace(c_obj=object(), c_int64=object())
+    native_types = SimpleNamespace(c_obj=object(), c_int64=object(), c_str=object())
 
     def declare(symbol, arguments, result):
+        if symbol == "pcc_worker_resource_replace":
+            assert arguments == (native_types.c_str, native_types.c_str)
+            assert result is native_types.c_int64
+            return native
         if symbol == "py_os_replace":
             assert arguments == (native_types.c_obj, native_types.c_obj)
             assert result is native_types.c_obj
@@ -315,9 +320,14 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
     assert isinstance(ordinary.body[1], ast.Return)
     native_import = next(node for node in dispatch.body if isinstance(node, ast.ImportFrom))
     assert native_import.module == "pcc.extern"
-    assert [name.name for name in native_import.names] == ["c_int64", "c_obj", "extern"]
+    assert [name.name for name in native_import.names] == ["c_int64", "c_obj", "c_str", "extern"]
     assert all(isinstance(node, ast.If) for node in dispatch.body[3:5])
     assert dispatch.body[4].end_lineno < native_import.lineno
+    native_windows = dispatch.body[-6]
+    assert ast.unparse(native_windows.test) == "execution_runtime.platform == 'win32'"
+    assert ast.unparse(native_windows.body[0]) == (
+        "native_publish = extern('pcc_worker_resource_replace', (c_str, c_str), c_int64)")
+    assert isinstance(native_windows.body[-1], ast.Return)
     tail = [ast.unparse(node) for node in dispatch.body[-5:]]
     assert tail == [
         "native_replace = extern('py_os_replace', (c_obj, c_obj), c_obj)",
@@ -343,7 +353,7 @@ def test_actual_publisher_dispatcher_preserves_native_import_boundary():
 def _native_import_control(policy, events, *, platform="linux", pending=False, call_error=None):
     """Inert declaration provider; never imports PCC or calls a native symbol."""
     original_import = builtins.__import__
-    types = SimpleNamespace(c_obj=object(), c_int64=object())
+    types = SimpleNamespace(c_obj=object(), c_int64=object(), c_str=object())
 
     class Result:
         def __del__(self):
@@ -353,6 +363,8 @@ def _native_import_control(policy, events, *, platform="linux", pending=False, c
         events.append(("replace", source, destination))
         if call_error is not None:
             raise call_error
+        if platform == "win32":
+            return -13 if pending else 0
         return Result()
 
     def error_pending():
@@ -362,6 +374,9 @@ def _native_import_control(policy, events, *, platform="linux", pending=False, c
 
     def declare(symbol, arguments, result):
         events.append(("declare", symbol))
+        if symbol == "pcc_worker_resource_replace":
+            assert arguments == (types.c_str, types.c_str) and result is types.c_int64
+            return replace
         if symbol == "py_os_replace":
             assert arguments == (types.c_obj, types.c_obj) and result is types.c_obj
             return replace
@@ -384,7 +399,7 @@ def _native_import_control(policy, events, *, platform="linux", pending=False, c
 
 @pytest.mark.parametrize("platform", ["linux", "win32", "darwin"])
 @pytest.mark.parametrize("pending", [False, True])
-def test_native_report_abi_retains_result_until_pending_check(monkeypatch, platform, pending):
+def test_native_report_abi_preserves_platform_error_and_ownership_contract(monkeypatch, platform, pending):
     policy = _load_leaf(POLICY_PATH)
     events = []
     importing = _native_import_control(policy, events, platform=platform, pending=pending)
@@ -399,12 +414,22 @@ def test_native_report_abi_retains_result_until_pending_check(monkeypatch, platf
                 with monkeypatch.context() as selected:
                     selected.setattr(builtins, "__import__", importing)
                     policy._replace_worker_resource("worker.rss.tmp", "worker.rss")
-        assert caught.value is failure
+        if platform == "win32":
+            assert isinstance(caught.value, PermissionError) and caught.value.errno == 13
+            assert caught.value.filename == "worker.rss.tmp" and caught.value.filename2 == "worker.rss"
+        else:
+            assert caught.value is failure
     else:
         with monkeypatch.context() as selected:
             selected.setattr(builtins, "__import__", importing)
             assert policy._replace_worker_resource("worker.rss.tmp", "worker.rss") is None
-        assert events[-1] == ("release",) and events.count(("release",)) == 1
+        if platform != "win32":
+            assert events[-1] == ("release",) and events.count(("release",)) == 1
+    if platform == "win32":
+        assert events == [("import", "sys"), ("import", "pcc.extern"),
+                          ("declare", "pcc_worker_resource_replace"),
+                          ("replace", "worker.rss.tmp", "worker.rss")]
+        return
     assert events[:6] == [
         ("import", "sys"), ("import", "pcc.extern"),
         ("declare", "py_os_replace"), ("declare", "py_err_occurred"),

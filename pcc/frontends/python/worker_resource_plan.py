@@ -517,7 +517,25 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
         raise TypeError("worker RSS publication paths must be strings")
     if "\0" in temporary or "\0" in path:
         raise ValueError("worker RSS publication path contains a null character")
-    from pcc.extern import c_int64, c_obj, extern
+    from pcc.extern import c_int64, c_obj, c_str, extern
+
+    if execution_runtime.platform == "win32":
+        # c_str leases both owners before exposing either UTF-8 view. Ordinary
+        # MoveFileEx does not request extended replace-open-destination
+        # semantics, even when the reader grants all three sharing modes.
+        native_publish = extern("pcc_worker_resource_replace", (c_str, c_str), c_int64)
+        status = native_publish(temporary, path)
+        if status < 0:
+            raise OSError(-status, "worker RSS atomic replacement failed", temporary, None, path)
+        if status > 0:
+            primary_errno = status // 65536
+            cleanup_errno = status % 65536
+            committed = "True" if primary_errno == 0 else "False"
+            raise RuntimeError(
+                "worker RSS handle cleanup failed: publication_committed=" + committed
+                + " primary_errno=" + str(primary_errno)
+                + " handle_cleanup_errno=" + str(cleanup_errno))
+        return
 
     native_replace = extern("py_os_replace", (c_obj, c_obj), c_obj)
     native_error_pending = extern("py_err_occurred", (), c_int64)

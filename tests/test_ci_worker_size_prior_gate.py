@@ -1648,7 +1648,14 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     rss_strings = {node.value for node in ast.walk(rss) if isinstance(node, ast.Constant)
                    and isinstance(node.value, str)}
     assert {"_open_worker_resource", "read_worker_resource", "py_file_open_options",
-            "_replace_worker_resource", "publish_worker_resource", "py_os_replace"} <= rss_strings
+            "_replace_worker_resource", "publish_worker_resource", "py_os_replace",
+            "pcc_worker_resource_replace"} <= rss_strings
+    rss_pairs = {ast.literal_eval(node) for node in ast.walk(rss)
+                 if isinstance(node, ast.Tuple) and len(node.elts) == 2
+                 and all(isinstance(value, ast.Constant) and isinstance(value.value, str)
+                         for value in node.elts)}
+    assert {("_replace_worker_resource", "py_os_replace"),
+            ("_replace_worker_resource", "pcc_worker_resource_replace")} <= rss_pairs
     assert "worker_resource_host_windows" in rss_strings
     assert "pcc.frontends.python.worker_resource_host_windows" in {
         node.value for node in ast.walk(closure) if isinstance(node, ast.Constant)

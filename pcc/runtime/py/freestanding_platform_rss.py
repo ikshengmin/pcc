@@ -1,7 +1,7 @@
 """Freestanding process RSS sampling for Darwin and Linux."""
 
 from pcc import i64
-from pcc.extern import c_abi_export
+from pcc.extern import c_abi_export, c_ptr
 from pcc.unsafe import (
     close,
     cstr,
@@ -86,3 +86,10 @@ def pcc_os_peak_rss_bytes() -> i64:
     if value >= 0:
         return value
     return _linux_proc_status_bytes(1)
+
+
+@c_abi_export("pcc_worker_resource_replace")
+def pcc_worker_resource_replace(source: c_ptr, destination: c_ptr) -> i64:
+    # Only the Windows publisher uses this extended-rename contract. Other
+    # targets keep their existing py_os_replace path, never a host fallback.
+    return -38

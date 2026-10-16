@@ -307,7 +307,8 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                 for function, callee in (("_open_worker_resource", "py_file_open_options"),
                                          ("read_worker_resource", "_open_worker_resource"),
                                          ("publish_worker_resource", "_replace_worker_resource"),
-                                         ("_replace_worker_resource", "py_os_replace")):
+                                         ("_replace_worker_resource", "py_os_replace"),
+                                         ("_replace_worker_resource", "pcc_worker_resource_replace")):
                     symbol = "user_" + name.replace(".", "_") + "_" + function
                     require_definition(section, symbol, bodies=definition_bodies)
                     matches = (definition_bodies.get(symbol, []) if definition_bodies is not None

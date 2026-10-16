@@ -608,6 +608,10 @@ int64_t   pcc_gc_telemetry(int64_t metric);
 /* G-P3-LONGRUN: process RSS sampling (C-only; -1 on failure). */
 int64_t   pcc_os_current_rss_bytes(void);
 int64_t   pcc_os_peak_rss_bytes(void);
+/* Windows report publication: 0 confirms commit+close; negative errno means
+ * no commit and confirmed cleanup; positive primary_errno*65536+close_errno
+ * means close failed (primary==0 means committed). Positive must not retry. */
+int64_t   pcc_worker_resource_replace(const char *source, const char *destination);
 /* G-P3-LONGRUN: malloc-heap statistics for backends 0-3 fragmentation
  * (C-only; -1 on failure). in_use = bytes handed to the program;
  * capacity = bytes the allocator holds from the OS. */
