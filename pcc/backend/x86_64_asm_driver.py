@@ -548,6 +548,43 @@ _INSTRUCTION_SIZE_CACHE_MAX_ENTRIES = 4096
 _INSTRUCTION_SIZE_CACHE_MAX_KEY_BYTES = 1_048_576
 
 
+_SECTION_PAYLOAD_CHUNK_BYTES = 8192
+
+
+class _SectionPayload:
+    """Publish section bytes without repeatedly copying their whole prefix."""
+
+    def __init__(self) -> None:
+        self.chunks: list[bytes] = []
+        self.pending: list[bytes] = []
+        self.pending_size = 0
+
+    def _flush(self) -> None:
+        if self.pending:
+            self.chunks.append(b"".join(self.pending))
+            self.pending.clear()
+            self.pending_size = 0
+
+    def append(self, raw: bytes) -> None:
+        if not raw:
+            return
+        size = len(raw)
+        if size >= _SECTION_PAYLOAD_CHUNK_BYTES:
+            self._flush()
+            self.chunks.append(raw)
+            return
+        self.pending.append(raw)
+        self.pending_size += size
+        if self.pending_size >= _SECTION_PAYLOAD_CHUNK_BYTES:
+            self._flush()
+
+    def finish(self) -> bytes:
+        self._flush()
+        result = b"".join(self.chunks)
+        self.chunks.clear()
+        return result
+
+
 def _measure_sections(plans, order, symbols, operand_cache=None):
     labels: dict[str, tuple[str, int]] = {}
     sizes: dict[str, int] = {}
@@ -763,7 +800,9 @@ def _assemble_file(
     section_payloads: dict[str, bytes] = {}
     for name in order:
         plan = plans[name]
-        payload = bytearray()
+        # Native bytearray.extend allocates and copies the complete prefix.
+        # Keep machine PCs in memory_size and join bounded chunks only once.
+        payload = _SectionPayload()
         memory_size = 0
         # Measurement and stack-map resolution have consumed the plan. Retire
         # each record/run while encoding; later readers use final payloads.
@@ -772,30 +811,30 @@ def _assemble_file(
                 target = _align(memory_size, entry.log2)
                 padding = target - memory_size
                 if plan.type != SHT_NOBITS:
-                    payload.extend(bytes((entry.fill,)) * padding)
+                    payload.append(bytes((entry.fill,)) * padding)
                 memory_size = target
             elif isinstance(entry, (_Label, _SizeHere)):
                 continue
             elif isinstance(entry, _Data):
                 if plan.type != SHT_NOBITS:
-                    payload.extend(entry.payload)
+                    payload.append(entry.payload)
                 memory_size += len(entry.payload)
             elif isinstance(entry, _Zero):
                 if plan.type != SHT_NOBITS:
-                    payload.extend(b"\0" * entry.size)
+                    payload.append(b"\0" * entry.size)
                 memory_size += entry.size
             elif isinstance(entry, _SymbolData):
                 pending.append(_PendingRelocation(
                     name, memory_size, entry.symbol, R_X86_64_64, entry.addend,
                 ))
-                payload.extend(b"\0" * 8)
+                payload.append(b"\0" * 8)
                 memory_size += 8
             elif isinstance(entry, _SymbolDifference):
                 left = labels.get(entry.left)
                 right = labels.get(entry.right)
                 if left is None or right is None or left[0] != right[0]:
                     raise X86EncodeError("symbol difference requires definitions in the same section: " + entry.left + " - " + entry.right)
-                payload.extend(_integer_payload(left[1] - right[1], entry.width, owner="symbol difference"))
+                payload.append(_integer_payload(left[1] - right[1], entry.width, owner="symbol difference"))
                 memory_size += entry.width
             elif isinstance(entry, (_Instruction, int)):
                 encoded = encode_instruction(
@@ -805,7 +844,7 @@ def _assemble_file(
                     section_name=name,
                     operand_cache=operand_cache,
                 )
-                payload.extend(encoded.code)
+                payload.append(encoded.code)
                 memory_size += len(encoded.code)
                 for relocation in encoded.relocations:
                     pending.append(_PendingRelocation(
@@ -825,7 +864,7 @@ def _assemble_file(
                 f"x86 assembly pass size drift in {name}: "
                 f"{memory_size} != {measured_sizes[name]}"
             )
-        section_payloads[name] = bytes(payload)
+        section_payloads[name] = payload.finish()
         plan.entries.clear()
 
     section_indices = {name: index for index, name in enumerate(order, start=1)}

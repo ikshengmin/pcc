@@ -139,11 +139,11 @@ def test_instruction_lines_retire_before_the_next_function(tmp_path, monkeypatch
     references = []
     observed = []
 
-    def traced_emit_function(function, plan):
+    def traced_emit_function(function, plan, *, phase_timing=None):
         # Retaining the module's individual instruction lines keeps these
         # references live. Compacting completed output preserves only text.
         assert all(reference() is None for reference in references)
-        lines = real_emit_function(function, plan)
+        lines = real_emit_function(function, plan, phase_timing=phase_timing)
         for index, line in enumerate(lines):
             if line.startswith("  ") and not line.lstrip().startswith("."):
                 tracked = _TrackedAssemblyLine(line)
@@ -197,7 +197,7 @@ def test_indexed_functions_retire_before_next_function_and_metadata(
             assert not function.blocks and not function.block_map
             _assert_tables_closed(kernel)
 
-    def traced_emit_function(function, plan):
+    def traced_emit_function(function, plan, *, phase_timing=None):
         # The previous function must be retired before this one's projection
         # is allocated. Checking only the final module would miss peak usage.
         assert_retired()
@@ -206,7 +206,7 @@ def test_indexed_functions_retire_before_next_function_and_metadata(
         assert not blocks and not block_map
         assert len(kernel.block_facts) > 0
         before = kernel.block_diagnostic_projections
-        lines = real_emit_function(function, plan)
+        lines = real_emit_function(function, plan, phase_timing=phase_timing)
         assert kernel.block_diagnostic_projections > before
         assert function.blocks is blocks
         assert function.block_map is block_map
@@ -252,10 +252,10 @@ def test_indexed_projection_cleanup_preserves_the_original_failure(
     real_materialize = IndexedFunctionKernel.materialize_legacy_blocks
     real_emit_blocks = emitter.emit_function_blocks
 
-    def traced_emit_function(function, plan):
+    def traced_emit_function(function, plan, *, phase_timing=None):
         assert function is target
         entry_state.append((function.blocks, function.block_map))
-        return real_emit_function(function, plan)
+        return real_emit_function(function, plan, phase_timing=phase_timing)
 
     def fail_after_projection(kernel, function):
         blocks = real_materialize(kernel, function)
@@ -299,12 +299,12 @@ def test_emitter_preserves_supplied_legacy_blocks(tmp_path, monkeypatch, fail):
     observed = []
     failure = BackendUnavailable("injected legacy emission failure")
 
-    def traced_emit_function(function, plan):
+    def traced_emit_function(function, plan, *, phase_timing=None):
         blocks, block_map = function.blocks, function.block_map
         assert blocks and block_map
         snapshots = [(block, block.instructions) for block in blocks]
         try:
-            return real_emit_function(function, plan)
+            return real_emit_function(function, plan, phase_timing=phase_timing)
         finally:
             assert function.blocks is blocks
             assert function.block_map is block_map
