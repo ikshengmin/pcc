@@ -927,7 +927,7 @@ def _box_stmts(stmts, boxed, boxed_function_defs=None, free=False):
             if boxed_function_defs is not None and name_in(boxed, stmt.name):
                 # A def binds its closure cell just like an assignment. Keep
                 # the AST alive with its identity until hoisting publishes it.
-                boxed_function_defs[id(rewritten)] = rewritten
+                boxed_function_defs.append(rewritten)
             out.append(rewritten)
             continue
         if isinstance(stmt, ClassDef):

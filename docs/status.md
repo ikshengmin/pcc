@@ -52,17 +52,29 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   point settles in one pass, so `referenced_sibling_names` runs once per
   nested function. `_module_bound_names` (from `8c7f55e4c`) read handler
   `.name`/`.body` directly; it now uses the stage-safe field accessor.
+- `--python-libpython auto` only (the default `off` compiles it): a nested
+  function that returns an arithmetic result of calling a captured callable,
+  `def outer(f): def wrapped(x): return f(x) * 2`, fails with "slot-call Call
+  lacks an immediate owned-result handoff". The captured `f` is a cell read,
+  and the libpython-compat call path does not publish into the slot-call sink.
+  This is what `test_same_module_bare_decorator_still_applies` hits.
 - Still failing on a clean `1694b049f` snapshot:
   `test_hoist_global_cell_boundaries.py::test_host_ir_global_reads_do_not_become_capture_values`
   (both modes), the `_hoist_nested_funcdefs` length check (1810 lines there,
   1833 now, against 1800), `test_py_function_decorators.py::test_same_module_bare_decorator_still_applies`
   ("slot-call Call lacks an immediate owned-result handoff") and
-  `::test_imported_bare_decorator_is_metadata_noop` (`singledispatch` refused),
-  `test_py_native_closure.py::test_native_closure_captures_starred_unpack_target`
-  ("starred unpack target must be a bare name"), and
-  `test_py_nested_hoist.py::test_nested_hoist_caches_reject_reused_object_id`.
-  The last forces every `id()` equal; `boxed_function_defs` (id -> retained
-  object) then keeps only the last def, which live objects cannot trigger.
+  `::test_imported_bare_decorator_is_metadata_noop` (`singledispatch` refused;
+  pcc's native `functools` has no `singledispatch`).
+- Starred unpack: a captured `*rest` arrives as its cell subscript and an
+  attribute `*obj.tail` was refused ("starred unpack target must be a bare
+  name"); both now store like the other unpack targets
+  (`test_py_native_closure.py`, the existing captured case plus
+  `test_native_starred_unpack_into_captured_and_attribute_targets`, GC0-GC4).
+- `test_py_nested_hoist.py::test_nested_hoist_caches_reject_reused_object_id`
+  patched `id()` in `hoist_lowering` only, while `hoist_boxing` keyed
+  `boxed_function_defs` with the real `id()`, so no def was found to bind a
+  cell. The table is now an identity list; with or without the patch the
+  probe's IR is identical to the unpatched IR.
 - Linux aarch64 and x86_64 at `169bcfca1` both built Stage1 pcc1 and then
   timed out in `ci_worker_size_prior_gate.py --phase pcc1` (300 s): pcc1
   compiling `tests/fixtures/native/worker_size_priors.py` spent 291 s in one

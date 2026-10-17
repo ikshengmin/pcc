@@ -1887,9 +1887,11 @@ class AssignmentStatementLoweringMixin:
         rest_target = target.elems[star_i]
         assert isinstance(rest_target, Call)
         rest_inner = rest_target.args[0]
-        if not isinstance(rest_inner, Name):
+        # A captured name arrives as its cell subscript; store it like the
+        # other unpack targets.
+        if not isinstance(rest_inner, (Name, Subscript, Attr)):
             raise NotImplementedError(
-                "Layer 1 starred unpack target must be a bare name"
+                "Layer 1 starred unpack target must be a name, subscript or attribute"
             )
         lo_obj = self.builder.call(
             self.runtime["py_int_from_i64"],

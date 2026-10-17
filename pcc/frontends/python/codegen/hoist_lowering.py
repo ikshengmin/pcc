@@ -409,7 +409,8 @@ class _HoistLoweringPass:
             )
             return hoisted
         compute_free_names_cache = {}
-        boxed_function_defs = {}
+        # Cell-binding defs by identity; no id() key can alias another def.
+        boxed_function_defs = []
         # The inferred type of the enclosing method's ``self`` while one
         # method's body is rewritten.  A mixin method is typed with its
         # composed host class; a hoisted closure that captures ``self``
@@ -418,7 +419,10 @@ class _HoistLoweringPass:
         enclosing_self_type = [None]
 
         def function_binds_cell(fd):
-            return boxed_function_defs.get(id(fd)) is fd
+            for boxed_def in boxed_function_defs:
+                if boxed_def is fd:
+                    return True
+            return False
 
         module_scope_names_base_items = []
         module_import_names = []
