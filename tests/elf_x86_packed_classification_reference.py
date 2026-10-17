@@ -5,6 +5,8 @@ import ast
 import hashlib
 from pathlib import Path
 
+from tests.elf_arm_branch_slot_reference import without_arm_branch_slot_defaults
+
 
 BASE_OWNER_SHA256 = "ee78de923583637d34d79b96289a17539101087f13eff68492037124aa850ad2"
 OWNER_REVERSE_EDITS = (
@@ -45,6 +47,7 @@ OWNER_REVERSE_EDITS = (
 
 
 def without_x86_packed_classification(source):
+    source = without_arm_branch_slot_defaults(source)
     for changed, original in reversed(OWNER_REVERSE_EDITS):
         assert source.count(changed) == 1
         source = source.replace(changed, original)

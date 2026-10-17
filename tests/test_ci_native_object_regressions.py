@@ -508,6 +508,7 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "tests/python/test_stage2_export_capture.py",
         "tests/python/test_aarch64_call_target_reuse.py",
         "tests/python/test_owned_elf_assembler_dispatch.py",
+        "tests/python/test_elf_arm_branch_slot_defaults.py",
         "tests/test_ci_native_object_regressions.py",
     ]
     linux_only = (
@@ -519,6 +520,9 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}")
     for path in (*[node.split("::")[0] for node in (*gate.NODES, *gate.WINDOWS_NODES)],
                  "scripts/ci_native_object_regressions.py", "tests/test_ci_native_object_regressions.py",
+                 "tests/python/test_elf_arm_branch_slot_defaults.py",
+                 "tests/elf_arm_branch_slot_reference.py",
+                 "tests/elf_x86_packed_classification_reference.py",
                  *linux_only, "tests/python/test_freestanding_gc_relocation_copy.py",
                  "tests/python/fixtures/gc4_copy_page_probe_native.c"):
         assert text.count('      - "' + path + '"') == 2

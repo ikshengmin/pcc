@@ -1246,7 +1246,10 @@ def _link_static_executable_image(
                         if (machine == EM_AARCH64 and relocation_type == 283
                                 and section.flags & SHF_EXECINSTR
                                 and not section.flags & SHF_WRITE):
-                            slots = branch_slots.setdefault((object_index, section_index), {})
+                            slots = branch_slots.get((object_index, section_index))
+                            if slots is None:
+                                slots = {}
+                                branch_slots[(object_index, section_index)] = slots
                             branch_key = (object_index, symbol_index, addend)
                             if branch_key not in slots:
                                 slots[branch_key] = len(slots)
@@ -1293,7 +1296,10 @@ def _link_static_executable_image(
                 if (machine == EM_AARCH64 and relocation.type == 283
                         and section.flags & SHF_EXECINSTR
                         and not section.flags & SHF_WRITE):
-                    slots = branch_slots.setdefault((object_index, section_index), {})
+                    slots = branch_slots.get((object_index, section_index))
+                    if slots is None:
+                        slots = {}
+                        branch_slots[(object_index, section_index)] = slots
                     branch_key = (object_index, relocation.symbol_index, relocation.addend)
                     if branch_key not in slots:
                         slots[branch_key] = len(slots)
