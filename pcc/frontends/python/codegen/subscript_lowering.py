@@ -563,10 +563,9 @@ class SubscriptLoweringMixin:
             self._gc_release_if_owned(key_obj, idx_expr)
             release_rhs()
             return
-        if isinstance(obj_ty, TupleType):
-            raise NotImplementedError(
-                "tuples are immutable - subscript-assignment not allowed"
-            )
+        # A tuple-typed target still needs Python's runtime assignment error,
+        # including catch/finally and prior RHS/receiver/key evaluation. The
+        # native protocol dispatches on the actual object, not a static hint.
         # The unknown receiver may be a mapping: preserve its Python key
         # just as the dynamic load path does, including computed wide ints.
         key_obj = self._emit_subscript_key_object(idx_expr)

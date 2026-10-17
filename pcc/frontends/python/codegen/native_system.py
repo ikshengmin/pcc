@@ -660,6 +660,26 @@ class NativeSystemLoweringMixin:
                 self.runtime["py_int_from_i64"], [limit],
                 name=self._fresh("sys.getrecursionlimit.box"),
             )
+        if kind == "sys.setrecursionlimit" and len(expr.args) == 1:
+            previous = self._current_try_err_block()
+            target = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            root = self._emit_slot_call_operand(expr.args[0], "sys.recursion.limit")
+            try:
+                self._try_err_block = self._slot_call_cleanup_block((root,), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                limit = self.builder.call(
+                    self.runtime["py_index_i64_checked_slots"],
+                    [self._as_gc_ptr(root)], name=self._fresh("sys.recursion.index"),
+                )
+                self._emit_post_call_err_check(expr.span)
+                self.builder.call(self.runtime["py_sys_setrecursionlimit"], [limit])
+                self._emit_post_call_err_check(expr.span)
+                self._release_slot_call_roots((root,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return self._emit_none_literal()
         if kind != "sys.exit":
             return None
         # ``sys.exit(code)`` raises ``SystemExit(code)`` as in CPython, so

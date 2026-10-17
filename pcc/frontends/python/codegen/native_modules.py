@@ -457,7 +457,7 @@ class NativeModuleAliasMixin:
             return "time." + expr.name
         if (
             isinstance(expr, Attr)
-            and expr.name in ("exit", "getrecursionlimit")
+            and expr.name in ("exit", "getrecursionlimit", "setrecursionlimit")
             and isinstance(expr.obj, Name)
             and self._native_builtin_module_for_name(expr.obj.ident) == "sys"
         ):
@@ -1270,7 +1270,7 @@ class NativeModuleAliasMixin:
         if import_module == "sys":
             return all(
                 attr_name
-                in ("exit", "getrecursionlimit", "stdin", "stdout", "stderr", "prefix", "base_prefix")
+                in ("exit", "getrecursionlimit", "setrecursionlimit", "stdin", "stdout", "stderr", "prefix", "base_prefix")
                 for attr_name, _as_name in stmt.names
             )
         if import_module == "os":
@@ -1514,7 +1514,7 @@ class NativeModuleAliasMixin:
                     },
                 )
                 continue
-            if attr_name in ("exit", "getrecursionlimit") and import_module == "sys":
+            if attr_name in ("exit", "getrecursionlimit", "setrecursionlimit") and import_module == "sys":
                 self._register_native_builtin_value_alias(local_name, "sys." + attr_name)
                 continue
             if attr_name == "replace" and import_module == "dataclasses":

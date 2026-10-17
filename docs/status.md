@@ -1,10 +1,40 @@
 # PCC current status
 
-Updated 2026-10-15. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-10-17. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## Generated portable-runtime compiler integration
+
+Source baseline `a1da79229ed5a6f934b544f36d4d908eecb05dd2` plus this
+milestone. Recovery index (frozen sources, patches, native binaries, command/mode
+and runtime receipts):
+`/Users/jiamo/pcc-recovery-archive/2026-10-17/portable-runtime/index.json`.
+
+- Temporary `str(...).zfill(width)` results enter the existing output-slot
+  protocol before retiring input roots. Tuple-typed stores use the native
+  assignment protocol, preserving catchable errors and evaluation/finally order.
+  Private module-comprehension unpack slots are registered before publication.
+- Public `sys.setrecursionlimit` direct/alias calls use the existing native
+  setter with rooted `__index__` conversion and exception checks. The stdlib
+  facade exposes the same API; the no-libpython guard remains enabled.
+- Native source-hosted self-backend/no-libpython programs match CPython for
+  padding/callback order, tuple errors/finally, private comprehension names and
+  recursion setter errors/restoration. Fifteen executions at GC0-GC4 pass.
+  An unchanged TAG/T2-generated UUID Python program also executes natively;
+  dynamic linkage is libSystem only. UUID payloads are compared by format,
+  version/variant and count, not unpredictable byte equality.
+- The earlier 120-second executable timeouts interrupted cold owned-runtime
+  construction (181 modules). A task orchestrator reused only receipt-verified
+  objects and completed the same production compile/optimization/emission and
+  archive checks. A compiler-identity change correctly rebuilt the objects.
+  Production runtime-build checkpoint reuse is still separate unfinished work.
+- Compiler ownership for these runs is **host pcc0 frontend, owned self backend,
+  libpython off**. The historical installed pcc1 baseline was not replaced.
+  New-source pcc1 bootstrap/promotion, full translated Harness/zdb, all Node APIs
+  and release qualification remain open; no fixed point or performance claim.
 
 ## Harness compiler integration (local source delta)
 

@@ -307,6 +307,12 @@ class AssignmentStoreLoweringMixin:
                             init_null=True,
                         )
                         self.env[lhs.ident] = (alloca, ir_ty, target_ty)
+                        # Private comprehension locals also live in module
+                        # initializers. Register their empty physical slot
+                        # before unpacking can publish an owned item into it.
+                        self._ensure_local_gc_frame_root(
+                            lhs.ident, alloca, ir_ty, allow_module=True,
+                        )
                         slot = self.env[lhs.ident]
             if planned_exact_int:
                 self._store_value_at_name(

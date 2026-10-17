@@ -893,6 +893,12 @@ class StringMethodLoweringMixin:
             if expr.args:
                 return None
             runtime_name = "py_str_" + name
+        elif name == "zfill":
+            if len(expr.args) != 1:
+                return None
+            runtime_name = "py_str_zfill"
+            scalar_index = 0
+            object_count = 0
         elif name in ("split", "rsplit"):
             if len(expr.args) > 2:
                 return None

@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import sys as _native_sys
 
-from pcc.extern import c_int, c_int64, extern
+from pcc.extern import c_int, c_int64, c_obj, extern
 from pcc.driver.python_target import PYTHON_TARGET_FULL_VERSION, PYTHON_TARGET_MAJOR, PYTHON_TARGET_MINOR, PYTHON_TARGET_MICRO
 
 # libc glue.
 exit_c: "extern" = extern("exit", (c_int,))  # noreturn; treat as void
 _recursion_limit_c: "extern" = extern("py_sys_getrecursionlimit", (), c_int64)
+_recursion_set_c: "extern" = extern("py_sys_setrecursionlimit", (c_int64,), c_int64)
+_index_value = extern("py_obj_index", (c_obj,), c_obj)
+_error_pending = extern("py_err_occurred", (), c_int64)
 
 # Use the compiler's kernel-backed argv projection to construct real pcc
 # strings. Publishing this module must not expose raw extern ``char *`` values
@@ -89,3 +92,17 @@ def getrecursionlimit() -> int:
     if _native_sys.implementation.name != "pcc":
         return _native_sys.getrecursionlimit()
     return _recursion_limit_c()
+
+
+def setrecursionlimit(limit, /) -> None:
+    """Update the native activation limit without a host interpreter fallback."""
+    if _native_sys.implementation.name != "pcc":
+        return _native_sys.setrecursionlimit(limit)
+    value = _index_value(limit)
+    if _error_pending():
+        raise
+    if value > 2147483647 or value < -2147483648:
+        raise OverflowError("Python int too large to convert to C int")
+    _recursion_set_c(value)
+    if _error_pending():
+        raise
