@@ -50,6 +50,40 @@ def emit_in_process(
     return target.identity, target.emit_asm(ir_text)
 
 
+def emit_packed_object_in_process(
+    ir_text: str,
+    *,
+    parse_target_triple,
+    host_target_triple,
+) -> Optional[tuple[str, bytes]]:
+    """Keep Linux x86 stack-map plans owned until final object offsets exist."""
+    from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+
+    triple = parse_target_triple(ir_text)
+    if triple == "unknown-unknown-unknown":
+        triple = host_target_triple()
+    if not is_x86_64_linux_triple(triple):
+        return None
+    from pcc.backend.self_backend_x86_64_linux import _emit_x86_64_module
+    from pcc.backend.target_objects import encode_assembly_object
+
+    plans = []
+    try:
+        # Preserve the text emitter's passes and original IR profile identity.
+        # Only stack-map rendering changes: the assembler packs those plans
+        # after measuring final instruction offsets, then consumes their owner.
+        assembly = _emit_x86_64_module(ir_text, stack_map_plans_out=plans)
+        payload = encode_assembly_object(
+            assembly, triple, stack_map_plans=plans,
+            consume_stack_map_plans=True,
+        )
+        return "self-x86_64-linux-v0", payload
+    finally:
+        # Validation failures deliberately retain caller-owned plans in the
+        # encoder. This worker owns its private list and must release it too.
+        plans.clear()
+
+
 def emit_via_host_python(
     ir_text: str,
     tmp_dir: str,
@@ -102,38 +136,47 @@ def run_emit_worker(
     *,
     normalize_ir,
     emit_native,
+    emit_native_object=None,
 ) -> int:
     try:
         if cc and sys.implementation.name == "pcc":
             raise SelfBackendEmitError("native self emission cannot invoke an external assembler")
         with open(ir_path, "r", encoding="utf-8") as stream:
             ir_text = normalize_ir(stream.read())
-        native_result = emit_native(ir_text)
-        if native_result is None:
-            raise SelfBackendEmitError(
-                "native emitter does not support the module target"
-            )
-        target_id, asm_text = native_result
+        packed_result = None
+        if obj_path and not cc and obj_path.endswith(".pco") and emit_native_object is not None:
+            packed_result = emit_native_object(ir_text)
+        asm_text = ""
+        if packed_result is None:
+            native_result = emit_native(ir_text)
+            if native_result is None:
+                raise SelfBackendEmitError(
+                    "native emitter does not support the module target"
+                )
+            target_id, asm_text = native_result
+        else:
+            target_id, payload = packed_result
         result_payload = asm_text
         if obj_path and not cc and obj_path.endswith(".pco"):
             # Owned link: assemble here, in parallel with the other emit
             # workers, and hand the linker a packed native object.  The link
             # used to assemble every module's text serially in one process;
             # under pcc1 that was most of a multi-module compile.
-            from pcc.backend.arm64_asm_driver import assemble_file
-            from pcc.backend.native_object import encode_native_object_from_sections
+            if packed_result is None:
+                from pcc.backend.arm64_asm_driver import assemble_file
+                from pcc.backend.native_object import encode_native_object_from_sections
 
-            if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0"):
-                from pcc.backend.owned_elf_link import assemble as assemble_elf
-                from pcc.backend.elf_x86_64 import emit_relocatable
-                triple = "aarch64-unknown-linux-gnu" if target_id == "self-aarch64-linux-v0" else "x86_64-unknown-linux-gnu"
-                payload = emit_relocatable(assemble_elf(asm_text, triple))
-            elif target_id == "self-x86_64-windows-v0":
-                from pcc.backend.coff_x86_64 import assemble_object
-                payload = assemble_object(asm_text)
-            else:
-                sections, undefined = assemble_file(asm_text)
-                payload = encode_native_object_from_sections(sections, undefined=undefined)
+                if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0"):
+                    from pcc.backend.owned_elf_link import assemble as assemble_elf
+                    from pcc.backend.elf_x86_64 import emit_relocatable
+                    triple = "aarch64-unknown-linux-gnu" if target_id == "self-aarch64-linux-v0" else "x86_64-unknown-linux-gnu"
+                    payload = emit_relocatable(assemble_elf(asm_text, triple))
+                elif target_id == "self-x86_64-windows-v0":
+                    from pcc.backend.coff_x86_64 import assemble_object
+                    payload = assemble_object(asm_text)
+                else:
+                    sections, undefined = assemble_file(asm_text)
+                    payload = encode_native_object_from_sections(sections, undefined=undefined)
             asm_text = ""
             with open(obj_path, "wb") as stream:
                 stream.write(payload)

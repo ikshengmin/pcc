@@ -1114,6 +1114,14 @@ def _emit_self_asm_in_process(
         target_supported=_is_aarch64_darwin_triple_native,
         emit_asm=_emit_aarch64_darwin_asm_native,
     )
+def _emit_self_packed_object_in_process(
+    ir_text: str,
+) -> Optional[tuple[str, bytes]]:
+    return _pipeline_self_backend_emit.emit_packed_object_in_process(
+        ir_text,
+        parse_target_triple=_parse_self_backend_target_triple_native,
+        host_target_triple=_host_target_triple_for_self_backend,
+    )
 def _maintain_self_backend_object_cache(
     protected_paths: list[str],
 ) -> None:
@@ -1164,6 +1172,7 @@ def run_self_backend_emit_worker(
         cc,
         normalize_ir=_self_backend_ir_text,
         emit_native=_emit_self_asm_in_process,
+        emit_native_object=_emit_self_packed_object_in_process,
     )
 
 
