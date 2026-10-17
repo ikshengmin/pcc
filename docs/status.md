@@ -8,6 +8,37 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 
 ## 2026-10-17 Mac local continuation
 
+### 0.1.8 release readiness (2026-10-18)
+
+- macOS arm64 Stage1 at `85650ac4b` (local, `scripts/bootstrap.py --stage 1`,
+  auto cap 9.78 GB): rc=0 in 2730 s; the owned link passed `fixups`, so
+  `10be0ed89` holds on the real image. pcc1 is 1,686,784,024 bytes (gzip -6
+  385 MB; the 10-13 build was 674 MB before precise stack maps), above PyPI's
+  default 100 MB per-file limit. It runs `--help`, links only libSystem, and
+  compiled a function-bearing program with no host Python/compiler; the
+  program prints 42 under GC0-GC4.
+- That compile took 108 s, 88 s of it in the owned Mach-O link (host pcc0:
+  3.8 s on the same input). `012ec3265` trims the per-relocation work there:
+  its Stage1 (2133 s locally) links the same program in 68.6 s (70.6 s total,
+  GC0-GC4 print 42). In that pcc1, `_iter_folded_relocation_rows` is 61% of
+  the link and ~45% is `Relocation(...)` built through `py_module_attr_get` +
+  `py_obj_call_slots` + kwargs merging, while the closed-world compile of the
+  same module constructs it statically (`py_instance_new` + direct
+  `Relocation.__init__`). The Stage1 multi-module route loses the
+  cross-module class layout there; not yet root-caused.
+- macOS wheel from `012ec3265` (`PCC_BUILD_PCC1=<that pcc1> uv build --wheel`):
+  `python_cc-0.1.7-cp315-cp315-macosx_26_0_arm64.whl`, 430,773,781 bytes.
+  `scripts/ci_native_wheel_gate.py` passes. In a fresh venv `import pcc`,
+  `python -m pcc` (4 s compile) and `pcc1` (75 s compile) each build a
+  class/dict/exception/big-int program that matches CPython on GC0-GC4 and
+  links only libSystem. Open release decisions: the wheel exceeds PyPI's
+  default 100 MB file limit; the tag is `cp315` (built by the 3.15 rc) and
+  `macosx_26_0` (build host) although pcc1's link minimum is macOS 12.0.
+- Windows at `169bcfca1`: GC0-GC3 compiled and ran the canary; GC4's canary
+  compile hit the stage deadline. Linux x86_64 and aarch64 built pcc1 and
+  timed out in the pcc1 prior-worker gate (aarch64: one oversized emit worker
+  ran 291 s of the 300 s budget).
+
 - macOS Stage1 at `169bcfca1` (CI run 39031828792, artifact
   `bootstrap-macos-arm64`): all codegen finished (3574 s, peak tree RSS
   2.54 GB under the 2.77 GB cap) and the owned Mach-O link reached `fixups`,
