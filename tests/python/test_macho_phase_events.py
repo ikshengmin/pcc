@@ -1563,17 +1563,17 @@ def test_staged_preparation_seals_all_rows_before_first_payload_join(tmp_path, m
         compact_budget=_budget(50_000_000),
     )
     stores = _capture_row_stores(monkeypatch)
-    original = host._consume_parts
+    original = host._StagedSectionPayloads.read_owned
     joins, phases = [], []
-    def consume(parts, ledger, **kwargs):
+    def consume(self, index, ledger, **kwargs):
         store, = stores
         assert store.sealed and store.appended == store.count
         assert store.active_bytes == 0
-        joins.append(len(parts))
-        return original(parts, ledger, **kwargs)
+        joins.append(index)
+        return original(self, index, ledger, **kwargs)
     def phase(event, **fields):
         phases.append((event, fields))
-    monkeypatch.setattr(host, "_consume_parts", consume)
+    monkeypatch.setattr(host._StagedSectionPayloads, "read_owned", consume)
     budget = _budget(50_000_000)
     pending = [host.prepare_executable_from_paths(paths, compact_budget=budget,
                                                  _staged_rows=True, _phase_callback=phase)]

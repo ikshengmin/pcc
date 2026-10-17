@@ -17,6 +17,7 @@ import traceback
 from . import macho_link as link, macho_spec as spec, native_object as native
 from .macho_host_relocations import _model_bytes, _pack_final_link_rows
 from .macho_host_join import _StagedRelocationRows, _consume_parts, _join_instrumentation_absent
+from .macho_host_payload import _StagedSectionPayloads
 from .macho_host_phase import emit_phase, emit_section_phase
 from .macho_host_stackmap import merge_staged_stack_map_payloads
 from .macho_host_stackmap_inputs import _StagedStackMapInputs
@@ -887,7 +888,7 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
     normal_parts, rebase_parts, stack_payloads = {}, {}, None
     raw = packed = payload = descriptor = section = target = part = None
     out_sections, output_rows = [], []
-    row_storage = row_targets = failure = None
+    row_storage = row_targets = payload_storage = failure = None
     try:
         emit_phase(_phase_callback, "input_scan_begin")
         ledger.keep(ledger.sequence(len(paths)) + ledger.sequence(len(archives) + len(archive_paths)))
@@ -1282,6 +1283,22 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
             from .macho_host_output import _require_uninstrumented_owner
             _require_uninstrumented_owner()
             row_storage.seal()
+            payload_storage = _StagedSectionPayloads(len(order), ledger.budget, ledger.keep)
+            # Retire the aggregate chunk graph, including single-part sections,
+            # before creating any final section backing. Per-section consuming
+            # joins otherwise overlap completed backings with all later chunks
+            # and with allocator-resident pages from earlier chunk retirement.
+            for join_index in range(len(order)):
+                key = order[join_index]
+                target = merged[key]
+                size = sum(map(len, target.data_parts))
+                payload_part_count = len(target.data_parts)
+                emit_section_phase(_phase_callback, "section_payload_spool_begin", join_index, key,
+                                   size, payload_part_count, True)
+                ledger.retained -= payload_storage.write_owned_parts(target.data_parts)
+                emit_section_phase(_phase_callback, "section_payload_spool_end", join_index, key,
+                                   size, payload_part_count, True)
+            payload_storage.seal()
         for join_index in range(len(order)):
             key = order[join_index]
             target = merged[key]
@@ -1313,7 +1330,11 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                                    size, row_part_count, consume_rows)
                 has_section_targets = any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
                                           for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))
-            size = sum(len(part) for part in target.data_parts)
+            if payload_storage is not None:
+                _offset, size, payload_part_count, _digest = payload_storage.descriptor(join_index)
+            else:
+                size = sum(len(part) for part in target.data_parts)
+                payload_part_count = len(target.data_parts)
             def patch_targets(data):
                 if row_storage is None:
                     _patch_section_targets(data, rows, addresses, order)
@@ -1326,11 +1347,15 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                         finally:
                             staged = None
 
-            payload_part_count = len(target.data_parts)
-            consume_payload = consuming_join and (payload_part_count > 1 or has_section_targets)
+            consume_payload = payload_storage is not None or (
+                consuming_join and (payload_part_count > 1 or has_section_targets))
             emit_section_phase(_phase_callback, "section_payload_begin", join_index, key,
                                size, payload_part_count, consume_payload)
-            if consume_payload:
+            if payload_storage is not None:
+                payload = payload_storage.read_owned(
+                    join_index, ledger, patch=patch_targets if has_section_targets else None,
+                )
+            elif consume_payload:
                 payload = _consume_parts(target.data_parts, ledger,
                                          patch=patch_targets if has_section_targets else None)
             else:
@@ -1359,6 +1384,10 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
             payload = rows = patch_targets = None
             emit_section_phase(_phase_callback, "section_payload_end", join_index, key,
                                size, payload_part_count, consume_payload)
+        if payload_storage is not None:
+            payload_storage.close()
+            ledger.retained -= payload_storage.metadata_bytes
+            payload_storage = None
         emit_phase(_phase_callback, "section_joins_end")
         if row_storage is None:
             return out_sections, output_rows, unresolved, weak_unresolved
@@ -1383,13 +1412,17 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
     finally:
         try:
             try:
-                if row_storage is not None:
-                    row_storage.close(_error=failure)
+                try:
+                    if payload_storage is not None:
+                        payload_storage.close(_error=failure)
+                finally:
+                    if row_storage is not None:
+                        row_storage.close(_error=failure)
             finally:
                 if stack_payloads is not None:
                     stack_payloads.close()
         finally:
-            row_storage = row_targets = failure = None
+            row_storage = row_targets = payload_storage = failure = None
             stack_payloads = None
             descriptors.clear()
             archive_buffers.clear()
