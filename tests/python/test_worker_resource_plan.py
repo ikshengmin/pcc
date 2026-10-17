@@ -1030,6 +1030,14 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
         "build/bootstrap/stage*.process.*/target.stderr",
         "build/bootstrap/stage*.process.*/result.json.worker-rss.tsv",
         "build/bootstrap/stage*.json",
+        # Size-prior gate receipts are text only; objects and binaries stay out.
+        "build/worker-prior-gate/**/*.json",
+        "build/worker-prior-gate/**/*.jsonl",
+        "build/worker-prior-gate/**/*.log",
+        "build/worker-prior-gate/**/*.stdout",
+        "build/worker-prior-gate/**/*.stderr",
+        "build/worker-prior-gate/**/*.tsv",
+        "build/worker-prior-gate/**/*.xml",
     ]
     environment = macos.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in environment

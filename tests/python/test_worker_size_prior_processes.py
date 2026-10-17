@@ -95,9 +95,11 @@ def _run(prefix, case, directory, owner, collector, compiler_parameter=None):
     ):
         record["failure_evidence"] = _fixture_failure_evidence(directory)
     (directory / "execution.json").write_text(json.dumps(record, indent=2) + "\n")
+    # A string message is printed whole; pytest would saferepr-truncate a dict
+    # at default verbosity and hide the child's stderr.
     assert (result.returncode, result.stdout, result.stderr) == (
         0, "WORKER_SIZE_PRIOR_OK " + case + "\n", "",
-    ), record
+    ), json.dumps(record, indent=2)
     assert (directory / "complete").read_text() == owner + "\t" + str(collector)
     expected_attempts = 3 if case == "width" else 4
     starts = sorted(directory.glob("started.*"))
