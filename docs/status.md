@@ -26,12 +26,19 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   decorators keep declaration-time handling. Test:
   `tests/python/test_decorator_application.py::test_nested_decorators_apply_where_the_def_executes`
   (pcc0, GC0-GC4). `constructor_expression_failures` now compiles.
-- Still open: a nested `def` (or an assignment) that rebinds a typed local
-  inside `if`/`try` leaves the local's inferred type as the arm's (repro:
-  `x = 37` then `try: x = some_function` then `x == 37` fails with "cannot
-  coerce FuncType to int"); `constructor_exception_order` and
-  `constructor_default_exception` stop there. A decorated nested def that
-  calls itself still reaches the undecorated function directly.
+- Type joins: `try` now joins every type that can reach the code after it
+  (normal completion; for each handler that falls through, the pre-`try` or
+  any partial-body binding unless the handler rebinds; `finally` replaces
+  all), and an `if` arm counts a nested `def` as a binding. Before,
+  `x = 37` then `try: x = some_function` then `x == 37` failed with "cannot
+  coerce FuncType to int". On pcc's own modules this widens 21 locals to dyn
+  (scan: `_typeconf_widen_try_join` retargets, 34 events), none in
+  `pcc/runtime/`, all on error/observer/config paths or where the old type
+  was wrong (`c_codegen.py:3979` `dim`). Test:
+  `tests/python/test_try_rebinding_type_join.py` (pcc0, GC0-GC4).
+  `constructor_exception_order` and `constructor_default_exception` compile.
+  Still open: a decorated nested def that calls itself reaches the
+  undecorated function directly.
 - The Windows tar native cases (0xC0000005, empty stdout) crash before
   `main()`'s first flushed print. The same generated program compiled on
   macOS extracts and runs to its Windows-specific controls, so the crash is

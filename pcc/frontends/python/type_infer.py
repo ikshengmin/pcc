@@ -2851,6 +2851,109 @@ def _typeconf_collect_arm_assignments(body: tuple, out: dict, annotated: dict) -
                 ident = _name_ident(tgt)
                 if ident is not None:
                     out[ident] = tgt.ty
+        elif isinstance(s, FuncDef):
+            # A nested def rebinds its name to a function object (an object
+            # slot); the hoist pass emits that store through a dyn binding.
+            out[s.name] = _make_func_type((), TYPE_DYN)
+
+
+def _typeconf_collect_try_candidates(body: tuple, out: dict, annotated: dict) -> None:
+    """Record every type a simple local takes at the top level of ``body``.
+
+    A try body can stop after any statement, so each binding (not only the
+    last) can reach a handler.
+    """
+    for s in body:
+        last: dict = {}
+        _typeconf_collect_arm_assignments((s,), last, annotated)
+        for name in last:
+            if name not in out:
+                out[name] = []
+            out[name].append(last[name])
+
+
+def _typeconf_block_falls_through(block: tuple) -> bool:
+    """Conservatively, whether control can leave ``block`` at its end."""
+    if not block:
+        return True
+    return not isinstance(block[-1], (Return, Raise, Continue, Break))
+
+
+def _typeconf_widen_try_join(
+    scope: _Scope,
+    pre_types: dict,
+    body: tuple,
+    handlers: tuple,
+    else_body: tuple,
+    finally_body: tuple,
+) -> tuple:
+    """Force-widen locals whose ``try`` exits disagree on slot ABI.
+
+    Normal completion carries the last body/``else`` binding. A handler that
+    falls through carries its own last binding, or else the pre-``try`` type or
+    any partial-body binding. A ``finally`` binding replaces every exit.
+    Conflicting locals become ``DynType`` in the shared scope and their
+    top-level assignment targets in every block are retargeted to ``DynType``.
+    """
+    annotated: dict = {}
+    normal: dict = {}
+    _typeconf_collect_arm_assignments(body, normal, annotated)
+    _typeconf_collect_arm_assignments(else_body, normal, annotated)
+    partial: dict = {}
+    _typeconf_collect_try_candidates(body, partial, annotated)
+    handler_exits: list = []
+    for handler in handlers:
+        if _typeconf_block_falls_through(handler.body):
+            last: dict = {}
+            _typeconf_collect_arm_assignments(handler.body, last, annotated)
+            handler_exits.append(last)
+    finally_last: dict = {}
+    _typeconf_collect_arm_assignments(finally_body, finally_last, annotated)
+    names: list = []
+    for table in [normal, finally_last] + handler_exits:
+        for name in table:
+            if name not in names:
+                names.append(name)
+    if handler_exits:
+        for name in partial:
+            if name not in names:
+                names.append(name)
+    widen: dict = {}
+    for name in names:
+        if annotated.get(name) or name in finally_last:
+            continue
+        pre_ty = pre_types.get(name)
+        exits: list = []
+        exits.append(normal.get(name, pre_ty))
+        for last in handler_exits:
+            if name in last:
+                exits.append(last[name])
+            else:
+                exits.append(pre_ty)
+                for ty in partial.get(name, ()):
+                    exits.append(ty)
+        types: list = []
+        for ty in exits:
+            if ty is not None:
+                types.append(ty)
+        index = 1
+        while index < len(types):
+            if _typeconf_join_type(types[0], types[index]) is not None:
+                widen[name] = True
+            index += 1
+        if widen.get(name):
+            scope.update(name, TYPE_DYN)
+    if not widen:
+        return (body, handlers, else_body, finally_body)
+    new_handlers: list = []
+    for handler in handlers:
+        new_handlers.append(replace(handler, body=_typeconf_retarget_arm(handler.body, widen)))
+    return (
+        _typeconf_retarget_arm(body, widen),
+        tuple(new_handlers),
+        _typeconf_retarget_arm(else_body, widen),
+        _typeconf_retarget_arm(finally_body, widen),
+    )
 
 
 def _typeconf_retarget_arm(body: tuple, widen: dict) -> tuple:
@@ -3169,10 +3272,27 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
         return replace(stmt, exc=exc, cause=cause)
 
     if isinstance(stmt, Try):
+        # Pre-``try`` types of every simple local the statement rebinds, for
+        # the exception edges that leave a body binding unexecuted.
+        pre_types: dict = {}
+        pre_annotated: dict = {}
+        _typeconf_collect_try_candidates(stmt.body, pre_types, pre_annotated)
+        for handler in stmt.handlers:
+            _typeconf_collect_arm_assignments(handler.body, pre_types, pre_annotated)
+        _typeconf_collect_arm_assignments(stmt.else_body, pre_types, pre_annotated)
+        _typeconf_collect_arm_assignments(stmt.finally_body, pre_types, pre_annotated)
+        pre_names: list = []
+        for name in pre_types:
+            pre_names.append(name)
+        for name in pre_names:
+            pre_types[name] = scope.lookup(name)
         body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.body)
         handlers = tuple(_infer_handler(ctx, scope, h) for h in stmt.handlers)
         else_body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.else_body)
         finally_body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.finally_body)
+        body, handlers, else_body, finally_body = _typeconf_widen_try_join(
+            scope, pre_types, body, handlers, else_body, finally_body,
+        )
         return replace(
             stmt,
             body=body,
