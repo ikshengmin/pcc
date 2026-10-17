@@ -5,6 +5,11 @@ call site execution, so each decorator ran once per call (a recording
 decorator saw ['f', 'f', 'f', 'f'] for one definition and three calls) and a
 stateful decorator started from fresh state each time. A decorator written as
 a call to a module function (``@tag("b")``) was refused at compile time.
+
+A nested def is hoisted to module scope, and its decorators stayed on the
+hoisted function: a decorator naming an enclosing local was refused, and a
+module-level decorator never ran. The enclosing scope now evaluates them
+before the defaults and applies them each time the def executes.
 """
 
 from __future__ import annotations
@@ -68,12 +73,80 @@ main()
 '''
 
 
-def test_decorators_run_once_and_factories_apply(tmp_path, pcc_runtime_archive, python_program_compiler):
-    source = tmp_path / "decorators.py"
-    source.write_text(_PROGRAM, encoding="utf-8")
+_NESTED_PROGRAM = '''
+events = []
+
+
+def register(function):
+    events.append("register " + function.__name__)
+    return function
+
+
+def tagged(label):
+    events.append("factory " + label)
+    def apply(function):
+        events.append("apply " + label + " " + function.__name__)
+        return function
+    return apply
+
+
+def note(label):
+    events.append("default " + label)
+    return label
+
+
+def build(tag):
+    def mark(function):
+        events.append("mark " + tag)
+        def wrapper(*args):
+            return function(*args) + "|" + tag
+        return wrapper
+
+    @mark
+    @tagged(tag)
+    def inner(value=note(tag)):
+        return value
+
+    @register
+    def plain():
+        return tag
+
+    return inner, plain
+
+
+def failing(error):
+    def reject(function):
+        events.append("reject " + function.__name__)
+        raise error
+
+    @reject
+    def never(value=note("never")):
+        return value
+    return never
+
+
+def main() -> None:
+    first, first_plain = build("a")
+    second, second_plain = build("b")
+    print(first(), first("x"), second(), first_plain(), second_plain())
+    print(first is second, first.__name__, first_plain.__name__)
+    try:
+        failing(ValueError("rejected"))
+    except ValueError as caught:
+        print("caught", caught)
+    print(events)
+
+
+main()
+'''
+
+
+def _assert_native_matches_cpython(program, name, tmp_path, pcc_runtime_archive, python_program_compiler):
+    source = tmp_path / (name + ".py")
+    source.write_text(program, encoding="utf-8")
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=60)
     assert expected.returncode == 0, expected.stderr
-    output = tmp_path / "decorators"
+    output = tmp_path / name
     python_program_compiler(
         str(source), str(output), backend="self", libpython_mode="off",
         runtime_archive=str(pcc_runtime_archive),
@@ -85,3 +158,18 @@ def test_decorators_run_once_and_factories_apply(tmp_path, pcc_runtime_archive, 
         )
         assert ran.returncode == 0, f"GC{gc}: {ran.stdout}{ran.stderr}"
         assert ran.stdout == expected.stdout, f"GC{gc}: {ran.stdout}"
+
+
+def test_decorators_run_once_and_factories_apply(tmp_path, pcc_runtime_archive, python_program_compiler):
+    _assert_native_matches_cpython(
+        _PROGRAM, "decorators", tmp_path, pcc_runtime_archive, python_program_compiler,
+    )
+
+
+def test_nested_decorators_apply_where_the_def_executes(
+    tmp_path, pcc_runtime_archive, python_program_compiler,
+):
+    _assert_native_matches_cpython(
+        _NESTED_PROGRAM, "nested_decorators", tmp_path, pcc_runtime_archive,
+        python_program_compiler,
+    )

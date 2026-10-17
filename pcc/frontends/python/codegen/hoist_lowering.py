@@ -120,6 +120,62 @@ def _hoist_decorator_name(dec):
     return None
 
 
+def _hoist_executable_decorators(fd, scope_names, module_names, import_names):
+    """The top decorators a nested def applies where its definition executes.
+
+    A decorator qualifies when its root names an enclosing local or a binding
+    this module defines. Imported decorators keep declaration-time handling:
+    classifying them needs import tables that do not exist during hoisting.
+    Only a top run qualifies, so the kept decorators still apply first.
+    """
+    executable = []
+    for dec in getattr(fd, "decorators", ()):
+        name = _hoist_decorator_name(dec)
+        if name is None:
+            return tuple(executable)
+        root = name.split(".", 1)[0]
+        if not (
+            name_in(scope_names, root)
+            or (name_in(module_names, root) and not name_in(import_names, root))
+        ):
+            return tuple(executable)
+        executable.append(dec)
+    return tuple(executable)
+
+
+def _hoist_decorated_definition(fd, hoisted_name, decorators, scope_names):
+    """Assignments for rewritten decorator values, and the decorated value.
+
+    Python evaluates decorator expressions top to bottom before the defaults
+    and function object, then applies them bottom to top.
+    """
+    statements = []
+    names = []
+    for decorator in decorators:
+        name = "__pcc_decorator_" + hoisted_name + "_" + str(len(names))
+        while name_in(scope_names, name):
+            name = name + "_"
+        statements.append(_Assign(
+            span=fd.span,
+            targets=(_Name(span=fd.span, ty=_DYN, ident=name),),
+            value=decorator,
+            annotation=None,
+        ))
+        append_name_once(scope_names, name)
+        names.append(name)
+    value = _Name(span=fd.span, ty=_DYN, ident=hoisted_name)
+    index = len(names)
+    while index > 0:
+        index -= 1
+        value = _Call(
+            span=fd.span,
+            ty=_DYN,
+            func=_Name(span=fd.span, ty=_DYN, ident=names[index]),
+            args=(value,),
+        )
+    return tuple(statements), value
+
+
 def _hoist_method_kind(fd) -> str:
     kind = "instance"
     for dec in getattr(fd, "decorators", ()):
@@ -365,6 +421,7 @@ class _HoistLoweringPass:
             return boxed_function_defs.get(id(fd)) is fd
 
         module_scope_names_base_items = []
+        module_import_names = []
 
         def add_module_scope_target_names(t):
             if isinstance(t, _Name):
@@ -394,6 +451,10 @@ class _HoistLoweringPass:
                             module_scope_names_base_items,
                             as_name or imported_name,
                         )
+                        append_name_once(
+                            module_import_names,
+                            as_name or imported_name,
+                        )
                 elif isinstance(
                     module_scope_stmt, (_TopImport, _ImportStmt)
                 ) or not hasattr(
@@ -406,6 +467,7 @@ class _HoistLoweringPass:
                         bound = as_name or imported_mod_name.split(".", 1)[0]
                         if bound:
                             append_name_once(module_scope_names_base_items, bound)
+                            append_name_once(module_import_names, bound)
             elif isinstance(module_scope_stmt, _Assign):
                 for target in module_scope_stmt.targets:
                     add_module_scope_target_names(target)
@@ -1346,8 +1408,12 @@ class _HoistLoweringPass:
                     # layout path but correct, and good enough to
                     # unblock solo-compile on the affected files.
                     binds_cell = function_binds_cell(st)
+                    executable_decorators = _hoist_executable_decorators(
+                        st, scope_names, module_scope_names_base, module_import_names,
+                    )
                     needs_binding = (
                         binds_cell
+                        or bool(executable_decorators)
                         or _hoist_definition_needs_binding(call_scope_body, st)
                     )
                     if needs_binding:
@@ -1587,6 +1653,19 @@ class _HoistLoweringPass:
                         st.return_ty,
                         inner_body,
                     )
+                    definition_value = _Name(span=st.span, ty=_DYN, ident=final_name)
+                    if executable_decorators:
+                        hoisted_fd = _replace(
+                            hoisted_fd,
+                            decorators=st.decorators[len(executable_decorators):],
+                        )
+                        rewritten_decorators = []
+                        for decorator in executable_decorators:
+                            rewritten_decorators.append(rewrite_expr(decorator, rename_map))
+                        decorator_statements, definition_value = _hoist_decorated_definition(
+                            st, final_name, rewritten_decorators, scope_names,
+                        )
+                        new_stmts.extend(decorator_statements)
                     hoisted.append(hoisted_fd)
                     if binds_cell:
                         new_stmts.append(_Assign(
@@ -1596,7 +1675,7 @@ class _HoistLoweringPass:
                                 obj=_Name(span=st.span, ty=_DYN, ident=st.name),
                                 idx=IntLit(span=st.span, ty=IntType(name="int"), value=0),
                             ),),
-                            value=_Name(span=st.span, ty=_DYN, ident=final_name),
+                            value=definition_value,
                             annotation=None,
                         ))
                     elif needs_binding:
@@ -1614,7 +1693,7 @@ class _HoistLoweringPass:
                         new_stmts.append(_Assign(
                             span=st.span,
                             targets=(_Name(span=st.span, ty=_DYN, ident=binding),),
-                            value=_Name(span=st.span, ty=_DYN, ident=final_name),
+                            value=definition_value,
                             annotation=None,
                         ))
                         append_name_once(scope_names, binding)

@@ -49,6 +49,15 @@ Check these invariants in current source when the corresponding path changes:
 Use the [existing tools](development-tools.md). Heavy runs hold
 `build/.pcc-performance.lock`, freeze relevant source/runtime inputs and use
 isolated outputs. Record the expected cache/time envelope.
+
+Freeze source with one `git archive <rev> <paths>` snapshot per source
+identity under test, outside the repository. Archive only what the run reads
+(`pcc tests scripts utils conftest.py run.py pyproject.toml uv.lock
+hatch_build.py .python-version` is about 70 MB). `projects/` alone is about
+634 MB, so symlink it into the snapshot only when a test reads it. Reuse a
+snapshot for every run of that identity, and delete it (by literal absolute
+path) when the comparison is finished, before creating the next one. A
+finished job once left 50 full-repository copies (29 GB, ~157k files).
 `scripts/run_process_tree_sample.py` provides a process-group watchdog,
 descendant RSS cap, durable logs and progress; inspect its current arguments.
 Do not edit the input closure or run tests rebuilding the same runtime archive

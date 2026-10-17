@@ -6,6 +6,59 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## 2026-10-17 Mac local continuation
+
+- macOS Stage1 at `169bcfca1` (CI run 39031828792, artifact
+  `bootstrap-macos-arm64`): all codegen finished (3574 s, peak tree RSS
+  2.54 GB under the 2.77 GB cap) and the owned Mach-O link reached `fixups`,
+  then failed: `_build_seg_info` packed `page_count` > 65535 into a uint16
+  (`__text` span 529.6 MiB; `__DATA` file extent > 1 GiB of 16 KiB pages).
+  `10be0ed89` bounds the starts table at the last fixup page and moves TLV
+  descriptors ahead of DATA. The fixups that remain are the per-function
+  addresses in `__pcc_stackmaps` (the pointer-free location table follows
+  them), so whether the last one sits below 1 GiB is decided only by a real
+  link; the CI run on `e0e6faa81` covers it. A local Stage1 was not run.
+- Nested decorated defs: the hoist pass now evaluates decorators whose root
+  is an enclosing local or a module-defined (non-imported) binding in the
+  enclosing scope, before the defaults, and applies them each time the def
+  executes. Before, a local decorator was refused ("Layer 1 does not handle
+  decorators") and a module decorator on a nested def never ran. Imported
+  decorators keep declaration-time handling. Test:
+  `tests/python/test_decorator_application.py::test_nested_decorators_apply_where_the_def_executes`
+  (pcc0, GC0-GC4). `constructor_expression_failures` now compiles.
+- Still open: a nested `def` (or an assignment) that rebinds a typed local
+  inside `if`/`try` leaves the local's inferred type as the arm's (repro:
+  `x = 37` then `try: x = some_function` then `x == 37` fails with "cannot
+  coerce FuncType to int"); `constructor_exception_order` and
+  `constructor_default_exception` stop there. A decorated nested def that
+  calls itself still reaches the undecorated function directly.
+- The Windows tar native cases (0xC0000005, empty stdout) crash before
+  `main()`'s first flushed print. The same generated program compiled on
+  macOS extracts and runs to its Windows-specific controls, so the crash is
+  in Windows-only module initialization; no Windows host was available here.
+- Failing on a clean `1694b049f` snapshot as well:
+  `test_closure_class_cell_boundness.py::test_owned_capture_root_handoffs_consume_each_source_once`
+  (looks for `_extern_enter_root(..., "cell.payload")`; the code now calls
+  `_new_slot_call_root("cell.payload")`), and both
+  `test_hoist_module_boundaries.py` source-shape checks (the orchestrator was
+  1810 lines against 1800; a `handlers` loop reads `.body`/`.name`), and all
+  four `test_hoist_source_callable_bindings.py::test_enclosing_callable_is_materialized_once_for_default_and_class_values`
+  cases (no `py_func_new_named(... f_native_adapter` call in the IR) and
+  `test_hoisted_default_capture_binding.py::test_default_factory_is_emitted_once_at_the_definition_not_each_call`
+  (counts `py_func_new_named` calls), plus
+  `test_py_function_decorators.py::test_same_module_bare_decorator_still_applies`
+  ("slot-call Call lacks an immediate owned-result handoff") and
+  `::test_imported_bare_decorator_is_metadata_noop` (`singledispatch` refused),
+  and `test_py_native_closure.py::test_native_closure_captures_starred_unpack_target`
+  ("starred unpack target must be a bare name"). In `test_py_nested_hoist.py`:
+  `test_nested_hoist_free_name_analysis_is_cached`,
+  `test_value_position_nested_capture_propagates_through_sibling_cycle` and
+  `test_nested_hoist_caches_reject_reused_object_id` (native `NameError: cannot
+  access free variable 'from_left'`; its IR is byte-identical with and without
+  the decorator change), and
+  `test_mem2reg_self_compile_emits_llvm_after_nested_capture_propagation`
+  (reads the removed `pcc/ir_passes/mem2reg.py`).
+
 ## Generated portable-runtime compiler integration
 
 Source baseline `a1da79229ed5a6f934b544f36d4d908eecb05dd2` plus this
