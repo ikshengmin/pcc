@@ -8,6 +8,8 @@ on:
       - "scripts/run_process_tree_sample.py"
       - "scripts/run_pcc_compile_ab.py"
       - "tests/python/test_compiler_invocation_guard.py"
+      - "tests/python/test_process_tree_sample_tool.py"
+      - "tests/python/test_process_tree_manifest_evidence.py"
       - "tests/test_compiler_invocation_guard_ci.py"
       - "conftest.py"
       - "tests/conftest.py"
@@ -27,6 +29,8 @@ on:
       - "scripts/run_process_tree_sample.py"
       - "scripts/run_pcc_compile_ab.py"
       - "tests/python/test_compiler_invocation_guard.py"
+      - "tests/python/test_process_tree_sample_tool.py"
+      - "tests/python/test_process_tree_manifest_evidence.py"
       - "tests/test_compiler_invocation_guard_ci.py"
       - "conftest.py"
       - "tests/conftest.py"
@@ -94,6 +98,8 @@ jobs:
           env -u LC_ALL uv run --frozen --no-sync --python 3.13 python -m pytest -x -vv --tb=short \
             --junitxml=build/compiler-invocation-guard.xml \
             tests/python/test_compiler_invocation_guard.py \
+            tests/python/test_process_tree_sample_tool.py \
+            tests/python/test_process_tree_manifest_evidence.py \
             tests/test_compiler_invocation_guard_ci.py
 
       - name: Require executed guard tests without skips
@@ -102,7 +108,8 @@ jobs:
           from xml.etree import ElementTree
 
           cases = ElementTree.parse("build/compiler-invocation-guard.xml").findall(".//testcase")
-          assert any(case.get("classname") == "tests.python.test_compiler_invocation_guard" for case in cases), "guard tests were not executed"
+          for name in ("test_compiler_invocation_guard", "test_process_tree_sample_tool", "test_process_tree_manifest_evidence"):
+              assert any(case.get("classname") == "tests.python." + name for case in cases), name + " guard tests were not executed"
           assert not any(case.find("skipped") is not None for case in cases), "host guard coverage must not skip tests"
 
       - name: Preserve host test results

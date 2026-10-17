@@ -14,14 +14,17 @@ import contextlib
 import ctypes
 import datetime as dt
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from typing import NamedTuple
 
@@ -811,6 +814,167 @@ def _command_manifest_paths(command: str) -> list[str]:
     return paths
 
 
+_MANIFEST_FILE_LIMIT = 16
+_MANIFEST_BYTE_LIMIT = 256 * 1024
+_MANIFEST_TOTAL_BYTE_LIMIT = 1024 * 1024
+_MANIFEST_ARGV_BYTE_LIMIT = 64 * 1024
+_MANIFEST_WORKERS = {
+    "--pcc-python-multi-codegen-worker": (
+        r"pcc_frontends_python_workers_[A-Za-z0-9_]+",
+        r"(?:worker|export)_[0-9]+\.manifest",
+        tuple(b"pcc.frontends.python.codegen_worker.v" + str(version).encode()
+              for version in range(1, 6)),
+    ),
+    "--pcc-self-backend-emit-batch-worker": (
+        r"pcc_py_self_[A-Za-z0-9_]+",
+        r"self_backend_emit_[A-Za-z0-9_]+_[0-9]+\.manifest",
+        (b"pcc.self_backend.emit_batch.v1",),
+    ),
+}
+
+
+def _read_worker_manifest(path, worker, temp_root, byte_limit):
+    """Read only a private compiler protocol file, never its referenced files."""
+    directory_pattern, file_pattern, headers = _MANIFEST_WORKERS[worker]
+    source = Path(path)
+    # Keep the candidate lexical: resolving it would follow untrusted links.
+    if not source.is_absolute() or ".." in source.parts:
+        return {"status": "rejected_path"}
+    try:
+        relative = source.relative_to(temp_root)
+    except ValueError:
+        return {"status": "rejected_path"}
+    if (len(relative.parts) != 2
+            or re.fullmatch(directory_pattern, relative.parts[0]) is None
+            or re.fullmatch(file_pattern, relative.parts[1]) is None):
+        return {"status": "rejected_path"}
+    record = {"source_path": str(source)}
+    try:
+        with contextlib.ExitStack() as stack:
+            def open_at(name, flags, parent=None):
+                descriptor = os.open(name, flags | os.O_NOFOLLOW, dir_fd=parent)
+                stack.callback(os.close, descriptor)
+                return descriptor
+
+            root_fd = open_at(temp_root.anchor, os.O_RDONLY | os.O_DIRECTORY)
+            for part in temp_root.parts[1:]:
+                root_fd = open_at(part, os.O_RDONLY | os.O_DIRECTORY, root_fd)
+            directory_fd = open_at(relative.parts[0], os.O_RDONLY | os.O_DIRECTORY, root_fd)
+            directory_info = os.fstat(directory_fd)
+            if directory_info.st_uid != os.getuid() or directory_info.st_mode & 0o077:
+                return dict(record, status="rejected_directory")
+            descriptor = open_at(relative.parts[1], os.O_RDONLY | os.O_NONBLOCK, directory_fd)
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_nlink != 1):
+                return dict(record, status="rejected_file")
+            data = os.read(descriptor, byte_limit)
+            record["read_bytes"] = len(data)
+            # Header validation precedes retaining any payload. A name or an
+            # argv flag alone must never authorize copying an arbitrary file.
+            header = data[:128]
+            if header.split(b"\n", 1)[0] not in headers or b"\n" not in header:
+                return dict(record, status="rejected_header")
+            after = os.fstat(descriptor)
+            if (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                    after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                return dict(record, status="changed_during_read")
+            # Invalid UTF-8 is not a compiler manifest. Never replace bytes
+            # silently; truncation can split a codepoint at the byte bound.
+            try:
+                contents = data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                if (info.st_size > len(data) and exc.end == len(data)
+                        and exc.reason == "unexpected end of data"):
+                    data = data[:exc.start]
+                    contents = data.decode("utf-8")
+                else:
+                    return dict(record, status="rejected_encoding")
+            return dict(
+                record, status="captured", format=header.split(b"\n", 1)[0].decode("ascii"),
+                text=contents, retained_bytes=len(data), source_bytes=info.st_size,
+                truncated=info.st_size > len(data), sha256=hashlib.sha256(data).hexdigest(),
+            )
+    except OSError as exc:
+        # A disappearing workspace or denied file cannot suppress tree cleanup.
+        return dict(record, status="unavailable", error=type(exc).__name__)
+
+
+def _capture_worker_manifests(processes, observed_processes):
+    """Best-effort bounded evidence before the guard's first cleanup signal.
+
+    Only previously observed manifest-bearing workers are candidates. Capped
+    sampling knows argv for previously-largest workers, so this is explicitly
+    partial evidence, not a complete inventory. Linux provides unambiguous argv
+    without adding diagnostic subprocesses to the watchdog's stop path.
+    """
+    evidence = {
+        "schema": "pcc.worker-manifest-evidence.v1",
+        "scope": "observed_workers_before_guard_cleanup",
+        "complete_inventory": False,
+        "max_files": _MANIFEST_FILE_LIMIT,
+        "max_file_bytes": _MANIFEST_BYTE_LIMIT,
+        "max_total_bytes": _MANIFEST_TOTAL_BYTE_LIMIT,
+        "files": [],
+    }
+    if not sys.platform.startswith("linux"):
+        return dict(evidence, status="unsupported_platform")
+    # This is the guard's trusted temp root, never a root supplied by a child.
+    temp_root = Path(tempfile.gettempdir()).absolute()
+    if temp_root.is_symlink():
+        return dict(evidence, status="unsupported_temp_root_symlink")
+    remaining = _MANIFEST_TOTAL_BYTE_LIMIT
+    captured_paths = {}
+    candidates = [row for row in processes if row.get("manifest_paths")]
+    evidence["candidate_count"] = len(candidates)
+    for row in candidates[:_MANIFEST_FILE_LIMIT]:
+        pid = row["pid"]
+        identity = observed_processes.get(pid)
+        record = {"pid": pid, "status": "process_unavailable"}
+        evidence["files"].append(record)
+        if identity is None or _process_identity(pid) != identity:
+            continue
+        record["process_start_time"] = list(identity.start_time)
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as stream:
+                raw = stream.read(_MANIFEST_ARGV_BYTE_LIMIT + 1)
+        except OSError:
+            continue
+        if len(raw) > _MANIFEST_ARGV_BYTE_LIMIT or not raw.endswith(b"\0"):
+            record["status"] = "unavailable_argv"
+            continue
+        argv = [os.fsdecode(part) for part in raw[:-1].split(b"\0")]
+        if _process_identity(pid) != identity:
+            continue
+        # The exact two trailing argv fields distinguish worker entrypoints
+        # from arbitrary process names, quoted command text, or stale caches.
+        if len(argv) < 3 or argv[-2] not in _MANIFEST_WORKERS:
+            record["status"] = "not_manifest_worker"
+            continue
+        record["worker_flag"] = argv[-2]
+        key = (argv[-2], argv[-1])
+        if key in captured_paths:
+            record.update(status="duplicate", duplicate_of=captured_paths[key])
+            continue
+        if remaining <= 0:
+            record["status"] = "total_byte_limit"
+            continue
+        captured = _read_worker_manifest(
+            argv[-1], argv[-2], temp_root, min(_MANIFEST_BYTE_LIMIT, remaining),
+        )
+        remaining -= captured.get("read_bytes", 0)
+        if _process_identity(pid) != identity:
+            record["status"] = "process_changed"
+            continue
+        record.update(captured)
+        if captured["status"] == "captured":
+            captured_paths[key] = len(evidence["files"]) - 1
+    evidence["read_bytes"] = _MANIFEST_TOTAL_BYTE_LIMIT - remaining
+    evidence["retained_bytes"] = sum(row.get("retained_bytes", 0) for row in evidence["files"])
+    evidence["file_limit_reached"] = len(candidates) > _MANIFEST_FILE_LIMIT
+    return dict(evidence, status="collected")
+
+
 def _run(args: argparse.Namespace) -> dict[str, object]:
     global _INTERRUPT_REQUESTED
     _INTERRUPT_REQUESTED = False
@@ -954,6 +1118,21 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     terminal_processes: list[dict[str, object]] = []
     command_cache: dict[int, str] = {}
     command_lookup_failure_count = 0
+    worker_manifest_evidence = None
+
+    def terminate_with_evidence():
+        nonlocal worker_manifest_evidence
+        try:
+            if worker_manifest_evidence is None:
+                try:
+                    worker_manifest_evidence = _capture_worker_manifests(
+                        terminal_processes, observed_processes,
+                    )
+                except Exception as exc:
+                    worker_manifest_evidence = {"status": "capture_error", "error": type(exc).__name__}
+        finally:
+            _terminate_owned_processes(process, observed_processes)
+
     with contextlib.ExitStack() as launch_context:
         try:
             launch_context.enter_context(lock_context)
@@ -1109,7 +1288,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         and tree_rss > args.max_tree_rss_bytes
                     ):
                         memory_limited = True
-                        _terminate_owned_processes(process, observed_processes)
+                        terminate_with_evidence()
                         returncode = process.returncode
                         break
                     returncode = process.poll()
@@ -1129,25 +1308,25 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                         if remaining:
                             known_pids.update(remaining)
                             payload["post_exit_cleanup_pids"] = sorted(remaining)
-                            _terminate_owned_processes(process, observed_processes)
+                            terminate_with_evidence()
                         break
                     if _INTERRUPT_REQUESTED:
                         interrupted = True
-                        _terminate_owned_processes(process, observed_processes)
+                        terminate_with_evidence()
                         returncode = process.returncode
                         break
                     if now >= deadline:
                         timed_out = True
-                        _terminate_owned_processes(process, observed_processes)
+                        terminate_with_evidence()
                         returncode = process.returncode
                         break
                     time.sleep(args.interval)
             except KeyboardInterrupt:
-                _terminate_owned_processes(process, observed_processes)
+                terminate_with_evidence()
                 interrupted = True
                 returncode = process.returncode
             except BaseException as exc:
-                _terminate_owned_processes(process, observed_processes)
+                terminate_with_evidence()
                 process_table_retry_count += int(
                     getattr(exc, "retry_count", 0) or 0
                 )
@@ -1190,6 +1369,8 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     )
     if sampler_error:
         payload["error"] = sampler_error
+    if worker_manifest_evidence is not None:
+        payload["worker_manifest_evidence"] = worker_manifest_evidence
     _persist(result_path, payload)
     if sampler_error:
         raise ProcessTreeSampleError(sampler_error)

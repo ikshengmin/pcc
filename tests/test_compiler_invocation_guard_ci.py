@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ".github/workflows/compiler-invocation-guard.yml"
 WORKFLOW = (ROOT / WORKFLOW_PATH).read_text(encoding="utf-8")
 GUARD_TEST = "tests/python/test_compiler_invocation_guard.py"
+SAMPLER_TESTS = (
+    "tests/python/test_process_tree_sample_tool.py",
+    "tests/python/test_process_tree_manifest_evidence.py",
+)
 CONTROL_TEST = "tests/test_compiler_invocation_guard_ci.py"
 
 
@@ -39,6 +43,7 @@ def test_host_workflow_tracks_guard_helpers_and_test_configuration(event):
         "scripts/run_process_tree_sample.py",
         "scripts/run_pcc_compile_ab.py",
         GUARD_TEST,
+        *SAMPLER_TESTS,
         CONTROL_TEST,
         "conftest.py",
         "tests/conftest.py",
@@ -64,7 +69,7 @@ def test_host_workflow_uses_normal_pytest_scheduling_and_resource_controls():
     assert command == [
         "env", "-u", "LC_ALL", "uv", "run", "--frozen", "--no-sync", "--python", "3.13",
         "python", "-m", "pytest", "-x", "-vv", "--tb=short",
-        "--junitxml=build/compiler-invocation-guard.xml", GUARD_TEST, CONTROL_TEST,
+        "--junitxml=build/compiler-invocation-guard.xml", GUARD_TEST, *SAMPLER_TESTS, CONTROL_TEST,
     ]
     assert "        timeout-minutes: 2\n" in step
     assert "--noconftest" not in WORKFLOW
@@ -102,15 +107,18 @@ def test_host_workflow_requires_real_pidfd_support():
     assert "finally:\n    os.close(descriptor)" in probe
 
 
-@pytest.mark.parametrize("result", ("pass", "skipped", "deselected", "empty"))
+@pytest.mark.parametrize("result", ("pass", "skipped", "deselected", "empty", "missing_sampler", "missing_manifests"))
 def test_host_workflow_receipt_check_rejects_missing_or_skipped_guard_tests(monkeypatch, result):
     suite = ElementTree.Element("testsuite")
     if result != "empty":
         ElementTree.SubElement(suite, "testcase", classname="tests.test_compiler_invocation_guard_ci")
-    if result in ("pass", "skipped"):
+    if result in ("pass", "skipped", "missing_sampler", "missing_manifests"):
         case = ElementTree.SubElement(suite, "testcase", classname="tests.python.test_compiler_invocation_guard")
         if result == "skipped":
             ElementTree.SubElement(case, "skipped")
+    for index, path in enumerate(SAMPLER_TESTS):
+        if result in ("pass", "skipped") or (result == "missing_sampler" and index == 1) or (result == "missing_manifests" and index == 0):
+            ElementTree.SubElement(suite, "testcase", classname=path[:-3].replace("/", "."))
     monkeypatch.setattr(ElementTree, "parse", lambda path: ElementTree.ElementTree(suite))
     step = _step("Require executed guard tests without skips")
     check = textwrap.dedent(step.split("        run: |\n", 1)[1])
