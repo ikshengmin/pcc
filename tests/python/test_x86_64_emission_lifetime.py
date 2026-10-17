@@ -249,7 +249,7 @@ def test_indexed_projection_cleanup_preserves_the_original_failure(
     entry_state = []
     failure = BackendUnavailable("injected x86 emission failure")
     real_emit_function = emitter._emit_function
-    real_materialize = IndexedFunctionKernel.materialize_legacy_blocks
+    real_materialize = emitter._materialize_indexed_control_flow
     real_emit_blocks = emitter.emit_function_blocks
 
     def traced_emit_function(function, plan, *, phase_timing=None):
@@ -257,13 +257,12 @@ def test_indexed_projection_cleanup_preserves_the_original_failure(
         entry_state.append((function.blocks, function.block_map))
         return real_emit_function(function, plan, phase_timing=phase_timing)
 
-    def fail_after_projection(kernel, function):
-        blocks = real_materialize(kernel, function)
+    def fail_after_projection(function, kernel):
+        real_materialize(function, kernel)
         if entry_state and function is target and failure_stage == "projection":
             assert function.blocks and function.block_map
             assert any(block.phis for block in function.blocks)
             raise failure
-        return blocks
 
     def fail_during_instructions(function, **kwargs):
         if entry_state and function is target and failure_stage == "instructions":
@@ -273,7 +272,7 @@ def test_indexed_projection_cleanup_preserves_the_original_failure(
         return real_emit_blocks(function, **kwargs)
 
     monkeypatch.setattr(emitter, "_emit_function", traced_emit_function)
-    monkeypatch.setattr(IndexedFunctionKernel, "materialize_legacy_blocks", fail_after_projection)
+    monkeypatch.setattr(emitter, "_materialize_indexed_control_flow", fail_after_projection)
     monkeypatch.setattr(emitter, "emit_function_blocks", fail_during_instructions)
     try:
         with pytest.raises(BackendUnavailable, match="injected x86 emission failure") as caught:

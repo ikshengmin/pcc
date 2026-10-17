@@ -28,15 +28,21 @@ from .self_backend_float_bits import (
     float64_to_bits,
 )
 from .wide_float import encode_float_bits
-from .self_backend_instruction_dispatch import emit_instruction_dispatch
-from .self_backend_kernel import get_indexed_function_kernel
+from .self_backend_instruction_dispatch import (
+    emit_instruction_dispatch,
+    emit_instruction_dispatch_parts,
+)
+from .self_backend_kernel import IndexedFunctionKernel, get_indexed_function_kernel
 from .self_backend_aarch64_darwin_symbols import sanitize_label
 from .self_backend_ir import (
     GlobalDef,
+    PARSED_INSTRUCTION_KINDS,
+    ParsedBlock,
     ParsedFunction,
     ParsedInstr,
     TypeDesc,
     _align_to,
+    _interned_operands,
     aggregate_member_info,
     clear_text_key_mapping,
     reset_operand_intern,
@@ -2942,6 +2948,50 @@ def _emit_unreachable_terminator() -> list[str]:
     return ["  ud2"]
 
 
+def _materialize_indexed_control_flow(
+    func: ParsedFunction, kernel: IndexedFunctionKernel,
+) -> None:
+    # Branch/PHI selection still needs every target block and its PHIs. The
+    # ordinary instruction selector only reads one kind/data pair at a time;
+    # do not rebuild a second instruction arena to immediately project it again.
+    blocks = []
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        blocks.append(kernel.diagnostic_block(block_id, include_instructions=False))
+        block_id += 1
+    func.blocks = blocks
+    func.block_map = {block.name: block for block in blocks}
+
+
+def _emit_indexed_instruction_parts(
+    func: ParsedFunction,
+    block: ParsedBlock,
+    kernel: IndexedFunctionKernel,
+    block_id: int,
+    instruction_index: int,
+    instruction_id: int,
+    kind_id: int,
+    data: int | tuple,
+    is_volatile: bool,
+) -> list[str]:
+    # The shared loop supplies packed IDs for its fixed-payload vocabulary and
+    # already-decoded tuples for other kinds, including atomic/cold records.
+    # Let the authoritative decoder distinguish packed and negative cold IDs.
+    if isinstance(data, int):
+        data = kernel.instruction_data(block_id, instruction_index)
+    # Preserve the legacy projection's metadata check and operand interning.
+    # x86 selection itself consumes only kind/data; the kernel retains flags.
+    kernel.instruction_arithmetic_flags(block_id, instruction_index)
+    return emit_instruction_dispatch_parts(
+        func,
+        block,
+        PARSED_INSTRUCTION_KINDS[kind_id],
+        _interned_operands(data),
+        emit_memory=_emit_memory_instruction,
+        emit_compute=_emit_compute_instruction,
+    )
+
+
 def _emit_function(
     func: ParsedFunction,
     stack_map_plan: FunctionStackMapPlan,
@@ -2965,7 +3015,18 @@ def _emit_function(
     original_blocks = func.blocks
     original_block_map = func.block_map
     try:
-        kernel.materialize_legacy_blocks(func)
+        indexed_instruction_emitter = None
+        if (
+            type(func) is ParsedFunction
+            and type(kernel) is IndexedFunctionKernel
+            and type(original_blocks) is list
+            and not original_blocks
+            and type(original_block_map) is dict
+        ):
+            _materialize_indexed_control_flow(func, kernel)
+            indexed_instruction_emitter = _emit_indexed_instruction_parts
+        else:
+            kernel.materialize_legacy_blocks(func)
         for block_id, block in enumerate(func.blocks):
             if block.phis:
                 continue
@@ -2986,6 +3047,7 @@ def _emit_function(
                 emit_terminator=_emit_terminator,
                 stack_map_plan=stack_map_plan,
                 indexed_kernel=kernel,
+                emit_indexed_instruction=indexed_instruction_emitter,
             )
         )
     finally:
