@@ -13,6 +13,7 @@ from pcc.backend import (
     macho_obj as obj,
     macho_spec as spec,
     native_object as native,
+    precise_stackmap as wire,
 )
 from tests.python.test_macho_fixup_retirement import _fixup_input, _link
 from tests.python.test_macho_owned_output import (
@@ -21,6 +22,47 @@ from tests.python.test_macho_owned_output import (
     _tracked_buffers,
 )
 from tests.python.test_macho_payload_windows import _source, _stage, _signature_matches
+
+
+@pytest.mark.parametrize("sizes, expected", (
+    ((36, 36, 64, 33, 216), (48, 768, 224)),
+    ((36, 36, 80, 33, 216), (48, 784, 224)),
+    ((36, 49, 65, 49, 225), (64, 848, 240)),
+))
+def test_factory_budget_tracks_host_object_sizes_without_relaxing_admission(monkeypatch, sizes, expected):
+    from tests.python import test_stackmap_host_budget as fixtures
+
+    configure = fixtures.configured_host
+    positive, negative, triple, empty_bytes, empty_set = sizes
+
+    def configured(patch, **kwargs):
+        environment, runtime = configure(patch, **kwargs)
+
+        def getsizeof(value):
+            if type(value) is int:
+                assert value in ((1 << 64) - 1, -(1 << 63))
+                return positive if value > 0 else negative
+            if type(value) is tuple:
+                assert value == (0, 0, 0)
+                return triple
+            if type(value) is bytes:
+                assert value == b""
+                return empty_bytes
+            assert type(value) is set and not value
+            return empty_set
+
+        runtime.getsizeof = getsizeof
+        return environment, runtime
+
+    monkeypatch.setattr(fixtures, "configured_host", configured)
+    metadata = expected[1]
+    budget = _factory_budget(2 * metadata + 17)
+    assert (budget.integer_bytes, budget.metadata_entry_bytes, budget.set_header_bytes) == expected
+    assert budget.allocation_quantum == budget.set_entry_bytes == 16
+    budget.retained_bytes = 17
+    budget.check_peak(0, entries=2)
+    with pytest.raises(wire.PreciseStackMapError, match="byte budget exceeded"):
+        budget.check_peak(1, entries=2)
 
 
 def _staged_link(paths, budget=None, **kwargs):

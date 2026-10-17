@@ -27,8 +27,23 @@ def _factory_budget(limit=50_000_000):
     with pytest.MonkeyPatch.context() as patch:
         configured_host(patch, raw=str(limit + 11000))
         value = stackmap_host_budget.host_compact_stackmap_budget()
+        word = stackmap_host_budget.struct.calcsize("P")
+        quantum = 2 * word
+        sizeof = stackmap_host_budget.sys.getsizeof
+
+        def rounded(size):
+            return ((size + quantum - 1) // quantum) * quantum
+
+        # Supported CPython releases can have different object headers. Keep
+        # the exact conservative formula, rather than a fixed runtime's sizes.
+        integer = rounded(max(sizeof((1 << 64) - 1), sizeof(-(1 << 63))))
+        metadata = 64 * word + rounded(sizeof((0, 0, 0))) + 3 * integer + rounded(sizeof(b""))
+        header = rounded(sizeof(set()))
     assert value.limit_bytes == limit
-    assert (value.integer_bytes, value.metadata_entry_bytes) == (48, 768)
+    assert (value.integer_bytes, value.metadata_entry_bytes, value.set_header_bytes) == (
+        integer, metadata, header,
+    )
+    assert value.allocation_quantum == value.set_entry_bytes == quantum
     assert value.record_visit_limit == 3 * (value.limit_bytes // 32)
     return value
 
