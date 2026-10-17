@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -447,7 +448,23 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
         "build/stage1-native-export/stage1-native.tar.gz", "            build/stage1-native-export/manifest.json",
     ]
     host = job.split("      - name: Verify host Stage2 export-retention", 1)[1].split("      #", 1)[0]
-    assert "tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/test_ci_native_object_regressions.py" in host
+    host_tests = (
+        "tests/python/test_stage2_export_capture.py",
+        "tests/python/test_aarch64_call_target_reuse.py",
+        "tests/python/test_owned_elf_assembler_dispatch.py",
+        "tests/python/test_elf_arm_branch_slot_defaults.py",
+        "tests/python/test_gc_phase_attribution.py",
+        "tests/python/test_gc_phase_counter_widths.py",
+        "tests/test_ci_native_object_regressions.py",
+    )
+    host_command = host.split("        run: ", 1)[1].splitlines()[0]
+    host_args = shlex.split(host_command.split("${{", 1)[0], comments=True)
+    pytest_command = ["uv", "run", "--frozen", "--no-sync", "--python", "3.13",
+                      "python", "-m", "pytest", "-x", "-q"]
+    assert host_args[:len(pytest_command)] == pytest_command
+    # Require every host regression once, in order, while allowing new tests
+    # between them. Match command arguments rather than contiguous text.
+    assert tuple(arg for arg in host_args[len(pytest_command):] if arg in host_tests) == host_tests
     linux_only = (
         "tests/test_ci_stage1_artifact_export.py",
         "tests/python/test_gc4_copy_page_probe_native.py",
