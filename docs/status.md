@@ -24,8 +24,20 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   the link and ~45% is `Relocation(...)` built through `py_module_attr_get` +
   `py_obj_call_slots` + kwargs merging, while the closed-world compile of the
   same module constructs it statically (`py_instance_new` + direct
-  `Relocation.__init__`). The Stage1 multi-module route loses the
-  cross-module class layout there; not yet root-caused.
+  `Relocation.__init__`).
+- Root cause of that dynamic construction: in multi-module compiles (CLI
+  multi-file programs and Stage1 workers) an imported name or module attribute
+  is a live import binding, so `R(...)` / `mod.R(...)` / `mod.f(...)` go
+  through `_emit_slot_call_object` (`call_expression_lowering._emit_call`, and
+  the `live_import_expr_binding` branch of
+  `native_modules._maybe_emit_native_module_alias_call`) before any static
+  binding rule runs. Probe built by host pcc0 at `012ec3265` (1M
+  constructions of a frozen slots dataclass): imported + keywords 17 s,
+  imported + positional 5 s, same-module 1 s; CPython ~1 s. The closed-world
+  check (`compile_contextual_per_module_fallback_counts`) compiles the same
+  calls statically, so it does not represent Stage1 lowering here. Binding an
+  import statically needs a proof that the importer never rebinds the name
+  (and an answer for import cycles); not changed.
 - macOS wheel from `012ec3265` (`PCC_BUILD_PCC1=<that pcc1> uv build --wheel`):
   `python_cc-0.1.7-cp315-cp315-macosx_26_0_arm64.whl`, 430,773,781 bytes.
   `scripts/ci_native_wheel_gate.py` passes. In a fresh venv `import pcc`,
