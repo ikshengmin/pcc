@@ -22,6 +22,7 @@ from .macho_host_prepare import (
 )
 from .macho_host_relocations import _model_bytes
 from .macho_host_phase import emit_phase
+from . import macho_host_validation as host_validation
 from .macho_link import LinkError
 from .native_object import OwnedMergedSourceView
 
@@ -620,7 +621,7 @@ class _OwnedOutput:
             )
             adapter = _ValidationBudget(self.budget, snapshot)
             self.phase("stackmap_payload_validate_begin")
-            stackmap.validate_stack_map_payload(
+            host_validation.validate_stack_map_payload(
                 snapshot, expected_arch=stackmap.ARCH_AARCH64,
                 final_image=True, compact_budget=adapter,
             )
