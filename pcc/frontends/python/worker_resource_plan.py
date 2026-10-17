@@ -187,7 +187,7 @@ def require_task_fits(task_index: int, demand: int, available: int,
         )
 
 
-def resource_task_order(tasks):
+def resource_task_order(tasks, guarded_calibration: bool = False):
     """Schedule modeled host work largest-first; retain legacy native cohorts.
 
     Source/AST bytes vary per singleton; full-export bytes and module count
@@ -237,6 +237,21 @@ def resource_task_order(tasks):
             # original quotient loop and skip this split if it ends in NaN.
             band = 2 * band + (1 if 4 * size_total >= 3 * upper else 0)
         bands.append(band)
+    # A singleton-only inventory has no within-band peers to amortize its
+    # calibration: smallest-first would calibrate every input exclusively.
+    # If one input covers every other input under the existing estimator,
+    # calibrate it first and let that same-run completed observation admit
+    # peers. No live/incomplete sample or foreign invocation is reused.
+    # Only the guarded path permits oversized borrowed forecasts to calibrate
+    # exclusively against current RSS instead of rejecting an otherwise-fit
+    # task. Unguarded inventories retain their original ordering.
+    # Repeated bands keep the small-first policy that avoids charging a large
+    # module's peak to the many small modules of a bootstrap build.
+    if guarded_calibration and len(tasks) > 1 and len(set(bands)) == len(tasks):
+        largest = pending[0]
+        if all(input_envelope_covers(tasks[largest]["inputs"], task["inputs"])
+               for task in tasks):
+            return pending, []
     pending = sorted(pending, key=lambda index: (
         bands[index], -sum(tasks[index]["inputs"]), index,
     ))

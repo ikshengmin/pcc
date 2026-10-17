@@ -228,7 +228,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 recovery_allowance, guard_deadline = read_tree_recovery(raw_recovery)
                 configured_recovery = True
     owner_pid = os.getpid()
-    pending, bands = resource_task_order(tasks)
+    pending, bands = resource_task_order(tasks, guarded_calibration=bool(tree_path))
     active = []
     attempt_tokens = {}
     retries = [0 for _task in tasks]

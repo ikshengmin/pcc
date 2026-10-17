@@ -171,7 +171,7 @@ def _fake_processes(tmp_path, monkeypatch, tasks, order, *, poll_result, peak=No
     monkeypatch.delenv("PCC_PY_FRONTEND_WORKER_TIMING", raising=False)
     monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: MIB)
     monkeypatch.setattr(pool, "_HOST_WORKERS", {})
-    monkeypatch.setattr(policy, "resource_task_order", lambda actual: (list(order), []))
+    monkeypatch.setattr(policy, "resource_task_order", lambda actual, guarded_calibration=False: (list(order), []))
     monkeypatch.setattr(pool, "_command_spec", lambda command: (["fake-worker", command], []))
     monkeypatch.setattr(pool.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(pool, "_resource_event",
