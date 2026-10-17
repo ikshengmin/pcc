@@ -277,7 +277,6 @@ class _OwnedOutput:
         self.symbol_raw = _symbol_projections(source, budget)
         self.section_raw = _section_projections(self.output_count, budget)
         self.fixup_raw = 0
-        self.seen_storage = _SetStorage(budget)
         self.check(label="Mach-O owned preparation projections")
 
     def phase(self, event):
@@ -307,17 +306,16 @@ class _OwnedOutput:
         budget = self.budget
         integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
         quad = budget._rounded(sys.getsizeof((None, None, None, None)))
-        # One source site tuple (three/four fields) and its segment tuple,
-        # each with up to three new integers. Four source lists and two
-        # segment lists retain each site once; sorted(fixups) adds a list and
-        # key/merge scratch. by_page retains another pointer per fixup, with
-        # its independent list headers/growth padding covered by reserve_pages.
-        following = (total * (2 * quad + 6 * integer)
+        # Source-to-segment conversion retires each old tuple immediately
+        # after appending its replacement. Across all four source lists and
+        # both segments there are at most total + 1 live site tuples, each
+        # with at most three owned integers (shared offsets count only once).
+        # Retain both families' old/new pointer arrays conservatively. The
+        # private segment encoder sorts in place, using only key/merge
+        # scratch; it has no copied list, seen set or per-page site lists.
+        following = ((total + 1) * (quad + 3 * integer)
                      + _list_storage(total, budget, lists=4)
-                     + _list_storage(total, budget, lists=2)
-                     + _list_storage(total, budget, sorting=True)
-                     + 2 * budget._rounded((total + total // 8) * 8)
-                     + self.seen_storage.reserve(total))
+                     + _list_storage(total, budget, lists=2, sorting=True))
         self.check(following - self.fixup_raw, label="Mach-O owned fixup projections")
         self.fixup_count += count
         self.fixup_raw = following
@@ -331,18 +329,80 @@ class _OwnedOutput:
         self.order_raw = max(self.order_raw, needed)
 
     def reserve_pages(self, count):
-        budget = self.budget
-        integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
-        # Per-page dict key and page-start offset integers; independent
-        # grouping-list headers and growth padding; page_starts and the
-        # packed-piece join list; each tiny bytes header, plus all starts /
-        # segment-info / final fixups wire copies (12 bytes per page).
-        needed = (_dict_storage(count, budget)
-                  + count * (2 * integer + _list_storage(0, budget)
-                             + budget._rounded(sys.getsizeof(b"") + 2) + 12)
-                  + 2 * _list_storage(count, budget))
+        # Only compact uint16 starts survive the private encoder. Twelve
+        # bytes per possible page cover segment-info bytes, old/new starts
+        # bytearray growth, its bytes conversion and chained-fixups concat
+        # overlap. Fixed headers, alignment and the two segment owners fit
+        # in _FIXED. Empty trailing pages allocate no Python objects.
+        needed = 12 * count + _FIXED
         self.check(needed, label="Mach-O owned fixup page tables")
         self.extra_raw += needed
+
+    def _build_seg_info(self, fixups, seg_vmaddr, seg_size, seg_file_off):
+        """Consume a private site order without per-page or duplicate indices."""
+        if not fixups:
+            raise LinkError("chained-fixup segment has no sites")
+        fixups.sort(key=lambda site: site[0])
+        previous = None
+        last_page = -1
+        page_size = executable.PAGE
+        # Validate the complete order before allocating starts or writing any
+        # pointer. Sorting makes duplicates adjacent; empty pages need no
+        # dict entry, list, integer, or tiny packed bytes object.
+        for vmaddr, out, off, _base_word in fixups:
+            if vmaddr == previous:
+                raise LinkError(f"duplicate chained-fixup site at {vmaddr:#x}")
+            previous = vmaddr
+            if not seg_vmaddr <= vmaddr <= seg_vmaddr + seg_size - 8:
+                raise LinkError(
+                    f"chained-fixup site {vmaddr:#x} is outside its segment"
+                )
+            if vmaddr % 4 or off < 0 or off + 8 > len(out.data):
+                raise LinkError(
+                    f"chained-fixup site {vmaddr:#x} is not a complete, "
+                    "four-byte-aligned pointer"
+                )
+            segment_offset = vmaddr - seg_vmaddr
+            if segment_offset % page_size > page_size - 8:
+                raise LinkError(
+                    f"chained-fixup pointer at {vmaddr:#x} crosses a "
+                    f"{page_size:#x}-byte page boundary"
+                )
+            last_page = segment_offset // page_size
+        page_count = last_page + 1
+        if page_count > 0xFFFF:
+            raise LinkError(
+                f"chained-fixup page count {page_count} exceeds uint16; "
+                f"last fixup page {last_page} needs a different segment layout"
+            )
+        header = struct.pack(
+            "<IHHQIH", 22 + page_count * 2, page_size,
+            executable.DYLD_CHAINED_PTR_64_OFFSET, seg_file_off, 0, page_count,
+        )
+        info = bytearray(b"\xff") * (22 + 2 * page_count)
+        info[:22] = header
+        previous_page = -1
+        for index, (vmaddr, out, off, base_word) in enumerate(fixups):
+            segment_offset = vmaddr - seg_vmaddr
+            page = segment_offset // page_size
+            if page != previous_page:
+                struct.pack_into("<H", info, 22 + 2 * page,
+                                 segment_offset % page_size)
+                previous_page = page
+            nxt = 0
+            if index + 1 < len(fixups):
+                following = fixups[index + 1][0]
+                if (following - seg_vmaddr) // page_size == page:
+                    delta = following - vmaddr
+                    if delta <= 0 or delta % 4:
+                        raise LinkError(
+                            "chained-fixup sites must increase in four-byte units"
+                        )
+                    nxt = delta // 4
+                    if nxt > 0xFFF:
+                        raise LinkError("fixup chain stride exceeds 12 bits")
+            self.patch_word(out, off, base_word | (nxt << 51))
+        return bytes(info)
 
     def row_window(self, source, section):
         """Return the private replay context, or keep the ordinary row route.

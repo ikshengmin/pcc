@@ -1,6 +1,8 @@
 """Bounded host output payloads; full Mach-O bytes are the public oracle."""
 
 import struct
+import sys
+import tracemalloc
 import weakref
 from pathlib import Path
 
@@ -198,6 +200,153 @@ class _FixupWordSink:
     def patch_word(self, out, offset, word):
         self.writes.append((out, offset, word))
         struct.pack_into("<Q", out.data, offset, word)
+
+
+@pytest.mark.parametrize("positions", (
+    (8,),
+    (20, 4, 12),
+    (2 * macho_exec.PAGE + 20, 12, 2 * macho_exec.PAGE + 4),
+    (0xFFFF * macho_exec.PAGE - 8, 8),
+))
+def test_private_fixup_encoder_matches_public_without_reordering_public_input(positions):
+    def sites():
+        return [_sparse_fixup(offset, ((1 << 63) | 7) if i % 2 else 0x123456789)
+                for i, offset in enumerate(positions)]
+
+    public, owned = sites(), sites()
+    before = list(public)
+    size = (0x10000 + 64) * macho_exec.PAGE
+    expected = macho_exec._build_seg_info(public, macho_exec.TEXT_BASE, size, macho_exec.PAGE)
+    sink = _FixupWordSink()
+    actual = output._OwnedOutput._build_seg_info(
+        sink, owned, macho_exec.TEXT_BASE, size, macho_exec.PAGE,
+    )
+    assert actual == expected
+    assert public == before
+    assert [row[0] for row in owned] == sorted(row[0] for row in before)
+    assert {row[0]: bytes(row[1].data) for row in owned} == {
+        row[0]: bytes(row[1].data) for row in public
+    }
+
+
+@pytest.mark.parametrize("fault", (
+    "empty", "duplicate", "outside", "unaligned", "short", "page-crossing", "65536-pages",
+))
+def test_private_fixup_encoder_keeps_error_order_and_validates_before_writes(fault):
+    def sites():
+        first = _sparse_fixup(8, 7)
+        if fault == "empty":
+            return []
+        second = {
+            "duplicate": lambda: _sparse_fixup(8, 9),
+            "outside": lambda: _sparse_fixup(-4, 9),
+            "unaligned": lambda: _sparse_fixup(18, 9),
+            "short": lambda: _sparse_fixup(16, 9, payload_size=7),
+            "page-crossing": lambda: _sparse_fixup(macho_exec.PAGE - 4, 9),
+            "65536-pages": lambda: _sparse_fixup(0xFFFF * macho_exec.PAGE, 9),
+        }[fault]()
+        return [second, first]
+
+    errors = []
+    for private in (False, True):
+        rows = sites()
+        before = {id(row[1]): bytes(row[1].data) for row in rows}
+        sink = _FixupWordSink()
+        with pytest.raises(macho_exec.LinkError) as caught:
+            if private:
+                output._OwnedOutput._build_seg_info(
+                    sink, rows, macho_exec.TEXT_BASE, 0x10000 * macho_exec.PAGE,
+                    macho_exec.PAGE,
+                )
+            else:
+                macho_exec._build_seg_info(
+                    rows, macho_exec.TEXT_BASE, 0x10000 * macho_exec.PAGE,
+                    macho_exec.PAGE, _owned_output=sink,
+                )
+        errors.append(str(caught.value))
+        assert {id(row[1]): bytes(row[1].data) for row in rows} == before
+        assert sink.writes == []
+    assert errors[0] == errors[1]
+
+
+def test_private_fixup_starts_workspace_is_packed_and_budgeted():
+    # A huge numeric extent uses only two tiny payloads. A Python object per
+    # empty page would exceed this bound by an order of magnitude.
+    rows = [_sparse_fixup(8, 7), _sparse_fixup(0xFFFF * macho_exec.PAGE - 8, 9)]
+    sink = _FixupWordSink()
+    tracemalloc.start()
+    try:
+        info = output._OwnedOutput._build_seg_info(
+            sink, rows, macho_exec.TEXT_BASE, 0xFFFF * macho_exec.PAGE, macho_exec.PAGE,
+        )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(info) == 22 + 2 * 0xFFFF
+    assert peak < 6 * 0xFFFF + output._FIXED
+    budget = _factory_budget()
+    state = _projection_state(budget)
+    initial = state.known_bytes()
+    state.reserve_pages(0xFFFF)
+    assert state.known_bytes() - initial >= peak
+    assert state.known_bytes() - initial < 16 * 0xFFFF
+
+
+def _projection_state(budget):
+    source = native.OwnedMergedSourceView((obj.Section(
+        "__text", "__TEXT", data=b"\xc0\x03\x5f\xd6", align_log2=2,
+        flags=obj.TEXT_SECTION_FLAGS, symbols=(obj.TextSymbol("_main", 0),),
+    ),))
+    return output._OwnedOutput(source, budget, ())
+
+
+def _legacy_fixup_projection(count, budget):
+    integer = budget._rounded(sys.getsizeof((1 << 64) - 1))
+    quad = budget._rounded(sys.getsizeof((None, None, None, None)))
+    return (count * (2 * quad + 6 * integer)
+            + output._list_storage(count, budget, lists=4)
+            + output._list_storage(count, budget, lists=2)
+            + output._list_storage(count, budget, sorting=True)
+            + 2 * budget._rounded((count + count // 8) * 8)
+            + output._SetStorage(budget).reserve(count))
+
+
+def test_owned_fixups_fit_real_reduced_projection_and_keep_exact_budget_refusal(tmp_path, monkeypatch):
+    paths = _fixup_input(tmp_path, count=4096)
+    expected = _link(paths, "public")
+    budget = _factory_budget()
+    peaks, legacy = [], []
+    check, reserve = budget.check_peak, output._OwnedOutput.reserve_fixup
+
+    def measured(raw, *, records=0, entries=0, label="stack-map"):
+        peaks.append(raw + budget.retained_bytes + entries * budget.metadata_entry_bytes
+                     + (budget._set_bytes(records) if records else 0))
+        return check(raw, records=records, entries=entries, label=label)
+
+    def reserved(state, count=1):
+        result = reserve(state, count)
+        legacy.append(state.known_bytes() - state.fixup_raw
+                      + _legacy_fixup_projection(state.fixup_count, state.budget))
+        return result
+
+    monkeypatch.setattr(budget, "check_peak", measured)
+    with monkeypatch.context() as patch:
+        patch.setattr(output._OwnedOutput, "reserve_fixup", reserved)
+        assert _staged_link(paths, budget) == expected
+    limit = max(peaks)
+    assert max(legacy) > limit
+    assert _staged_link(paths, _factory_budget(limit)) == expected
+
+    budget = _factory_budget()
+    state = _projection_state(budget)
+    state.reserve_fixup(8192)
+    limit = state.known_bytes()
+    exact = _projection_state(_factory_budget(limit))
+    exact.reserve_fixup(8192)
+    short = _projection_state(_factory_budget(limit - 1))
+    with pytest.raises(wire.PreciseStackMapError, match="Mach-O owned fixup projections"):
+        short.reserve_fixup(8192)
+    assert short.fixup_count == short.fixup_raw == 0
 
 
 def _assert_segment_starts(info, starts, *, file_offset=macho_exec.PAGE):

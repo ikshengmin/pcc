@@ -165,6 +165,21 @@ def test_old_slots_retire_during_conversion_and_segments_before_later_work(tmp_p
         # The old tuple has no retained entry/enumerate alias after unpacking.
         references = sys.getrefcount([sites[index]].pop())
         assert references == 2
+        # All earlier source slots were retired before this next replacement
+        # is made. Thus appending one replacement can retain only N + 1 site
+        # tuples, not both complete N-sized source and segment graphs.
+        values = sys._getframe(1).f_locals["values"]
+        state = values["_owned_output"]
+        lists = [values[key] for key in _SITE_LISTS]
+        lists.extend(values["seg_fixups"].values())
+        live = [site for group in lists for site in group if site is not None]
+        assert len(live) == len({id(site) for site in live}) == state.fixup_count
+        integers = {id(value): value for site in live for value in site
+                    if type(value) is int}
+        assert len(integers) <= 3 * state.fixup_count
+        measured = sum(state.budget._rounded(sys.getsizeof(value))
+                       for value in [*lists, *live, *integers.values()])
+        assert measured < state.fixup_raw
         conversions[name].append(index)
 
     _observe_conversions(monkeypatch, conversion)
@@ -335,3 +350,37 @@ def test_native_ir_omits_host_only_none_slots_before_tuple_iteration():
     assert "@py_list_get" in body
     assert "@py_obj_add" in body
     assert "@py_obj_truthy" in body
+
+
+def test_native_ir_omits_private_segment_encoder_and_host_only_continue():
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+
+    source = '''def ordinary(sites):
+    return sites[0] + 1
+
+def run(owner):
+    total = 0
+    for index in range(2):
+        sites: list[int] = [index + 2]
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if owner is not None:
+                total += owner._build_seg_info(sites, 5, 7, 11)
+                sites.clear()
+                continue
+        total += ordinary(sites)
+    return total
+'''
+    module = infer_module(parse_and_lift(source, "segment_boundary.py", "segment_boundary"))
+    generator = L1CodeGen(module, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+    generator._strict_no_libpython = True
+    result = str(generator.generate())
+    definition = re.search(r"^define[^\n]*@user_segment_boundary_run\([^\n]*\) \{", result, re.MULTILINE)
+    assert definition is not None
+    body = result[definition.start():].split("\n}\n", 1)[0]
+    assert "_build_seg_info" not in result
+    assert "@py_list_clear" not in body
+    assert "@py_cpy_" not in body
+    assert re.search(r"\bcall[^\n]*@user_segment_boundary_ordinary\(", body)

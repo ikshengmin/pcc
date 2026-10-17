@@ -1793,12 +1793,15 @@ def _prepare_executable_image(
     seg_infos = {}
     for seg_index, fixups in seg_fixups.items():
         seg_vmaddr, seg_size, seg_file_off = seg_vm[seg_index]
-        seg_infos[seg_index] = _build_seg_info(
-            fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output)
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
             if _owned_output is not None:
+                seg_infos[seg_index] = _owned_output._build_seg_info(
+                    fixups, seg_vmaddr, seg_size, seg_file_off)
                 fixups.clear()
+                continue
+        seg_infos[seg_index] = _build_seg_info(
+            fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output)
     import sys as execution_runtime
     if execution_runtime.implementation.name == "cpython":
         if _owned_output is not None:
