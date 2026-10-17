@@ -106,7 +106,8 @@ def _stage_fixture(tmp_path, monkeypatch, count=5, order=None):
     requests = {}
     monkeypatch.setattr(workers, "resource_tasks_for_commands",
                         lambda actual: [dict(item) for item in frontend_tasks])
-    monkeypatch.setattr(policy, "resource_task_order", lambda tasks, guarded_calibration=False: (planned_order, []))
+    monkeypatch.setattr(policy, "resource_task_order", lambda tasks, guarded_calibration=False,
+                        native_cold_cover=False: (planned_order, []))
     monkeypatch.setattr(execution, "_direct_owned_pass_names", lambda name: ["mem2reg"])
     monkeypatch.setattr(targets, "host_target_triple", lambda: "arm64-apple-darwin")
     monkeypatch.setattr(handoff, "write_request",
@@ -195,7 +196,8 @@ def _mock_lifecycle(tmp_path, monkeypatch, *, backend_exit=0, cleanup_error=Fals
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
     monkeypatch.delenv("PCC_PY_FRONTEND_WORKER_TIMING", raising=False)
     monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: MIB)
-    monkeypatch.setattr(policy, "resource_task_order", lambda actual, guarded_calibration=False: ([0, 1, 2], []))
+    monkeypatch.setattr(policy, "resource_task_order", lambda actual, guarded_calibration=False,
+                        native_cold_cover=False: ([0, 1, 2], []))
     monkeypatch.setattr(pool, "_command_spec", lambda command: (["mock-worker"], []))
     monkeypatch.setattr(pool.time, "sleep", lambda seconds: None)
 
@@ -332,7 +334,8 @@ def test_pressure_retry_preserves_published_handoff_until_verified_retirement(tm
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
     monkeypatch.delenv("PCC_PY_FRONTEND_WORKER_TIMING", raising=False)
     monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: MIB)
-    monkeypatch.setattr(policy, "resource_task_order", lambda actual, guarded_calibration=False: ([0, 2, 1, 3], []))
+    monkeypatch.setattr(policy, "resource_task_order", lambda actual, guarded_calibration=False,
+                        native_cold_cover=False: ([0, 2, 1, 3], []))
     monkeypatch.setattr(pool, "_command_spec", lambda command: (["mock-worker"], []))
     monkeypatch.setattr(pool.time, "sleep", lambda seconds: None)
 
