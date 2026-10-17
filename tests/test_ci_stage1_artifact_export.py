@@ -471,6 +471,7 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
         "tests/python/test_gc_relocation_membership_lifecycle.py",
         "tests/python/test_gc_remembered_membership_lifecycle.py",
         "tests/python/test_gc_remembered_membership_native.py",
+        "tests/python/test_owned_runtime_pass_prefix.py",
     )
     assert "${{ matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}" in host
     assert "python -m pytest -x -q" in host and "-n0" not in host and "addopts" not in host
@@ -479,5 +480,6 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
         "tests/test_ci_stage1_artifact_export.py",
         "tests/python/test_gc_remembered_membership_lifecycle.py",
         "tests/python/test_gc_remembered_membership_native.py",
+        "tests/python/test_owned_runtime_pass_prefix.py",
     ):
         assert workflow.count('      - "' + path + '"') == 2

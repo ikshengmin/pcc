@@ -90,7 +90,13 @@ def runtime_modules(runtime_dir: str, target: str, threads: bool = False) -> lis
 
 
 def _compile_runtime_module(name, source, ir_path, target):
+    from pcc.driver.paths import module_name_from_src
+    from pcc.frontends.python.codegen.debug_info_lowering import debug_info_requested
     from pcc.frontends.python.pipeline import compile_python
+    from pcc.frontends.python.pipeline_pass_config import (
+        python_ir_pass_should_skip_module,
+        resolve_python_ir_pass_names,
+    )
     from pcc.frontends.python.pipeline_runtime_archive import runtime_python_ir_pass_mode
 
     # Match the Makefile: implicit kernel polls recurse before initialization;
@@ -111,17 +117,53 @@ def _compile_runtime_module(name, source, ir_path, target):
         # Keep this scoped to the call so a previous runtime selection cannot
         # leak into a later build (and restore it on a failed compile too).
         os.environ["PCC_RUNTIME_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(source)))
-        os.environ["PCC_PYTHON_IR_PASSES"] = runtime_python_ir_pass_mode()
+        mode = runtime_python_ir_pass_mode()
+        os.environ["PCC_PYTHON_IR_PASSES"] = mode
+        # Only this exact owned tier can supply a prefix-elision proof below.
+        # Use the frontend's source-derived name, including package prefixes.
+        frontend_prefix = ""
+        if (
+            mode.lower() == "default"
+            and resolve_python_ir_pass_names(raw=mode) == ["mem2reg", "sroa"]
+            and not debug_info_requested()
+            and not python_ir_pass_should_skip_module(module_name_from_src(source))
+        ):
+            frontend_prefix = "mem2reg,sroa"
         if suppress_polls:
             os.environ["PCC_WITH_THREADS"] = "0"
         compile_python(source, ir_path, emit_llvm_only=True, python_library=True,
                        libpython_mode="off", backend="self", target_triple=target)
+        return frontend_prefix
     finally:
         for key, value in previous.items():
             if value is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def _runtime_passes_after_frontend(passes, frontend_prefix, ir_text):
+    """Elide only a proven no-op repeat of the frontend's owned default tier."""
+    from pcc.frontends.python.compiled_default_passes import _has_py_cpy_call
+
+    prefix = "mem2reg,sroa"
+    if (
+        frontend_prefix != prefix
+        or str(os.environ.get("PCC_RUNTIME_IR_PASSES", "") or "").strip()
+        or "alloca " in ir_text
+        or _has_py_cpy_call(ir_text)
+    ):
+        return passes
+    # Running this pair once does not prove a fixed point: removing pointer
+    # spills can expose new promotion candidates for a second round. With no
+    # alloca token accepted by either parser, both the CFG pass and its textual
+    # cleanup are unchanged. Include its space, not names such as allocator.
+    # The strict frontend also returns early on py_cpy calls, so exclude those.
+    if passes == prefix:
+        return None
+    if passes.startswith(prefix + ",") and len(passes) > len(prefix) + 1:
+        return passes[len(prefix) + 1:]
+    return passes
 
 
 def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
@@ -162,14 +204,16 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
             source = os.path.join(runtime_dir, "py", name + ".py")
             ir_path = os.path.join(output_dir, name + ".ll")
             object_path = os.path.join(output_dir, name + ".o")
-            _compile_runtime_module(name, source, ir_path, target)
+            frontend_prefix = _compile_runtime_module(name, source, ir_path, target)
             with open(ir_path, encoding="utf-8") as stream:
                 ir_text = stream.read()
             # As in the Makefile rule, the object and its receipt describe the
             # optimized IR: precise stack maps expect promoted frame-slot
             # locals, and unoptimized runtime code is not what Darwin ships.
             if name != _THREAD_KERNEL_MODULE:
-                ir_text = optimize_ir(ir_text, passes)
+                remaining_passes = _runtime_passes_after_frontend(passes, frontend_prefix, ir_text)
+                if remaining_passes is not None:
+                    ir_text = optimize_ir(ir_text, remaining_passes)
                 with open(ir_path, "w", encoding="utf-8") as stream:
                     stream.write(ir_text)
             data = emit_owned_object(ir_text, target)
