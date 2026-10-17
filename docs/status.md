@@ -31,9 +31,12 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   `scripts/ci_native_wheel_gate.py` passes. In a fresh venv `import pcc`,
   `python -m pcc` (4 s compile) and `pcc1` (75 s compile) each build a
   class/dict/exception/big-int program that matches CPython on GC0-GC4 and
-  links only libSystem. Open release decisions: the wheel exceeds PyPI's
-  default 100 MB file limit; the tag is `cp315` (built by the 3.15 rc) and
-  `macosx_26_0` (build host) although pcc1's link minimum is macOS 12.0.
+  links only libSystem. The wheel exceeds PyPI's default 100 MB file limit
+  (open release decision). Its tag was inferred from the build interpreter
+  and host (`cp315`, `macosx_26_0`); the hook now writes `py3-none-<platform>`
+  (`macosx_12_0` from pcc1's minos, `manylinux_2_17` for the static ELF,
+  `win_amd64`), and the rebuilt `py3-none-macosx_12_0_arm64` wheel passes
+  `ci_native_wheel_gate.py` under Python 3.13 and 3.15.
 - Windows at `169bcfca1`: GC0-GC3 compiled and ran the canary; GC4's canary
   compile hit the stage deadline. Linux x86_64 and aarch64 built pcc1 and
   timed out in the pcc1 prior-worker gate (aarch64: one oversized emit worker

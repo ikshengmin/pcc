@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import platform
 import subprocess
 import sys
 from types import ModuleType
@@ -117,6 +118,33 @@ def _load_build_targets():
 
 
 _build_targets = _load_build_targets()
+
+
+def _native_wheel_tag() -> str:
+    """``py3-none-<platform>``: native artifacts, but no CPython extension.
+
+    pcc1 and the runtime archive do not depend on the building interpreter, so
+    one wheel serves every supported Python. The platform part follows pcc1:
+    the owned Mach-O linker writes minos 12.0, and the owned ELF output is a
+    static executable that needs no particular glibc.
+    """
+    machine = platform.machine().lower()
+    if sys.platform == "darwin":
+        if machine in ("arm64", "aarch64"):
+            return "py3-none-macosx_12_0_arm64"
+        if machine in ("x86_64", "amd64"):
+            return "py3-none-macosx_12_0_x86_64"
+    elif sys.platform.startswith("linux"):
+        if machine in ("x86_64", "amd64"):
+            return "py3-none-manylinux_2_17_x86_64"
+        if machine in ("aarch64", "arm64"):
+            return "py3-none-manylinux_2_17_aarch64"
+    elif sys.platform == "win32":
+        if machine in ("amd64", "x86_64"):
+            return "py3-none-win_amd64"
+    raise RuntimeError(
+        f"no native wheel tag for platform {sys.platform!r} machine {machine!r}"
+    )
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -218,7 +246,7 @@ class CustomBuildHook(BuildHookInterface):
 
         build_data.setdefault("shared_scripts", {})[str(out_binary)] = "pcc1.exe" if os.name == "nt" else "pcc1"
         build_data["pure_python"] = False
-        build_data["infer_tag"] = True
+        build_data["tag"] = _native_wheel_tag()
         self.app.display_info("bundled native pcc1 binary at .data/scripts/pcc1")
 
     def _validate_prebuilt_pcc1(self, path: Path) -> bool:
