@@ -1,6 +1,8 @@
 """Host-only freshness contracts for relocated compiled module origins."""
 
 import hashlib
+import io
+import ntpath
 from pathlib import Path
 
 import pytest
@@ -216,3 +218,97 @@ def test_lexical_parent_is_normalized_before_path_resolution(source, tmp_path, m
     monkeypatch.setenv("PCC_SOURCE_ROOT", raw)
     assert provenance.codegen_checksum() == expected
     assert str(source) in seen
+
+
+@pytest.mark.parametrize("selection", ("origin", "source", "source-package", "repo-package"))
+@pytest.mark.parametrize("crlf", (False, True), ids=("lf", "crlf"))
+def test_windows_owned_providers_compute_current_checksum(source, monkeypatch, selection, crlf):
+    """Keep real os/pathlib provider bodies; model only Windows ABI and I/O.
+
+    This host check covers discovery, inventory and bytes. It is not native
+    execution. The old dirname body failed before hashing with parents=['.'].
+    """
+    from tests.python.test_owned_path_basename import load_provider, modeled_os
+
+    windows_root = r"D:\a\pcc\pcc"
+    windows_os = modeled_os(ntpath)
+    windows_os.sep = "\\"
+    windows_os.environ = {}
+
+    def mapped(value):
+        relative = ntpath.relpath(str(value), windows_root)
+        if relative == ".." or relative.startswith("..\\"):
+            raise OSError("outside modeled checkout")
+        return source / relative.replace("\\", "/")
+
+    def source_bytes(path):
+        data = path.read_bytes()
+        return data.replace(b"\n", b"\r\n") if crlf else data
+
+    # Independently construct the existing on-disk identity, preserving
+    # platform-relative names and line endings rather than normalizing them.
+    frontend = hashlib.sha256()
+    files = bootstrap_identity.bootstrap_source_files(source)
+    for path in sorted(files, key=lambda value: str(value.relative_to(source)).replace("/", "\\")):
+        relative = str(path.relative_to(source)).replace("/", "\\").encode("utf-8")
+        frontend.update(len(relative).to_bytes(8, "big"))
+        frontend.update(relative)
+        frontend.update(hashlib.sha256(source_bytes(path)).digest())
+    linker = hashlib.sha256(backend_identity._MACHO_LINK_IDENTITY_SCHEMA)
+    for relative in backend_identity.MACHO_LINK_SOURCE_PATHS:
+        name = relative.encode("utf-8")
+        linker.update(len(name).to_bytes(8, "big"))
+        linker.update(name)
+        linker.update(source_bytes(source / relative))
+    emitter = hashlib.sha256()
+    for relative in ("pcc/tools/ir_to_obj.py", "pcc/backend/owned_object_emit.py"):
+        emitter.update(source_bytes(source / relative))
+    emitter.update(linker.hexdigest().encode("ascii"))
+    expected = hashlib.sha256(
+        (frontend.hexdigest() + ":" + emitter.hexdigest()).encode("ascii")
+    ).hexdigest()
+
+    windows_os._path_abspath = ntpath.normpath
+    windows_os._path_realpath = ntpath.normpath
+    windows_os._path_dirname = ntpath.dirname
+    windows_os._path_splitdrive = ntpath.splitdrive
+    windows_os._path_normcase = ntpath.normcase
+    windows_os._path_isfile = lambda value: mapped(value).is_file()
+    windows_os._path_isdir = lambda value: mapped(value).is_dir()
+    windows_os._os_listdir = lambda value: [path.name for path in mapped(value).iterdir()]
+    paths = load_provider("pcc/stdlib/pathlib.py", "checksum_windows_pathlib")
+    paths.os = windows_os
+    paths._op = windows_os.path
+
+    def read_windows(value, mode):
+        assert mode == "rb"
+        return io.BytesIO(source_bytes(mapped(value)))
+
+    paths.open = read_windows
+    for module, relative in (
+        (provenance, r"pcc\tools\runtime_archive_provenance.py"),
+        (bootstrap_identity, r"pcc\driver\bootstrap_cache_identity.py"),
+        (backend_identity, r"pcc\backend\self_backend_cache_identity.py"),
+    ):
+        monkeypatch.setattr(module, "Path", paths.Path)
+        monkeypatch.setattr(module, "__file__", windows_root + "\\" + relative)
+    monkeypatch.setattr(provenance, "os", windows_os)
+    monkeypatch.setattr(bootstrap_identity, "os", windows_os)
+    if selection.startswith("source"):
+        windows_os.environ["PCC_SOURCE_ROOT"] = windows_root + (r"\pcc" if selection.endswith("package") else "")
+    elif selection == "repo-package":
+        windows_os.environ["PCC_REPO_ROOT"] = windows_root + r"\pcc"
+
+    assert str(provenance._codegen_source_root()) == windows_root
+    assert len(bootstrap_identity.bootstrap_source_files(windows_root)) == len(files)
+    assert provenance.codegen_checksum() == expected
+    manifest = {"members": [{"codegen_checksum": expected}]}
+    assert not provenance.manifest_is_stale_for_current_codegen(manifest)
+    assert provenance.manifest_is_stale_for_current_codegen(
+        {"members": [{"codegen_checksum": "f" * 64}]}
+    )
+    # Root validation must precede the warm cache, including on Windows.
+    marker = source / "pcc/frontends/python/pipeline.py"
+    marker.unlink()
+    assert provenance.codegen_checksum() == "unknown"
+    assert provenance.manifest_is_stale_for_current_codegen(manifest)

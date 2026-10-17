@@ -63,6 +63,7 @@ _file_digest = extern("py_sha256_file_hex", (c_obj,), c_obj)
 _file_digest_bounded = extern("py_sha256_file_hex_bounded", (c_obj, c_int64), c_obj)
 
 _path_basename = extern("py_os_path_basename", (c_obj,), c_obj)
+_path_dirname = extern("py_os_path_dirname", (c_obj,), c_obj)
 _path_split = extern("py_os_path_split", (c_obj,), c_obj)
 _path_isfile = extern("py_os_path_isfile", (c_obj,), c_int)
 _path_isdir = extern("py_os_path_isdir", (c_obj,), c_int)
@@ -721,18 +722,19 @@ class _path:
 
 
     @staticmethod
-    def dirname(p: str) -> str:
-        i = len(p) - 1
-        while i >= 0 and p[i] != "/":
-            i = i - 1
-        if i < 0:
-            return ""
-        head = p[: i + 1]
-        # CPython strips trailing slashes unless the head is all slashes, so
-        # dirname("/a//b") is "/a" and dirname("//") stays "//".
-        if head != "/" * len(head):
-            head = head.rstrip("/")
-        return head
+    def dirname(p):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.dirname(p)
+        # Closed-world ``from os import path`` binds this ordinary namespace.
+        # Path.parents therefore needs the same target-aware dirname helper
+        # as direct os.path calls, including Windows backslashes and roots.
+        value = _native_path_text(p)
+        result = _path_dirname(value)
+        if _error_pending():
+            raise
+        if ptr_is_null(result):
+            raise MemoryError('owned os.path.dirname result allocation failed')
+        return result
 
 
     @staticmethod
