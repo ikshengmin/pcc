@@ -66,11 +66,11 @@ def py_recursion_leave(entered: int) -> None:
 @c_abi_export("py_sys_setrecursionlimit")
 def py_sys_setrecursionlimit(limit: int) -> int:
     """Raw ABI setter; public Python callers also need index conversion."""
+    if limit > 2147483647 or limit < -2147483648:
+        py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to C int")))
+        return 0
     if limit <= 0:
         py_raise_owned(py_exc_new(2, cstr("recursion limit must be greater or equal than 1")))
-        return 0
-    if limit > 2147483647:
-        py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to C int")))
         return 0
     depth: int = load_i32(global_addr("pcc_py_recursion_depth"), 0)
     if limit <= depth:
