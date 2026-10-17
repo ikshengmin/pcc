@@ -85,7 +85,7 @@ def _assert_retired(error):
         while trace is not None:
             if trace.tb_frame.f_code.co_filename == payloads.__file__:
                 local = trace.tb_frame.f_locals
-                for name in ("buffer", "view", "payload", "result", "closing", "patch", "stream", "source", "part", "parts"):
+                for name in ("buffer", "view", "payload", "result", "closing", "patch", "check", "admit", "ledger", "stream", "source", "part", "parts"):
                     if name in local:
                         assert local[name] is None
             trace = trace.tb_next
@@ -153,7 +153,7 @@ def test_invalid_partial_io_releases_chunks_views_and_file(monkeypatch, mode, fa
     _assert_retired(caught.value)
 
 
-@pytest.mark.parametrize("damage", ("short", "long", "content", "offset", "order", "repeat"))
+@pytest.mark.parametrize("damage", ("short", "long", "content", "offset", "duplicate_index", "repeat"))
 def test_corruption_extent_and_replay_refuse_without_publishing(monkeypatch, damage):
     groups = [_parts((1001,)), _parts((1003,), seed=4)]
     store, ledger = _store(groups)
@@ -171,8 +171,10 @@ def test_corruption_extent_and_replay_refuse_without_publishing(monkeypatch, dam
         store.rows[0] = (offset + 1, size, count, digest)
     elif damage == "repeat":
         store.read_owned(0, ledger)
-    with pytest.raises(maps.PreciseStackMapError, match="extent|content|offset|order") as caught:
-        store.read_owned(1 if damage == "order" else 0, ledger)
+    elif damage == "duplicate_index":
+        store.read_owned(1, ledger)
+    with pytest.raises(maps.PreciseStackMapError, match="extent|content|offset|already consumed") as caught:
+        store.read_owned(1 if damage == "duplicate_index" else 0, ledger)
     assert store.stream is None
     _assert_retired(caught.value)
 
@@ -303,24 +305,28 @@ def test_production_retires_every_section_before_first_allocation_and_keeps_imag
         host.prepare_executable_from_paths(paths, compact_budget=_factory_budget()),
         compact_budget=_factory_budget(),
     )
-    original = host._StagedSectionPayloads.read_owned
-    reads, phases = [], []
-    def read(self, index, ledger, **kwargs):
-        frame = sys._getframe(1)
-        local = frame.f_locals
-        assert all(target.data_parts == [] for target in local["merged"].values())
+    original = host._StagedSectionPayloads._read
+    reads, phases, takes = [], [], []
+    def read(self, index, check, patch):
         assert self.sealed and self.appended == self.count
-        assert len(local["out_sections"]) == index
-        del frame, local
+        assert any(event == "source_view_begin" for event, _ in phases)
+        assert self.active_bytes == 0
         reads.append(index)
-        return original(self, index, ledger, **kwargs)
-    monkeypatch.setattr(host._StagedSectionPayloads, "read_owned", read)
+        return original(self, index, check, patch)
+    take = host._StagedSectionPayloads.take
+    def consume(self, index, **kwargs):
+        takes.append(index)
+        return take(self, index, **kwargs)
+    monkeypatch.setattr(host._StagedSectionPayloads, "_read", read)
+    monkeypatch.setattr(host._StagedSectionPayloads, "take", consume)
     budget = _factory_budget()
     pending = [host.prepare_executable_from_paths(
         paths, compact_budget=budget, _staged_rows=True,
         _phase_callback=lambda event, **fields: phases.append((event, fields)),
     )]
     assert reads == list(range(len(reads))) and reads
+    assert takes == [] and pending[0]._payloads == [b""] * len(reads)
+    assert pending[0]._host_payload_store.active_bytes == 0
     ends = [(index, fields) for index, (event, fields) in enumerate(phases)
             if event == "section_payload_spool_end"]
     joins = [(index, fields) for index, (event, fields) in enumerate(phases)
@@ -329,6 +335,7 @@ def test_production_retires_every_section_before_first_allocation_and_keeps_imag
     assert [fields for _, fields in ends] == [fields for _, fields in joins]
     actual = output.link_owned_executable(pending.pop(), compact_budget=budget)
     assert actual == expected
+    assert takes == list(range(len(takes))) and len(reads) == 2 * len(takes)
 
 
 def test_section_targets_after_stackmap_resize_keep_prepared_bytes(tmp_path):
@@ -341,7 +348,7 @@ def test_section_targets_after_stackmap_resize_keep_prepared_bytes(tmp_path):
         host.close_staged_source_rows(source)
 
 
-def test_payload_store_close_failure_cannot_publish_prepared_source(tmp_path, monkeypatch):
+def test_payload_store_close_failure_cannot_publish_final_image(tmp_path, monkeypatch):
     paths = _stack_inputs(tmp_path, count=2, records=8, data_bytes=64)
     original = host._StagedSectionPayloads.close
     stores, phases = [], []
@@ -351,13 +358,19 @@ def test_payload_store_close_failure_cannot_publish_prepared_source(tmp_path, mo
         if _error is None:
             raise OSError("injected final payload close")
     monkeypatch.setattr(host._StagedSectionPayloads, "close", close)
+    budget = _factory_budget()
+    pending = [host.prepare_executable_from_paths(
+        paths, compact_budget=budget, _staged_rows=True,
+        _phase_callback=lambda event, **fields: phases.append(event),
+    )]
+    assert stores == [] and pending[0]._host_payload_store.stream is not None
+    rows = pending[0]._host_row_store
     with pytest.raises(OSError, match="injected final payload close") as caught:
-        host.prepare_executable_from_paths(
-            paths, compact_budget=_factory_budget(), _staged_rows=True,
-            _phase_callback=lambda event, **fields: phases.append(event),
-        )
+        output.link_owned_executable(pending.pop(), compact_budget=budget,
+                                     _phase_callback=lambda event, **fields: phases.append(event))
     assert stores and all(store.stream is None for store in stores)
-    assert "section_joins_end" not in phases and "source_view_begin" not in phases
+    assert rows.stream is None
+    assert "source_view_end" in phases and "final_backing_begin" not in phases
     _assert_retired(caught.value)
 
 
@@ -408,3 +421,375 @@ def test_escaped_patch_export_refuses_without_copy(monkeypatch):
             view.release()
         for owner in owners:
             owner.close()
+
+
+@pytest.mark.parametrize("sizes", ((), (0,), (1,), (65539, 3, 99999)))
+def test_payload_windows_retire_each_backing_and_bound_replayed_io(monkeypatch, sizes):
+    groups = [_parts(sizes, seed=index + 1) for index in range(3)]
+    files = _files(monkeypatch)
+    owners = _track_buffers(monkeypatch)
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    size = sum(sizes)
+    backing = ledger.immutable(size)
+    assert store.max_window_bytes == backing
+    admissions = []
+    for index in (2, 0, 2, 1):
+        def check():
+            assert store.active_bytes == 0
+            assert all(owner.closed for owner in owners)
+            admissions.append(index)
+            ledger.check(backing)
+        with store.window(index, check=check) as raw:
+            assert type(raw) is bytes and raw == b"".join(_parts(sizes, seed=index + 1))
+            assert store.size(index) == size
+            assert store.active_bytes == store.backing_bytes(index) == backing
+            raw = None
+        assert store.active_bytes == 0
+    assert admissions == [2, 0, 2, 1]
+    assert store._replays == [1, 1, 2]
+    assert store.consumed == store.public_copy_bytes == 0
+    assert store.read_bytes == 4 * size
+    assert all(owner.closed and len(set(owner.addresses)) <= 1 for owner in owners)
+    assert max((size for file in files for _, size in file.calls), default=0) <= payloads._BLOCK
+    store.close()
+    assert files[0].inner.closed and store._replays == [] and store._taken == []
+    assert ledger.budget.retained_bytes == 137
+
+
+@pytest.mark.parametrize("consume", ("take", "read_owned"))
+def test_payload_consume_allows_arbitrary_indices_and_dropped_sections(consume):
+    groups = [_parts((1001 + index,), seed=index + 1) for index in range(4)]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    retained = ledger.retained
+    results = []
+    for index in (3, 0, 2):
+        if consume == "take":
+            result = store.take(index, check=lambda: ledger.keep(store.backing_bytes(index)))
+        else:
+            result = store.read_owned(index, ledger)
+        assert result == bytes([index + 1]) * (1001 + index)
+        results.append(result)
+        assert store.active_bytes == 0
+    assert store._taken == [True, False, True, True]
+    assert store.consumed == 3 and store.read_bytes == 1004 + 1001 + 1003
+    assert ledger.retained == retained + sum(ledger.immutable(len(raw)) for raw in results)
+    store.close()
+
+
+def test_payload_replays_and_final_take_patch_fresh_original_bytes_once():
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    calls = []
+    def patch(view):
+        calls.append(view[0])
+        view[0] += 1
+    for _ in range(3):
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes), patch=patch) as raw:
+            assert raw == b"\x02" + b"\x01" * 1000
+            raw = None
+    result = store.read_owned(0, ledger, patch=patch)
+    assert result == b"\x02" + b"\x01" * 1000
+    assert calls == [1, 1, 1, 1]
+    assert store.read_bytes == 4004 and store._replays == [3] and store.consumed == 1
+    store.close()
+
+
+def test_payload_public_copies_charge_each_backing_and_disqualify_consume():
+    groups = [_parts((1001,)), _parts((1003,), seed=4)]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    backing = store.backing_bytes(0)
+    admissions, patches = [], []
+    def check():
+        admissions.append(store.public_copy_bytes)
+        ledger.check(store.public_copy_bytes + backing)
+    def patch(view):
+        patches.append(view[0])
+        view[0] += 1
+    first = store.copy(0, check=check, patch=patch)
+    second = store.copy(0, check=check, patch=patch)
+    assert type(first) is bytes and first == second == b"\x02" + b"\x01" * 1000
+    assert first is not second and patches == [1, 1]
+    assert admissions == [0, backing]
+    assert store.public_copy_bytes == 2 * backing and store.active_bytes == 0
+    assert store._replays == [0, 0] and store.read_bytes == 2002
+    with pytest.raises(maps.PreciseStackMapError, match="public copies") as caught:
+        store.read_owned(1, ledger)
+    assert store.stream is None and store.public_copy_bytes == 2 * backing
+    _assert_retired(caught.value)
+
+
+def test_payload_windows_enforce_eight_replays_without_allocating_ninth(monkeypatch):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    owners = _track_buffers(monkeypatch)
+    for _ in range(8):
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+            assert len(raw) == 1001
+            raw = None
+    with pytest.raises(maps.PreciseStackMapError, match="replay budget") as caught:
+        with store.window(0, check=lambda: None):
+            pytest.fail("ninth payload replay was admitted")
+    assert len(owners) == 8 and all(owner.closed for owner in owners)
+    assert store.read_bytes == 8008 and store.active_bytes == 0 and store.stream is None
+    _assert_retired(caught.value)
+
+
+def test_payload_final_consume_remains_available_after_eight_windows():
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    for _ in range(8):
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+            raw = None
+    assert store.read_owned(0, ledger) == b"\x01" * 1001
+    assert store.consumed == 1 and store.read_bytes == 9009
+    with pytest.raises(maps.PreciseStackMapError, match="already consumed"):
+        with store.window(0, check=lambda: None):
+            pytest.fail("consumed descriptor was replayed")
+    assert store.stream is None
+
+
+def test_payload_replay_verifies_original_digest_after_each_window(monkeypatch):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    owners = _track_buffers(monkeypatch)
+    with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+        raw = None
+    store.stream.seek(0)
+    store.stream.write(b"x")
+    with pytest.raises(maps.PreciseStackMapError, match="content changed") as caught:
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)):
+            pytest.fail("modified payload was replayed")
+    assert store.stream is None and store.read_bytes == 1001
+    assert len(owners) == 2 and all(owner.closed for owner in owners)
+    _assert_retired(caught.value)
+
+
+@pytest.mark.parametrize("alias_kind", ("bytes", "view", "iterator"))
+def test_payload_windows_fail_closed_on_escaped_aliases(alias_kind):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    aliases = []
+    with pytest.raises(maps.PreciseStackMapError, match="escaped aliases") as caught:
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+            aliases.append(raw if alias_kind == "bytes" else (
+                memoryview(raw) if alias_kind == "view" else iter(raw)
+            ))
+            raw = None
+    assert store.stream is None and store.active_bytes > 0
+    _assert_retired(caught.value)
+    aliases.clear()
+    store.close()
+    assert store.active_bytes > 0
+
+
+def test_payload_window_original_error_survives_escaped_alias_and_close_failure(monkeypatch):
+    groups = [_parts((1001,))]
+    files = _files(monkeypatch)
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    original = ValueError("original payload consumer error")
+    aliases = []
+    with pytest.raises(ValueError) as caught:
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+            aliases.append(raw)
+            raw = None
+            files[0].mode = "close"
+            raise original
+    assert caught.value is original and files[0].inner.closed
+    assert store.stream is None and store.active_bytes > 0
+    _assert_retired(caught.value)
+    aliases.clear()
+
+
+def test_payload_window_failure_clears_traceback_held_views_before_retirement():
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    original = ValueError("original payload decoder error")
+    def decode(raw):
+        child = memoryview(raw)
+        raise original
+    with pytest.raises(ValueError) as caught:
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+            try:
+                decode(raw)
+            finally:
+                raw = None
+    assert caught.value is original and store.active_bytes == 0 and store.stream is None
+    _assert_retired(caught.value)
+
+
+@pytest.mark.parametrize("mode", ("window", "copy", "take"))
+@pytest.mark.parametrize("delta", (-1, 0, 1))
+def test_payload_window_admission_precedes_allocation_at_exact_cap(monkeypatch, mode, delta):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    backing = store.backing_bytes(0)
+    ledger.budget.limit_bytes = ledger.retained + ledger.budget.retained_bytes + backing + delta
+    owners = _track_buffers(monkeypatch)
+    def check():
+        ledger.check(backing, label="payload window admission")
+    def read():
+        if mode == "window":
+            with store.window(0, check=check) as raw:
+                assert type(raw) is bytes and len(raw) == 1001
+                raw = None
+        else:
+            assert len(getattr(store, mode)(0, check=check)) == 1001
+    try:
+        if delta < 0:
+            with pytest.raises(maps.PreciseStackMapError, match="payload window admission") as caught:
+                read()
+            assert not owners and store.active_bytes == 0 and store.stream is None
+            _assert_retired(caught.value)
+        else:
+            read()
+            assert len(owners) == 1 and owners[0].closed
+    finally:
+        store.close()
+
+
+def test_payload_copy_refusal_preserves_prior_cumulative_charge(monkeypatch):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    first = store.copy(0, check=lambda: ledger.check(store.max_window_bytes))
+    prior = store.public_copy_bytes
+    owners = _track_buffers(monkeypatch)
+    original = maps.PreciseStackMapError("payload public copy budget exceeded")
+    def check():
+        assert store.public_copy_bytes == prior
+        raise original
+    with pytest.raises(maps.PreciseStackMapError) as caught:
+        store.copy(0, check=check)
+    assert caught.value is original and first == b"\x01" * 1001
+    assert store.public_copy_bytes == prior and store.active_bytes == 0 and not owners
+    assert store.stream is None
+    _assert_retired(caught.value)
+
+
+def test_payload_copy_cumulative_charge_refuses_second_backing_at_cap(monkeypatch):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    backing = store.backing_bytes(0)
+    ledger.budget.limit_bytes = ledger.retained + ledger.budget.retained_bytes + 2 * backing - 1
+    owners = _track_buffers(monkeypatch)
+    def check():
+        ledger.check(store.public_copy_bytes + backing, label="payload public copies")
+    first = store.copy(0, check=check)
+    with pytest.raises(maps.PreciseStackMapError, match="payload public copies"):
+        store.copy(0, check=check)
+    assert first == b"\x01" * 1001 and len(owners) == 1 and owners[0].closed
+    assert store.public_copy_bytes == backing and store.active_bytes == 0
+    assert store.stream is None
+
+
+def test_payload_reentrant_reads_leave_outer_window_intact():
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    errors = []
+    def reject_nested():
+        for mode in ("window", "copy", "take"):
+            with pytest.raises(maps.PreciseStackMapError, match="already active") as caught:
+                if mode == "window":
+                    with store.window(0, check=lambda: None):
+                        pytest.fail("reentrant window admitted")
+                else:
+                    getattr(store, mode)(0, check=lambda: None)
+            errors.append(caught.value)
+    def check():
+        ledger.check(store.max_window_bytes)
+        reject_nested()
+    with store.window(0, check=check) as raw:
+        reject_nested()
+        raw = None
+    assert store.stream is not None and store.active_bytes == 0
+    for error in errors:
+        _assert_retired(error)
+    store.close()
+
+
+@pytest.mark.parametrize("instrument", ("trace", "profile"))
+def test_payload_window_retirement_rechecks_instrumentation(monkeypatch, instrument):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    with pytest.raises(maps.PreciseStackMapError, match="instrumentation changed") as caught:
+        with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+            monkeypatch.setattr(payloads.sys, "get" + instrument, lambda: object())
+            raw = None
+    assert store.stream is None and store.active_bytes > 0
+    _assert_retired(caught.value)
+
+
+def test_payload_window_outer_handled_error_does_not_hide_alias_refusal():
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    aliases = []
+    try:
+        raise ValueError("unrelated handled error")
+    except ValueError:
+        with pytest.raises(maps.PreciseStackMapError, match="escaped aliases"):
+            with store.window(0, check=lambda: ledger.check(store.max_window_bytes)) as raw:
+                aliases.append(raw)
+                raw = None
+    assert store.stream is None and store.active_bytes > 0
+    aliases.clear()
+
+
+def test_payload_patch_error_wins_over_escaped_export_cleanup(monkeypatch):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    owners = _track_buffers(monkeypatch)
+    escaped = []
+    original = ValueError("original payload patch error")
+    def patch(view):
+        escaped.append(view[:])
+        raise original
+    try:
+        with pytest.raises(ValueError) as caught:
+            with store.window(0, check=lambda: ledger.check(store.max_window_bytes), patch=patch):
+                pytest.fail("failed patch was published")
+        assert caught.value is original and store.stream is None and store.active_bytes > 0
+        _assert_retired(caught.value)
+    finally:
+        for view in escaped:
+            view.release()
+        for owner in owners:
+            owner.close()
+
+
+def test_payload_freeze_refuses_hidden_immutable_snapshot_alias(monkeypatch):
+    groups = [_parts((1001,))]
+    store, ledger = _store(groups)
+    _stage(store, ledger, groups)
+    original = payloads.io.BytesIO
+    aliases, owners = [], []
+    class Escaping(original):
+        def __init__(self, value):
+            super().__init__(value)
+            owners.append(self)
+        def getvalue(self):
+            result = super().getvalue()
+            aliases.append(result)
+            return result
+    monkeypatch.setattr(payloads.io, "BytesIO", Escaping)
+    with pytest.raises(maps.PreciseStackMapError, match="exclusively owned bytes") as caught:
+        store.take(0, check=lambda: ledger.check(store.max_window_bytes))
+    assert store.stream is None and store.active_bytes > 0
+    assert len(owners) == 1 and owners[0].closed
+    _assert_retired(caught.value)
+    aliases.clear()

@@ -1127,7 +1127,7 @@ def test_staged_source_failure_closes_private_owner(tmp_path, monkeypatch, failu
         original = ValueError("original source validator failure")
         def fail(*_args, **_kwargs):
             raise original
-        monkeypatch.setattr(native, "_validate_source_sections", fail)
+        monkeypatch.setattr(native, "_validate_section", fail)
         with pytest.raises(ValueError) as caught:
             host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=True)
         assert caught.value is original
@@ -1167,7 +1167,10 @@ def test_staged_source_host_helpers_stay_out_of_native_import_closure():
         source = Path(module.__file__).read_text()
         stripped = _without_inactive_implementation_imports(source, implementation="pcc")
         assert "from .macho_host_prepare import copy_staged_relocation_rows" not in stripped
+        assert "from .macho_host_prepare import copy_staged_section_data" not in stripped
         assert "from pcc.backend.macho_host_prepare import close_staged_source_rows" not in stripped
+        assert "_host_payload_store" not in stripped
+        assert "_owned_output.retire_payloads" not in stripped
 
 
 @pytest.mark.parametrize("instrument", ("trace", "profile"))
@@ -1377,7 +1380,11 @@ def test_staged_source_budget_counts_resident_window_and_refuses_unadmitted_copy
     source = host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=True)
     store = source._host_row_store
     ordinary_fields = sum(_model_bytes(getattr(source, name), budget) for name in output._SOURCE_FIELDS)
-    assert output._source_bytes(source, budget) == ordinary_fields + store.metadata_bytes + store.max_window_bytes
+    payloads = source._host_payload_store
+    assert output._source_bytes(source, budget) == (
+        ordinary_fields + store.metadata_bytes + store.max_window_bytes
+        + payloads.metadata_bytes + _model_bytes(source._host_payload_layout, budget)
+    )
     assert macho_exec._compact_source_raw_bytes(source) == sum(len(data) for data in source._payloads)
     assert store.logical_bytes > max(store.size(index) for index in range(store.count))
     section = max(source.sections(), key=lambda row: row["nreloc"])
@@ -1563,17 +1570,19 @@ def test_staged_preparation_seals_all_rows_before_first_payload_join(tmp_path, m
         compact_budget=_budget(50_000_000),
     )
     stores = _capture_row_stores(monkeypatch)
-    original = host._StagedSectionPayloads.read_owned
+    original = host._StagedSectionPayloads._read
     joins, phases = [], []
-    def consume(self, index, ledger, **kwargs):
+    def consume(self, index, check, patch):
         store, = stores
         assert store.sealed and store.appended == store.count
-        assert store.active_bytes == 0
+        # Validation borrows exactly this section's row replay while its one
+        # payload is checked; final output obtains a fresh exclusive backing.
+        assert store.active_bytes in (0, store.backing_bytes(index))
         joins.append(index)
-        return original(self, index, ledger, **kwargs)
+        return original(self, index, check, patch)
     def phase(event, **fields):
         phases.append((event, fields))
-    monkeypatch.setattr(host._StagedSectionPayloads, "read_owned", consume)
+    monkeypatch.setattr(host._StagedSectionPayloads, "_read", consume)
     budget = _budget(50_000_000)
     pending = [host.prepare_executable_from_paths(paths, compact_budget=budget,
                                                  _staged_rows=True, _phase_callback=phase)]
@@ -1613,7 +1622,7 @@ def test_staged_preparation_replays_targets_after_stackmap_resize(tmp_path, monk
         targets = [index for index, rows in enumerate(expected[3])
                    if any(not row[4] and row[5] != spec.ARM64_RELOC_ADDEND
                           for row in native._FINAL_LINK_RELOCATION.iter_unpack(rows))]
-        assert targets and early_reads == targets
+        assert targets and early_reads == []
         assert stores[0].active_bytes == 0
     finally:
         host.close_staged_source_rows(source)
@@ -1658,8 +1667,8 @@ def test_staged_preparation_target_replay_failure_retires_rows_and_payloads(tmp_
     if failure == "budget":
         check = host._Ledger.check
         def refuse(self, extra=0, *, label="Mach-O input window"):
-            if label == "Mach-O section-target row replay":
-                assert extra > 0 and stores[0].active_bytes == 0
+            if label == "Mach-O compact row validation replay":
+                assert extra == 0 and stores[0].active_bytes == 0
                 checked.append(len(buffers))
                 raise maps.PreciseStackMapError("injected target row replay budget refusal")
             return check(self, extra, label=label)
@@ -1679,7 +1688,8 @@ def test_staged_preparation_target_replay_failure_retires_rows_and_payloads(tmp_
         message = "section-target value does not fit relocation width"
     budget = _budget(50_000_000)
     budget.retained_bytes = 137
-    with pytest.raises(output.LinkError, match=message) as caught:
+    expected_error = OSError if failure == "read" else output.LinkError
+    with pytest.raises(expected_error, match=message) as caught:
         host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=True)
     assert stores and stores[0].stream is None and stores[0].active_bytes == 0
     assert all(buffer.closed for buffer in buffers) and budget.retained_bytes == 137

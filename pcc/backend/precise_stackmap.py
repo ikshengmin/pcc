@@ -1550,7 +1550,10 @@ def _scan_stack_map_payload(payload: bytes, *, compact_budget=None):
     if table_count > MAX_LOCATIONS:
         raise PreciseStackMapError("too many stack-map locations")
     if compact_budget is not None:
-        compact_budget.check_peak(len(payload), entries=function_count, label="input")
+        compact_budget.check_peak(
+            compact_budget.unretained_payload_bytes(payload),
+            entries=function_count, label="input",
+        )
     functions: list[tuple[int, int, int]] = []
     total_records = 0
     for _ in range(function_count):

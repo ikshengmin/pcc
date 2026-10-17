@@ -1,9 +1,10 @@
-"""Private aggregate payload retirement before CPython section materialization.
+"""Private aggregate payload retirement and bounded CPython section windows.
 
 One anonymous file owns every section's detached chunks before the first
 joined backing is allocated. The public/native preparation path is unchanged.
 """
 
+from contextlib import contextmanager
 import hashlib
 import io
 import os
@@ -15,30 +16,41 @@ from .precise_stackmap import PreciseStackMapError
 
 
 class _StagedSectionPayloads:
-    """Consume exact owned chunks, then materialize each section once."""
+    """Retire exact owned chunks before borrowing or transferring backings.
+
+    Admission callbacks are borrowed and must admit the complete live graph,
+    including the requested backing and any cumulative public-copy charge.
+    A window's consumer must retire every bytes/view/iterator alias before
+    leaving it. Final transfers may consume descriptor indices in any order.
+    """
 
     __slots__ = (
         "stream", "rows", "count", "appended", "consumed", "sealed",
         "budget", "logical_bytes", "read_bytes", "metadata_bytes", "_busy",
+        "_replays", "_taken", "max_window_bytes", "public_copy_bytes",
+        "active_bytes",
     )
 
     def __init__(self, count, compact_budget, admit):
-        self.stream, self.rows = None, []
+        self.stream, self.rows, self._replays, self._taken = None, [], [], []
         try:
             if (type(count) is not int or count < 0 or compact_budget is None
                     or count > compact_budget.limit_bytes // 8):
                 raise PreciseStackMapError("Mach-O staged payload descriptor budget exceeded")
             self.count, self.budget = count, compact_budget
             self.appended = self.consumed = self.logical_bytes = self.read_bytes = 0
+            self.max_window_bytes = self.public_copy_bytes = self.active_bytes = 0
             self.sealed = self._busy = False
             rounded = compact_budget._rounded
             integer = max(compact_budget.integer_bytes,
                           rounded(sys.getsizeof((1 << 64) - 1)))
-            # Fixed pointer array, offset/size/part-count/digest descriptors,
-            # file, hash state, BytesIO headers and bounded exported views.
+            # Fixed descriptor, replay and consumed pointer arrays; descriptors
+            # own offset/size/part-count integers and a digest. Replay counters
+            # add one bounded integer per section; consumed flags are shared
+            # bools. Fixed workspace includes file/hash/BytesIO/view headers.
             self.metadata_bytes = (
-                rounded(sys.getsizeof(self)) + rounded(sys.getsizeof([]))
-                + rounded(8 * count) + count * (
+                rounded(sys.getsizeof(self)) + 3 * rounded(sys.getsizeof([]))
+                + 3 * rounded(8 * count) + count * (
                     rounded(sys.getsizeof((0, 0, 0, b"")))
                     + 4 * integer + rounded(sys.getsizeof(b"") + 32)
                 ) + _FIXED
@@ -47,6 +59,8 @@ class _StagedSectionPayloads:
             if not _join_instrumentation_absent():
                 raise PreciseStackMapError("Mach-O staged payloads require an uninstrumented host")
             self.rows = [None] * count
+            self._replays = [0] * count
+            self._taken = [False] * count
             self.stream = tempfile.TemporaryFile(mode="w+b", buffering=0)
         except BaseException as exc:
             self._abort(exc)
@@ -115,6 +129,9 @@ class _StagedSectionPayloads:
             self.rows[self.appended] = (offset, size, part_count, digest.digest())
             self.appended += 1
             self.logical_bytes += size
+            self.max_window_bytes = max(
+                self.max_window_bytes, self.budget._rounded(sys.getsizeof(b"") + size),
+            )
             return retired
         except BaseException as exc:
             self._abort(exc)
@@ -146,6 +163,19 @@ class _StagedSectionPayloads:
             raise PreciseStackMapError("Mach-O staged payload offset changed")
         return row
 
+    def size(self, index):
+        return self.descriptor(index)[1]
+
+    def backing_bytes(self, index):
+        return self.budget._rounded(sys.getsizeof(b"") + self.size(index))
+
+    def _available(self, index):
+        row = self.descriptor(index)
+        if (len(self._taken) != self.count or len(self._replays) != self.count
+                or self._taken[index] is not False):
+            raise PreciseStackMapError("Mach-O staged payload index already consumed")
+        return row
+
     def seal(self):
         try:
             if (self.stream is None or self.sealed or self._busy
@@ -158,32 +188,32 @@ class _StagedSectionPayloads:
                 self.descriptor(index)
             if not _join_instrumentation_absent():
                 raise PreciseStackMapError("Mach-O staged payload instrumentation changed")
+            return self
         except BaseException as exc:
             self._abort(exc)
             if isinstance(exc, OSError):
                 raise PreciseStackMapError("Mach-O staged payload storage failed: " + str(exc)) from exc
             raise
 
-    def read_owned(self, index, ledger, *, patch=None):
-        """One admitted immutable backing; patch only its borrowed mutable view."""
-        buffer = view = part = result = closing = None
+    def _read(self, index, check, patch):
+        """Read original file bytes once; patch only this fresh borrowed view."""
+        buffer = view = part = result = closing = failure = None
         try:
-            if self._busy or type(index) is not int or index != self.consumed:
-                raise PreciseStackMapError("Mach-O staged payload read order changed")
-            self._busy = True
-            offset, size, part_count, digest = self.descriptor(index)
-            if offset != self.read_bytes:
-                raise PreciseStackMapError("Mach-O staged payload offset changed")
-            ledger.keep(ledger.immutable(size), label="Mach-O staged payload backing")
+            offset, size, part_count, digest = self._available(index)
+            backing = self.budget._rounded(sys.getsizeof(b"") + size)
+            if backing > self.max_window_bytes:
+                raise PreciseStackMapError("Mach-O staged payload backing changed")
+            check()
             if not _join_instrumentation_absent():
                 raise PreciseStackMapError("Mach-O staged payloads require an uninstrumented host")
-            if (self.descriptor(index) != (offset, size, part_count, digest)
+            if (self._available(index) != (offset, size, part_count, digest)
                     or os.fstat(self.stream.fileno()).st_size != self.logical_bytes
                     or self.stream.seek(0, 2) != self.logical_bytes
                     or self.stream.seek(offset) != offset):
                 raise PreciseStackMapError("Mach-O staged payload extent changed")
             if not _join_instrumentation_absent():
                 raise PreciseStackMapError("Mach-O staged payload instrumentation changed")
+            self.active_bytes = backing
             buffer = io.BytesIO(b"\0" * size)
             view = buffer.getbuffer()
             cursor = 0
@@ -213,10 +243,15 @@ class _StagedSectionPayloads:
                 closing.close()
             finally:
                 closing = None
-            self.consumed += 1
+            if not _join_instrumentation_absent():
+                raise PreciseStackMapError("Mach-O staged payload instrumentation changed")
+            if (type(result) is not bytes or len(result) != size
+                    or (size > 1 and sys.getrefcount([result].pop()) != 2)):
+                raise PreciseStackMapError("Mach-O staged payload requires exclusively owned bytes")
             self.read_bytes += size
             return result
         except BaseException as exc:
+            failure = exc
             self._abort(exc)
             if isinstance(exc, OSError):
                 raise PreciseStackMapError("Mach-O staged payload storage failed: " + str(exc)) from exc
@@ -225,13 +260,119 @@ class _StagedSectionPayloads:
             try:
                 if view is not None:
                     view.release()
+                if buffer is not None:
+                    buffer.close()
+            except BaseException:
+                if failure is None:
+                    raise
             finally:
-                try:
-                    if buffer is not None:
-                        buffer.close()
-                finally:
-                    self._busy = False
-                    buffer = view = part = result = closing = patch = ledger = None
+                buffer = view = part = result = closing = patch = check = failure = None
+
+    @contextmanager
+    def window(self, index, *, check, patch=None):
+        """Borrow one of at most eight exact immutable replays per descriptor."""
+        payload = failure = None
+        retired, acquired = True, False
+        try:
+            if self._busy:
+                raise PreciseStackMapError("Mach-O staged payload window is already active")
+            self._busy = acquired = True
+            self._available(index)
+            if self._replays[index] >= 8:
+                raise PreciseStackMapError("Mach-O staged payload replay budget exceeded")
+            self._replays[index] += 1
+            retired = False
+            payload = self._read(index, check, patch)
+            check = patch = None
+            try:
+                yield payload
+            except BaseException as exc:
+                failure = exc
+                raise
+            finally:
+                # Only this window's failure may suppress a secondary alias
+                # error. An unrelated exception handled by its caller cannot.
+                if failure is not None:
+                    from .macho_host_prepare import _release_closed_tracebacks
+                    _release_closed_tracebacks(failure)
+                uninstrumented = _join_instrumentation_absent()
+                exclusive = uninstrumented and (
+                    len(payload) <= 1 or sys.getrefcount([payload].pop()) == 2
+                )
+                retired = exclusive
+                if failure is None:
+                    if not uninstrumented:
+                        raise PreciseStackMapError("Mach-O staged payload instrumentation changed")
+                    if not exclusive:
+                        raise PreciseStackMapError("Mach-O staged payload window has escaped aliases")
+        except BaseException as exc:
+            if acquired:
+                self._abort(exc)
+            raise
+        finally:
+            payload = check = patch = failure = None
+            if acquired:
+                if retired:
+                    self.active_bytes = 0
+                self._busy = False
+
+    def copy(self, index, *, check, patch=None):
+        """Publish a fresh backing and keep its cumulative allocation charge."""
+        payload = None
+        acquired = False
+        try:
+            if self._busy:
+                raise PreciseStackMapError("Mach-O staged payload window is already active")
+            self._busy = acquired = True
+            payload = self._read(index, check, patch)
+            self.public_copy_bytes += self.active_bytes
+            self.active_bytes = 0
+            return payload
+        except BaseException as exc:
+            if acquired:
+                self._abort(exc)
+            raise
+        finally:
+            payload = check = patch = None
+            if acquired:
+                self._busy = False
+
+    def take(self, index, *, check, patch=None):
+        """Transfer a backing once by index, after admitting its retained owner.
+
+        Prior public copies disqualify exclusive consumption of this store.
+        Replay windows do not: each read starts with the original file bytes.
+        """
+        payload = None
+        acquired = False
+        try:
+            if self._busy:
+                raise PreciseStackMapError("Mach-O staged payload window is already active")
+            self._busy = acquired = True
+            if self.public_copy_bytes:
+                raise PreciseStackMapError("Mach-O staged payload public copies prevent exclusive consume")
+            payload = self._read(index, check, patch)
+            self._taken[index] = True
+            self.consumed += 1
+            self.active_bytes = 0
+            return payload
+        except BaseException as exc:
+            if acquired:
+                self._abort(exc)
+            raise
+        finally:
+            payload = check = patch = None
+            if acquired:
+                self._busy = False
+
+    def read_owned(self, index, ledger, *, patch=None):
+        """Transfer one arbitrary descriptor, retaining its ledger charge."""
+        try:
+            return self.take(index, check=lambda: ledger.keep(
+                self.backing_bytes(index), label="Mach-O staged payload backing",
+            ), patch=patch)
+        finally:
+            ledger = patch = None
 
     def _abort(self, error):
         from .macho_host_prepare import _release_closed_tracebacks
@@ -243,6 +384,8 @@ class _StagedSectionPayloads:
     def close(self, *, _error=None):
         stream, self.stream = self.stream, None
         self.rows.clear()
+        self._replays.clear()
+        self._taken.clear()
         try:
             if stream is not None:
                 stream.close()

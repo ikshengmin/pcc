@@ -952,6 +952,11 @@ def _prepare_executable_image(
                 f"segment {segname} is outside the proven layout"
             )
 
+    import sys as execution_runtime
+    if execution_runtime.implementation.name == "cpython":
+        if _owned_output is not None:
+            _owned_output.retire_payloads(obj)
+
     # Mach-O TLS is one compact template: file-backed __thread_data followed
     # immediately by virtual-only __thread_bss.  Input objects commonly put
     # ordinary __bss/__common before __thread_bss; preserving that order in

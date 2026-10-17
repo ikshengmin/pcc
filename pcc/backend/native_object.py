@@ -519,6 +519,98 @@ class PackedNativeObject:
             )
 
 
+def _validate_source_section_names(
+    section: Section, seen: set[str], seen_zerofill_segments: set[str],
+) -> None:
+    """Validate source names and ordering without reading the payload."""
+    if section.is_zerofill:
+        seen_zerofill_segments.add(section.segname)
+    elif section.segname in seen_zerofill_segments:
+        raise MachOEmitError(
+            f"content section {section.sectname} after a zerofill "
+            "section"
+        )
+    for symbol in section.symbols:
+        if "\0" in symbol.name:
+            raise MachOEmitError(
+                f"symbol name {symbol.name!r} contains NUL"
+            )
+        if symbol.name in seen:
+            raise MachOEmitError(
+                f"duplicate symbol {symbol.name!r}"
+            )
+        seen.add(symbol.name)
+
+
+def _validate_source_undefined_names(undefined: tuple[str, ...], seen: set[str]) -> None:
+    """Complete the source-name domain before validating relocations."""
+    if not seen:
+        raise MachOEmitError("at least one defined symbol is required")
+    for name in undefined:
+        if not isinstance(name, str) or not name or not name.isascii():
+            raise MachOEmitError(f"bad undefined symbol name {name!r}")
+        if "\0" in name:
+            raise MachOEmitError(f"symbol name {name!r} contains NUL")
+        if name in seen:
+            raise MachOEmitError(
+                f"symbol {name!r} both defined and undefined"
+            )
+        seen.add(name)
+
+
+def _validate_source_section_relocations(
+    section: Section, known: dict[str, int],
+    section_by_name: dict[tuple[str, str], Section], relocations,
+    count: int, proven: int = 0,
+) -> None:
+    """Validate one payload window against the complete source metadata."""
+    relocation_offsets: set[int] = set()
+    offset_bitmap = _relocation_offset_bitmap(len(section.data), count)
+    if not 0 <= proven <= count:
+        raise MachOEmitError(
+            "proven relocation prefix exceeds the records of "
+            f"{section.segname},{section.sectname}"
+        )
+    if proven:
+        data_size = len(section.data)
+        for index in range(count):
+            relocation = relocations[index]
+            if index < proven:
+                if not (
+                    0 <= relocation.offset
+                    <= data_size - (1 << relocation.length)
+                ):
+                    raise MachOEmitError(
+                        f"relocation offset {relocation.offset} "
+                        f"outside {section.sectname}"
+                    )
+            else:
+                _validate_relocation(
+                    section, relocation, known, section_by_name,
+                )
+            if not _claim_relocation_offset(
+                relocation.offset, offset_bitmap, relocation_offsets,
+            ):
+                raise MachOEmitError(
+                    "multiple relocation requests at offset "
+                    f"{relocation.offset} in {section.segname},"
+                    f"{section.sectname}"
+                )
+        return
+    for relocation in relocations:
+        _validate_relocation(
+            section, relocation, known, section_by_name,
+        )
+        if not _claim_relocation_offset(
+            relocation.offset, offset_bitmap, relocation_offsets,
+        ):
+            raise MachOEmitError(
+                "multiple relocation requests at offset "
+                f"{relocation.offset} in {section.segname},"
+                f"{section.sectname}"
+            )
+
+
 def _validate_source_sections(
     sections: tuple[Section, ...],
     undefined: tuple[str, ...],
@@ -559,47 +651,20 @@ def _validate_source_sections(
                     relocations=relocation_source(section_index),
                     relocation_count=relocation_counts[section_index],
                 )
-            if section.is_zerofill:
-                seen_zerofill_segments.add(section.segname)
-            elif section.segname in seen_zerofill_segments:
-                raise MachOEmitError(
-                    f"content section {section.sectname} after a zerofill "
-                    "section"
-                )
-            for symbol in section.symbols:
-                if "\0" in symbol.name:
-                    raise MachOEmitError(
-                        f"symbol name {symbol.name!r} contains NUL"
-                    )
-                if symbol.name in seen:
-                    raise MachOEmitError(
-                        f"duplicate symbol {symbol.name!r}"
-                    )
-                seen.add(symbol.name)
-        if not seen:
-            raise MachOEmitError("at least one defined symbol is required")
-        for name in undefined:
-            if not isinstance(name, str) or not name or not name.isascii():
-                raise MachOEmitError(f"bad undefined symbol name {name!r}")
-            if "\0" in name:
-                raise MachOEmitError(f"symbol name {name!r} contains NUL")
-            if name in seen:
-                raise MachOEmitError(
-                    f"symbol {name!r} both defined and undefined"
-                )
-            seen.add(name)
+            _validate_source_section_names(
+                section, seen, seen_zerofill_segments,
+            )
+        _validate_source_undefined_names(undefined, seen)
         section_by_name = {
             (section.segname, section.sectname): section
             for section in sections
         }
         known = {name: index for index, name in enumerate(seen)}
         for section_index, section in enumerate(sections):
-            relocation_offsets: set[int] = set()
             count = (
                 len(section.relocations) if relocation_counts is None
                 else relocation_counts[section_index]
             )
-            offset_bitmap = _relocation_offset_bitmap(len(section.data), count)
             relocations = (
                 section.relocations if relocation_source is None
                 else relocation_source(section_index)
@@ -607,49 +672,9 @@ def _validate_source_sections(
             proven = 0
             if proven_relocations is not None and relocation_source is None:
                 proven = proven_relocations[section_index]
-                if not 0 <= proven <= count:
-                    raise MachOEmitError(
-                        "proven relocation prefix exceeds the records of "
-                        f"{section.segname},{section.sectname}"
-                    )
-            if proven:
-                data_size = len(section.data)
-                for index in range(count):
-                    relocation = relocations[index]
-                    if index < proven:
-                        if not (
-                            0 <= relocation.offset
-                            <= data_size - (1 << relocation.length)
-                        ):
-                            raise MachOEmitError(
-                                f"relocation offset {relocation.offset} "
-                                f"outside {section.sectname}"
-                            )
-                    else:
-                        _validate_relocation(
-                            section, relocation, known, section_by_name,
-                        )
-                    if not _claim_relocation_offset(
-                        relocation.offset, offset_bitmap, relocation_offsets,
-                    ):
-                        raise MachOEmitError(
-                            "multiple relocation requests at offset "
-                            f"{relocation.offset} in {section.segname},"
-                            f"{section.sectname}"
-                        )
-                continue
-            for relocation in relocations:
-                _validate_relocation(
-                    section, relocation, known, section_by_name,
-                )
-                if not _claim_relocation_offset(
-                    relocation.offset, offset_bitmap, relocation_offsets,
-                ):
-                    raise MachOEmitError(
-                        "multiple relocation requests at offset "
-                        f"{relocation.offset} in {section.segname},"
-                        f"{section.sectname}"
-                    )
+            _validate_source_section_relocations(
+                section, known, section_by_name, relocations, count, proven,
+            )
     except MachOEmitError as exc:
         raise NativeObjectError(str(exc)) from exc
 
@@ -1320,7 +1345,9 @@ def _source_symbols_in_offset_order(section: Section):
     return section.symbols
 
 
-def _final_section_rows(source_sections, payloads, addrs, relocation_counts=None) -> list[dict]:
+def _final_section_rows(
+    source_sections, payloads, addrs, relocation_counts=None, *, payload_sizes=None,
+) -> list[dict]:
     """The common final section numbering/file layout for owned views."""
     result = []
     file_size = 0
@@ -1329,7 +1356,11 @@ def _final_section_rows(source_sections, payloads, addrs, relocation_counts=None
             file_offset = 0
         else:
             file_offset = _align_up(file_size, section.align_log2)
-            file_size = file_offset + len(payloads[index])
+            payload_size = (
+                len(payloads[index]) if payload_sizes is None
+                else payload_sizes[index]
+            )
+            file_size = file_offset + payload_size
         if relocation_counts is None:
             count = len(section.relocations)
             for relocation in section.relocations:
@@ -1398,20 +1429,21 @@ class OwnedMergedSourceView:
     def __init__(
         self, sections, *, undefined=(), weak_undefined=(),
         proven_relocations=None, compact_budget=None, _compact_rows=None, _row_storage=None,
+        _payload_storage=None,
     ) -> None:
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
-            if _compact_rows is not None or _row_storage is not None:
+            if _compact_rows is not None or _row_storage is not None or _payload_storage is not None:
                 from .macho_host_prepare import _initialize_checked_compact_view
                 try:
                     _initialize_checked_compact_view(
                         self, sections, undefined, weak_undefined, _compact_rows,
-                        compact_budget, _row_storage=_row_storage,
+                        compact_budget, _row_storage=_row_storage, _payload_storage=_payload_storage,
                     )
                 finally:
-                    sections = undefined = weak_undefined = _compact_rows = _row_storage = None
+                    sections = undefined = weak_undefined = _compact_rows = _row_storage = _payload_storage = None
                 return
-        if _compact_rows is not None or _row_storage is not None:
+        if _compact_rows is not None or _row_storage is not None or _payload_storage is not None:
             raise NativeObjectError("compact source rows require the explicit host budget")
         source_sections = tuple(sections)
         undefined_names = tuple(undefined)
@@ -1545,6 +1577,11 @@ class OwnedMergedSourceView:
         index = section.get("_pcc_source_index")
         if not isinstance(index, int) or not 0 <= index < len(self._payloads):
             raise NativeObjectError("section does not belong to this source view")
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if getattr(self, "_host_payload_store", None) is not None:
+                from .macho_host_prepare import copy_staged_section_data
+                return copy_staged_section_data(self, index)
         return self._payloads[index]
 
     def take_section_data(self, section):
@@ -1554,6 +1591,12 @@ class OwnedMergedSourceView:
         and never reads the source again; retiring it there keeps one copy of
         the image resident instead of two. A view is single-use afterwards.
         """
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if getattr(self, "_host_payload_store", None) is not None:
+                # Only the private output owner can admit its growing aggregate
+                # mutable graph before consuming a file-owned backing.
+                raise NativeObjectError("staged payload transfer requires owned output")
         payload = self.section_data(section)
         self._payloads[section["_pcc_source_index"]] = b""
         return payload

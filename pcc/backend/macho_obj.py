@@ -309,7 +309,8 @@ def _scan_stack_map_section(data: bytes, *, compact_budget=None) -> tuple[int, l
         )
     else:
         compact_budget.check_peak(
-            2 * len(data), label="Mach-O section stack-map snapshot",
+            2 * compact_budget.unretained_payload_bytes(data),
+            label="Mach-O section stack-map snapshot",
         )
         count, scanned, _table_start, _table_count = _scan_stack_map_payload(
             bytes(data), compact_budget=compact_budget,

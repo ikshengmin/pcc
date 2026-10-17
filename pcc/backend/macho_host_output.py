@@ -16,6 +16,7 @@ from . import macho_codesign as codesign
 from . import precise_stackmap as stackmap
 from .macho_host_prepare import (
     close_staged_source_rows,
+    _patch_staged_payload,
     _release_closed_tracebacks,
     _single_buffer_window_supported,
 )
@@ -174,19 +175,19 @@ def _row_storage_bytes(source):
 def _source_bytes(source, budget):
     # These are fixed source models, never _Out/fixup graphs whose repeated
     # references could multiply one backing by the relocation count.
+    payloads = getattr(source, "_host_payload_store", None)
     return (sum(_model_bytes(getattr(source, name), budget) for name in _SOURCE_FIELDS)
-            + _row_storage_bytes(source))
+            + _row_storage_bytes(source)
+            + (payloads.metadata_bytes + payloads.public_copy_bytes
+               + _model_bytes(source._host_payload_layout, budget) if payloads is not None else 0))
 
 
 def _clear_source(source, *, _error=None):
-    storage = getattr(source, "_host_row_store", None)
     try:
-        if storage is not None:
-            storage.close(_error=_error)
+        close_staged_source_rows(source, _error=_error)
     finally:
-        if storage is not None:
-            source._host_row_store = None
-        storage = None
+        if hasattr(source, "_host_payload_layout"):
+            source._host_payload_layout = ()
         for name in _SOURCE_FIELDS:
             value = getattr(source, name)
             if type(value) in (dict, list):
@@ -219,6 +220,8 @@ def _require_uninstrumented_owner():
 
 class _ValidationBudget:
     def __init__(self, budget, payload):
+        if type(payload) is not bytes:
+            raise LinkError("retained validation payload must be exact bytes")
         self.budget = budget
         self.payload = payload
 
@@ -355,11 +358,48 @@ class _OwnedOutput:
         self.source_bytes -= before - _model_bytes(source._raw_relocations, self.budget)
         self.order_raw = 0
 
+    def retire_payloads(self, source):
+        """Drop the source file after all used indices have transferred.
+
+        Unwind-only indices are deliberately never consumed. The executable
+        section walk has now visited every descriptor, so closing the store
+        discards those extents without materializing their unused backings.
+        """
+        storage = getattr(source, "_host_payload_store", None)
+        if storage is None:
+            return
+        before = (storage.metadata_bytes + storage.public_copy_bytes
+                  + _model_bytes(source._host_payload_layout, self.budget)
+                  + _model_bytes(source._payloads, self.budget))
+        try:
+            storage.close()
+        finally:
+            source._host_payload_store = None
+            source._host_payload_layout = ()
+            source._payloads.clear()
+        self.source_bytes -= before - _model_bytes(source._payloads, self.budget)
+
     def take(self, source, section, zerofill):
         payload = buffer = view = None
         try:
             _require_uninstrumented_owner()
-            payload = OwnedMergedSourceView.take_section_data(source, section)
+            storage = getattr(source, "_host_payload_store", None)
+            if storage is None:
+                payload = OwnedMergedSourceView.take_section_data(source, section)
+            else:
+                index = section.get("_pcc_source_index")
+                if type(index) is not int or not 0 <= index < len(source._sections):
+                    raise LinkError("section does not belong to this source view")
+                backing = storage.backing_bytes(index)
+                def check():
+                    self.check(backing, label="Mach-O owned source payload transfer")
+                payload = storage.take(
+                    index, check=check,
+                    patch=lambda data: _patch_staged_payload(source, index, data, check),
+                )
+                # Each final backing now belongs to the output graph. Earlier
+                # transfers remain charged while subsequent ones materialize.
+                self.extra_raw += backing
             if type(payload) is not bytes:
                 raise LinkError("owned output payload is not exact bytes")
             if zerofill:
@@ -380,7 +420,7 @@ class _OwnedOutput:
             buffer = None
             return view
         finally:
-            payload = None
+            payload = storage = check = None
             if buffer is not None:
                 if view is not None:
                     view.release()
@@ -584,6 +624,10 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
         storage = getattr(source, "_host_row_store", None)
         if storage is not None and storage.public_copy_bytes:
             raise LinkError("owned output cannot consume staged rows with public copies")
+        payloads = getattr(source, "_host_payload_store", None)
+        if payloads is not None and payloads.public_copy_bytes:
+            raise LinkError("owned output cannot consume staged payloads with public copies")
+        payloads = None
         storage = None
         emit_phase(_phase_callback, "output_model_begin")
         state = _OwnedOutput(source, compact_budget, caller_owners, _phase_callback)
@@ -678,7 +722,7 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
                         if state is not None:
                             state.close()
                 finally:
-                    source = state = buffer = view = image = blob = storage = failure = None
+                    source = state = buffer = view = image = blob = storage = payloads = failure = None
 
 
 def check_signature_verification(image, signature, budget, *, caller_owners=()):

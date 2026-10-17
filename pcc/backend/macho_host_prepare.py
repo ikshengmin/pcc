@@ -108,6 +108,51 @@ class _InputDescriptor:
     archive_object: object = None
 
 
+@dataclass(frozen=True, slots=True)
+class _StagedSourceSection:
+    """Section metadata whose file bytes belong only to the payload store.
+
+    This is not a Section with an empty stand-in payload. Canonical validators
+    receive a real Section constructed inside its admitted immutable window.
+    Cross-section targets need only this descriptor's flags and virtual size.
+    """
+
+    sectname: str
+    segname: str
+    file_size: int
+    align_log2: int
+    flags: int
+    symbols: tuple
+    data_in_code: tuple
+    zerofill_size: int
+    section_targets: bool
+
+    @property
+    def is_zerofill(self):
+        return (self.flags & spec.SECTION_TYPE) in (spec.S_ZEROFILL, 0x12)
+
+    @property
+    def vm_size(self):
+        return self.zerofill_size if self.is_zerofill else self.file_size
+
+    def materialize(self, payload):
+        if type(payload) is not bytes or len(payload) != self.file_size:
+            raise native.NativeObjectError("staged source payload size changed")
+        return Section(
+            self.sectname, self.segname, payload, self.align_log2, self.flags,
+            self.symbols, (), self.zerofill_size, self.data_in_code,
+        )
+
+
+def _staged_section_metadata_bytes(sections, budget):
+    total = budget._rounded(sys.getsizeof(sections))
+    for section in sections:
+        total += budget._rounded(sys.getsizeof(section))
+        for name in _StagedSourceSection.__slots__:
+            total += _model_bytes(getattr(section, name), budget)
+    return total
+
+
 def _release_closed_tracebacks(error):
     """A retained exception must not retain a failed decoder's PCO window."""
     pending = [error]
@@ -488,16 +533,27 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
 
 
 def close_staged_source_rows(view, *, _error=None):
-    """Close only the private row owner; ordinary views have no such owner."""
-    storage = getattr(view, "_host_row_store", None)
-    if storage is not None:
-        try:
-            storage.close(_error=_error)
-        finally:
-            # Empty placeholders must never become an apparently valid
-            # ordinary row table after the private file has been retired.
-            view._raw_relocations.clear()
-            view._host_row_store = None
+    """Retire both private stores; ordinary views have neither owner."""
+    failure = _error
+    try:
+        for attribute, table in (("_host_payload_store", "_payloads"),
+                                 ("_host_row_store", "_raw_relocations")):
+            storage = getattr(view, attribute, None)
+            if storage is not None:
+                try:
+                    storage.close(_error=failure)
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+                finally:
+                    # Placeholders cannot become an apparently valid ordinary
+                    # source after their private backing file has retired.
+                    getattr(view, table).clear()
+                    setattr(view, attribute, None)
+        if _error is None and failure is not None:
+            raise failure
+    finally:
+        failure = storage = _error = None
 
 
 def copy_staged_relocation_rows(view, index):
@@ -508,18 +564,31 @@ def copy_staged_relocation_rows(view, index):
     """
     storage = view._host_row_store
     def check():
+        payloads = getattr(view, "_host_payload_store", None)
         storage.budget.check_peak(
-            view._host_row_copy_bound + storage.public_copy_bytes + storage.backing_bytes(index),
+            view._host_row_copy_bound + storage.public_copy_bytes + storage.backing_bytes(index)
+            + (payloads.public_copy_bytes if payloads is not None else 0),
             label="Mach-O public staged row copy",
         )
     try:
         return storage.copy(index, check=check)
+    except BaseException as exc:
+        close_staged_source_rows(view, _error=exc)
+        raise
     finally:
         view = storage = check = None
 
 
-def _initialize_checked_compact_view(view, sections, undefined, weak_undefined, rows, budget, _row_storage=None):
+def _initialize_checked_compact_view(view, sections, undefined, weak_undefined, rows, budget,
+                                     _row_storage=None, _payload_storage=None):
     try:
+        if _payload_storage is not None:
+            if rows is not None:
+                raise native.NativeObjectError("staged payloads require privately staged rows")
+            return _initialize_checked_payload_view(
+                view, sections, undefined, weak_undefined, budget,
+                _row_storage, _payload_storage,
+            )
         return _initialize_checked_compact_view_inner(
             view, sections, undefined, weak_undefined, rows, budget, _row_storage,
         )
@@ -528,12 +597,228 @@ def _initialize_checked_compact_view(view, sections, undefined, weak_undefined, 
         if _row_storage is not None:
             _row_storage.close(_error=exc)
             view._host_row_store = None
+        if _payload_storage is not None:
+            _payload_storage.close(_error=exc)
+            view._host_payload_store = None
         for name in ("_payloads", "_raw_relocations", "_sections", "_symbols"):
             if hasattr(view, name):
                 setattr(view, name, [])
         raise
     finally:
-        sections = undefined = weak_undefined = rows = _row_storage = None
+        sections = undefined = weak_undefined = rows = _row_storage = _payload_storage = None
+
+
+def _logical_staged_rows(data, section_rows, symbol_rows):
+    raw = folded = None
+    try:
+        raw = _raw_row_dicts(data)
+        folded = link._iter_folded_relocation_rows(raw, section_rows, symbol_rows, {})
+        yield from folded
+    finally:
+        if folded is not None:
+            folded.close()
+        if raw is not None:
+            raw.close()
+        data = raw = folded = None
+
+
+def _initialize_checked_payload_view(view, sections, undefined, weak_undefined, budget,
+                                     row_storage, payload_storage):
+    """Publish metadata, validating one exact payload and row replay at a time.
+
+    The construction allowance is unchanged. Once its temporary name sets have
+    actually retired, recount the surviving metadata before opening any payload
+    window. The canonical section/relocation validators still see all bytes.
+    """
+    from .macho_host_output import _ValidationBudget, _require_uninstrumented_owner, _source_bytes
+    from .macho_host_payload import _StagedSectionPayloads as payload_type
+    from .macho_obj import MachOEmitError
+
+    _require_uninstrumented_owner()
+    ledger = _Ledger(budget)
+    if (type(sections) not in (list, tuple)
+            or type(row_storage) is not _StagedRelocationRows
+            or type(payload_storage) is not payload_type
+            or row_storage.budget is not budget or payload_storage.budget is not budget
+            or row_storage.count != len(sections) or payload_storage.count != len(sections)
+            or row_storage.public_copy_bytes or payload_storage.public_copy_bytes
+            or payload_storage.consumed):
+        raise native.NativeObjectError("staged source storage is not privately owned")
+    for index, metadata in enumerate(sections):
+        if type(metadata) is not _StagedSourceSection:
+            raise native.NativeObjectError("staged source requires file-owned section metadata")
+        if metadata.file_size != payload_storage.size(index):
+            raise native.NativeObjectError("staged source payload size changed")
+        if type(metadata.align_log2) is not int or not 0 <= metadata.align_log2 <= 31:
+            raise native.NativeObjectError("compact section alignment must be 0..31")
+        native._validate_final_link_relocation_count(row_storage.row_count(index))
+    retained = (_staged_section_metadata_bytes(sections, budget)
+                + _model_bytes(undefined, budget) + _model_bytes(weak_undefined, budget)
+                + row_storage.metadata_bytes + payload_storage.metadata_bytes
+                + row_storage.max_window_bytes + 2 * ledger.sequence(len(sections)))
+    symbols_count = sum(len(section.symbols) for section in sections) + len(undefined)
+    ledger.keep(retained + 4 * ledger.mapping(symbols_count) + ledger.mapping(len(sections)))
+    previous = budget.retained_bytes
+    payload = raw_rows = real_section = adapter = records = patch = None
+    seen = seen_zerofill = weak_names = None
+    try:
+        # This phase owns no payload. Preserve canonical names, duplicate and
+        # zerofill-order checks before constructing the final reusable index.
+        if not sections:
+            raise MachOEmitError("at least one section is required")
+        if len({(s.segname, s.sectname) for s in sections}) != len(sections):
+            raise MachOEmitError("duplicate section names")
+        seen, seen_zerofill = set(), set()
+        for metadata in sections:
+            native._validate_source_section_names(metadata, seen, seen_zerofill)
+        undefined_names = tuple(undefined)
+        native._validate_source_undefined_names(undefined_names, seen)
+        weak_names = set(weak_undefined)
+        if not weak_names.issubset(undefined_names):
+            raise native.NativeObjectError("weak references must name undefined symbols")
+        addrs, cursor = [], 0
+        for metadata in sections:
+            cursor = native._align_up(cursor, metadata.align_log2)
+            addrs.append(cursor)
+            cursor += metadata.vm_size
+        sizes = tuple(section.file_size for section in sections)
+        counts = tuple(row_storage.row_count(index) for index in range(len(sections)))
+        section_rows = native._final_section_rows(
+            sections, None, addrs, counts, payload_sizes=sizes,
+        )
+        symbol_rows = native._final_symbol_rows(sections, undefined_names, weak_names, addrs)
+        symbol_index = {symbol["name"]: index for index, symbol in enumerate(symbol_rows)}
+        section_by_name = {(section.segname, section.sectname): section for section in sections}
+        section_index = {key: index for index, key in enumerate(section_by_name, 1)}
+        order = tuple(section_by_name)
+        addresses = {key: addrs[index] for index, key in enumerate(order)}
+        targets = tuple(section.section_targets for section in sections)
+        layout = (targets, order, addresses)
+        # No validation frame retains seen/weak_names while the largest payload
+        # is read. The numeric index now serves canonical membership validation
+        # and is the exact table published in the final view.
+        seen = seen_zerofill = weak_names = None
+        ledger.retained = retained + sum(_model_bytes(owner, budget) for owner in (
+            undefined_names, addrs, sizes, counts, section_rows, symbol_rows,
+            symbol_index, section_index, layout,
+        )) + ledger.mapping(len(sections)) + 8192
+        ledger.check(label="Mach-O staged source surviving metadata")
+        for index, metadata in enumerate(sections):
+            backing = payload_storage.backing_bytes(index)
+            with row_storage.window(index, check=lambda: ledger.check(
+                    label="Mach-O compact row validation replay")) as raw_rows:
+                try:
+                    records = _logical_staged_rows(raw_rows, section_rows, symbol_rows)
+                    count = sum(1 for _ in records)
+                    records.close()
+                    records = None
+                    if targets[index]:
+                        def patch(data):
+                            _patch_section_targets(data, raw_rows, addresses, order)
+                    else:
+                        patch = None
+                    with payload_storage.window(index, check=lambda: ledger.check(
+                            backing, label="Mach-O source payload validation replay"), patch=patch) as payload:
+                        try:
+                            bitmap = (len(payload) + 7) // 8
+                            offsets = (ledger.mutable(bitmap) if count and bitmap <= max(64, count * 8)
+                                       else budget._set_bytes(count))
+                            scratch = offsets + _special_scratch(
+                                (metadata.segname, metadata.sectname), metadata.flags,
+                                len(payload), count, ledger, source_rows=True,
+                                function_count=(_stack_count(payload, 0, len(payload))
+                                                if (metadata.segname, metadata.sectname) == _STACK_KEY else 0),
+                            ) + 8192
+                            ledger.check(backing + scratch, label="Mach-O compact row validation scratch")
+                            budget.retained_bytes = previous + ledger.retained + backing
+                            real_section = metadata.materialize(payload)
+                            adapter = _ValidationBudget(budget, payload)
+                            records = _logical_staged_rows(raw_rows, section_rows, symbol_rows)
+                            native._validate_section(
+                                real_section, relocations=records, relocation_count=count,
+                                compact_budget=adapter,
+                            )
+                            records.close()
+                            records = _logical_staged_rows(raw_rows, section_rows, symbol_rows)
+                            native._validate_source_section_relocations(
+                                real_section, symbol_index, section_by_name, records, count,
+                            )
+                            records.close()
+                            records = _logical_staged_rows(raw_rows, section_rows, symbol_rows)
+                            for relocation in records:
+                                if relocation.section is not None:
+                                    target_index = section_index[relocation.section] - 1
+                                    width, start = 1 << relocation.length, relocation.offset
+                                    stored = int.from_bytes(payload[start:start + width], "little")
+                                    normalized = link._normalized_section_target_value(
+                                        stored, None, addrs[target_index], sections[target_index].vm_size,
+                                        width, target_index + 1,
+                                    )
+                                    if normalized != stored:
+                                        raise native.NativeObjectError("compact section target is not object-relative")
+                            records.close()
+                        except BaseException as exc:
+                            _release_closed_tracebacks(exc)
+                            raise
+                        finally:
+                            budget.retained_bytes = previous
+                            if records is not None:
+                                records.close()
+                            if adapter is not None:
+                                adapter.payload = None
+                            records = real_section = adapter = payload = patch = None
+                finally:
+                    if records is not None:
+                        records.close()
+                    records = raw_rows = patch = None
+        view._source_sections = ()
+        view._payloads = [b""] * len(sections)
+        view._raw_relocations = [b""] * len(sections)
+        view._sections, view._symbols = section_rows, symbol_rows
+        view._section_index, view._symbol_index = section_index, symbol_index
+        view._host_payload_store, view._host_row_store = payload_storage, row_storage
+        view._host_payload_layout = layout
+        # Public copies start after the constructor's metadata temporaries have
+        # retired; this is the surviving source graph, plus its one row replay.
+        view._host_row_copy_bound = view._host_payload_copy_bound = _source_bytes(view, budget)
+        _require_uninstrumented_owner()
+    except MachOEmitError as exc:
+        _release_closed_tracebacks(exc)
+        raise native.NativeObjectError(str(exc)) from exc
+    finally:
+        budget.retained_bytes = previous
+        payload = raw_rows = real_section = adapter = records = patch = None
+        seen = seen_zerofill = weak_names = None
+
+
+def _patch_staged_payload(view, index, data, check):
+    targets, order, addresses = view._host_payload_layout
+    if targets[index]:
+        with view._host_row_store.window(index, check=check) as rows:
+            try:
+                _patch_section_targets(data, rows, addresses, order)
+            finally:
+                rows = None
+
+
+def copy_staged_section_data(view, index):
+    """Publish an independent, cumulatively charged normalized exact copy."""
+    storage = view._host_payload_store
+    rows = view._host_row_store
+    def check():
+        storage.budget.check_peak(
+            view._host_payload_copy_bound + storage.public_copy_bytes
+            + rows.public_copy_bytes + storage.backing_bytes(index),
+            label="Mach-O public staged payload copy",
+        )
+    try:
+        return storage.copy(index, check=check,
+                            patch=lambda data: _patch_staged_payload(view, index, data, check))
+    except BaseException as exc:
+        close_staged_source_rows(view, _error=exc)
+        raise
+    finally:
+        view = storage = rows = check = None
 
 
 def _archive_bounds(raw, ledger):
@@ -1352,9 +1637,12 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
             emit_section_phase(_phase_callback, "section_payload_begin", join_index, key,
                                size, payload_part_count, consume_payload)
             if payload_storage is not None:
-                payload = payload_storage.read_owned(
-                    join_index, ledger, patch=patch_targets if has_section_targets else None,
-                )
+                # Keep every backing file-owned through source-view metadata
+                # construction. Validation and final output replay the original
+                # bytes, applying section-target normalization exactly once to
+                # each fresh window, never to an already normalized backing.
+                _require_uninstrumented_owner()
+                payload = None
             elif consume_payload:
                 payload = _consume_parts(target.data_parts, ledger,
                                          patch=patch_targets if has_section_targets else None)
@@ -1374,29 +1662,35 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                     payload = frozen
                     frozen = None
                     ledger.retained += ledger.immutable(size) - joined_size
-            out_sections.append(Section(target.sectname, target.segname, data=payload,
-                                        align_log2=target.align_log2, flags=target.flags,
-                                        symbols=tuple(sorted(target.symbols, key=lambda symbol: symbol.offset)),
-                                        data_in_code=tuple(sorted(target.data_in_code, key=lambda region: region.offset)),
-                                        zerofill_size=target.zerofill_size if not payload else 0))
+            if payload_storage is not None:
+                out_sections.append(_StagedSourceSection(
+                    target.sectname, target.segname, size, target.align_log2, target.flags,
+                    tuple(sorted(target.symbols, key=lambda symbol: symbol.offset)),
+                    tuple(sorted(target.data_in_code, key=lambda region: region.offset)),
+                    target.zerofill_size if not size else 0, has_section_targets,
+                ))
+            else:
+                out_sections.append(Section(target.sectname, target.segname, data=payload,
+                                            align_log2=target.align_log2, flags=target.flags,
+                                            symbols=tuple(sorted(target.symbols, key=lambda symbol: symbol.offset)),
+                                            data_in_code=tuple(sorted(target.data_in_code, key=lambda region: region.offset)),
+                                            zerofill_size=target.zerofill_size if not payload else 0))
             if row_storage is None:
                 output_rows.append(rows)
             payload = rows = patch_targets = None
             emit_section_phase(_phase_callback, "section_payload_end", join_index, key,
                                size, payload_part_count, consume_payload)
         if payload_storage is not None:
-            payload_storage.close()
-            ledger.retained -= payload_storage.metadata_bytes
-            payload_storage = None
+            _require_uninstrumented_owner()
         emit_phase(_phase_callback, "section_joins_end")
         if row_storage is None:
-            return out_sections, output_rows, unresolved, weak_unresolved
+            return out_sections, output_rows, unresolved, weak_unresolved, None
         # The boundary callback may have changed host eligibility after the
         # final write. Do not hand a live file to an instrumented return path.
         from .macho_host_output import _require_uninstrumented_owner
         _require_uninstrumented_owner()
-        result = (out_sections, row_storage, unresolved, weak_unresolved)
-        row_storage = None  # caller owns the handle only after result exists
+        result = (out_sections, row_storage, unresolved, weak_unresolved, payload_storage)
+        row_storage = payload_storage = None  # transfer only after result exists
         return result
     except BaseException as exc:
         failure = exc
@@ -1450,9 +1744,9 @@ def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compa
     external = sum(_model_bytes(owner, compact_budget) for owner in (paths, archives, archive_paths, caller_owners))
     ledger.keep(external, label="Mach-O retained caller metadata")
     ledger.caller_bytes = external
-    sections = rows = undefined = weak = row_storage = failure = result = None
+    sections = rows = undefined = weak = row_storage = payload_storage = failure = result = None
     try:
-        sections, rows, undefined, weak = _merge_paths(
+        sections, rows, undefined, weak, payload_storage = _merge_paths(
             paths, archives, archive_paths, ledger, _phase_callback,
             _staged_rows=_staged_rows,
         )
@@ -1464,16 +1758,18 @@ def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compa
             emit_phase(_phase_callback, "source_view_begin")
             result = native.OwnedMergedSourceView(sections, undefined=undefined, weak_undefined=weak,
                                                  _compact_rows=rows, compact_budget=compact_budget,
-                                                 _row_storage=row_storage)
+                                                 _row_storage=row_storage, _payload_storage=payload_storage)
             if row_storage is not None:
                 result._host_row_copy_bound += external
+            if payload_storage is not None:
+                result._host_payload_copy_bound += external
             # Retain our cleanup owner until after the last callback and
             # eligibility check. A profile return hook can escape emit_phase's
             # own fail-open try without ever delivering this source view.
             emit_phase(_phase_callback, "source_view_end")
             if row_storage is not None:
                 _require_uninstrumented_owner()
-            row_storage = None  # only the successfully returned view owns it
+            row_storage = payload_storage = None  # only the returned view owns them
             return result
         finally:
             compact_budget.retained_bytes = previous
@@ -1489,11 +1785,15 @@ def prepare_executable_from_paths(paths, *, archives=(), archive_paths=(), compa
         raise
     finally:
         try:
-            if row_storage is not None:
-                row_storage.close(_error=failure)
+            try:
+                if payload_storage is not None:
+                    payload_storage.close(_error=failure)
+            finally:
+                if row_storage is not None:
+                    row_storage.close(_error=failure)
         finally:
             if sections is not None:
                 sections.clear()
             if rows is not None:
                 rows.clear()
-            sections = rows = undefined = weak = row_storage = failure = result = None
+            sections = rows = undefined = weak = row_storage = payload_storage = failure = result = None
