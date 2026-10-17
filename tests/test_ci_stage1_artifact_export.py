@@ -472,8 +472,18 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
         "tests/python/test_gc_remembered_membership_lifecycle.py",
         "tests/python/test_gc_remembered_membership_native.py",
         "tests/python/test_owned_runtime_pass_prefix.py",
+        "tests/python/test_pipeline_ir_split.py",
+        "tests/python/test_pipeline_ir_frame_maps.py",
     )
-    assert "${{ matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}" in host
+    linux_condition = host_command.split("${{ ", 1)[1]
+    linux_prefix = "matrix.platform == 'linux-x86_64' && '"
+    linux_suffix = "' || '' }}"
+    assert linux_condition.startswith(linux_prefix)
+    assert linux_condition.endswith(linux_suffix)
+    linux_args = shlex.split(linux_condition[len(linux_prefix):-len(linux_suffix)])
+    # Keep the required regressions exactly once and in order while allowing
+    # other short Linux-only checks in the same existing step.
+    assert tuple(arg for arg in linux_args if arg in linux_only) == linux_only
     assert "python -m pytest -x -q" in host and "-n0" not in host and "addopts" not in host
     for path in (
         "scripts/ci_stage1_artifact_export.py",
@@ -481,5 +491,7 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
         "tests/python/test_gc_remembered_membership_lifecycle.py",
         "tests/python/test_gc_remembered_membership_native.py",
         "tests/python/test_owned_runtime_pass_prefix.py",
+        "tests/python/test_pipeline_ir_split.py",
+        "tests/python/test_pipeline_ir_frame_maps.py",
     ):
         assert workflow.count('      - "' + path + '"') == 2

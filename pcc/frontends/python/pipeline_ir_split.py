@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from pcc.frontends.python.pipeline_ir_text import defined_function_name_from_line, export_split_function_declaration, export_split_function_text, function_declaration_from_define_line, global_declaration_from_definition_line, line_has_internal_linkage, private_symbol_rename_map, rename_llvm_global_refs, rename_symbol_name
+from pcc.frontends.python.pipeline_ir_text import (
+    defined_function_name_from_line,
+    export_split_function_declaration,
+    export_split_function_text,
+    function_declaration_from_define_line,
+    global_declaration_from_definition_line,
+    line_has_internal_linkage,
+    llvm_global_name_char,
+    private_symbol_rename_map,
+    rename_llvm_global_refs,
+    rename_symbol_name,
+)
 
 
 def ir_global_definition_line(line: str) -> bool:
@@ -26,9 +37,9 @@ def self_backend_local_frame_map_line(line: str) -> bool:
 
     Self-backend object shards are emitted independently, and precise
     stack-map planning needs the descriptor initializer before the objects are
-    linked.  These tiny internal constants are therefore copied into every
-    function shard instead of being exported through the ordinary global-only
-    shard.  Mutable globals must continue to use the single-definition path.
+    linked. These internal constants stay local to shards that reference
+    them; unfamiliar descriptor/reference shapes retain the copy-all path.
+    Mutable globals must continue to use the single-definition path.
     """
     if not line_has_internal_linkage(line):
         return False
@@ -39,6 +50,75 @@ def self_backend_local_frame_map_line(line: str) -> bool:
         ".pcc.gc.frame.map." in line
         or ".pcc.vthread.frame.map." in line
     )
+
+
+def _literal_local_frame_map_name(line: str) -> str:
+    """Recognize only dependency-free descriptors emitted by our frontend."""
+    words = line.split()
+    if (
+        len(words) != 6
+        or not words[0].startswith("@")
+        or words[1] != "="
+        or words[2] not in ("internal", "private")
+        or words[3] != "constant"
+        or words[4] != "i32"
+    ):
+        return ""
+    name = words[0][1:]
+    if not (
+        name.startswith(".pcc.gc.frame.map.")
+        or name.startswith(".pcc.vthread.frame.map.")
+    ):
+        return ""
+    for char in name:
+        if ord(char) >= 128 or not llvm_global_name_char(char):
+            return ""
+    count = words[5]
+    digits = count[1:] if count.startswith("-") else count
+    if not digits or len(digits) > 10:
+        return ""
+    for char in digits:
+        if char < "0" or char > "9":
+            return ""
+    if int(count) < -2147483648 or int(count) > 2147483647:
+        return ""
+    return name
+
+
+def _local_frame_map_references(
+    text: str, names: set[str],
+) -> set[str] | None:
+    """Conservatively collect map uses; None keeps every descriptor.
+
+    Scan reserved map operands, including aliases, metadata and initializer
+    expressions. String/comment false positives retain extra maps safely.
+    Quoted/escaped names and assembly need a richer lexer, so do not prune.
+    """
+    if '@"' in text or "\\" in text:
+        return None
+    position = text.find("asm")
+    while position >= 0:
+        end = position + 3
+        if (
+            (position == 0 or not llvm_global_name_char(text[position - 1]))
+            and (end == len(text) or not llvm_global_name_char(text[end]))
+        ):
+            return None
+        position = text.find("asm", end)
+    references: set[str] = set()
+    for prefix in ("@.pcc.gc.frame.map.", "@.pcc.vthread.frame.map."):
+        position = text.find(prefix)
+        while position >= 0:
+            end = position + len(prefix)
+            while end < len(text) and llvm_global_name_char(text[end]):
+                end += 1
+            name = text[position + 1:end]
+            if name in names:
+                references.add(name)
+                if len(references) == len(names):
+                    return references
+            position = text.find(prefix, end)
+    return references
 
 
 def split_python_ir_module_for_pass_shards(
@@ -227,17 +307,64 @@ def split_self_backend_ir_module_for_object_shards(
             export_split_global_line(rename_llvm_global_refs(line, rename_map))
         )
     functions = []
+    total_function_bytes = 0
     for _name, body, _declaration, _is_internal in functions_raw:
-        functions.append(
-            export_split_function_text(rename_llvm_global_refs(body, rename_map))
+        function_text = export_split_function_text(
+            rename_llvm_global_refs(body, rename_map)
         )
+        functions.append(function_text)
+        total_function_bytes += len(function_text)
+    # The original single-output path returns the input unchanged. Avoid any
+    # descriptor/reference analysis when no object sharding can take place.
+    if not global_lines and total_function_bytes <= shard_bytes:
+        return [ir_text]
+
+    local_frame_map_names: list[str] = []
+    local_frame_map_name_set: set[str] = set()
+    # Small descriptor sets offer limited duplication savings; keep their
+    # copy-all path without adding scans to large function bodies.
+    can_prune_local_maps = len(local_frame_map_lines) > 3
+    if can_prune_local_maps:
+        for line in local_frame_map_lines:
+            name = _literal_local_frame_map_name(line)
+            if not name or name in local_frame_map_name_set:
+                can_prune_local_maps = False
+                break
+            local_frame_map_names.append(name)
+            local_frame_map_name_set.add(name)
+    shared_map_references = None
+    if can_prune_local_maps:
+        shared_map_references = _local_frame_map_references(
+            shared, local_frame_map_name_set,
+        )
+        if (
+            shared_map_references is not None
+            and len(shared_map_references) == len(local_frame_map_name_set)
+        ):
+            shared_map_references = None
 
     def make_shard(body_parts: list[str]) -> str:
         pieces = []
         if shared:
             pieces.append(shared)
         if body_parts:
-            pieces.extend(local_frame_map_lines)
+            needed: set[str] = set()
+            prune = shared_map_references is not None
+            if shared_map_references is not None:
+                for name in shared_map_references:
+                    needed.add(name)
+                for part in body_parts:
+                    references = _local_frame_map_references(
+                        part, local_frame_map_name_set,
+                    )
+                    if references is None:
+                        prune = False
+                        break
+                    for name in references:
+                        needed.add(name)
+            for index, line in enumerate(local_frame_map_lines):
+                if not prune or local_frame_map_names[index] in needed:
+                    pieces.append(line)
         for part in body_parts:
             if part:
                 pieces.append(part)
