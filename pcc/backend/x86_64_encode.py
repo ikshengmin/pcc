@@ -314,10 +314,13 @@ def _parse_encoding_operand(text: str):
 
 _OPERAND_CACHE_MAX_ENTRIES = 4096
 _OPERAND_CACHE_MAX_KEY_BYTES = 1_048_576
-# Independent file-local bounds include both source-key storage and machine
-# bytes. No instruction graph or PC-dependent relocation is retained here.
+# Independent file-local bounds include source keys, machine bytes, and the
+# branch syntax below. No PC-dependent encoding or relocation is retained.
 _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES = 4096
 _INSTRUCTION_ENCODING_CACHE_MAX_BYTES = 1_048_576
+# Charge retained syntax record/target metadata as well as their text.
+# Only a single register or symbol target is admitted, never an operand graph.
+_BRANCH_SYNTAX_ENTRY_BYTES = 1024
 # An explicit allowlist keeps future PC-sensitive instructions (including
 # loop/jrcxz families) on the ordinary encoder until their contract is audited.
 _PC_INDEPENDENT_INSTRUCTION_MNEMONICS = frozenset((
@@ -328,6 +331,12 @@ _PC_INDEPENDENT_INSTRUCTION_MNEMONICS = frozenset((
 ))
 
 
+@dataclass(frozen=True)
+class _BranchSyntax:
+    mnemonic: str
+    target: _Reg | _Target
+
+
 class _OperandParseCache:
     """Bounded file-local reuse of immutable, PC-independent operand syntax."""
 
@@ -336,6 +345,8 @@ class _OperandParseCache:
         self.key_bytes = 0
         self.instruction_encodings: dict[str, bytes] = {}
         self.instruction_encoding_bytes = 0
+        self.branch_syntaxes: dict[str, _BranchSyntax] = {}
+        self.branch_syntax_bytes = 0
 
     def parse(self, text: str):
         # A str subclass can override len/hash/equality. Preserve the parser's
@@ -394,8 +405,53 @@ class _OperandParseCache:
         ):
             self.instruction_encodings.clear()
             self.instruction_encoding_bytes = 0
+        # Syntax uses only spare capacity: it must not change the original
+        # machine-byte cache's admission or eviction sequence.
+        if (
+            len(self.instruction_encodings) + len(self.branch_syntaxes) >= _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES
+            or self.instruction_encoding_bytes + self.branch_syntax_bytes + storage_bytes > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            self.branch_syntaxes.clear()
+            self.branch_syntax_bytes = 0
         self.instruction_encodings[text] = encoded.code
         self.instruction_encoding_bytes += storage_bytes
+
+    def branch_syntax(self, text: str):
+        if (
+            type(text) is not str
+            or _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES <= 0
+            or 4 * len(text) > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            return None
+        return self.branch_syntaxes.get(text)
+
+    def remember_branch_syntax(self, text: str, mnemonic: str, operands) -> None:
+        # Called only after the real branch encoder has succeeded. Its single
+        # frozen register/symbol operand contains no PC, label map, or result.
+        if (
+            type(text) is not str
+            or len(operands) != 1
+            or (type(operands[0]) is not _Reg and type(operands[0]) is not _Target)
+        ):
+            return
+        if text in self.branch_syntaxes:
+            return
+        storage_bytes = _BRANCH_SYNTAX_ENTRY_BYTES + 4 * (
+            len(text) + len(mnemonic) + len(operands[0].name)
+        )
+        if (
+            len(self.instruction_encodings) >= _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES
+            or self.instruction_encoding_bytes + storage_bytes > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            return
+        if (
+            len(self.instruction_encodings) + len(self.branch_syntaxes) >= _INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES
+            or self.instruction_encoding_bytes + self.branch_syntax_bytes + storage_bytes > _INSTRUCTION_ENCODING_CACHE_MAX_BYTES
+        ):
+            self.branch_syntaxes.clear()
+            self.branch_syntax_bytes = 0
+        self.branch_syntaxes[text] = _BranchSyntax(mnemonic, operands[0])
+        self.branch_syntax_bytes += storage_bytes
 
 
 def _int_bytes(value: int, width: int) -> bytes:
@@ -1107,7 +1163,7 @@ def encode_instruction(
     section_name: str,
     operand_cache: _OperandParseCache | None = None,
 ) -> EncodedInstruction:
-    """Encode at the real PC, reusing only proven PC-independent machine bytes."""
+    """Encode at the real PC, reusing PC-independent bytes or branch syntax."""
     # Preserve the existing duck-typed/subclass operand-cache path. The owned
     # assembler creates this exact file-local cache type for both passes.
     reusable = type(operand_cache) is _OperandParseCache
@@ -1116,6 +1172,14 @@ def encode_instruction(
         if code is not None:
             # Each caller still owns a fresh immutable result record.
             return EncodedInstruction(code)
+        syntax = operand_cache.branch_syntax(line)
+        if syntax is not None:
+            # A syntax hit still resolves symbols and checks rel32 at this PC.
+            # Keep the encoder's existing list argument/native ABI unchanged.
+            return _branch(
+                syntax.mnemonic, [syntax.target], pc=pc, labels=labels,
+                section_name=section_name,
+            )
     encoded = _encode_instruction_uncached(
         line, pc=pc, labels=labels, section_name=section_name,
         operand_cache=operand_cache,
@@ -1227,10 +1291,13 @@ def _encode_instruction_uncached(
     if mnemonic in ("call", "jmp") or (
         mnemonic.startswith("j") and mnemonic[1:] in _SET_CONDITIONS
     ):
-        return _branch(
+        encoded = _branch(
             mnemonic, operands, pc=pc, labels=labels,
             section_name=section_name,
         )
+        if type(operand_cache) is _OperandParseCache:
+            operand_cache.remember_branch_syntax(line, mnemonic, operands)
+        return encoded
     if mnemonic in ("push", "pop"):
         if len(operands) != 1:
             raise X86EncodeError(f"{mnemonic} expects one register")

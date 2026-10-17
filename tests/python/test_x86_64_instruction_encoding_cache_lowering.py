@@ -1,6 +1,6 @@
 """Host lowering of the exact cache additions across an imported class boundary.
 
-The unchanged operand parser and machine encoder are outside this small probe.
+The unchanged operand parser and non-branch machine encoder are outside this probe.
 The real cache methods, constructor, result records, constants and public
 wrapper are read from production source rather than copied into the fixture.
 Generating and verifying their owned IR is not native pcc1 execution evidence.
@@ -31,7 +31,9 @@ def _cache_provider_source():
     constants = {
         "_INSTRUCTION_ENCODING_CACHE_MAX_ENTRIES",
         "_INSTRUCTION_ENCODING_CACHE_MAX_BYTES",
+        "_BRANCH_SYNTAX_ENTRY_BYTES",
         "_PC_INDEPENDENT_INSTRUCTION_MNEMONICS",
+        "_SET_CONDITIONS",
     }
     selected_constants = [node for node in nodes if isinstance(node, ast.Assign)
                           and any(isinstance(target, ast.Name) and target.id in constants
@@ -42,17 +44,25 @@ def _cache_provider_source():
     # Only the old operand-parser implementation is omitted. Its annotation
     # names need ordinary class owners but never participate in this probe.
     prelude = "from __future__ import annotations\nfrom dataclasses import dataclass\n\n"
-    prelude += "\n".join("class " + name + ":\n    pass\n" for name in ("_Reg", "_Mem", "_Imm", "_Target"))
-    records = "\n".join(segment(definitions[name]) for name in ("EncodedRelocation", "EncodedInstruction"))
+    prelude += "R_X86_64_PLT32 = " + str(encoder.R_X86_64_PLT32) + "\n"
+    prelude += "\n".join("class " + name + ":\n    pass\n" for name in ("_Mem", "_Imm", "_SymbolImmediate"))
+    records = "\n".join(segment(definitions[name]) for name in (
+        "X86EncodeError", "_Reg", "_Target", "EncodedRelocation", "EncodedInstruction", "_BranchSyntax",
+    ))
     cache = "class _OperandParseCache:\n" + "\n".join(segment(methods[name]) for name in (
         "__init__", "instruction_encoding", "remember_instruction_encoding",
+        "branch_syntax", "remember_branch_syntax",
     ))
     leaf = definitions["_encode_instruction_uncached"]
     # Keep the real argument/return ABI, including every keyword-only input.
     leaf_source = "".join(lines[leaf.lineno - 1:leaf.body[0].lineno - 1])
     leaf_source += "    return EncodedInstruction(b'\\x90')\n"
+    modrm = definitions["_modrm_instruction"]
+    modrm_source = "".join(lines[modrm.lineno - 1:modrm.body[0].lineno - 1])
+    modrm_source += "    return EncodedInstruction(b'\\xff\\xd0')\n"
     return "\n\n".join((prelude, records, *map(segment, selected_constants), cache,
-                          leaf_source, segment(definitions["encode_instruction"])))
+                          leaf_source, modrm_source, segment(definitions["_int_bytes"]),
+                          segment(definitions["_branch"]), segment(definitions["encode_instruction"])))
 
 
 def _body(text, symbol):
@@ -75,12 +85,14 @@ def test_instruction_cache_added_shapes_lower_with_real_cross_module_exports(tmp
     consumer = tmp_path / "cache_consumer.py"
     provider.write_text(_cache_provider_source(), encoding="utf-8")
     consumer.write_text(
-        "from pcc.backend.x86_64_encode import _OperandParseCache, encode_instruction\n"
+        "from pcc.backend.x86_64_encode import _OperandParseCache, _Target, encode_instruction\n"
         "def probe():\n"
         "    cache = _OperandParseCache()\n"
         "    first = encode_instruction('nop', pc=0, labels={}, section_name='.text', operand_cache=cache)\n"
         "    second = encode_instruction('nop', pc=17, labels={}, section_name='.data', operand_cache=cache)\n"
-        "    return first.code == second.code and first is not second\n",
+        "    cache.remember_branch_syntax('jmp target', 'jmp', [_Target('target')])\n"
+        "    branch = encode_instruction('jmp target', pc=42, labels={}, section_name='.text', operand_cache=cache)\n"
+        "    return first.code == second.code and first is not second and len(branch.code) == 5\n",
         encoding="utf-8",
     )
     modules, exports, derived = build_closed_world_context(
@@ -89,6 +101,7 @@ def test_instruction_cache_added_shapes_lower_with_real_cross_module_exports(tmp
     cache = exports[provider_name]["_OperandParseCache"]
     assert cache["field_names"] == (
         "entries", "key_bytes", "instruction_encodings", "instruction_encoding_bytes",
+        "branch_syntaxes", "branch_syntax_bytes",
     )
     assert dict(cache["field_types"])["instruction_encodings"] == ("dict", ("str",), ("bytes",))
     methods = {method["name"]: method for method in cache["methods"]}

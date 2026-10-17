@@ -520,6 +520,10 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "tests/python/test_gc_remembered_membership_lifecycle.py",
         "tests/python/test_gc_remembered_membership_native.py",
         "tests/python/test_owned_runtime_pass_prefix.py",
+        "tests/python/test_x86_64_branch_syntax_cache.py",
+        "tests/python/test_x86_64_instruction_encoding_cache.py",
+        "tests/python/test_x86_64_instruction_encoding_cache_lowering.py",
+        "tests/python/test_x86_64_operand_cache.py",
     )
     assert linux_condition == (
         "matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}")
