@@ -172,18 +172,29 @@ def _symbols(objects):
     return defined, needed - set(defined)
 
 
-def _append(payload, data, compact_budget):
+def _append(payload: bytearray, data, compact_budget) -> bytearray:
+    # Native growth replaces the buffer. Keep the result in an owned local,
+    # and let each caller rebind it before publishing the completed payload.
+    result = payload
     if compact_budget is None:
-        payload.extend(data)
+        if type(data) is bytes or type(data) is bytearray:
+            if not data:
+                return result
+        result.extend(data)
     else:
-        compact_budget.extend(payload, data)
+        compact_budget.extend(result, data)
+    return result
 
 
-def _zeros(payload, count, compact_budget):
+def _zeros(payload: bytearray, count, compact_budget) -> bytearray:
+    result = payload
     if compact_budget is None:
-        payload.extend(b"\0" * count)
+        if type(count) is int and count == 0:
+            return result
+        result.extend(b"\0" * count)
     else:
-        compact_budget.zeros(payload, count)
+        compact_budget.zeros(result, count)
+    return result
 
 
 def _import_data(names, base_rva, compact_budget=None):
@@ -191,26 +202,26 @@ def _import_data(names, base_rva, compact_budget=None):
     for name in sorted(names):
         groups.setdefault(system_dll(name), []).append(name)
     payload = bytearray()
-    _zeros(payload, 20 * (len(groups) + 1), compact_budget)
-    _zeros(payload, (-len(payload)) & 7, compact_budget)
+    payload = _zeros(payload, 20 * (len(groups) + 1), compact_budget)
+    payload = _zeros(payload, (-len(payload)) & 7, compact_budget)
     lookups = {}
     iats = {}
     slots = {}
     for dll in sorted(groups):
         lookups[dll] = len(payload)
-        _zeros(payload, (len(groups[dll]) + 1) * 8, compact_budget)
+        payload = _zeros(payload, (len(groups[dll]) + 1) * 8, compact_budget)
     iat_start = len(payload)
     for dll in sorted(groups):
         iats[dll] = len(payload)
-        _zeros(payload, (len(groups[dll]) + 1) * 8, compact_budget)
+        payload = _zeros(payload, (len(groups[dll]) + 1) * 8, compact_budget)
     iat_end = len(payload)
     for ordinal, dll in enumerate(sorted(groups)):
         dll_offset = len(payload)
-        _append(payload, dll.encode("ascii") + b"\0", compact_budget)
+        payload = _append(payload, dll.encode("ascii") + b"\0", compact_budget)
         for index, name in enumerate(groups[dll]):
-            _zeros(payload, len(payload) & 1, compact_budget)
+            payload = _zeros(payload, len(payload) & 1, compact_budget)
             hint = len(payload)
-            _append(payload, b"\0\0" + name.encode("ascii") + b"\0", compact_budget)
+            payload = _append(payload, b"\0\0" + name.encode("ascii") + b"\0", compact_budget)
             struct.pack_into("<Q", payload, lookups[dll] + index * 8, base_rva + hint)
             struct.pack_into("<Q", payload, iats[dll] + index * 8, base_rva + hint)
             slots[name] = base_rva + iats[dll] + index * 8
@@ -432,17 +443,17 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
                 if sec.align <= 0 or sec.align & (sec.align - 1):
                     raise CoffError("invalid PE TLS section alignment")
                 tls_alignment = max(tls_alignment, sec.align)
-            _zeros(payload, (-len(payload)) & (sec.align - 1), compact_budget)
+            payload = _zeros(payload, (-len(payload)) & (sec.align - 1), compact_budget)
             if oi < 0:
                 stack_placement = (len(sections), len(payload))
             else:
                 placements[(oi, si)] = (len(sections), len(payload))
-            _append(payload, sec.data, compact_budget)
+            payload = _append(payload, sec.data, compact_budget)
             flags |= sec.flags & 0xE00000E0
         if name == ".text":
             for symbol in sorted(imports):
                 text_thunks[symbol] = rva + len(payload)
-                _append(payload, b"\xff\x25\0\0\0\0", compact_budget)
+                payload = _append(payload, b"\xff\x25\0\0\0\0", compact_budget)
         if name == ".idata":
             if payload:
                 raise CoffError("explicit import sections conflict with owned imports")
@@ -599,9 +610,9 @@ def _link_selected_objects(objects, definitions, imports, boundary_names,
     for page, entries in sorted(pages.items()):
         if len(entries) & 1:
             entries.append(0)
-        _append(reloc_data, struct.pack("<II", page, 8 + len(entries) * 2), compact_budget)
+        reloc_data = _append(reloc_data, struct.pack("<II", page, 8 + len(entries) * 2), compact_budget)
         for word in entries:
-            _append(reloc_data, struct.pack("<H", word), compact_budget)
+            reloc_data = _append(reloc_data, struct.pack("<H", word), compact_budget)
     reloc_directory = (rva, len(reloc_data)) if reloc_data else (0, 0)
     if reloc_data:
         sections.append([".reloc", rva, reloc_data, 0x42000040])
