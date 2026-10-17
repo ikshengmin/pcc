@@ -75,6 +75,12 @@ pcc_gc_relocation_member_note = extern("pcc_gc_relocation_member_note", (c_ptr,)
 pcc_gc_relocation_member_maybe = extern("pcc_gc_relocation_member_maybe", (c_ptr,), c_int64)
 pcc_gc_relocation_member_forget = extern("pcc_gc_relocation_member_forget", (c_ptr,), c_void)
 pcc_gc_relocation_member_clear = extern("pcc_gc_relocation_member_clear", (), c_void)
+pcc_gc_remembered_member_note = extern("pcc_gc_remembered_member_note", (c_ptr,), c_void)
+pcc_gc_remembered_member_maybe = extern("pcc_gc_remembered_member_maybe", (c_ptr,), c_int64)
+pcc_gc_remembered_member_require = extern("pcc_gc_remembered_member_require", (c_ptr,), c_void)
+pcc_gc_remembered_member_forget = extern("pcc_gc_remembered_member_forget", (c_ptr,), c_void)
+pcc_gc_remembered_member_clear = extern("pcc_gc_remembered_member_clear", (), c_void)
+
 
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
@@ -2069,6 +2075,9 @@ def _backend4_remembered_set_add(owner, slot) -> int:
     node = malloc(24)
     if ptr_is_null(node) != 0:
         return 0
+    # Index allocation may reenter: do it before publishing this node, then
+    # read the current head below. Unknown membership preserves the old walk.
+    pcc_gc_remembered_member_note(owner)
     store_ptr(node, 0, owner)
     store_ptr(node, 8, slot)
     store_ptr(node, 16, _remembered_set_head())
@@ -2098,6 +2107,8 @@ def _backend4_remembered_set_add(owner, slot) -> int:
 def _backend4_remembered_set_remove(owner) -> None:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return
+    if pcc_gc_remembered_member_maybe(owner) == 0:
+        return
     prev = null()
     node = _remembered_set_head()
     while ptr_is_null(node) == 0:
@@ -2122,6 +2133,11 @@ def _backend4_remembered_set_remove(owner) -> None:
             continue
         prev = node
         node = nxt
+    # A free callback can add a new head after the walk passed it. Retire the
+    # owner key only after a fresh, callback-free absence proof. Slot/card
+    # deletion and retarget may conservatively leave keys until owner removal.
+    if _backend4_owner_remembered_slots(owner) == 0:
+        pcc_gc_remembered_member_forget(owner)
 
 
 def _backend4_remembered_set_remove_slot(slot) -> int:
@@ -2168,11 +2184,15 @@ def _backend4_remembered_set_retarget_slot(
         return
     if ptr_eq(from_owner, to_owner) != 0 and ptr_eq(from_slot, to_slot) != 0:
         return
+    # Prepare before taking a cursor: index allocation may invoke callbacks.
+    # Retaining the old owner key is conservative, including multiple slots.
+    pcc_gc_remembered_member_note(to_owner)
     node = _remembered_set_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), from_owner) != 0:
             if ptr_eq(load_ptr(node, 8), from_slot) != 0:
                 _backend4_remembered_entry_detach(from_owner, from_slot)
+                pcc_gc_remembered_member_require(to_owner)
                 store_ptr(node, 0, to_owner)
                 store_ptr(node, 8, to_slot)
                 _backend4_remembered_entry_attach(to_owner, to_slot)
@@ -2217,6 +2237,7 @@ def _backend4_reset_remembered_set_epoch_state() -> None:
 def _backend4_remembered_set_clear() -> None:
     node = _remembered_set_head()
     _set_remembered_set_head(null())
+    pcc_gc_remembered_member_clear()
     while ptr_is_null(node) == 0:
         nxt = load_ptr(node, 16)
         _backend4_zpage_note_remembered_slot(load_ptr(node, 0), -1)

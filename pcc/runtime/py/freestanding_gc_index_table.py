@@ -120,6 +120,22 @@ define_global_i64("pcc_py_gc_relocation_member_used", 0)
 define_global_i64("pcc_py_gc_relocation_member_incomplete", 0)
 
 
+# Conservative owner superset for GC4 remembered slots. A key may remain after
+# slot/card deletion or retarget; forget is allowed only after a callback-free
+# list walk proves that owner absent. All calls require the GC graph lock.
+# Reentrant allocator callbacks cannot inspect a half-published table: busy
+# queries scan the list, and a nested mutation taints the epoch until an
+# authoritative empty-list clear. Neither object headers nor slot addresses
+# establish negative membership.
+define_global_ptr_null("pcc_py_gc_remembered_member_slots")
+define_global_i64("pcc_py_gc_remembered_member_cap", 0)
+define_global_i64("pcc_py_gc_remembered_member_count", 0)
+define_global_i64("pcc_py_gc_remembered_member_used", 0)
+define_global_i64("pcc_py_gc_remembered_member_incomplete", 0)
+define_global_i64("pcc_py_gc_remembered_member_busy", 0)
+
+
+
 @c_abi_export("pcc_gc_index_py_hash_ptr")
 def pcc_gc_index_py_hash_ptr(key: c_ptr) -> i64:
     # Fibonacci multiply: consecutive (bump-allocated) addresses previously
@@ -1634,6 +1650,122 @@ def pcc_gc_relocation_member_clear() -> None:
         global_addr("pcc_py_gc_relocation_member_used"),
     )
     store_i64(global_addr("pcc_py_gc_relocation_member_incomplete"), 0, 0)
+
+
+@c_abi_export("pcc_gc_remembered_member_maybe")
+def pcc_gc_remembered_member_maybe(obj: c_ptr) -> i64:
+    """0 only when obj is certainly outside the remembered owner superset."""
+    if (
+        load_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0) != 0
+        or load_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0) != 0
+    ):
+        return 1
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    slots = global_load_ptr("pcc_py_gc_remembered_member_slots")
+    cap: i64 = load_i64(global_addr("pcc_py_gc_remembered_member_cap"), 0)
+    count: i64 = load_i64(global_addr("pcc_py_gc_remembered_member_count"), 0)
+    used: i64 = load_i64(global_addr("pcc_py_gc_remembered_member_used"), 0)
+    if ptr_is_null(slots) != 0:
+        if cap == 0 and count == 0 and used == 0:
+            return 0
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+        return 1
+    if (
+        cap < 8
+        or (cap & (cap - 1)) != 0
+        or count < 0
+        or used != count
+        or used > logical_shift_right_i64(cap, 1)
+    ):
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+        return 1
+    if count == 0:
+        return 0
+    return 1 if pcc_gc_index_py_find_slot(slots, cap, obj) >= 0 else 0
+
+
+@c_abi_export("pcc_gc_remembered_member_note")
+def pcc_gc_remembered_member_note(obj: c_ptr) -> None:
+    # Call before publishing a new owner, without holding a list-node cursor
+    # across this potentially allocating operation. Nested mutations cannot
+    # touch the in-flight table or be mistaken for an unmodified exact epoch.
+    if load_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0) != 0:
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+        return
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+        return
+    present: i64 = pcc_gc_remembered_member_maybe(obj)
+    if load_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0) != 0:
+        return
+    if present != 0:
+        return
+    store_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0, 1)
+    inserted: i64 = pcc_gc_index_py_insert(
+        global_addr("pcc_py_gc_remembered_member_slots"),
+        global_addr("pcc_py_gc_remembered_member_cap"),
+        global_addr("pcc_py_gc_remembered_member_count"),
+        global_addr("pcc_py_gc_remembered_member_used"),
+        obj,
+        obj,
+        1,
+        0,
+        256,
+    )
+    if inserted != 1:
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+    store_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0, 0)
+
+
+@c_abi_export("pcc_gc_remembered_member_require")
+def pcc_gc_remembered_member_require(obj: c_ptr) -> None:
+    # A callback may have removed a pre-noted target before retarget commits.
+    # Never allocate while holding the cursor: a missing key makes all
+    # negative membership unknown until the authoritative list is cleared.
+    if (
+        load_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0) != 0
+        or pcc_gc_remembered_member_maybe(obj) == 0
+    ):
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+
+
+@c_abi_export("pcc_gc_remembered_member_forget")
+def pcc_gc_remembered_member_forget(obj: c_ptr) -> None:
+    # The caller has just proved no linked slot belongs to obj. This raw
+    # backward-shift deletion cannot allocate, free, or invoke a callback.
+    if load_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0) != 0:
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+        return
+    if pcc_gc_remembered_member_maybe(obj) == 0:
+        return
+    if load_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0) != 0:
+        return
+    pcc_gc_index_py_remove(
+        global_addr("pcc_py_gc_remembered_member_slots"),
+        global_addr("pcc_py_gc_remembered_member_cap"),
+        global_addr("pcc_py_gc_remembered_member_count"),
+        global_addr("pcc_py_gc_remembered_member_used"),
+        obj,
+        1,
+    )
+
+
+@c_abi_export("pcc_gc_remembered_member_clear")
+def pcc_gc_remembered_member_clear() -> None:
+    # Call immediately after detaching the authoritative list. Publish the
+    # empty index before free: a callback may build the next epoch. Do not
+    # write any membership state after free, including the incomplete flag.
+    if load_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0) != 0:
+        store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+        return
+    slots = global_load_ptr("pcc_py_gc_remembered_member_slots")
+    global_store_ptr("pcc_py_gc_remembered_member_slots", null())
+    store_i64(global_addr("pcc_py_gc_remembered_member_cap"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_remembered_member_count"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_remembered_member_used"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 0)
+    free(slots)
 
 
 @c_abi_export("pcc_gc_ptr_index_tls_pool_drain")

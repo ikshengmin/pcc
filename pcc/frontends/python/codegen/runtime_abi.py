@@ -2247,6 +2247,11 @@ def _cross_object_signatures_part_5():
     return {
     "pcc_gc_relocation_member_count": (("c_ptr",), "c_int64"),
     "pcc_gc_relocation_member_forget": (("c_ptr",), "c_void"),
+    "pcc_gc_remembered_member_note": (("c_ptr",), "c_void"),
+    "pcc_gc_remembered_member_maybe": (("c_ptr",), "c_int64"),
+    "pcc_gc_remembered_member_require": (("c_ptr",), "c_void"),
+    "pcc_gc_remembered_member_forget": (("c_ptr",), "c_void"),
+    "pcc_gc_remembered_member_clear": ((), "c_void"),
     "pcc_gc_backend3_promote_cext_owner_referents": (
         ("c_ptr",),
         "c_void",
