@@ -455,6 +455,7 @@ enum {
     PCC_GC_COUNTER_READ_BARRIERS = 2,
     PCC_GC_COUNTER_SAFEPOINTS = 3,
     PCC_GC_COUNTER_PIN_BALANCE = 4,
+    /* Accumulated step-call count, with 64-bit raw storage. */
     PCC_GC_COUNTER_WORK_STEPS = 5,
     PCC_GC_COUNTER_DEBT_BYTES = 6,
     PCC_GC_COUNTER_MAX_PAUSE_US = 7,
@@ -482,8 +483,11 @@ enum {
     PCC_GC_COUNTER_CMS_WORKBUFFER_SCORE = 29,
     PCC_GC_COUNTER_GEN_MINOR_PRODUCTIVITY_SCORE = 30,
     PCC_GC_COUNTER_GEN_REMEMBERED_UPDATE_SCORE = 31,
-    /* G-P3-LONGRUN pause telemetry (docs/plans/gc-longrun-benchmark-plan.md):
-     * recorded at collect/step endpoints by pcc_gc_record_pause. */
+    /* Recorded collect/step windows, inclusive of nested work. These are not
+     * total GC CPU time or exclusive stop-the-world time. MAX_PAUSE_US,
+     * PAUSE_COUNT and PAUSE_SUM_US have 64-bit raw storage; histogram bins
+     * retain their existing 32-bit storage. Metric IDs and the i64 API stay
+     * unchanged. MAX_PAUSE_US is a maximum since reset, not a phase delta. */
     PCC_GC_COUNTER_PAUSE_COUNT = 32,
     PCC_GC_COUNTER_PAUSE_SUM_US = 33,
     PCC_GC_COUNTER_PAUSE_HIST_LT_100US = 34,

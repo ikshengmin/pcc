@@ -1688,16 +1688,12 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_mark_active',
         'pcc_gc_metric_alloc',
         'pcc_gc_metric_load',
-        'pcc_gc_metric_max_pause_us',
-        'pcc_gc_metric_pause_count',
         'pcc_gc_metric_pause_hist0',
         'pcc_gc_metric_pause_hist1',
         'pcc_gc_metric_pause_hist2',
         'pcc_gc_metric_pause_hist3',
-        'pcc_gc_metric_pause_sum_us',
         'pcc_gc_metric_pin',
         'pcc_gc_metric_safepoint',
-        'pcc_gc_metric_step',
         'pcc_gc_metric_store',
         'pcc_gc_minor_alloc_max',
         'pcc_gc_minor_allocations',
@@ -1732,6 +1728,11 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        # Width must match freestanding_gc_state and all telemetry endpoints.
+        'pcc_gc_metric_step',
+        'pcc_gc_metric_max_pause_us',
+        'pcc_gc_metric_pause_count',
+        'pcc_gc_metric_pause_sum_us',
         'pcc_builtin_function_cache_mutex_bits',
         'pcc_gc_debt_bytes',
         'pcc_gc_live_bytes',

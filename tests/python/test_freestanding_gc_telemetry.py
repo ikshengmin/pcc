@@ -127,6 +127,9 @@ def _differential_source() -> str:
     function_values = {name: 10000 + index for index, name in enumerate(functions)}
     global_values = {name: 1000 + index for index, name in enumerate(globals_)}
     global_values["pcc_gc_debt_bytes"] = 8589934765
+    for name in ("pcc_gc_metric_step", "pcc_gc_metric_max_pause_us",
+                 "pcc_gc_metric_pause_count", "pcc_gc_metric_pause_sum_us"):
+        global_values[name] = 8589934765
 
     aliases = {
         "pcc_gc_max_pause_us": "pcc_gc_metric_max_pause_us",
@@ -145,7 +148,7 @@ def _differential_source() -> str:
     for name in globals_:
         # Declare each counter at its registered width: reading an i64
         # counter out of a 4-byte harness global returns neighbouring bytes.
-        ctype = "int64_t" if name in FREESTANDING_GC_I64_GLOBALS else "int32_t"
+        ctype = "int64_t" if aliases.get(name, name) in FREESTANDING_GC_I64_GLOBALS else "int32_t"
         lines.append(f"{ctype} {name} = {global_values[name]};")
     pause_values = [
         global_values[f"pcc_gc_metric_pause_hist{index}"] for index in range(4)

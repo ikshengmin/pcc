@@ -270,11 +270,11 @@ def pcc_gc_telemetry(metric: i64) -> i64:
     if metric == 6:
         return load_i64(global_addr("pcc_gc_debt_bytes"), 0)
     if metric == 7:
-        return load_i32(global_addr("pcc_gc_metric_max_pause_us"), 0)
+        return load_i64(global_addr("pcc_gc_metric_max_pause_us"), 0)
     if metric == 32:
-        return load_i32(global_addr("pcc_gc_metric_pause_count"), 0)
+        return load_i64(global_addr("pcc_gc_metric_pause_count"), 0)
     if metric == 33:
-        return load_i32(global_addr("pcc_gc_metric_pause_sum_us"), 0)
+        return load_i64(global_addr("pcc_gc_metric_pause_sum_us"), 0)
     if metric == 34:
         return load_i32(global_addr("pcc_gc_metric_pause_hist0"), 0)
     if metric == 35:
@@ -508,7 +508,7 @@ def pcc_gc_telemetry(metric: i64) -> i64:
     if metric == 4:
         return load_i32(global_addr("pcc_gc_metric_pin"), 0)
     if metric == 5:
-        return load_i32(global_addr("pcc_gc_metric_step"), 0)
+        return load_i64(global_addr("pcc_gc_metric_step"), 0)
     return -1
 
 

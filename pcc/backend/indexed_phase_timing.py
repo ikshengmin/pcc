@@ -8,6 +8,27 @@ Indexes are stable; assembly children 13..15 belong to inclusive parent 9.
 import sys
 import time
 
+from pcc.extern import c_int64, extern
+
+
+_pcc_gc_backend: "extern" = extern("pcc_gc_backend", (), c_int64)
+_pcc_gc_telemetry: "extern" = extern("pcc_gc_telemetry", (c_int64,), c_int64)
+
+# These are existing O(1) scalar getters, never heap/root inventories. The
+# first eight counters are cumulative; the remaining values are end gauges.
+# Only work steps and the recorded pause count/sum/max have 64-bit storage.
+_GC_COUNTER_IDS = (5, 32, 33, 0, 1, 2, 3, 15, 7, 42, 57, 59, 60, 66, 68, 70)
+_GC_DELTA_NAMES = (
+    "work_steps", "recorded_pause_count", "recorded_pause_us", "allocations",
+    "write_barriers", "read_barriers", "safepoints", "relocation_forwards",
+)
+_GC_GAUGE_NAMES = (
+    "max_recorded_pause_us_since_reset_end", "store_buffer_entries_end",
+    "store_buffer_high_water_end", "store_buffer_owner_fanout_high_water_end",
+    "store_buffer_owner_count_high_water_end", "remembered_entries_end",
+    "remembered_high_water_end", "store_buffer_medium_pending_end",
+)
+
 
 _PHASE_NAMES = (
     "frontend_generate_ns",          # 0
@@ -147,7 +168,8 @@ def _bounded_module_name(module_name: str) -> str:
     return "".join(char if char in allowed else "_" for char in module_name[:160])
 
 
-def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name=""):
+def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name="",
+                 gc_fields=()):
     try:
         parts = [
             "pcc coarse phase", "scope=" + scope, "phase=" + phase,
@@ -160,6 +182,7 @@ def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name
         # watchdog termination fabricates a completion or elapsed duration.
         if event == "complete" and clock_ok:
             parts.append("duration_ns=" + str(duration_ns))
+        parts.extend(gc_fields)
         sys.stderr.write(" ".join(parts) + "\n")
         sys.stderr.flush()
     except BaseException:
@@ -169,10 +192,100 @@ def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name
 
 
 class CoarsePhaseTiming:
-    """At most fourteen fixed coordinator boundary pairs in the direct build path."""
+    """At most fourteen fixed coordinator boundary pairs in the direct build path.
+
+    Native GC readings cover this compiler process only. They include nested
+    recorded collector work and diagnostic allocation, are not atomic, and do
+    not cover all GC cost (for example mutator barrier/free-time scans). Parent
+    and child deltas overlap and must not be added. Host GC is never substituted.
+    """
 
     def __init__(self):
         self.failed = False
+        self.gc_unavailable = False
+        self.gc_starts = {}
+
+    def _gc_snapshot(self):
+        if self.gc_unavailable:
+            return []
+        try:
+            # This exact native-owner guard is folded by the closed-world
+            # frontend. CPython never substitutes its unrelated GC counters.
+            if sys.implementation.name != "pcc":
+                self.gc_unavailable = True
+                return []
+            # Annotated externs lower to direct native runtime calls.
+            backend = _pcc_gc_backend()
+            if backend < 0 or backend > 4:
+                self.gc_unavailable = True
+                return []
+            values = [backend]
+            for metric in _GC_COUNTER_IDS:
+                values.append(_pcc_gc_telemetry(metric))
+            return values
+        except BaseException:
+            self.gc_unavailable = True
+            return []
+
+    def _gc_begin(self, phase, started_ns):
+        try:
+            snapshot = self._gc_snapshot()
+            if snapshot:
+                self.gc_starts[phase] = (started_ns, snapshot)
+                return ["gc_available=1", "gc_backend=" + str(snapshot[0])]
+        except BaseException:
+            pass
+        return ["gc_available=0"]
+
+    def _gc_complete(self, phase, started_ns):
+        try:
+            start = self.gc_starts.pop(phase, None)
+            snapshot = self._gc_snapshot()
+            if not snapshot:
+                return ["gc_available=0"]
+            parts = [
+                "gc_available=1", "gc_backend=" + str(snapshot[0]),
+                "gc_scope=process", "gc_snapshot=non_atomic",
+                "gc_recorded_work=inclusive", "gc_event_counter_bits=32",
+                "gc_accounting_counter_bits=64",
+            ]
+            valid = (
+                start is not None and start[0] == started_ns
+                and start[1][0] == snapshot[0]
+            )
+            # Detect ordinary wrap/reset cases instead of publishing negative
+            # work. Existing 32-bit event counters still cannot exclude a full
+            # wrap between snapshots. No telemetry reset is ever performed.
+            wide_valid = valid
+            event_valid = valid
+            index = 0
+            while index < 8:
+                counter_valid = valid and (
+                    start[1][index + 1] >= 0
+                    and snapshot[index + 1] >= start[1][index + 1]
+                )
+                if index < 3:
+                    wide_valid = wide_valid and counter_valid
+                else:
+                    event_valid = event_valid and counter_valid
+                index += 1
+            parts.append("gc_wide_delta_ok=" + str(int(wide_valid)))
+            parts.append("gc_event_delta_ok=" + str(int(event_valid)))
+            index = 0
+            while index < 8:
+                if (index < 3 and wide_valid) or (index >= 3 and event_valid):
+                    parts.append("gc_" + _GC_DELTA_NAMES[index] + "_delta="
+                                 + str(snapshot[index + 1] - start[1][index + 1]))
+                index += 1
+            index = 0
+            while index < 8:
+                if snapshot[index + 9] >= 0:
+                    parts.append("gc_" + _GC_GAUGE_NAMES[index] + "="
+                                 + str(snapshot[index + 9]))
+                index += 1
+            return parts
+        except BaseException:
+            return ["gc_available=0"]
 
     def begin(self, phase: str) -> int:
         try:
@@ -190,6 +303,7 @@ class CoarsePhaseTiming:
             _write_event(
                 "coordinator", phase, _COORDINATOR_PARENTS[phase],
                 "begin", not self.failed, 0,
+                gc_fields=self._gc_begin(phase, started_ns),
             )
             return started_ns
         except BaseException:
@@ -210,6 +324,7 @@ class CoarsePhaseTiming:
             _write_event(
                 "coordinator", phase, _COORDINATOR_PARENTS[phase],
                 "complete", not self.failed and started_ns > 0, elapsed_ns,
+                gc_fields=self._gc_complete(phase, started_ns),
             )
         except BaseException:
             pass

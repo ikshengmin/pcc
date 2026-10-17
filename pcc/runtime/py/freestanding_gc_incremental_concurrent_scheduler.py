@@ -613,15 +613,15 @@ def pcc_gc_tracing_record_pause(start_us: i64, end_us: i64) -> None:
     pause: i64 = end_us - start_us
     if pause <= 0:
         pause: i64 = 1
-    store_i32(
+    store_i64(
         global_addr("pcc_gc_metric_pause_count"),
         0,
-        load_i32(global_addr("pcc_gc_metric_pause_count"), 0) + 1,
+        load_i64(global_addr("pcc_gc_metric_pause_count"), 0) + 1,
     )
-    store_i32(
+    store_i64(
         global_addr("pcc_gc_metric_pause_sum_us"),
         0,
-        load_i32(global_addr("pcc_gc_metric_pause_sum_us"), 0) + pause,
+        load_i64(global_addr("pcc_gc_metric_pause_sum_us"), 0) + pause,
     )
     if pause < 100:
         store_i32(
@@ -647,9 +647,9 @@ def pcc_gc_tracing_record_pause(start_us: i64, end_us: i64) -> None:
             0,
             load_i32(global_addr("pcc_gc_metric_pause_hist3"), 0) + 1,
         )
-    current: i64 = load_i32(global_addr("pcc_gc_metric_max_pause_us"), 0)
+    current: i64 = load_i64(global_addr("pcc_gc_metric_max_pause_us"), 0)
     if pause > current:
-        store_i32(global_addr("pcc_gc_metric_max_pause_us"), 0, pause)
+        store_i64(global_addr("pcc_gc_metric_max_pause_us"), 0, pause)
 
 
 @c_abi_export("pcc_gc_record_explicit_pause")
@@ -865,8 +865,8 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
 def pcc_gc_incremental_concurrent_step(budget: i64) -> i64:
     if budget <= 0:
         return 0
-    steps: i64 = load_i32(global_addr("pcc_gc_metric_step"), 0)
-    store_i32(global_addr("pcc_gc_metric_step"), 0, steps + 1)
+    steps: i64 = load_i64(global_addr("pcc_gc_metric_step"), 0)
+    store_i64(global_addr("pcc_gc_metric_step"), 0, steps + 1)
     start_us: i64 = pcc_platform_monotonic_us()
     processed: i64 = pcc_gc_tracing_step_cycle(budget)
     pcc_gc_tracing_discharge_debt(processed)

@@ -918,6 +918,9 @@ def _counter_global(metric: int):
 
 def _counter_inc(metric: int, delta: int) -> None:
     slot = _counter_global(metric)
+    if metric < 0 or metric >= 5:
+        store_i64(slot, 0, load_i64(slot, 0) + delta)
+        return
     v: int = load_i32(slot, 0)
     store_i32(slot, 0, v + delta)
 
@@ -2620,13 +2623,14 @@ def pcc_gc_telemetry_reset() -> None:
     _object_graph_unlock()
     _backend3_finish_detached_remembered_owners(detached_remembered)
     i: int = 0
-    while i <= 5:
+    while i < 5:
         store_i32(_counter_global(i), 0, 0)
         i = i + 1
+    store_i64(global_addr("pcc_gc_metric_step"), 0, 0)
     store_i64(global_addr("pcc_gc_unmanaged_refcount_ops"), 0, 0)
-    store_i32(global_addr("pcc_gc_metric_max_pause_us"), 0, 0)
-    store_i32(global_addr("pcc_gc_metric_pause_count"), 0, 0)
-    store_i32(global_addr("pcc_gc_metric_pause_sum_us"), 0, 0)
+    store_i64(global_addr("pcc_gc_metric_max_pause_us"), 0, 0)
+    store_i64(global_addr("pcc_gc_metric_pause_count"), 0, 0)
+    store_i64(global_addr("pcc_gc_metric_pause_sum_us"), 0, 0)
     store_i32(global_addr("pcc_gc_metric_pause_hist0"), 0, 0)
     store_i32(global_addr("pcc_gc_metric_pause_hist1"), 0, 0)
     store_i32(global_addr("pcc_gc_metric_pause_hist2"), 0, 0)

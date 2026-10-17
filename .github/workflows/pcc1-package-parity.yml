@@ -45,6 +45,8 @@ on:
       - "tests/python/test_host_indexed_process_split.py"
       - "tests/python/test_dynamic_handoff_slots.py"
       - "tests/python/test_indexed_phase_timing.py"
+      - "tests/python/test_gc_phase_attribution.py"
+      - "tests/python/test_gc_phase_counter_widths.py"
       - "tests/python/test_x86_64_windows_packed_stackmaps.py"
       - "tests/python/test_windows_symbol_immediates.py"
       - "tests/python/test_windows_global_memory_scratch.py"
@@ -257,6 +259,8 @@ on:
       - "tests/python/test_host_indexed_process_split.py"
       - "tests/python/test_dynamic_handoff_slots.py"
       - "tests/python/test_indexed_phase_timing.py"
+      - "tests/python/test_gc_phase_attribution.py"
+      - "tests/python/test_gc_phase_counter_widths.py"
       - "tests/python/test_x86_64_windows_packed_stackmaps.py"
       - "tests/python/test_windows_symbol_immediates.py"
       - "tests/python/test_windows_global_memory_scratch.py"
@@ -739,7 +743,7 @@ jobs:
         run: uv sync --frozen --dev --python 3.13
 
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
-        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/python/test_elf_arm_branch_slot_defaults.py tests/test_ci_native_object_regressions.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_gc4_copy_page_probe_native.py tests/python/test_gc_relocation_membership_lifecycle.py' || '' }}
+        run: uv run --frozen --no-sync --python 3.13 python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_owned_elf_assembler_dispatch.py tests/python/test_elf_arm_branch_slot_defaults.py tests/python/test_gc_phase_attribution.py tests/python/test_gc_phase_counter_widths.py tests/test_ci_native_object_regressions.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_gc4_copy_page_probe_native.py tests/python/test_gc_relocation_membership_lifecycle.py' || '' }}
 
       # A push qualifies Stage1 and the native canary under all five
       # collectors. Stage2 codegen alone needs ~66k-116k pcc1 task-s today

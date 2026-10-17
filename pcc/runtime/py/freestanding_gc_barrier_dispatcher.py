@@ -7,11 +7,13 @@ from pcc.unsafe import (
     global_load_ptr,
     is_tagged_int,
     load_i32,
+    load_i64,
     null,
     ptr_diff,
     ptr_is_null,
     stack_alloc,
     store_i32,
+    store_i64,
     store_ptr,
 )
 
@@ -127,10 +129,10 @@ def pcc_gc_step(budget: i64) -> i64:
     if backend == 1 or backend == 2:
         return pcc_gc_incremental_concurrent_step(budget)
 
-    store_i32(
+    store_i64(
         global_addr("pcc_gc_metric_step"),
         0,
-        load_i32(global_addr("pcc_gc_metric_step"), 0) + 1,
+        load_i64(global_addr("pcc_gc_metric_step"), 0) + 1,
     )
     start_us: i64 = pcc_platform_monotonic_us()
     processed: i64 = 0

@@ -509,6 +509,8 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "tests/python/test_aarch64_call_target_reuse.py",
         "tests/python/test_owned_elf_assembler_dispatch.py",
         "tests/python/test_elf_arm_branch_slot_defaults.py",
+        "tests/python/test_gc_phase_attribution.py",
+        "tests/python/test_gc_phase_counter_widths.py",
         "tests/test_ci_native_object_regressions.py",
     ]
     linux_only = (
@@ -521,6 +523,8 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     for path in (*[node.split("::")[0] for node in (*gate.NODES, *gate.WINDOWS_NODES)],
                  "scripts/ci_native_object_regressions.py", "tests/test_ci_native_object_regressions.py",
                  "tests/python/test_elf_arm_branch_slot_defaults.py",
+                 "tests/python/test_gc_phase_attribution.py",
+                 "tests/python/test_gc_phase_counter_widths.py",
                  "tests/elf_arm_branch_slot_reference.py",
                  "tests/elf_x86_packed_classification_reference.py",
                  *linux_only, "tests/python/test_freestanding_gc_relocation_copy.py",

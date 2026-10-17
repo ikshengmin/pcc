@@ -503,7 +503,7 @@ def test_coordinator_vocabulary_is_fourteen_fixed_flushed_pairs(monkeypatch):
     for label in labels:
         timer.complete(label, timer.begin(label))
     assert len(sink.lines) == sink.flushes == 28
-    assert set(vars(timer)) == {"failed"}
+    assert set(vars(timer)) == {"failed", "gc_unavailable", "gc_starts"}
     for index, row in enumerate(_events(sink)):
         label = labels[index // 2]
         assert row["scope"] == "coordinator" and row["phase"] == label
