@@ -8,6 +8,7 @@ and exact membership table.
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import time
 
 import pytest
 
+from pcc.backend import elf_x86_64 as elf
 from tests.python import test_freestanding_gc_relocation_copy as contract
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,8 +31,7 @@ pytestmark = [
     pytest.mark.pcc_gate(
         probe=lambda: sys.platform.startswith("linux")
         and platform.machine().lower() in ("x86_64", "amd64")
-        and shutil.which("cc") is not None
-        and shutil.which("nm") is not None,
+        and shutil.which("cc") is not None,
     ),
 ]
 
@@ -315,19 +316,31 @@ def test_current_native_membership_state_machine(emitted_copy, case):
     assert observed == MEMBERSHIP_CASES[case]
 
 
+def _owned_elf_symbol_names(path: Path) -> tuple[set[str], set[str]]:
+    # Inspect the emitted bytes without a separately scheduled nm process.
+    # Unlike archive resolution, exact closure includes weak undefined names.
+    # Only symbol zero is omitted; parse_relocatable validates its null shape.
+    symbols = elf.parse_relocatable(path.read_bytes()).symbols[1:]
+    undefined = {
+        symbol.name for symbol in symbols if symbol.section_index == elf.SHN_UNDEF
+    }
+    defined = {
+        symbol.name for symbol in symbols
+        if symbol.binding != elf.STB_LOCAL and symbol.section_index != elf.SHN_UNDEF
+    }
+    return undefined, defined
+
+
 def test_current_owned_copy_has_exact_strict_closure(emitted_copy):
     _build, obj, index_obj, _executable = emitted_copy
-    undefined = subprocess.check_output(["nm", "-u", str(obj)], text=True, timeout=5)
-    assert {line.split()[-1] for line in undefined.splitlines()} == (
+    undefined, defined = _owned_elf_symbol_names(obj)
+    assert undefined == (
         contract.RAW_FUNCTION_IMPORTS | contract.RAW_GLOBAL_IMPORTS
     )
-    defined = subprocess.check_output(
-        ["nm", "-g", "--defined-only", str(obj)], text=True, timeout=5,
-    )
-    assert {line.split()[-1] for line in defined.splitlines()} == contract.OWNED_SYMBOLS
+    assert defined == contract.OWNED_SYMBOLS
 
-    index_undefined = subprocess.check_output(["nm", "-u", str(index_obj)], text=True, timeout=5)
-    assert {line.split()[-1] for line in index_undefined.splitlines()} == {
+    index_undefined, index_defined = _owned_elf_symbol_names(index_obj)
+    assert index_undefined == {
         "calloc", "free", "pcc_allocator_object_side_slot", "pcc_allocator_granule_object_slot",
     }
     index_source = contract.STRICT_SOURCE.with_name("freestanding_gc_index_table.py")
@@ -343,7 +356,89 @@ def test_current_owned_copy_has_exact_strict_closure(emitted_copy):
         "pcc_gc_relocation_member_count", "pcc_gc_relocation_member_note",
         "pcc_gc_relocation_member_forget", "pcc_gc_relocation_member_clear",
     } <= expected_index_symbols
-    index_defined = subprocess.check_output(
-        ["nm", "-g", "--defined-only", str(index_obj)], text=True, timeout=5,
+    assert index_defined == expected_index_symbols
+
+
+def _symbol_fixture():
+    return elf.ElfObject(
+        sections=(
+            elf.ElfSection(".text", elf.SHT_PROGBITS, elf.SHF_ALLOC, 1, b"\xc3"),
+            elf.ElfSection(".bss", elf.SHT_NOBITS, elf.SHF_ALLOC | elf.SHF_WRITE, 8,
+                           mem_size=8),
+        ),
+        symbols=(
+            elf.ElfSymbol.null(),
+            elf.ElfSymbol("", 1, 0, 0, elf.STB_LOCAL, elf.STT_SECTION),
+            elf.ElfSymbol("local_definition", 1, 0, 1, elf.STB_LOCAL, elf.STT_FUNC),
+            elf.ElfSymbol("local_import", elf.SHN_UNDEF, 0, 0,
+                          elf.STB_LOCAL, elf.STT_NOTYPE),
+            elf.ElfSymbol("global_import", elf.SHN_UNDEF, 0, 0,
+                          elf.STB_GLOBAL, elf.STT_NOTYPE),
+            elf.ElfSymbol("weak_import", elf.SHN_UNDEF, 0, 0,
+                          elf.STB_WEAK, elf.STT_NOTYPE),
+            elf.ElfSymbol("global_definition", 1, 0, 1, elf.STB_GLOBAL, elf.STT_FUNC),
+            elf.ElfSymbol("weak_definition", 1, 0, 1, elf.STB_WEAK, elf.STT_FUNC),
+            elf.ElfSymbol("hidden_definition", 1, 0, 1, elf.STB_GLOBAL, elf.STT_FUNC,
+                          elf.STV_HIDDEN),
+            elf.ElfSymbol("absolute_definition", elf.SHN_ABS, 42, 0,
+                          elf.STB_GLOBAL, elf.STT_NOTYPE),
+            elf.ElfSymbol("bss_definition", 2, 0, 8, elf.STB_GLOBAL, elf.STT_OBJECT),
+        ),
     )
-    assert {line.split()[-1] for line in index_defined.splitlines()} == expected_index_symbols
+
+
+def test_owned_symbol_names_preserve_exact_binding_and_section_semantics(tmp_path, monkeypatch):
+    path = tmp_path / "symbols.o"
+    path.write_bytes(elf.emit_relocatable(_symbol_fixture()))
+
+    def forbid_process(*args, **kwargs):
+        raise AssertionError("object-closure inspection must not start an external process")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid_process)
+    assert _owned_elf_symbol_names(path) == (
+        {"local_import", "global_import", "weak_import"},
+        {"global_definition", "weak_definition", "hidden_definition",
+         "absolute_definition", "bss_definition"},
+    )
+
+
+@pytest.mark.parametrize("binding", [elf.STB_LOCAL, elf.STB_GLOBAL, elf.STB_WEAK])
+def test_owned_symbol_names_include_unreferenced_undefined_symbols(tmp_path, binding):
+    original = _symbol_fixture()
+    extra = elf.ElfSymbol("unexpected_import", elf.SHN_UNDEF, 0, 0,
+                          binding, elf.STT_NOTYPE)
+    symbols = list(original.symbols)
+    symbols.insert(1 if binding == elf.STB_LOCAL else len(symbols), extra)
+    path = tmp_path / "unexpected.o"
+    path.write_bytes(elf.emit_relocatable(replace(original, symbols=tuple(symbols))))
+    undefined, _defined = _owned_elf_symbol_names(path)
+    assert undefined == {
+        "local_import", "global_import", "weak_import", "unexpected_import",
+    }
+
+
+@pytest.mark.parametrize("payload", [b"", b"not an ELF object", b"\x7fELF" + b"\0" * 64])
+def test_owned_symbol_names_reject_invalid_objects(tmp_path, payload):
+    path = tmp_path / "invalid.o"
+    path.write_bytes(payload)
+    with pytest.raises(elf.ElfError):
+        _owned_elf_symbol_names(path)
+
+
+def test_owned_symbol_names_reject_truncated_symbol_table(tmp_path):
+    encoded = elf.emit_relocatable(_symbol_fixture())
+    header = elf._ELF_HEADER.unpack_from(encoded)
+    section_table = header[6]
+    damaged = bytearray(encoded)
+    for offset in range(section_table, len(encoded), elf._SECTION_HEADER.size):
+        section = list(elf._SECTION_HEADER.unpack_from(encoded, offset))
+        if section[1] == elf.SHT_SYMTAB:
+            section[5] -= 1
+            elf._SECTION_HEADER.pack_into(damaged, offset, *section)
+            break
+    else:
+        raise AssertionError("fixture is missing its symbol table")
+    path = tmp_path / "truncated-symbols.o"
+    path.write_bytes(damaged)
+    with pytest.raises(elf.ElfError, match="symbol table has an invalid entry size"):
+        _owned_elf_symbol_names(path)
