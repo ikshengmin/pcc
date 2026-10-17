@@ -913,7 +913,7 @@ def _prepare_executable_image(
             if _owned_output is not None:
                 out = _Out(
                     segname, sectname, sec["flags"], sec["align"],
-                    _owned_output.take(obj, sec, is_zf),
+                    _owned_output.layout_data(obj, sec, is_zf),
                 )
                 if source_view and not is_zf:
                     source_raw_bytes -= min(source_raw_bytes, len(out.data))
@@ -951,11 +951,6 @@ def _prepare_executable_image(
             raise LinkError(
                 f"segment {segname} is outside the proven layout"
             )
-
-    import sys as execution_runtime
-    if execution_runtime.implementation.name == "cpython":
-        if _owned_output is not None:
-            _owned_output.retire_payloads(obj)
 
     # Mach-O TLS is one compact template: file-backed __thread_data followed
     # immediately by virtual-only __thread_bss.  Input objects commonly put
@@ -1234,6 +1229,10 @@ def _prepare_executable_image(
         if mapping is None:
             continue  # a dropped unwind section carries no live relocations
         out, sec_addr = mapping
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if _owned_output is not None:
+                _owned_output.begin_section(obj, sec, out)
         pending_addend = 0
         rows = relocations = row_window = row_error = None
         try:
@@ -1499,6 +1498,11 @@ def _prepare_executable_image(
                         finally:
                             row_window = row_error = None
 
+        import sys as execution_runtime
+        if execution_runtime.implementation.name == "cpython":
+            if _owned_output is not None:
+                _owned_output.end_section(out)
+
     # All addresses now live in the output sections and fixup tables. The
     # indexed view is a separate owned object and can be retired here. The
     # source view aliases the borrowed ``merged`` argument; its caller owns
@@ -1511,6 +1515,7 @@ def _prepare_executable_image(
             # Every ordered iterator has exhausted and closed its integer
             # arena. Retire the final local row/generator aliases as well.
             rows = relocations = None
+            _owned_output.retire_payloads(obj)
             _owned_output.retire_relocations(obj)
             _owned_output.phase("relocations_end")
             _owned_output.phase("stackmap_validate_begin")
@@ -1742,6 +1747,11 @@ def _prepare_executable_image(
                     nxt = stride
                 else:
                     nxt = 0
+                import sys as execution_runtime
+                if execution_runtime.implementation.name == "cpython":
+                    if _owned_output is not None:
+                        _owned_output.patch_word(out, off, base_word | (nxt << 51))
+                        continue
                 struct.pack_into("<Q", out.data, off, base_word | (nxt << 51))
         info = struct.pack("<IHHQIH", 22 + page_count * 2, PAGE,
                            DYLD_CHAINED_PTR_64_OFFSET, seg_file_off, 0,

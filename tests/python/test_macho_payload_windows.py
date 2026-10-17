@@ -242,7 +242,7 @@ def test_public_payload_copies_are_fresh_charged_and_prevent_owned_consume():
     assert first == second == b"\x01" * 4096
 
 
-def test_owned_transfers_charge_prior_backings_and_refuse_next_before_allocation(monkeypatch):
+def test_owned_transfers_retire_prior_backings_and_refuse_next_before_allocation(monkeypatch):
     budget = _factory_budget()
     budget.retained_bytes = 137
     builders = (
@@ -273,8 +273,9 @@ def test_owned_transfers_charge_prior_backings_and_refuse_next_before_allocation
             states.append(state)
         assert state is states[0]
         snapshots.append((index, state.known_bytes(), state.extra_raw))
-        assert state.extra_raw == snapshots[0][2] + sum(backings[:index])
-        assert state.known_bytes() == snapshots[0][1] + sum(backings[:index])
+        assert state.extra_raw == snapshots[0][2]
+        assert not state.views and not state.buffers
+        assert all(buffer.closed for buffer in buffers)
         if index == 2:
             budget.limit_bytes = state.known_bytes() + backings[index] + budget.retained_bytes - 1
         result = take(state, current, section, zerofill)
@@ -296,15 +297,15 @@ def test_owned_transfers_charge_prior_backings_and_refuse_next_before_allocation
     with pytest.raises(macho_exec.LinkError, match="Mach-O owned source payload transfer"):
         output.link_owned_executable(pending.pop(), compact_budget=budget)
     assert [index for index, _known, _extra in snapshots] == [0, 1, 2]
-    assert admissions == [snapshots[0][1] + sum(backings[:index + 1]) + 137
-                          for index in range(3)]
+    assert admissions == [known + backings[index] + 137
+                          for index, known, _extra in snapshots]
     assert admissions[-1] == budget.limit_bytes + 1
     assert all(amount <= budget.limit_bytes for amount in admissions[:-1])
     sizes = [buffer.initial_size for buffer in buffers]
     assert sizes.count(4) == sizes.count(4097) == 2
     assert 8193 not in sizes
     assert store.consumed == 2 and store.read_bytes - prior_reads == 4 + 4097
-    assert states[0].extra_raw == snapshots[0][2] + sum(backings[:2])
+    assert states[0].extra_raw == snapshots[0][2]
     assert not states[0].views and not states[0].buffers
     assert all(buffer.closed for buffer in buffers)
     assert all(file.closed for file in files)
@@ -460,7 +461,7 @@ def test_owned_image_and_signature_keep_later_payload_after_dropped_descriptor(m
     monkeypatch.setattr(payloads._StagedSectionPayloads, "take", tracked)
     def phase(event, **_fields):
         phases.append(event)
-        if event == "relocations_begin":
+        if event == "relocations_end":
             assert store.stream is None and payload_file.closed
             assert store.consumed == 2
 

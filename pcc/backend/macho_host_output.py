@@ -36,6 +36,19 @@ _SOURCE_FIELDS = (
 )
 
 
+class _FilePayload:
+    """Size-only section owner until relocation, then one private file extent."""
+
+    __slots__ = ("size", "offset")
+
+    def __init__(self, size):
+        self.size = size
+        self.offset = None
+
+    def __len__(self):
+        return self.size
+
+
 def _list_storage(count, budget, *, lists=1, sorting=False):
     # CPython append growth is (n + n//8 + 6)&~3. Count both the old
     # and replacement pointer arrays, even when realloc can grow in place.
@@ -157,7 +170,8 @@ def _section_projections(count, budget):
                    + budget._rounded(sys.getsizeof("") + 40) + 4 * 80)
     # Output lists and sorted/concatenated temporary lists, section_addr and
     # both private id-indexed owner maps. Each section_addr value is a pair.
-    return (count * (per_section + budget._rounded(sys.getsizeof((None, None))))
+    return (count * (per_section + budget._rounded(sys.getsizeof((None, None)))
+                    + budget._rounded(sys.getsizeof(_FilePayload(0))) + 2 * integer)
             + 10 * _list_storage(count, budget, sorting=True)
             + 3 * _dict_storage(count, budget))
 
@@ -255,6 +269,9 @@ class _OwnedOutput:
         self.order_raw = 0
         self.fixup_count = 0
         self.io_remaining = 0
+        self.payload_file = None
+        self.payload_extent = 0
+        self.active_payload = None
         self.output_count = len(source._sections)
         self.symbol_raw = _symbol_projections(source, budget)
         self.section_raw = _section_projections(self.output_count, budget)
@@ -379,6 +396,151 @@ class _OwnedOutput:
             source._payloads.clear()
         self.source_bytes -= before - _model_bytes(source._payloads, self.budget)
 
+    def layout_data(self, source, section, zerofill):
+        """Keep staged sources file-owned until their relocation walk starts."""
+        storage = getattr(source, "_host_payload_store", None)
+        if storage is None or zerofill:
+            return self.take(source, section, zerofill)
+        index = section.get("_pcc_source_index")
+        if type(index) is not int or not 0 <= index < len(source._sections):
+            raise LinkError("section does not belong to this source view")
+        return _FilePayload(storage.size(index))
+
+    def begin_section(self, source, section, out):
+        descriptor = out.data
+        if type(descriptor) is not _FilePayload:
+            return
+        if self.active_payload is not None or descriptor.offset is not None:
+            raise LinkError("owned output section transfer state changed")
+        # Normalization in take may itself borrow the relocation-row store.
+        # The executable opens its ordered row window only after this call.
+        out.data = self.take(source, section, False)
+        if len(out.data) != len(descriptor):
+            raise LinkError("owned output section size changed")
+        self.active_payload = (out, descriptor)
+
+    def _file_extent(self, descriptor):
+        _require_uninstrumented_owner()
+        if (type(descriptor) is not _FilePayload
+                or type(descriptor.offset) is not int or descriptor.offset < 0
+                or descriptor.offset > self.payload_extent
+                or len(descriptor) > self.payload_extent - descriptor.offset
+                or self.payload_file is None
+                or os.fstat(self.payload_file.fileno()).st_size != self.payload_extent):
+            raise LinkError("owned output payload extent changed")
+
+    def _release_payload(self, out, descriptor):
+        view = out.data
+        key = id(view)
+        buffer = self.buffers[key]
+        # Close rejects a retained child export; do not credit its backing
+        # until the actual buffer has closed successfully.
+        view.release()
+        buffer.close()
+        self.views.pop(key)
+        self.buffers.pop(key)
+        out.data = descriptor
+        self.extra_raw -= self.budget._rounded(sys.getsizeof(b"") + len(descriptor))
+
+    def end_section(self, out):
+        if self.active_payload is None:
+            return
+        current, descriptor = self.active_payload
+        if current is not out or descriptor.offset is not None:
+            raise LinkError("owned output section transfer state changed")
+        _require_uninstrumented_owner()
+        if self.payload_file is None:
+            self.payload_file = tempfile.TemporaryFile(mode="w+b", buffering=0)
+        stream = self.payload_file
+        if (os.fstat(stream.fileno()).st_size != self.payload_extent
+                or stream.seek(self.payload_extent) != self.payload_extent):
+            raise LinkError("owned output payload extent changed")
+        size = len(descriptor)
+        if size > self.budget.limit_bytes - self.payload_extent:
+            raise LinkError("owned output payload storage exceeds byte budget")
+        remaining = 2 * size + 2 * _BLOCK
+        cursor = 0
+        while cursor < size:
+            end = min(size, cursor + _BLOCK)
+            remaining -= end - cursor
+            if remaining < 0:
+                raise LinkError("owned output payload I/O work bound exceeded")
+            with out.data[cursor:end] as part:
+                count = stream.write(part)
+            if type(count) is not int or not 0 < count <= end - cursor:
+                raise LinkError("owned output payload made invalid write progress")
+            cursor += count
+        if os.fstat(stream.fileno()).st_size != self.payload_extent + size:
+            raise LinkError("owned output payload extent changed")
+        descriptor.offset = self.payload_extent
+        self.payload_extent += size
+        self._release_payload(out, descriptor)
+        self.active_payload = None
+
+    def patch_word(self, out, offset, word):
+        """Patch a final chained word without rehydrating a whole section."""
+        descriptor = out.data
+        if type(descriptor) is not _FilePayload:
+            struct.pack_into("<Q", descriptor, offset, word)
+            return
+        self._file_extent(descriptor)
+        if type(offset) is not int or not 0 <= offset <= len(descriptor) - 8:
+            raise LinkError("owned output chained pointer exceeds its section")
+        position = descriptor.offset + offset
+        if self.payload_file.seek(position) != position:
+            raise LinkError("owned output payload seek changed")
+        # Chained-fixup grouping and next-stride decisions remain global to
+        # the segment/page in macho_exec, including cross-section chains.
+        count = self.payload_file.write(struct.pack("<Q", word))
+        if type(count) is not int or count != 8:
+            raise LinkError("owned output chained pointer write was short")
+
+    def _load_file_payload(self, out, descriptor):
+        self._file_extent(descriptor)
+        size = len(descriptor)
+        backing = self.budget._rounded(sys.getsizeof(b"") + size)
+        self.check(backing, label="Mach-O owned payload validation replay")
+        _require_uninstrumented_owner()
+        buffer = view = failure = None
+        try:
+            buffer = io.BytesIO(b"\0" * size)
+            view = buffer.getbuffer()
+            if self.payload_file.seek(descriptor.offset) != descriptor.offset:
+                raise LinkError("owned output payload seek changed")
+            cursor = 0
+            remaining = 2 * size + 2 * _BLOCK
+            while cursor < size:
+                end = min(size, cursor + _BLOCK)
+                remaining -= end - cursor
+                if remaining < 0:
+                    raise LinkError("owned output payload I/O work bound exceeded")
+                with view[cursor:end] as part:
+                    count = self.payload_file.readinto(part)
+                if type(count) is not int or not 0 < count <= end - cursor:
+                    raise LinkError("owned output payload made invalid read progress")
+                cursor += count
+            self._file_extent(descriptor)
+            self.buffers[id(view)] = buffer
+            self.views[id(view)] = view
+            out.data = view
+            self.extra_raw += backing
+            buffer = view = None
+        except BaseException as exc:
+            failure = exc
+            _release_closed_tracebacks(exc)
+            raise
+        finally:
+            try:
+                if view is not None:
+                    view.release()
+                if buffer is not None:
+                    buffer.close()
+            except BaseException:
+                if failure is None:
+                    raise
+            finally:
+                buffer = view = failure = None
+
     def take(self, source, section, zerofill):
         payload = buffer = view = None
         try:
@@ -427,6 +589,14 @@ class _OwnedOutput:
                 buffer.close()
 
     def validate(self, out):
+        descriptor = out.data if type(out.data) is _FilePayload else None
+        if descriptor is not None:
+            self._load_file_payload(out, descriptor)
+        self._validate_buffer(out)
+        if descriptor is not None:
+            self._release_payload(out, descriptor)
+
+    def _validate_buffer(self, out):
         old_view = out.data
         size = len(old_view)
         buffer = self.buffers.pop(id(old_view))
@@ -523,11 +693,15 @@ class _OwnedOutput:
         self.extra_raw = 0
         self.order_raw = 0
         raw = sum(len(item[1]) for item in self.regions)
+        file_raw = sum(len(item[1]) for item in self.regions
+                       if type(item[1]) is _FilePayload)
+        scratch_bytes = (self.budget._rounded(sys.getsizeof(bytearray()) + _BLOCK + 1)
+                         if file_raw else 0)
         # Bound requested transfers too, not only actual positive progress.
         # Limited short I/O is supported; pathological tiny progress refuses
         # after a linear amount of work, before issuing the next request.
-        self.io_remaining = 2 * (raw + size) + 2 * _BLOCK
-        self.budget.check_peak(raw + self.caller_bytes + _FIXED,
+        self.io_remaining = 2 * (file_raw + raw + size) + 4 * _BLOCK
+        self.budget.check_peak(raw - file_raw + scratch_bytes + self.caller_bytes + _FIXED,
                                entries=4 * len(self.regions), label="Mach-O owned output spool")
         # A new anonymous inode, not an existing file with potentially stale
         # gap bytes. ftruncate sets the exact bounded extent; gaps read as zero.
@@ -537,12 +711,41 @@ class _OwnedOutput:
             raise LinkError("owned output spool exceeds byte budget")
         os.ftruncate(stream.fileno(), size)
         written = 0
-        payload = region = view = None
+        payload = region = view = scratch = None
         try:
+            if file_raw:
+                scratch = bytearray(_BLOCK)
             for index in range(len(self.regions)):
                 region = self.regions[index]
                 offset, payload, _label = region
                 stream.seek(offset)
+                if type(payload) is _FilePayload:
+                    self._file_extent(payload)
+                    if self.payload_file.seek(payload.offset) != payload.offset:
+                        raise LinkError("owned output payload seek changed")
+                    cursor = 0
+                    while cursor < len(payload):
+                        wanted = min(_BLOCK, len(payload) - cursor)
+                        self.charge_io(wanted)
+                        with memoryview(scratch)[:wanted] as part:
+                            count = self.payload_file.readinto(part)
+                        if type(count) is not int or not 0 < count <= wanted:
+                            raise LinkError("owned output payload made invalid read progress")
+                        copied = 0
+                        while copied < count:
+                            self.charge_io(count - copied)
+                            with memoryview(scratch)[copied:count] as part:
+                                progress = stream.write(part)
+                            if type(progress) is not int or not 0 < progress <= count - copied:
+                                raise LinkError("owned output spool made invalid write progress")
+                            copied += progress
+                        cursor += count
+                        written += count
+                    self._file_extent(payload)
+                    region[1] = None
+                    self.regions[index] = None
+                    region = payload = None
+                    continue
                 with memoryview(payload) as view:
                     cursor = 0
                     while cursor < len(view):
@@ -567,10 +770,13 @@ class _OwnedOutput:
             if written != raw:
                 raise LinkError("owned output spool byte count changed")
             stream.seek(0)
+            if self.payload_file is not None:
+                self.payload_file.close()
+                self.payload_file = None
         finally:
-            payload = region = view = None
+            payload = region = view = scratch = None
 
-    def close(self):
+    def close(self, *, _error=None):
         failure = None
         try:
             for view in self.views.values():
@@ -593,8 +799,18 @@ class _OwnedOutput:
             finally:
                 self.buffers.clear()
                 self.regions.clear()
+                self.active_payload = None
                 view = buffer = None
-        if failure is not None:
+                if self.payload_file is not None:
+                    try:
+                        self.payload_file.close()
+                    except BaseException as exc:
+                        _release_closed_tracebacks(exc)
+                        if failure is None:
+                            failure = exc.with_traceback(None)
+                    finally:
+                        self.payload_file = None
+        if failure is not None and _error is None:
             raise failure
 
 
@@ -720,7 +936,7 @@ def link_owned_executable(source, *, compact_budget, phase_callback=None,
                             _clear_source(source, _error=failure)
                     finally:
                         if state is not None:
-                            state.close()
+                            state.close(_error=failure)
                 finally:
                     source = state = buffer = view = image = blob = storage = payloads = failure = None
 
