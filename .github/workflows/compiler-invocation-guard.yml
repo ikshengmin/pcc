@@ -1,0 +1,115 @@
+name: Compiler invocation guard host tests
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "scripts/compiler_invocation_guard.py"
+      - "scripts/run_process_tree_sample.py"
+      - "scripts/run_pcc_compile_ab.py"
+      - "tests/python/test_compiler_invocation_guard.py"
+      - "tests/test_compiler_invocation_guard_ci.py"
+      - "conftest.py"
+      - "tests/conftest.py"
+      - "tests/xdist_cpu_budget.py"
+      - "scripts/pytest_live_report.py"
+      - "tests/native_provisioning.py"
+      - "tests/runtime_build_cache.py"
+      - "tests/runtime_fixture_provenance.py"
+      - "run.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - ".github/workflows/compiler-invocation-guard.yml"
+  pull_request:
+    paths:
+      - "scripts/compiler_invocation_guard.py"
+      - "scripts/run_process_tree_sample.py"
+      - "scripts/run_pcc_compile_ab.py"
+      - "tests/python/test_compiler_invocation_guard.py"
+      - "tests/test_compiler_invocation_guard_ci.py"
+      - "conftest.py"
+      - "tests/conftest.py"
+      - "tests/xdist_cpu_budget.py"
+      - "scripts/pytest_live_report.py"
+      - "tests/native_provisioning.py"
+      - "tests/runtime_build_cache.py"
+      - "tests/runtime_fixture_provenance.py"
+      - "run.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - ".github/workflows/compiler-invocation-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-host:
+    name: Linux host invocation containment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+      PCC_NO_AUTO_PCC1: "1"
+      PCC_PYTEST_AUTO_CLEAN: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Keep the normal conftests and xdist resource controls, but omit
+          # projects/ so host-only collection does not configure nginx.
+          sparse-checkout: |
+            .github/workflows
+            pcc
+            utils
+            scripts
+            tests
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install host test dependencies without the native build hook
+        run: env -u LC_ALL uv sync --frozen --dev --no-install-project --python 3.13
+
+      - name: Require working Linux process handles
+        shell: env -u LC_ALL uv run --frozen --no-sync --python 3.13 python {0}
+        run: |
+          import os
+          import signal
+
+          descriptor = os.pidfd_open(os.getpid(), 0)
+          try:
+              signal.pidfd_send_signal(descriptor, 0)
+          finally:
+              os.close(descriptor)
+
+      - name: Run guard regressions with the normal six-worker pytest default
+        timeout-minutes: 2
+        run: |
+          env -u LC_ALL uv run --frozen --no-sync --python 3.13 python -m pytest -x -vv --tb=short \
+            --junitxml=build/compiler-invocation-guard.xml \
+            tests/python/test_compiler_invocation_guard.py \
+            tests/test_compiler_invocation_guard_ci.py
+
+      - name: Require executed guard tests without skips
+        shell: env -u LC_ALL uv run --frozen --no-sync --python 3.13 python {0}
+        run: |
+          from xml.etree import ElementTree
+
+          cases = ElementTree.parse("build/compiler-invocation-guard.xml").findall(".//testcase")
+          assert any(case.get("classname") == "tests.python.test_compiler_invocation_guard" for case in cases), "guard tests were not executed"
+          assert not any(case.find("skipped") is not None for case in cases), "host guard coverage must not skip tests"
+
+      - name: Preserve host test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-invocation-guard-host
+          retention-days: 7
+          if-no-files-found: warn
+          path: build/compiler-invocation-guard.xml
