@@ -22,6 +22,7 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_native_cold_cover_order.py"
       - "tests/python/test_stage2_export_capture.py"
       - "tests/python/test_aarch64_call_target_reuse.py"
       - "tests/python/test_owned_elf_assembler_dispatch.py"
@@ -243,6 +244,7 @@ on:
       - "tests/python/test_native_worker_state_clock.py"
       - "tests/python/test_worker_resource_setpgid.py"
       - "tests/python/test_worker_resource_plan.py"
+      - "tests/python/test_native_cold_cover_order.py"
       - "tests/python/test_stage2_export_capture.py"
       - "tests/python/test_aarch64_call_target_reuse.py"
       - "tests/python/test_owned_elf_assembler_dispatch.py"
@@ -667,7 +669,7 @@ jobs:
 
       - name: Verify Windows global addressing and PE relocations
         timeout-minutes: 2
-        run: uv run --frozen --no-sync ${{ matrix.platform != 'macos-arm64' && '--python 3.13' || '' }} python -m pytest -x -q --junitxml=build/worker-prior-focused-host.xml tests/python/test_windows_symbol_immediates.py tests/python/test_windows_global_memory_scratch.py tests/python/test_windows_pe_absolute_relocations.py tests/python/test_pe_stackmap_merge.py tests/python/test_pe_host_budget.py tests/python/test_pe_image_size_limit.py tests/python/test_recursion_limit_setter_range.py ${{ matrix.platform == 'macos-arm64' && 'tests/python/test_macho_phase_events.py' || '' }} ${{ matrix.platform == 'macos-arm64' && 'tests/python/test_macho_output_payload_spool.py tests/python/test_macho_output_spool_failures.py tests/python/test_macho_payload_windows.py' || '' }}
+        run: uv run --frozen --no-sync ${{ matrix.platform != 'macos-arm64' && '--python 3.13' || '' }} python -m pytest -x -q --junitxml=build/worker-prior-focused-host.xml tests/python/test_native_cold_cover_order.py tests/python/test_windows_symbol_immediates.py tests/python/test_windows_global_memory_scratch.py tests/python/test_windows_pe_absolute_relocations.py tests/python/test_pe_stackmap_merge.py tests/python/test_pe_host_budget.py tests/python/test_pe_image_size_limit.py tests/python/test_recursion_limit_setter_range.py ${{ matrix.platform == 'macos-arm64' && 'tests/python/test_macho_phase_events.py' || '' }} ${{ matrix.platform == 'macos-arm64' && 'tests/python/test_macho_output_payload_spool.py tests/python/test_macho_output_spool_failures.py tests/python/test_macho_payload_windows.py' || '' }}
 
       # fa62fbd9 receipts: compile alone took 189-278s; the 634 MB whole
       # parse was still incomplete at 300s. 85825b40 receipts (Linux): the

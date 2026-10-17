@@ -213,7 +213,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     recovery_allowance = STATE_MAX_AGE_SECONDS
     guard_deadline = -1.0
     configured_recovery = False
-    # The native scheduler retains its existing policy and import closure.
+    # Host recovery and native admission retain their separate ownership.
     # Snapshot freshness and the observation schema are shared and unchanged.
     import sys as execution_runtime
     if execution_runtime.implementation.name == "cpython":
@@ -228,7 +228,14 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 recovery_allowance, guard_deadline = read_tree_recovery(raw_recovery)
                 configured_recovery = True
     owner_pid = os.getpid()
-    pending, bands = resource_task_order(tasks, guarded_calibration=bool(tree_path))
+    pending, bands = resource_task_order(
+        tasks, guarded_calibration=bool(tree_path),
+        native_cold_cover=(
+            execution_runtime.implementation.name == "pcc"
+            and not any(len(sample) not in (3, 4) or sample[0] == tasks[0]["class"]
+                        for sample in observations)
+        ),
+    )
     active = []
     attempt_tokens = {}
     retries = [0 for _task in tasks]

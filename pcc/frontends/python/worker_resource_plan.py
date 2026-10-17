@@ -187,7 +187,63 @@ def require_task_fits(task_index: int, demand: int, available: int,
         )
 
 
-def resource_task_order(tasks, guarded_calibration: bool = False):
+def _sparse_native_cover_order(tasks, pending, bands) -> bool:
+    """Recognize cold cohorts with no measured-peer parallelism to preserve.
+
+    This only selects an order. Full completed-sample coverage, byte admission,
+    growth handling and exclusive retries remain the scheduler's responsibility.
+    A large completed peak can still overcharge small inputs; this is not a
+    bound on memory or an elapsed-time guarantee.
+    """
+    frontier = []
+    cohorts = {}
+    for index in pending:
+        task = tasks[index]
+        if (task["estimate_bytes"] != 0
+                or task.get("incomplete_peak_bytes", 0) != 0
+                or task.get("retry_calibration", False)
+                or task.get("calibrate_before_peers", False)
+                or any(type(value) is not int for value in task["inputs"])):
+            return False
+        # Descending total input size means a later input cannot strictly
+        # cover an earlier one. Scan the whole inventory, retaining at most
+        # two incomparable witnesses, with exact six-component coverage.
+        if not any(input_envelope_covers(tasks[peer]["inputs"], task["inputs"])
+                   for peer in frontier):
+            frontier.append(index)
+            if len(frontier) > 2:
+                return False
+        cohorts.setdefault(bands[index], []).append(index)
+    if len(frontier) >= len(tasks):
+        return False
+    for cohort in cohorts.values():
+        # Source and AST are the only variable components in this already
+        # validated singleton class. Sorting source first lets the largest
+        # preceding AST witness any earlier cover in O(n log n), not O(n^2).
+        cohort.sort(key=lambda index: (
+            -tasks[index]["inputs"][0], -tasks[index]["inputs"][2], index,
+        ))
+        best = -1
+        covered = 0
+        for position, index in enumerate(cohort):
+            inputs = tasks[index]["inputs"]
+            earlier = best >= 0 and input_envelope_covers(tasks[best]["inputs"], inputs)
+            # Equal vectors cover each other: both tasks count, not just the
+            # later tie. A later unequal vector cannot cover this input.
+            later = position + 1 < len(cohort) and input_envelope_covers(
+                tasks[cohort[position + 1]]["inputs"], inputs,
+            )
+            if earlier or later:
+                covered += 1
+                if covered > 1:
+                    return False
+            if best < 0 or inputs[2] > tasks[best]["inputs"][2]:
+                best = index
+    return True
+
+
+def resource_task_order(tasks, guarded_calibration: bool = False,
+                        native_cold_cover: bool = False):
     """Schedule modeled host work largest-first; retain legacy native cohorts.
 
     Source/AST bytes vary per singleton; full-export bytes and module count
@@ -196,7 +252,8 @@ def resource_task_order(tasks, guarded_calibration: bool = False):
     input in each half-band calibrates first, with the existing componentwise
     coverage and maximum-peak estimator unchanged. Task indices never move.
     Other phases, mixed classes and dependency-bearing tasks keep their old
-    priority and readiness rules.
+    priority and readiness rules. native_cold_cover is set only by a native
+    caller with no completed observation in this execution class.
     """
     pending = sorted(range(len(tasks)), key=lambda index: (
         -sum(tasks[index]["inputs"]), index,
@@ -252,6 +309,13 @@ def resource_task_order(tasks, guarded_calibration: bool = False):
         if all(input_envelope_covers(tasks[largest]["inputs"], task["inputs"])
                for task in tasks):
             return pending, []
+    # Sparse repeated cohorts can otherwise require almost every input to
+    # calibrate alone. Do not disturb dense cohorts with two known peers,
+    # warm invocations, explicit reservations, or the established host path.
+    if (guarded_calibration and native_cold_cover
+            and len(set(bands)) < len(tasks)
+            and _sparse_native_cover_order(tasks, pending, bands)):
+        return pending, []
     pending = sorted(pending, key=lambda index: (
         bands[index], -sum(tasks[index]["inputs"]), index,
     ))
