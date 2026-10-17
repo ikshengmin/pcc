@@ -96,6 +96,10 @@ These are required outcomes, not assertions that migration is complete. See
   keeping experiment provenance searchable. Avoid new running-log documents.
 - Prefer existing tools; search [development-tools.md](docs/development-tools.md)
   and `scripts/` before writing a reusable profiler, harness or inventory.
+- Clean `build/` periodically. Once a task's evidence is recorded, run
+  `scripts/clean_build_artifacts.py` (list first, then `--apply`) and delete your
+  own finished run directories by literal path. Keep active runs and anything
+  `docs/status.md` cites; put new one-off outputs outside the repository.
 - Keep partial work and skipped gates explicit. Before claiming completion,
   inspect remaining fallbacks and open boundaries against the requested scope.
   Read back every artifact cited as produced. No silent idle periods: report
