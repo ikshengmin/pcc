@@ -49,7 +49,10 @@ def _fixup_input(tmp_path, *, count=8, tlv=True, fault=None):
                 relocations = [relocation(2, "_main")]
             elif fault == "page-crossing":
                 data = bytearray(macho_exec.PAGE + 4)
-                relocations = [relocation(macho_exec.PAGE - 4 - 8 * (count + 1), "_main")]
+                # Descriptors precede ordinary DATA; place this pointer four
+                # bytes before the actual page end after both prefix sections.
+                prefix = 8 * (count + 1) + (3 * 24 if tlv else 0)
+                relocations = [relocation(macho_exec.PAGE - 4 - prefix, "_main")]
         sections.append(obj.Section(
             section, segment, data=bytes(data), align_log2=3,
             flags=obj.DATA_SECTION_FLAGS, relocations=tuple(relocations),

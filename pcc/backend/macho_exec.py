@@ -278,6 +278,79 @@ def _align(value: int, alignment: int) -> int:
     return (value + alignment - 1) & ~(alignment - 1)
 
 
+def _build_seg_info(fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output=None):
+    """Encode only the file-backed page prefix that contains chained sites."""
+    if not fixups:
+        raise LinkError("chained-fixup segment has no sites")
+    DYLD_CHAINED_PTR_START_NONE = 0xFFFF
+    last_page = -1
+    by_page: dict[int, list] = {}
+    seen_sites: set[int] = set()
+    for site in sorted(fixups, key=lambda item: item[0]):
+        vmaddr, out, off, _base_word = site
+        if vmaddr in seen_sites:
+            raise LinkError(f"duplicate chained-fixup site at {vmaddr:#x}")
+        seen_sites.add(vmaddr)
+        if not seg_vmaddr <= vmaddr <= seg_vmaddr + seg_size - 8:
+            raise LinkError(
+                f"chained-fixup site {vmaddr:#x} is outside its segment"
+            )
+        if vmaddr % 4 or off < 0 or off + 8 > len(out.data):
+            raise LinkError(
+                f"chained-fixup site {vmaddr:#x} is not a complete, "
+                "four-byte-aligned pointer"
+            )
+        segment_offset = vmaddr - seg_vmaddr
+        page_offset = segment_offset % PAGE
+        if page_offset > PAGE - 8:
+            raise LinkError(
+                f"chained-fixup pointer at {vmaddr:#x} crosses a "
+                f"{PAGE:#x}-byte page boundary"
+            )
+        page = segment_offset // PAGE
+        by_page.setdefault(page, []).append(site)
+        last_page = max(last_page, page)
+    # ld64/dyld allow file-backed trailing pages without fixups to be absent
+    # from this table. Keep every hole before the last site, and reject an
+    # unrepresentable actual site before allocating starts or patching words.
+    page_count = last_page + 1
+    if page_count > 0xFFFF:
+        raise LinkError(
+            f"chained-fixup page count {page_count} exceeds uint16; "
+            f"last fixup page {last_page} needs a different segment layout"
+        )
+    page_starts = [DYLD_CHAINED_PTR_START_NONE] * page_count
+    for page, plist in by_page.items():
+        page_starts[page] = (plist[0][0] - seg_vmaddr) % PAGE
+        for i, (vmaddr, out, off, base_word) in enumerate(plist):
+            # `next` is the 4-byte stride to the next fixup in this page;
+            # a chained pointer can only reach 4095*4 bytes, so a page
+            # denser than that would need splitting (not hit here).
+            if i + 1 < len(plist):
+                delta = plist[i + 1][0] - vmaddr
+                if delta <= 0 or delta % 4:
+                    raise LinkError(
+                        "chained-fixup sites must increase in four-byte units"
+                    )
+                stride = delta // 4
+                if stride > 0xFFF:
+                    raise LinkError("fixup chain stride exceeds 12 bits")
+                nxt = stride
+            else:
+                nxt = 0
+            import sys as execution_runtime
+            if execution_runtime.implementation.name == "cpython":
+                if _owned_output is not None:
+                    _owned_output.patch_word(out, off, base_word | (nxt << 51))
+                    continue
+            struct.pack_into("<Q", out.data, off, base_word | (nxt << 51))
+    info = struct.pack("<IHHQIH", 22 + page_count * 2, PAGE,
+                       DYLD_CHAINED_PTR_64_OFFSET, seg_file_off, 0,
+                       page_count)
+    info += b"".join(struct.pack("<H", ps) for ps in page_starts)
+    return info
+
+
 def _adrp_imm(word: int, delta_page: int) -> int:
     lo = delta_page & 3
     hi = (delta_page >> 2) & 0x7FFFF
@@ -956,15 +1029,16 @@ def _prepare_executable_image(
     # immediately by virtual-only __thread_bss.  Input objects commonly put
     # ordinary __bss/__common before __thread_bss; preserving that order in
     # the final image makes dyld's TLS template offsets disagree with the
-    # compact offsets stored in __thread_vars descriptors.  Keep all ordinary
-    # file-backed DATA first, then descriptors and TLS data, then TLS
-    # zerofill, and only then ordinary zerofill.  Python's sort is stable, so
-    # relative order within each semantic class (including multiple TLS
+    # compact offsets stored in __thread_vars descriptors. Descriptors are
+    # not part of the TLS template: put their fixups before potentially huge
+    # ordinary DATA (including pointer-free stack-map location tails). Keep
+    # TLS data followed by TLS zerofill, then ordinary zerofill. Stable sorting
+    # preserves relative order within each semantic class (including multiple TLS
     # sections) remains the merged-object order used by thread_block_offset.
     def _data_layout_rank(out):
         stype = out.flags & spec.SECTION_TYPE
         if stype == _S_THREAD_LOCAL_VARIABLES:
-            return 1
+            return -1
         if stype == _S_THREAD_LOCAL_REGULAR:
             return 2
         if stype == _S_THREAD_LOCAL_ZEROFILL:
@@ -1126,14 +1200,30 @@ def _prepare_executable_image(
     file_cursor = data_off
     vm_cursor = data_off
     data_content_end = data_off
+    # Descriptor offsets align within a template starting at zero. Align its
+    # actual base to every template section's requirement so later absolute
+    # alignment has exactly the same padding, even after descriptor reordering.
+    tls_alignment = 1
     for out in data_out:
+        if (out.flags & spec.SECTION_TYPE) in (
+            _S_THREAD_LOCAL_REGULAR, _S_THREAD_LOCAL_ZEROFILL,
+        ):
+            tls_alignment = max(tls_alignment, 1 << out.align_log2)
+    tls_started = False
+    for out in data_out:
+        alignment = 1 << out.align_log2
+        if not tls_started and (out.flags & spec.SECTION_TYPE) in (
+            _S_THREAD_LOCAL_REGULAR, _S_THREAD_LOCAL_ZEROFILL,
+        ):
+            alignment = max(alignment, tls_alignment)
+            tls_started = True
         if out.zerofill_size:
-            vm_cursor = _align(vm_cursor, 1 << out.align_log2)
+            vm_cursor = _align(vm_cursor, alignment)
             out.addr = TEXT_BASE + vm_cursor
             out.fileoff = 0
             vm_cursor += out.zerofill_size
         else:
-            file_cursor = _align(file_cursor, 1 << out.align_log2)
+            file_cursor = _align(file_cursor, alignment)
             vm_cursor = file_cursor
             out.fileoff = file_cursor
             out.addr = TEXT_BASE + file_cursor
@@ -1607,7 +1697,6 @@ def _prepare_executable_image(
     # descriptor thunks in __DATA. Each segment with binds gets its own
     # dyld_chained_starts_in_segment with per-page starts; within a page the
     # `next` field is the 4-byte stride to the following bind (0 = end).
-    DYLD_CHAINED_PTR_START_NONE = 0xFFFF
     dc_index = 2  # __PAGEZERO, __TEXT, __DATA_CONST
     data_index = 3  # __DATA (only present when data_out)
     seg_count = 4 + (1 if data_out else 0)
@@ -1692,8 +1781,8 @@ def _prepare_executable_image(
         # __DATA vmsize here makes the starts table claim BSS pages whose
         # numeric offsets overlap compact __LINKEDIT bytes.  dyld can then
         # expose those bytes through __common/__bss instead of zero-fill.
-        # Apple's linker likewise emits page_count from __DATA.filesize when
-        # a segment contains both rebased pointers and a larger BSS tail.
+        # The file extent bounds every site; the starts table below covers
+        # only through the last actual fixup, as in Apple's linker.
         data_index: (
             TEXT_BASE + data_off,
             data_file_end - data_off,
@@ -1701,69 +1790,11 @@ def _prepare_executable_image(
         ),
     }
 
-    def _build_seg_info(fixups, seg_vmaddr, seg_size, seg_file_off):
-        page_count = max(1, (seg_size + PAGE - 1) // PAGE)
-        page_starts = [DYLD_CHAINED_PTR_START_NONE] * page_count
-        by_page: dict[int, list] = {}
-        seen_sites: set[int] = set()
-        for site in sorted(fixups, key=lambda item: item[0]):
-            vmaddr, out, off, _base_word = site
-            if vmaddr in seen_sites:
-                raise LinkError(f"duplicate chained-fixup site at {vmaddr:#x}")
-            seen_sites.add(vmaddr)
-            if not seg_vmaddr <= vmaddr <= seg_vmaddr + seg_size - 8:
-                raise LinkError(
-                    f"chained-fixup site {vmaddr:#x} is outside its segment"
-                )
-            if vmaddr % 4 or off < 0 or off + 8 > len(out.data):
-                raise LinkError(
-                    f"chained-fixup site {vmaddr:#x} is not a complete, "
-                    "four-byte-aligned pointer"
-                )
-            segment_offset = vmaddr - seg_vmaddr
-            page_offset = segment_offset % PAGE
-            if page_offset > PAGE - 8:
-                raise LinkError(
-                    f"chained-fixup pointer at {vmaddr:#x} crosses a "
-                    f"{PAGE:#x}-byte page boundary"
-                )
-            page = segment_offset // PAGE
-            by_page.setdefault(page, []).append(site)
-        for page, plist in by_page.items():
-            page_starts[page] = (plist[0][0] - seg_vmaddr) % PAGE
-            for i, (vmaddr, out, off, base_word) in enumerate(plist):
-                # `next` is the 4-byte stride to the next fixup in this page;
-                # a chained pointer can only reach 4095*4 bytes, so a page
-                # denser than that would need splitting (not hit here).
-                if i + 1 < len(plist):
-                    delta = plist[i + 1][0] - vmaddr
-                    if delta <= 0 or delta % 4:
-                        raise LinkError(
-                            "chained-fixup sites must increase in four-byte units"
-                        )
-                    stride = delta // 4
-                    if stride > 0xFFF:
-                        raise LinkError("fixup chain stride exceeds 12 bits")
-                    nxt = stride
-                else:
-                    nxt = 0
-                import sys as execution_runtime
-                if execution_runtime.implementation.name == "cpython":
-                    if _owned_output is not None:
-                        _owned_output.patch_word(out, off, base_word | (nxt << 51))
-                        continue
-                struct.pack_into("<Q", out.data, off, base_word | (nxt << 51))
-        info = struct.pack("<IHHQIH", 22 + page_count * 2, PAGE,
-                           DYLD_CHAINED_PTR_64_OFFSET, seg_file_off, 0,
-                           page_count)
-        info += b"".join(struct.pack("<H", ps) for ps in page_starts)
-        return info
-
     seg_infos = {}
     for seg_index, fixups in seg_fixups.items():
         seg_vmaddr, seg_size, seg_file_off = seg_vm[seg_index]
         seg_infos[seg_index] = _build_seg_info(
-            fixups, seg_vmaddr, seg_size, seg_file_off)
+            fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output)
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
             if _owned_output is not None:

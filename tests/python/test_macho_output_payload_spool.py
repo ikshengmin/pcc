@@ -181,6 +181,245 @@ def test_staged_global_fixup_chains_match_public_across_sections_and_pages(tmp_p
     _signature_matches(actual, _factory_budget())
 
 
+def _sparse_fixup(segment_offset, word, *, payload_offset=0, payload_size=8):
+    # A virtual gap is metadata, not a request to allocate its backing bytes.
+    out = macho_exec._Out(
+        "__DATA", "__data", obj.DATA_SECTION_FLAGS, 2,
+        bytearray(b"\xa5" * payload_size),
+        addr=macho_exec.TEXT_BASE + segment_offset,
+    )
+    return out.addr, out, payload_offset, word
+
+
+class _FixupWordSink:
+    def __init__(self):
+        self.writes = []
+
+    def patch_word(self, out, offset, word):
+        self.writes.append((out, offset, word))
+        struct.pack_into("<Q", out.data, offset, word)
+
+
+def _assert_segment_starts(info, starts, *, file_offset=macho_exec.PAGE):
+    assert struct.unpack_from("<IHHQIH", info) == (
+        22 + 2 * len(starts), macho_exec.PAGE,
+        macho_exec.DYLD_CHAINED_PTR_64_OFFSET, file_offset, 0, len(starts),
+    )
+    assert len(info) == 22 + 2 * len(starts)
+    assert struct.unpack_from(f"<{len(starts)}H", info, 22) == tuple(starts)
+
+
+@pytest.mark.parametrize("owned", (False, True))
+def test_chained_starts_accept_exact_uint16_page_count_with_tiny_payloads(owned):
+    page_count = 0xFFFF
+    sites = [
+        _sparse_fixup(8, 0x123456789),
+        _sparse_fixup(page_count * macho_exec.PAGE - 8, (1 << 63) | 7),
+    ]
+    sink = _FixupWordSink() if owned else None
+    info = macho_exec._build_seg_info(
+        sites, macho_exec.TEXT_BASE, page_count * macho_exec.PAGE,
+        macho_exec.PAGE, _owned_output=sink,
+    )
+    _assert_segment_starts(
+        info, [8] + [0xFFFF] * (page_count - 2) + [macho_exec.PAGE - 8],
+    )
+    assert sum(len(out.data) for _, out, _, _ in sites) == 16
+    for _, out, offset, word in sites:
+        assert out.data == struct.pack("<Q", word)
+    if owned:
+        assert sink.writes == [(out, offset, word) for _, out, offset, word in sites]
+
+
+@pytest.mark.parametrize("owned", (False, True))
+def test_chained_starts_refuse_65536_pages_before_patching_any_word(owned):
+    sites = [_sparse_fixup(0, 11), _sparse_fixup(0xFFFF * macho_exec.PAGE, 29)]
+    before = [bytes(out.data) for _, out, _, _ in sites]
+    sink = _FixupWordSink() if owned else None
+    with pytest.raises(macho_exec.LinkError) as caught:
+        macho_exec._build_seg_info(
+            sites, macho_exec.TEXT_BASE, 0x10000 * macho_exec.PAGE,
+            macho_exec.PAGE, _owned_output=sink,
+        )
+    assert str(caught.value) == (
+        "chained-fixup page count 65536 exceeds uint16; "
+        "last fixup page 65535 needs a different segment layout"
+    )
+    assert [bytes(out.data) for _, out, _, _ in sites] == before
+    if owned:
+        assert sink.writes == []
+
+
+@pytest.mark.parametrize("site_count", (0, 1, 2))
+def test_chained_starts_ignore_gibibyte_file_tail_without_backing_allocation(site_count):
+    sites = [_sparse_fixup(0, 17), _sparse_fixup(16, (1 << 63) | 3)][:site_count]
+    segment_size = (0x10000 + 64) * macho_exec.PAGE
+    if not sites:
+        with pytest.raises(macho_exec.LinkError, match="^chained-fixup segment has no sites$"):
+            macho_exec._build_seg_info(
+                sites, macho_exec.TEXT_BASE, segment_size, macho_exec.PAGE,
+            )
+        return
+    # More than 65,535 file-backed pages are valid when the fixups end early.
+    info = macho_exec._build_seg_info(
+        sites, macho_exec.TEXT_BASE, segment_size, macho_exec.PAGE,
+    )
+    _assert_segment_starts(info, [0])
+    assert sum(len(out.data) for _, out, _, _ in sites) <= 16
+    assert sites[0][1].data == struct.pack("<Q", 17 | ((4 if site_count == 2 else 0) << 51))
+    if site_count == 2:
+        assert sites[1][1].data == struct.pack("<Q", (1 << 63) | 3)
+
+
+@pytest.mark.parametrize("owned", (False, True))
+def test_chained_starts_preserve_holes_and_exact_rebase_bind_words(owned):
+    rebase = (0xAB << 36) | 0x123456789
+    bind = (1 << 63) | (0xD7 << 24) | 0x123456
+    first = _sparse_fixup(12, 0x87654321)
+    second = _sparse_fixup(2 * macho_exec.PAGE + 4, rebase)
+    third = _sparse_fixup(2 * macho_exec.PAGE + 20, bind)
+    sink = _FixupWordSink() if owned else None
+    info = macho_exec._build_seg_info(
+        [third, first, second], macho_exec.TEXT_BASE, 9 * macho_exec.PAGE,
+        macho_exec.PAGE, _owned_output=sink,
+    )
+    _assert_segment_starts(info, [12, 0xFFFF, 4])
+    expected = [first[3], rebase | (4 << 51), bind]
+    for site, word in zip((first, second, third), expected):
+        assert site[1].data == struct.pack("<Q", word)
+    if owned:
+        assert sink.writes == [
+            (site[1], 0, word) for site, word in zip((first, second, third), expected)
+        ]
+
+
+@pytest.mark.parametrize("segment_offset, payload_offset, payload_size, segment_size, message", (
+    (-4, 0, 8, macho_exec.PAGE, "outside its segment"),
+    (macho_exec.PAGE - 4, 0, 8, macho_exec.PAGE, "outside its segment"),
+    (2, 0, 8, 2 * macho_exec.PAGE, "not a complete, four-byte-aligned pointer"),
+    (0, -1, 8, 2 * macho_exec.PAGE, "not a complete, four-byte-aligned pointer"),
+    (0, 0, 7, 2 * macho_exec.PAGE, "not a complete, four-byte-aligned pointer"),
+    (0, 1, 8, 2 * macho_exec.PAGE, "not a complete, four-byte-aligned pointer"),
+    (macho_exec.PAGE - 4, 0, 8, 2 * macho_exec.PAGE,
+     "crosses a 0x4000-byte page boundary"),
+))
+def test_chained_starts_validate_pointer_and_segment_bounds_before_patching(
+    segment_offset, payload_offset, payload_size, segment_size, message,
+):
+    sites = [
+        _sparse_fixup(8, 7),
+        _sparse_fixup(segment_offset, 11, payload_offset=payload_offset, payload_size=payload_size),
+    ]
+    before = [bytes(out.data) for _, out, _, _ in sites]
+    sink = _FixupWordSink()
+    with pytest.raises(macho_exec.LinkError, match=message):
+        macho_exec._build_seg_info(
+            sites, macho_exec.TEXT_BASE, segment_size, macho_exec.PAGE,
+            _owned_output=sink,
+        )
+    assert [bytes(out.data) for _, out, _, _ in sites] == before
+    assert sink.writes == []
+
+
+def test_staged_tls_descriptors_precede_data_and_keep_aligned_template_offsets(tmp_path):
+    def relocation(offset, symbol):
+        return obj.Relocation(offset, symbol, spec.ARM64_RELOC_UNSIGNED, False, 3)
+
+    def descriptors(suffix, targets):
+        return obj.Section(
+            "__thread_vars_" + suffix, "__DATA", data=b"\0" * 48,
+            align_log2=3, flags=0x13,
+            relocations=tuple(
+                relocation(index * 24 + offset, symbol)
+                for index, target in enumerate(targets)
+                for offset, symbol in ((0, "__tlv_bootstrap"), (16, target))
+            ),
+        )
+
+    sections = [
+        obj.Section(
+            "__text", "__TEXT", data=struct.pack("<I", 0xD65F03C0),
+            align_log2=2, flags=obj.TEXT_SECTION_FLAGS,
+            symbols=(obj.TextSymbol("_main", 0),),
+        ),
+        obj.Section(
+            "__data_a", "__DATA", data=b"\0" * 8, align_log2=4,
+            relocations=(relocation(0, "_main"),),
+        ),
+        obj.Section(
+            "__thread_data_a", "__DATA", data=struct.pack("<Q", 11),
+            align_log2=3, flags=0x11, symbols=(obj.TextSymbol("_tls_data_a", 0),),
+        ),
+        obj.Section("__data_b", "__DATA", data=b"x" * (2 * macho_exec.PAGE + 16), align_log2=3),
+        descriptors("a", ("_tls_data_a", "_tls_data_b")),
+        obj.Section(
+            "__thread_data_b", "__DATA", data=struct.pack("<Q", 22),
+            align_log2=3, flags=0x11, symbols=(obj.TextSymbol("_tls_data_b", 0),),
+        ),
+        descriptors("b", ("_tls_bss_a", "_tls_bss_b")),
+        obj.Section("__bss_a", "__DATA", flags=spec.S_ZEROFILL, zerofill_size=32, align_log2=5),
+        obj.Section(
+            "__thread_bss_a", "__DATA", flags=0x12, zerofill_size=16,
+            align_log2=4, symbols=(obj.TextSymbol("_tls_bss_a", 0),),
+        ),
+        obj.Section("__bss_b", "__DATA", flags=spec.S_ZEROFILL, zerofill_size=8, align_log2=3),
+        obj.Section(
+            "__thread_bss_b", "__DATA", flags=0x12, zerofill_size=16,
+            align_log2=4, symbols=(obj.TextSymbol("_tls_bss_b", 8),),
+        ),
+    ]
+    path = tmp_path / "aligned-tls.pco"
+    path.write_bytes(native.encode_native_object(native.NativeObject.from_sections(
+        sections, undefined=("__tlv_bootstrap",), weak_undefined=("__tlv_bootstrap",),
+    )))
+    paths = [str(path)]
+    expected = _link(paths, "public")
+    actual = _staged_link(paths)
+    assert actual == expected
+    _signature_matches(actual, _factory_budget())
+    parsed = spec.parse_object(actual)
+    data_sections = [section for section in parsed.sections() if section["segname_str"] == "__DATA"]
+    assert [section["sectname_str"] for section in data_sections] == [
+        "__thread_vars_a", "__thread_vars_b", "__data_a", "__data_b",
+        "__thread_data_a", "__thread_data_b", "__thread_bss_a", "__thread_bss_b",
+        "__bss_a", "__bss_b",
+    ]
+    by_name = {section["sectname_str"]: section for section in parsed.sections()}
+    template = by_name["__thread_data_a"]["addr"]
+    assert template % 16 == 0
+    assert by_name["__thread_data_a"]["align"] == 3
+    assert by_name["__thread_data_b"]["addr"] == template + 8
+    assert by_name["__thread_bss_a"]["addr"] == template + 16
+    assert by_name["__thread_bss_b"]["addr"] == template + 32
+    assert struct.unpack_from("<2Q", actual, by_name["__thread_data_a"]["offset"]) == (11, 22)
+    for name in ("__thread_bss_a", "__thread_bss_b", "__bss_a", "__bss_b"):
+        assert by_name[name]["offset"] == 0
+    for suffix, offsets in (("a", (0, 8)), ("b", (16, 40))):
+        descriptor = by_name["__thread_vars_" + suffix]
+        for index, offset in enumerate(offsets):
+            assert struct.unpack_from("<3Q", actual, descriptor["offset"] + index * 24) == (
+                (1 << 63) | (6 << 51), 0, offset,
+            )
+    main_offset = by_name["__text"]["addr"] - macho_exec.TEXT_BASE
+    assert struct.unpack_from("<Q", actual, by_name["__data_a"]["offset"]) == (main_offset,)
+    assert parsed.header["flags"] & 0x00800000
+
+    command = parsed.command(spec.LC_DYLD_CHAINED_FIXUPS)
+    _, _, fixup_offset, fixup_size = struct.unpack("<4I", command.raw)
+    fixups = actual[fixup_offset:fixup_offset + fixup_size]
+    _, starts_offset = struct.unpack_from("<2I", fixups)
+    segments = [command.body for command in parsed.commands if command.cmd == spec.LC_SEGMENT_64]
+    data_index = next(index for index, segment in enumerate(segments) if segment["segname_str"] == "__DATA")
+    relative_info, = struct.unpack_from("<I", fixups, starts_offset + 4 + 4 * data_index)
+    assert relative_info
+    info_at = starts_offset + relative_info
+    info_size, = struct.unpack_from("<I", fixups, info_at)
+    _assert_segment_starts(
+        fixups[info_at:info_at + info_size], [0], file_offset=segments[data_index]["fileoff"],
+    )
+    assert segments[data_index]["filesize"] > 2 * macho_exec.PAGE
+
+
 @pytest.mark.parametrize("fault, message", (
     ("addend", "does not fit a chained bind"),
     ("high-rebase", "exceeds 36 bits"),
