@@ -353,18 +353,22 @@ ALL_STRUCTS = (
 
 # --- relocation bitfield ---------------------------------------------------
 
+# Little-endian bitfield order from `mach-o/reloc.h`:
+# symbolnum:24, pcrel:1, length:2, extern:1, type:4.
+RELOC_SYMBOLNUM_MASK = 0x00FFFFFF
+RELOC_PCREL_SHIFT = 24
+RELOC_LENGTH_SHIFT = 25
+RELOC_EXTERN_SHIFT = 27
+RELOC_TYPE_SHIFT = 28
+
 
 def unpack_relocation(r_info: int, r_address: int | None = None) -> dict[str, int]:
-    """Split relocation_info's packed word.
-
-    Little-endian bitfield order from `mach-o/reloc.h`:
-    symbolnum:24, pcrel:1, length:2, extern:1, type:4.
-    """
-    symbolnum = r_info & 0x00FFFFFF
-    pcrel = (r_info >> 24) & 0x1
-    length = (r_info >> 25) & 0x3
-    external = (r_info >> 27) & 0x1
-    kind = (r_info >> 28) & 0xF
+    """Split relocation_info's packed word (see the RELOC_* layout above)."""
+    symbolnum = r_info & RELOC_SYMBOLNUM_MASK
+    pcrel = (r_info >> RELOC_PCREL_SHIFT) & 0x1
+    length = (r_info >> RELOC_LENGTH_SHIFT) & 0x3
+    external = (r_info >> RELOC_EXTERN_SHIFT) & 0x1
+    kind = (r_info >> RELOC_TYPE_SHIFT) & 0xF
     if r_address is not None:
         return {
             "r_address": r_address,
@@ -469,14 +473,25 @@ class MachOObject:
 
     def relocations(self, section: dict[str, Any]) -> list[dict[str, Any]]:
         out = []
+        # MachOStruct.size rebuilds its format and calls calcsize; read it once.
+        stride = _RELOCATION_READER.size
+        base = section["reloff"]
         for i in range(section["nreloc"]):
             # Read the two wire words once and build the final row directly.
             # The former path built two intermediate dicts and snapshotted
             # another mapping in dict.update for every eight-byte record.
-            address, info = _RELOCATION_READER.unpack_from(
-                self.data, section["reloff"] + i * RELOCATION_INFO.size
-            )
+            address, info = _RELOCATION_READER.unpack_from(self.data, base + i * stride)
             out.append(unpack_relocation(info, address))
+        return out
+
+    def relocation_infos(self, section: dict[str, Any]) -> list[int]:
+        """Each relocation's packed r_info word, in table order, without rows."""
+        out = []
+        stride = _RELOCATION_READER.size
+        base = section["reloff"]
+        for i in range(section["nreloc"]):
+            _address, info = _RELOCATION_READER.unpack_from(self.data, base + i * stride)
+            out.append(info)
         return out
 
     def data_in_code(self) -> list[dict[str, Any]]:
@@ -494,11 +509,10 @@ class MachOObject:
         end = dataoff + datasize
         if dataoff < 0 or end > len(self.data):
             raise MachOFormatError("LC_DATA_IN_CODE payload is outside file")
+        stride = DATA_IN_CODE_ENTRY.size
         return [
-            DATA_IN_CODE_ENTRY.unpack(
-                self.data, dataoff + i * DATA_IN_CODE_ENTRY.size
-            )
-            for i in range(datasize // DATA_IN_CODE_ENTRY.size)
+            DATA_IN_CODE_ENTRY.unpack(self.data, dataoff + i * stride)
+            for i in range(datasize // stride)
         ]
 
     def linker_optimization_hints(self) -> bytes:

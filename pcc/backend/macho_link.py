@@ -532,6 +532,7 @@ def _read_relocations(
     local_rename: dict[str, str],
     offset_bias: int = 0,
     symbol_names=None,
+    object_sections=None,
 ) -> list[Relocation]:
     """Relocations with ADDEND/SUBTRACTOR companions folded atomically.
 
@@ -654,16 +655,23 @@ def _read_relocations(
             ))
         return out
 
+    if object_sections is None:
+        object_sections = obj.sections()
     return list(_iter_folded_relocation_rows(
-        obj.relocations(section), obj.sections(), symbols, local_rename,
-        offset_bias=offset_bias,
+        obj.relocations(section), object_sections, symbols, local_rename,
+        offset_bias=offset_bias, symbol_names=symbol_names,
     ))
 
 
 def _iter_folded_relocation_rows(
-    raw, sections, symbols, local_rename, *, offset_bias=0,
+    raw, sections, symbols, local_rename, *, offset_bias=0, symbol_names=None,
 ):
-    """Fold the existing raw companion contract without retaining all rows."""
+    """Fold the existing raw companion contract without retaining all rows.
+
+    ``symbol_names`` optionally holds every symbol's resolved relocation name
+    (same ``local_rename``); in-range extern rows read it instead of resolving
+    the symbol again.
+    """
     pending_addend = None
     pending_subtractor = None
     for entry in raw:
@@ -754,14 +762,19 @@ def _iter_folded_relocation_rows(
             else 0
         )
         pending_addend = None
-        yield Relocation(
-            offset=entry["r_address"] + offset_bias,
-            symbol=_relocation_symbol_name(
+        symbol_index = entry["r_symbolnum"]
+        if symbol_names is not None and 0 <= symbol_index < len(symbol_names):
+            symbol_name = symbol_names[symbol_index]
+        else:
+            symbol_name = _relocation_symbol_name(
                 symbols,
-                entry["r_symbolnum"],
+                symbol_index,
                 local_rename,
                 context="extern relocation",
-            ),
+            )
+        yield Relocation(
+            offset=entry["r_address"] + offset_bias,
+            symbol=symbol_name,
             type=entry["r_type"],
             pcrel=bool(entry["r_pcrel"]),
             length=entry["r_length"],
@@ -845,19 +858,24 @@ def _inspect_link_input(
             )
 
     targeted: set[int] = set()
+    symbol_count = len(symbols)
     for section in obj.sections():
-        for entry in obj.relocations(section):
+        # Only extern/type/symbolnum are needed here; skip per-row dicts.
+        for info in obj.relocation_infos(section):
             if (
-                entry["r_extern"]
-                and entry["r_type"] != spec.ARM64_RELOC_ADDEND
+                (info >> spec.RELOC_EXTERN_SHIFT) & 0x1
+                and ((info >> spec.RELOC_TYPE_SHIFT) & 0xF) != spec.ARM64_RELOC_ADDEND
             ):
-                symbol_index = entry["r_symbolnum"]
-                _relocation_symbol_name(
-                    symbols,
-                    symbol_index,
-                    {},
-                    context=f"input {index} relocation",
-                )
+                symbol_index = info & spec.RELOC_SYMBOLNUM_MASK
+                # Only the index check matters here; resolving the name for
+                # every relocation was discarded work.
+                if not 0 <= symbol_index < symbol_count:
+                    _relocation_symbol_name(
+                        symbols,
+                        symbol_index,
+                        {},
+                        context=f"input {index} relocation",
+                    )
                 targeted.add(symbol_index)
     for symbol_index, symbol in enumerate(symbols):
         if (
@@ -1049,7 +1067,8 @@ def link_relocatable_native(
         symbols = symbol_tables[index]
         local_rename = local_renames[index]
         relocation_symbol_names = None
-        if isinstance(obj, PackedNativeObject):
+        # Packed and Mach-O inputs resolve each symbol once, not per relocation.
+        if not isinstance(obj, NativeObject):
             relocation_symbol_names = [
                 _relocation_symbol_name(symbols, symbol_index, local_rename, context="packed native relocation")
                 for symbol_index in range(len(symbols))
@@ -1152,6 +1171,7 @@ def link_relocatable_native(
                 stack_relocations = _read_relocations(
                     obj, sec, symbols, local_rename,
                     symbol_names=relocation_symbol_names,
+                    object_sections=sections,
                 )
                 relocation_by_offset = {
                     relocation.offset: relocation
@@ -1258,6 +1278,7 @@ def link_relocatable_native(
             for reloc in _read_relocations(
                 obj, sec, symbols, local_rename, offset_bias=base,
                 symbol_names=relocation_symbol_names,
+                object_sections=sections,
             ):
                 if reloc.section is None:
                     target.relocations.append(reloc)

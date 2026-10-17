@@ -1067,6 +1067,19 @@ class NativeObjectView:
             self._relocations[index] = _raw_relocations(self.native.sections[index])
         return self._relocations[index]
 
+    def relocation_infos(self, section: dict) -> list[int]:
+        """The packed r_info word of each ``relocations`` row (MachOObject protocol)."""
+        out = []
+        for row in self.relocations(section):
+            out.append(
+                row["r_symbolnum"]
+                | (row["r_pcrel"] << spec.RELOC_PCREL_SHIFT)
+                | (row["r_length"] << spec.RELOC_LENGTH_SHIFT)
+                | (row["r_extern"] << spec.RELOC_EXTERN_SHIFT)
+                | (row["r_type"] << spec.RELOC_TYPE_SHIFT)
+            )
+        return out
+
     def iter_relocations(self, section: dict, *, ordered: bool = True):
         index = self._relocation_section_index(section)
         if index in self._relocations:
