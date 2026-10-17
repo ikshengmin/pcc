@@ -517,6 +517,9 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "tests/test_ci_stage1_artifact_export.py",
         "tests/python/test_gc4_copy_page_probe_native.py",
         "tests/python/test_gc_relocation_membership_lifecycle.py",
+        "tests/python/test_gc_remembered_membership_lifecycle.py",
+        "tests/python/test_gc_remembered_membership_native.py",
+        "tests/python/test_owned_runtime_pass_prefix.py",
     )
     assert linux_condition == (
         "matrix.platform == 'linux-x86_64' && '" + " ".join(linux_only) + "' || '' }}")
