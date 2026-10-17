@@ -269,7 +269,8 @@ def test_default_factory_is_emitted_once_at_the_definition_not_each_call():
     assert match is not None, text
     body = match.group(1)
     assert len(re.findall(r"\bcall\b[^\n]*@user_nested_default_make\(", body)) == 1, body
-    assert len(re.findall(r"\bcall\b[^\n]*@py_func_new_named\(", body)) == 1, body
+    # py_func_new_signature_slots replaced py_func_new_named in d0b8b6720.
+    assert len(re.findall(r"\bcall\b[^\n]*@py_func_new_(?:named|signature_slots)\(", body)) == 1, body
 
 
 @pytest.mark.parametrize("name", PROGRAMS)

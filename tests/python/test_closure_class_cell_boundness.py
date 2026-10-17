@@ -14,8 +14,9 @@ def test_owned_capture_root_handoffs_consume_each_source_once():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "pcc/frontends/python/codegen"
+    # closure_cell_lowering's cell.payload read now publishes into a
+    # slot-call output root (_new_slot_call_root) and hands off no owner.
     cases = (
-        ("closure_cell_lowering.py", "cell.payload", "value"),
         ("call_expression_lowering.py", "class.captures.instance", "inst"),
     )
     for filename, label, owner in cases:

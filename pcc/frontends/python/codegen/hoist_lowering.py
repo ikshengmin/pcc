@@ -2249,9 +2249,10 @@ def _module_bound_names(body, taken):
         elif isinstance(stmt, Try):
             _module_bound_names(stmt.body, taken)
             for handler in stmt.handlers:
-                if handler.name:
-                    taken.add(handler.name)
-                _module_bound_names(handler.body, taken)
+                handler_name = _dataclass_field_value(handler, "name", None)
+                if handler_name:
+                    taken.add(handler_name)
+                _module_bound_names(_dataclass_field_value(handler, "body", ()), taken)
             _module_bound_names(stmt.else_body, taken)
             _module_bound_names(stmt.finally_body, taken)
 

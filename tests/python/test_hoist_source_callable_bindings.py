@@ -206,6 +206,9 @@ def _walk(node):
                 yield from _walk(getattr(node, field.name))
 
 
+_CONSTRUCTOR = r"call [^\n]*@py_func_new_(?:named|signature_slots)\([^\n]*?"
+
+
 def _outer_text(text):
     return next(body for body in re.findall(r"define [^\n]+\n.*?^\}", text, re.M | re.S)
                 if "@user_source_binding_outer(" in body.splitlines()[0])
@@ -242,10 +245,12 @@ def test_prior_call_keeps_the_source_local_bound_check():
 def test_enclosing_callable_is_materialized_once_for_default_and_class_values(name):
     _codegen, text = _generate(PROGRAMS[name][0])
     outer = _outer_text(text)
-    function_count = len(re.findall(r"call ptr \(ptr, ptr, ptr\) @py_func_new_named\(ptr @user_source_binding_(?:__nested_)?f_native_adapter", outer))
+    # Function objects are built by py_func_new_signature_slots since
+    # d0b8b6720; the contract is one construction per callable.
+    function_count = len(re.findall(_CONSTRUCTOR + r"@user_source_binding_(?:__nested_)?f_native_adapter", outer))
     assert function_count == 1
     if name.startswith("lambda_"):
-        callback_count = len(re.findall(r"call ptr \(ptr, ptr, ptr\) @py_func_new_named\(ptr @user_source_binding___nested_callback_native_adapter", outer))
+        callback_count = len(re.findall(_CONSTRUCTOR + r"@user_source_binding___nested_callback_native_adapter", outer))
         assert callback_count == 1
 
 

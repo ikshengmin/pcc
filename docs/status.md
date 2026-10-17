@@ -43,28 +43,34 @@ Durable receipts for this period (patches, profiles, A/B scripts, repros):
   `main()`'s first flushed print. The same generated program compiled on
   macOS extracts and runs to its Windows-specific controls, so the crash is
   in Windows-only module initialization; no Windows host was available here.
-- Failing on a clean `1694b049f` snapshot as well:
-  `test_closure_class_cell_boundness.py::test_owned_capture_root_handoffs_consume_each_source_once`
-  (looks for `_extern_enter_root(..., "cell.payload")`; the code now calls
-  `_new_slot_call_root("cell.payload")`), and both
-  `test_hoist_module_boundaries.py` source-shape checks (the orchestrator was
-  1810 lines against 1800; a `handlers` loop reads `.body`/`.name`), and all
-  four `test_hoist_source_callable_bindings.py::test_enclosing_callable_is_materialized_once_for_default_and_class_values`
-  cases (no `py_func_new_named(... f_native_adapter` call in the IR) and
-  `test_hoisted_default_capture_binding.py::test_default_factory_is_emitted_once_at_the_definition_not_each_call`
-  (counts `py_func_new_named` calls), plus
-  `test_py_function_decorators.py::test_same_module_bare_decorator_still_applies`
+- Stale pins updated (each shape re-checked first): function objects are built
+  by `py_func_new_signature_slots` since `d0b8b6720` (one construction per
+  callable, five tests); the `cell.payload` read publishes into a slot-call
+  root and hands off no owner; `mem2reg` moved to `pcc/ir/optimization/` and
+  has no nested functions; the sibling-cycle program now captures the later
+  sibling's binding (matches CPython natively on GC0-GC4); the capture fixed
+  point settles in one pass, so `referenced_sibling_names` runs once per
+  nested function. `_module_bound_names` (from `8c7f55e4c`) read handler
+  `.name`/`.body` directly; it now uses the stage-safe field accessor.
+- Still failing on a clean `1694b049f` snapshot:
+  `test_hoist_global_cell_boundaries.py::test_host_ir_global_reads_do_not_become_capture_values`
+  (both modes), the `_hoist_nested_funcdefs` length check (1810 lines there,
+  1833 now, against 1800), `test_py_function_decorators.py::test_same_module_bare_decorator_still_applies`
   ("slot-call Call lacks an immediate owned-result handoff") and
   `::test_imported_bare_decorator_is_metadata_noop` (`singledispatch` refused),
-  and `test_py_native_closure.py::test_native_closure_captures_starred_unpack_target`
-  ("starred unpack target must be a bare name"). In `test_py_nested_hoist.py`:
-  `test_nested_hoist_free_name_analysis_is_cached`,
-  `test_value_position_nested_capture_propagates_through_sibling_cycle` and
-  `test_nested_hoist_caches_reject_reused_object_id` (native `NameError: cannot
-  access free variable 'from_left'`; its IR is byte-identical with and without
-  the decorator change), and
-  `test_mem2reg_self_compile_emits_llvm_after_nested_capture_propagation`
-  (reads the removed `pcc/ir_passes/mem2reg.py`).
+  `test_py_native_closure.py::test_native_closure_captures_starred_unpack_target`
+  ("starred unpack target must be a bare name"), and
+  `test_py_nested_hoist.py::test_nested_hoist_caches_reject_reused_object_id`.
+  The last forces every `id()` equal; `boxed_function_defs` (id -> retained
+  object) then keeps only the last def, which live objects cannot trigger.
+- Linux aarch64 and x86_64 at `169bcfca1` both built Stage1 pcc1 and then
+  timed out in `ci_worker_size_prior_gate.py --phase pcc1` (300 s): pcc1
+  compiling `tests/fixtures/native/worker_size_priors.py` spent 291 s in one
+  `--pcc-self-backend-emit-batch-worker ... emit_oversized_0.manifest`
+  process (621 MB RSS) on aarch64 (artifact `bootstrap-linux-aarch64`,
+  `worker-prior-gate/native-pcc1/result.json`).
+- `pip install pcc` installs an unrelated PyPI project ("Predicate collection
+  classes"); this distribution is `python-cc`, whose 0.1.7 has no wheels.
 
 ## Generated portable-runtime compiler integration
 
