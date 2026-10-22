@@ -1352,7 +1352,7 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     # independent native regression must not rebuild or require pcc1 success.
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     other = workflow_job(workflow, "other-platform-native-wheel")
-    name = "Verify GC4 relocation with the existing single-thread runtime"
+    name = "Verify GC4 relocation with one mutator in the admitted threaded runtime"
     step = other.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
     assert "!cancelled() && startsWith(matrix.platform, 'linux-')" in step
     assert "steps.platform_runtime.outputs.ready == 'true'" in step
@@ -1370,7 +1370,7 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     assert "build/worker-prior-gate/**/*.xml" in other
     probe_path = "tests/python/test_gc_relocation_sweep_verdict.py"
     assert workflow.count('      - "' + probe_path + '"') == 2
-    node = probe_path + "::test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"
+    node = probe_path + "::test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator"
     import textwrap
 
     calls = []
@@ -1379,10 +1379,10 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     # Execute only the workflow wrapper with a mocked runner. No compiler,
     # runtime admission, subprocess or native program runs in this host test.
     exec(compile(textwrap.dedent(step.split("        run: |\n", 1)[1]),
-                 "<gc4 single-thread workflow>", "exec"), {})
+                 "<gc4 single-mutator workflow>", "exec"), {})
     args, kwargs = calls.pop()
     assert not calls
-    assert args[:3] == (Path("build/worker-prior-gate"), "gc4-single-thread-relocation", [node])
+    assert args[:3] == (Path("build/worker-prior-gate"), "gc4-single-mutator-relocation", [node])
     assert args[3]["PCC_RUNTIME_ARCHIVE"] == "/admitted/libpy_runtime_pcc_py.a"
     assert kwargs == {"integration": True, "timeout": 300}
     command = gate.pytest_command(tmp_path, [node], integration=True)
@@ -1399,10 +1399,10 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     with monkeypatch.context() as scoped:
         scoped.setattr(probe, "_run_probe", lambda *args, **kwargs: run_calls.append((args, kwargs)))
         probe.test_relocation_copy_clears_stale_sweep_verdict_backend4(tmp_path, "pcc_python")
-        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread(tmp_path)
+        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator(tmp_path)
     assert run_calls == [
-        ((tmp_path, "pcc_python"), {"expected_threads": True}),
-        ((tmp_path, "pcc_python_single_thread"), {"expected_threads": False}),
+        ((tmp_path, "pcc_python"), {}),
+        ((tmp_path, "pcc_python_single_mutator"), {}),
     ]
     archive = tmp_path / "libpy_runtime_pcc_py.a"
     archive.write_bytes(b"host-test placeholder, never a native runtime")
@@ -1416,37 +1416,35 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(probe, "link_c_harness", fake_link)
-    for threads in (True, False):
+    kinds = ("pcc_python", "pcc_python_single_mutator")
+    for kind in kinds:
         manifest = {"target_triple": "host-test-only", "members": [
-            {"runtime_build_config": {"threads": threads, "refcount": "atomic"}},
+            {"runtime_build_config": {"threads": True, "refcount": "atomic"}},
         ]}
         Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
-        executable = probe._compile_probe(tmp_path, str(threads), 4, expected_threads=threads)
+        executable = probe._compile_probe(tmp_path, kind, 4)
         receipt = json.loads(executable.with_suffix(".identity.json").read_text())
-        assert receipt["runtime_config"] == {"threads": threads, "refcount": "atomic"}
+        assert receipt["runtime_config"] == {"threads": True, "refcount": "atomic"}
         assert receipt["compiler"] == "host-pcc0" and receipt["runtime_provisioning"] is False
         assert set(receipt["runtime_hashes"]) == {"", ".provenance.json", ".capi_syms"}
+        manifest["members"][0]["runtime_build_config"]["threads"] = False
+        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
         with pytest.raises(AssertionError):
-            probe._compile_probe(tmp_path, "wrong-threads", 4, expected_threads=not threads)
+            probe._compile_probe(tmp_path, "wrong-threads", 4)
+        manifest["members"][0]["runtime_build_config"]["threads"] = True
         manifest["members"][0]["runtime_build_config"]["refcount"] = "plain"
         Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
         with pytest.raises(AssertionError):
-            probe._compile_probe(tmp_path, "wrong-refcount", 4, expected_threads=threads)
+            probe._compile_probe(tmp_path, "wrong-refcount", 4)
     assert linked == [
         probe.PROBE_SOURCE.replace("@BACKEND@", "4")
-        .replace("@EXPECTED_THREADS@", str(int(threads)))
-        .replace("@EXPECTED_REFCOUNT_STRATEGY@", strategy)
-        for threads, strategy in (
-            (True, "PCC_REFCOUNT_STRATEGY_ATOMIC"),
-            (False, "PCC_REFCOUNT_STRATEGY_NONATOMIC"),
-        )
+        .replace("@EXPECTED_THREADS@", "1")
+        .replace("@EXPECTED_REFCOUNT_STRATEGY@", "PCC_REFCOUNT_STRATEGY_ATOMIC")
+        for _ in kinds
     ]
-    for source, threads, strategy in (
-        (linked[0], 1, "PCC_REFCOUNT_STRATEGY_ATOMIC"),
-        (linked[1], 0, "PCC_REFCOUNT_STRATEGY_NONATOMIC"),
-    ):
-        assert f"if (pcc_threads_enabled() != {threads}) return 6;" in source
-        assert f"if (pcc_refcount_strategy() != {strategy}) return 1;" in source
+    for source in linked:
+        assert "if (pcc_threads_enabled() != 1) return 6;" in source
+        assert "if (pcc_refcount_strategy() != PCC_REFCOUNT_STRATEGY_ATOMIC) return 1;" in source
     assert linked[0].split("    if (pcc_gc_set_backend(backend)", 1)[1] == (
         linked[1].split("    if (pcc_gc_set_backend(backend)", 1)[1]
     )

@@ -973,7 +973,7 @@ jobs:
           PCC_TEST_NO_NATIVE_PROVISIONING: "1"
         run: uv run --frozen --no-sync python -m pytest -x -q --junitxml=build/worker-prior-gate/platform-machine-provider.xml tests/python/test_platform_machine_provider.py
 
-      - name: Verify GC4 relocation with the existing single-thread runtime
+      - name: Verify GC4 relocation with one mutator in the admitted threaded runtime
         if: ${{ !cancelled() && startsWith(matrix.platform, 'linux-') && steps.platform_runtime.outputs.ready == 'true' }}
         timeout-minutes: 6
         shell: uv run --frozen --no-sync python {0}
@@ -993,12 +993,12 @@ jobs:
           from scripts.ci_worker_size_prior_gate import run_pytest
 
           # Exact native execution, including after the canary fails. Reuse
-          # the verified archive; do not rebuild or substitute a threaded one.
+          # the verified threaded/atomic archive; do not rebuild or substitute it.
           # This is host-pcc0 C emission, not a native-pcc1 compiler result.
           run_pytest(
-              Path("build/worker-prior-gate"), "gc4-single-thread-relocation",
+              Path("build/worker-prior-gate"), "gc4-single-mutator-relocation",
               ["tests/python/test_gc_relocation_sweep_verdict.py::"
-               "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"],
+               "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator"],
               os.environ.copy(), integration=True, timeout=300,
           )
 

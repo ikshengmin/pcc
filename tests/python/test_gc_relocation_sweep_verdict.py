@@ -2,10 +2,9 @@
 
 GC-P1-BACKEND4-CONCURRENT-SURVIVOR-FINALIZED: a freshly relocated copy of a
 reachable value carried PY_FLAG_GC_SWEEP_CANDIDATE inherited through the
-header memcpy from stale source metadata, and the next explicit collect --
-which consumes pending candidates WITHOUT re-marking
-(pcc_gc_collect_tracing sweeps pending candidates verbatim) -- ran PASS-0
-``__del__`` on the live copy. CONFIRMED capture:
+header memcpy from stale source metadata. In the recorded failure, the next
+explicit collect swept pending candidates without re-marking and ran PASS-0
+``__del__`` on the live copy. Historical capture:
 docs/investigations/gc-backend4-concurrent-entry-loss.md.
 
 The contract under test is narrow and deterministic, no concurrency needed:
@@ -14,7 +13,12 @@ from BOTH the destination copy and the sweep-visible source shell, so a
 pending-candidate sweep can never consume a verdict that predates the copy.
 The probe pokes the verdict directly, exactly as a finished tracing cycle
 would have left it, relocates, and then drives the same explicit-collect
-boundary the mutator drain used in the capture.
+boundary the mutator drain used in the capture. Current sweep also rechecks
+reachability before finalizers; the direct flag checks still require relocation
+itself to clear both verdicts.
+
+The workload uses one mutator with the admitted threaded/atomic runtime.
+Thread support in the runtime does not require concurrent probe mutators.
 
 Scope note: the backend-3 generational oldify copy received the identical
 mask hardening (1024 added to its cleared-flag set in both mirrors), but
@@ -173,8 +177,8 @@ int main(void) {
         return fail_state(21, "shell-keeps-verdict", source, copy);
     }
 
-    /* The capture's consumer: an explicit collect consumes pending
-     * candidates verbatim. The live copy must survive untouched. */
+    /* Exercise explicit collection after relocation. The live copy must
+     * survive untouched, including the current pre-finalizer root recheck. */
     (void)pcc_gc_collect(0);
     if (del_other != 0)
         return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);
@@ -220,14 +224,13 @@ def _digest(path: Path) -> str:
 
 
 def _compile_probe(
-    tmp_path: Path, kind: str, backend: int, *, expected_threads: bool = True,
+    tmp_path: Path, kind: str, backend: int,
 ) -> Path:
-    assert type(expected_threads) is bool
     archive = admitted_runtime()
     provenance = Path(str(archive) + ".provenance.json")
     manifest = json.loads(provenance.read_text(encoding="utf-8"))
     assert manifest["members"]
-    assert all(member["runtime_build_config"]["threads"] is expected_threads
+    assert all(member["runtime_build_config"]["threads"] is True
                and member["runtime_build_config"]["refcount"] == "atomic"
                for member in manifest["members"])
     runtime_hashes = {
@@ -238,16 +241,11 @@ def _compile_probe(
     stem = f"sweep_verdict_gc{backend}_{kind}"
     source = tmp_path / f"{stem}.c"
     executable = tmp_path / stem
-    # Admission records the requested refcount setting; the single-thread
-    # kernel deliberately implements the non-atomic runtime strategy.
-    expected_strategy = (
-        "PCC_REFCOUNT_STRATEGY_ATOMIC"
-        if expected_threads else "PCC_REFCOUNT_STRATEGY_NONATOMIC"
-    )
+    # Use the admitted threaded/atomic runtime for this one-mutator workload.
     source.write_text(
         PROBE_SOURCE.replace("@BACKEND@", str(backend))
-        .replace("@EXPECTED_THREADS@", str(int(expected_threads)))
-        .replace("@EXPECTED_REFCOUNT_STRATEGY@", expected_strategy),
+        .replace("@EXPECTED_THREADS@", "1")
+        .replace("@EXPECTED_REFCOUNT_STRATEGY@", "PCC_REFCOUNT_STRATEGY_ATOMIC"),
         encoding="utf-8",
     )
     build = link_c_harness(
@@ -261,7 +259,7 @@ def _compile_probe(
         "compiler": "host-pcc0", "backend": "self", "gc_backend": backend,
         "runtime_provisioning": False, "runtime_archive": str(archive),
         "runtime_hashes": runtime_hashes,
-        "runtime_config": {"threads": expected_threads, "refcount": "atomic"},
+        "runtime_config": {"threads": True, "refcount": "atomic"},
         "target_triple": manifest["target_triple"],
         "source_sha256": _digest(source), "binary_sha256": _digest(executable),
     }
@@ -276,19 +274,19 @@ def test_relocation_copy_clears_stale_sweep_verdict_backend4(
     tmp_path: Path, kind: str
 ) -> None:
     """Backend 4 colored evacuation must publish a verdict-free copy."""
-    _run_probe(tmp_path, kind, expected_threads=True)
+    _run_probe(tmp_path, kind)
 
 
 @pytest.mark.integration
-def test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread(
+def test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator(
     tmp_path: Path,
 ) -> None:
-    """Run the same native contract against the admitted CI compiler runtime."""
-    _run_probe(tmp_path, "pcc_python_single_thread", expected_threads=False)
+    """Run one mutator against the admitted threaded/atomic CI runtime."""
+    _run_probe(tmp_path, "pcc_python_single_mutator")
 
 
-def _run_probe(tmp_path: Path, kind: str, *, expected_threads: bool) -> None:
-    executable = _compile_probe(tmp_path, kind, backend=4, expected_threads=expected_threads)
+def _run_probe(tmp_path: Path, kind: str) -> None:
+    executable = _compile_probe(tmp_path, kind, backend=4)
     identity = json.loads(executable.with_suffix(".identity.json").read_text(encoding="utf-8"))
     run_env = {**os.environ}
     run_env.pop("PCC_REFCOUNT_STRATEGY", None)
