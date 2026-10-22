@@ -875,12 +875,12 @@ def _runtime_signatures_part_18():
     "py_obj_delitem": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_assign_subscript": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_delete_subscript": (_I64, [_PYOBJ, _PYOBJ], False),
-    "py_obj_len": (_I64, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_19():
     return {
+    "py_obj_len": (_I64, [_PYOBJ], False),
     "py_obj_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_sorted": (_PYOBJ, [_PYOBJ], False),
     "py_obj_sorted_slots": (_I64, [_PTR, _PTR, _PTR, _I64, _PTR], False),
