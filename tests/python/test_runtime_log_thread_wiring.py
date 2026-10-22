@@ -553,7 +553,12 @@ class WorldTraceModel:
     def __init__(self, stopped=True, owner=2):
         self.namespace = _namespace("freestanding_thread_kernel_pthread.py")
         self.state = dict(pcc_tls_scheduler_lock_held_py=0, pcc_tls_no_park_depth_py=0,
-                          pcc_thread_stop_requested=int(stopped), pcc_stop_owner_thread_id_py=owner,
+                          # The polling thread is registered as thread 1.
+                          pcc_tls_thread_id_py=1,
+                          # The poll flag and the stopped-world epoch.
+                          pcc_thread_stop_requested=int(stopped),
+                          pcc_thread_world_stop_py=int(stopped),
+                          pcc_stop_owner_thread_id_py=owner,
                           pcc_stop_epoch_py=1, pcc_stop_depth_py=int(stopped),
                           pcc_tls_thread_parked_py=0, pcc_tls_parked_epoch_py=0,
                           pcc_parked_thread_count_py=0, pcc_live_thread_count_py=3,
@@ -618,6 +623,7 @@ class WorldTraceModel:
 
     def resume(self):
         self.state["pcc_thread_stop_requested"] = 0
+        self.state["pcc_thread_world_stop_py"] = 0
         self.state["pcc_stop_owner_thread_id_py"] = 0
         self.state["pcc_parked_thread_count_py"] = 0
 

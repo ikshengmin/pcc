@@ -46,15 +46,31 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     py_resume = py_src.split("def pcc_resume_world() -> int:", 1)[1].split(
         '@c_abi_export("pcc_thread_unregister_current")', 1
     )[0]
-    assert '''atomic_store_i32(
-        global_addr("pcc_thread_stop_requested"), 0, 1, "release"
+    # Two flags publish a stop with release stores. The stopped-world epoch
+    # (pcc_thread_world_stop_py) is set by the request and cleared by the
+    # resume. The poll flag (pcc_thread_stop_requested) is set by the
+    # request and cleared once every other mutator is parked or exited,
+    # after the wait for them, and again by the resume.
+    for flag in ("pcc_thread_world_stop_py", "pcc_thread_stop_requested"):
+        assert '''atomic_store_i32(
+        global_addr("''' + flag + '''"), 0, 1, "release"
     )''' in py_stop
-    assert '''atomic_store_i32(
-        global_addr("pcc_thread_stop_requested"), 0, 0, "release"
+        assert '''atomic_store_i32(
+        global_addr("''' + flag + '''"), 0, 0, "release"
     )''' in py_resume
+    poll_clear = '''atomic_store_i32(
+        global_addr("pcc_thread_stop_requested"), 0, 0, "release"
+    )'''
+    assert py_stop.index("pthread_cond_wait(cond, lock)\n    # Every other mutator") < py_stop.index(
+        poll_clear
+    )
     assert py_src.count(
         '''atomic_store_i32(
         global_addr("pcc_thread_stop_requested")'''
+    ) == 3
+    assert py_src.count(
+        '''atomic_store_i32(
+        global_addr("pcc_thread_world_stop_py")'''
     ) == 2
     py_world_init = py_src.split("def _world_init() -> int:", 1)[1].split(
         '@c_abi_export("pcc_threads_enabled")', 1
