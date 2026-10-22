@@ -704,6 +704,43 @@ def _push_ready_node(node) -> None:
     )
 
 
+def _publish_ready_node(vthread, node) -> None:
+    """Queue READY ``vthread`` on its rooted ``node``, or leave it to the step.
+
+    Offset 40 is 2 while a carrier runs the thread, from its dequeue until
+    _step_finished. Another carrier can wake it in that window: after it
+    parked on a lock, join or channel but before its resume returned to the
+    scheduler, or when it yields. Queueing it then let a second carrier
+    resume it from its previous continuation while the first was still
+    leaving it (lost updates, a probe run twice), and the first, finding it
+    RUNNING again, completed it with None. Its READY state records the
+    wakeup instead, and _step_finished queues it. A thread already queued
+    (1) is not queued twice: a second node let a carrier dequeue it again
+    while another ran it, after the stale pop cleared the running mark.
+    """
+    if load_i64(vthread, 40) != 0:
+        _ready_release(node)
+        return
+    _push_ready_node(node)
+    store_i64(vthread, 40, 1)
+    _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
+    _effect(3, 0, 0, 1)
+    _scheduler_signal()
+
+
+def _step_finished(vthread) -> int:
+    """The carrier no longer runs ``vthread``: queue a wakeup it kept."""
+    if _scheduler_lock() != 0:
+        return -1
+    result: int = 0
+    if load_i64(vthread, 40) == 2:
+        store_i64(vthread, 40, 0)
+        if load_i64(vthread, 32) == 1:
+            result = _enqueue(vthread)
+    _scheduler_unlock()
+    return result
+
+
 def _carrier_queues_open(carrier_count: int) -> int:
     if carrier_count <= 0:
         return 0
@@ -801,11 +838,7 @@ def _ready_commit(vthread, node) -> None:
     """Publish a previously rooted ready or join node."""
     store_i64(vthread, 32, 1)
     store_i64(vthread, 120, 0)
-    _push_ready_node(node)
-    store_i64(vthread, 40, 1)
-    _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
-    _effect(3, 0, 0, 1)
-    _scheduler_signal()
+    _publish_ready_node(vthread, node)
 
 
 def _make_ready(vthread) -> int:
@@ -834,7 +867,8 @@ def _join_enqueue(target, waiter) -> int:
     store_ptr(target, 96, node)
     store_ptr(waiter, 104, node)
     store_i64(waiter, 120, 4)
-    store_i64(waiter, 40, 0)
+    if load_i64(waiter, 40) != 2:
+        store_i64(waiter, 40, 0)
     store_i64(waiter, 32, 3)
     _effect(5, 1, 0, 3)
     return 0
@@ -850,7 +884,8 @@ def _join_wake_all(target) -> int:
             and load_i32(waiter, 8) == PY_TYPE_VIRTUAL_THREAD
             and ptr_eq(load_ptr(waiter, 104), node) != 0
             and load_i64(waiter, 32) == 3
-            and load_i64(waiter, 40) == 0
+            # Not queued; 2 is a waiter whose carrier is still leaving it.
+            and load_i64(waiter, 40) != 1
         )
         if valid:
             after = load_ptr(node, 8)
@@ -860,11 +895,7 @@ def _join_wake_all(target) -> int:
             store_ptr(waiter, 104, null())
             store_i64(waiter, 120, 0)
             store_i64(waiter, 32, 1)
-            _push_ready_node(node)
-            store_i64(waiter, 40, 1)
-            _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
-            _effect(3, 0, 0, 1)
-            _scheduler_signal()
+            _publish_ready_node(waiter, node)
             _effect(6, 1, 0, load_i64(waiter, 32))
             continue
         after = load_ptr(node, 8)
@@ -1531,7 +1562,8 @@ def py_virtual_thread_channel_send_begin(vthread, sender, value) -> int:
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 120, PCC_VTHREAD_WAIT_CHANNEL_SEND)
-    store_i64(vthread, 40, 0)
+    if load_i64(vthread, 40) != 2:
+        store_i64(vthread, 40, 0)
     store_i64(vthread, 32, 3)
     _channel_queue_push(core, 88, 96, arm)
     _scheduler_unlock()
@@ -1601,7 +1633,8 @@ def py_virtual_thread_channel_recv_begin(vthread, receiver) -> int:
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 120, PCC_VTHREAD_WAIT_CHANNEL_RECV)
-    store_i64(vthread, 40, 0)
+    if load_i64(vthread, 40) != 2:
+        store_i64(vthread, 40, 0)
     store_i64(vthread, 32, 3)
     _channel_queue_push(core, 104, 112, arm)
     _scheduler_unlock()
@@ -1852,7 +1885,8 @@ def py_virtual_thread_channel_select2_begin(
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 120, PCC_VTHREAD_WAIT_CHANNEL_SELECT2)
-    store_i64(vthread, 40, 0)
+    if load_i64(vthread, 40) != 2:
+        store_i64(vthread, 40, 0)
     store_i64(vthread, 32, 3)
     _channel_queue_push(left_core, 104, 112, left_arm)
     _channel_queue_push(right_core, 104, 112, right_arm)
@@ -1887,9 +1921,14 @@ def _dequeue_from(head_slot, tail_slot):
             and is_tagged_int(thread) == 0
             and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
         ):
-            store_i64(thread, 40, 0)
-            if load_i64(thread, 32) == 1:
+            # A node popped for a thread no longer READY is stale; it must
+            # not clear a mark that another carrier's run owns (2).
+            if load_i64(thread, 40) == 1:
+                store_i64(thread, 40, 0)
+            if load_i64(thread, 32) == 1 and load_i64(thread, 40) == 0:
                 store_i64(thread, 32, 2)
+                # Running on this carrier until _step_finished.
+                store_i64(thread, 40, 2)
                 _effect(7, 0, 0, 2)
                 return thread
         if ptr_is_null(thread) == 0:
@@ -3080,7 +3119,16 @@ def _run_ready_step() -> int:
 
 
 def _run_ready_thread(ready, continuation) -> int:
-    """Run one ready thread; the caller holds and releases ``ready``."""
+    """Run one ready thread; the caller holds and releases ``ready``.
+
+    Until the final _step_finished this carrier owns the thread (offset 40
+    is 2): no wakeup queues it, so no other carrier runs it. Everything the
+    step decides about the thread -- a failure, completing a body that
+    returned without parking -- happens before that call. Read after it,
+    the thread's RUNNING state may be another carrier's run, and completing
+    it then ended a live thread with None.
+    """
+    result: int = 1
     continuation_kind: int = 0
     if ptr_is_null(continuation) == 0 and is_tagged_int(continuation) == 0:
         continuation_kind = load_i32(continuation, 8)
@@ -3108,18 +3156,18 @@ def _run_ready_thread(ready, continuation) -> int:
             global_store_ptr("pcc_current_virtual_thread_py", saved)
             failure = py_current_exception()
             if ptr_is_null(failure) == 0:
-                fail_result = py_virtual_thread_fail(ready, failure)
-                if fail_result == 0:
+                if py_virtual_thread_fail(ready, failure) == 0:
                     py_clear_exception()
-                if fail_result == 0:
-                    return 1
-                return -1
-            if rc != 0:
-                return -1
-    if load_i64(ready, 32) == 2:
+                else:
+                    result = -1
+            elif rc != 0:
+                result = -1
+    if result == 1 and load_i64(ready, 32) == 2:
         if py_virtual_thread_complete(ready, global_load_ptr("py_None")) != 0:
-            return -1
-    return 1
+            result = -1
+    if _step_finished(ready) != 0:
+        return -1
+    return result
 
 
 @c_abi_export("py_virtual_thread_run_until_idle")
