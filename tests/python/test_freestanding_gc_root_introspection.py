@@ -30,6 +30,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
+    # The scheduler-root list word its walks hold.
+    "pcc_gc_scheduler_root_list_acquire",
+    "pcc_gc_scheduler_root_list_release",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_scheduler_root_head",

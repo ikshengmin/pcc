@@ -41,11 +41,17 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_object_index_find",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
+    # The Darwin thread-local descriptor bootstrap of the handled-context slot.
+    "tlv_bootstrap",
     "py_decref", "py_incref", "pcc_gc_config_ensure",
     "pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock",
     "pcc_gc_granule_is_object_start", "pcc_gc_managed_pointer_index_contains",
 }
-RAW_GLOBAL_IMPORTS = {"pcc_gc_backend_selected", "pcc_gc_gray_count", "pcc_gc_metric_pin"}
+RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend_selected", "pcc_gc_gray_count", "pcc_gc_metric_pin",
+    # The refcount mode and configuration the pin fast paths read.
+    "pcc_gc_refcount_fast", "pcc_gc_config_initialized",
+}
 
 
 def _exported_symbols(source: str) -> set[str]:

@@ -37,6 +37,19 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_continuation_root_unlink_locked",
     "pcc_gc_root_slot_count_from_map",
     "pcc_gc_root_map_is_borrowed",
+    # The scheduler-root list word, its held-word link/unlink and node reuse.
+    "pcc_gc_scheduler_root_list_acquire",
+    "pcc_gc_scheduler_root_list_release",
+    "pcc_gc_scheduler_root_link_held",
+    "pcc_gc_scheduler_root_unlink_held",
+    "pcc_gc_scheduler_root_node_take",
+    "pcc_gc_scheduler_root_node_give",
+}
+# The list word and the free-node list this module owns.
+OWNED_GLOBALS = {
+    "pcc_py_gc_scheduler_root_spin",
+    "pcc_py_gc_scheduler_root_free_head",
+    "pcc_py_gc_scheduler_root_free_count",
 }
 RAW_FUNCTION_IMPORTS = {
     "free",
@@ -147,7 +160,7 @@ def test_root_registry_object_has_exact_raw_closure(tmp_path: Path, emitter: str
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS
+    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | OWNED_GLOBALS
 
 
 def _harness_source(concurrent: bool) -> str:
