@@ -56,6 +56,57 @@ print(sorted(events))
         assert ran.stdout == str(backend) + "\n" + oracle.stdout
 
 
+RESUMED_REBIND_PROGRAM = """import gc
+events = []
+class Token:
+    def __init__(self, label):
+        self.label = label
+    def __del__(self):
+        events.append(self.label)
+def worker():
+    local = Token("local")
+    yield None
+    local = None
+    gc.collect()
+    yield list(events)
+    held = [Token("operand")]
+    yield None
+    del held
+    gc.collect()
+    yield list(events)
+def exercise():
+    iterator = worker()
+    next(iterator)
+    print(next(iterator))
+    next(iterator)
+    print(next(iterator))
+exercise()
+"""
+
+
+def test_resumed_generator_frame_does_not_keep_rebound_locals(tmp_path, pcc_runtime_archive):
+    """A resumed body owns its locals; the frame keeps nothing behind.
+
+    The frame used to keep a copy of each value saved at a yield until the
+    next yield or completion, so a local rebound or deleted after resuming
+    stayed alive and its finalizer ran late.
+    """
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = tmp_path / "resumed_rebind.py"
+    source.write_text(RESUMED_REBIND_PROGRAM)
+    oracle = subprocess.run([sys.executable, str(source)], text=True, capture_output=True,
+                            check=True, timeout=10)
+    executable = tmp_path / "resumed_rebind"
+    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+                   ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    for backend in range(5):
+        ran = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15,
+                             env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
+        assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
+        assert ran.stdout == oracle.stdout, f"GC{backend}"
+
+
 def test_unaccepted_frame_moves_stay_out_of_application_codegen(tmp_path, monkeypatch):
     from pcc.frontends.python.pipeline import compile_python
 
