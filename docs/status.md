@@ -83,7 +83,7 @@ Open, in the order they are being taken:
   (older dyld: 64-bit fields at +8 and +16), so compiled code cannot inline
   dyld's layout. Candidate: one pthread-key thread block read through
   `tpidrro_el0` after a startup self-check, as Go does on darwin/arm64.
-- Failing on 92c9daf56's parent as well, proposed as separate sessions:
+- Failing on 92c9daf56's parent as well, to be fixed in this work:
   `test_virtual_thread_park_effect::test_cross_module_may_park_uses_generator_abi_and_resumes`
   (prints None, CPython 42); `test_exception_constructor_owned_result`,
   `test_generator_operand_root_groups`, `test_super_call_result_roots`
@@ -94,6 +94,38 @@ Open, in the order they are being taken:
 - The C probes of the GC substrate tests still compile with the host `cc`
   (test harness only, `tests/python/_gc_substrate_common.py`); pcc's own C
   frontend could build them.
+
+## P0 follow-up: GC4 costs and a GC4 virtual-thread fault (2026-10-22, Claude)
+
+Source: `shenming/master` 6b5a484e9.
+
+- Stopped-world polls (27839a001): the owner of a stopped world polled the
+  slow path on every loop of the runtime code it ran (31% of GC4 st_alloc).
+  The poll flag is now cleared once every other mutator is parked or
+  exited; `pcc_thread_world_stop_py` publishes the stopped world. Test:
+  `tests/python/test_stop_the_world_poll_flag.py`.
+- GC4 remembered set (7d8bc0f6c): a dying remembered owner walked the whole
+  set twice; entries now chain per owner (head in the member index) while
+  the index is exact. GC4 st_alloc 39.3 s -> 32.1 s (GC0 3.29 s). Test:
+  `tests/python/test_gc_remembered_membership_lifecycle.py`.
+- Operand method calls on receivers of unknown class (80699cbbb) load the
+  method with `py_obj_load_method` into registered roots instead of
+  binding it.
+- GC4 virtual threads (6b5a484e9): the scheduler step kept the running
+  thread as a raw pointer across its resume; when GC4 moved the thread the
+  step completed it with None, so the gateway benchmark failed on GC4 at
+  C100 from the second round. The step now leases the thread and its
+  continuation. Test: `tests/python/test_vthread_scheduler_holds_running_thread.py`.
+- Gateway C100 (20 rounds, one carrier) after these: GC0 9,936, GC1 2,450,
+  GC2 2,461, GC3 2,227, GC4 1,646 requests/s; CPython asyncio 85,731.
+- Remaining GC4 cost in st_alloc: the graph lock around
+  `pcc_gc_pointer_is_managed` (zpage objects miss the granule fast path, so
+  every refcount operation takes the lock) and object-index probes in the
+  load barrier (`pcc_gc_backend4_slot_needs_resolve`).
+- Found and not yet fixed: a parking call nested in an expression in a
+  resumable function (`totals.append(batch(n))`) fails the self IR
+  verifier with an SSA-dominance error; `test_gc_abstraction_surface::test_colored_relocating_gc_read_barrier_clears_candidate`
+  fails on the parent commit too.
 
 ## P0 threaded runtime: threading locks and virtual-thread locks (2026-10-22, Claude)
 
