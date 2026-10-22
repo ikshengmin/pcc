@@ -95,6 +95,54 @@ Open, in the order they are being taken:
   (test harness only, `tests/python/_gc_substrate_common.py`); pcc's own C
   frontend could build them.
 
+## P0 follow-up: lock-free GC4 provenance, one thread-state word, virtual-thread carrier races (2026-10-22, Claude)
+
+Source: `shenming/master` 00f6b6238.
+
+- GC4 object provenance without the graph lock (087be68b3, 3a0e8f0c4):
+  `pcc_gc_pointer_is_managed` asks the GC1-4 object index and the
+  managed-pointer set with an unlocked probe (`pcc_gc_index_py_seen`)
+  before taking the lock, so a refcount operation on a zpage object no
+  longer takes it. The tables of the four indexes read without the lock
+  (object, managed-pointer, forwarding, forwarding target) are published
+  with their capacity as one record and retired, not freed, when replaced;
+  collections free them with the world stopped, and a one-thread process at
+  once. This also fixes the GC4 load barrier, which already probed the
+  object and forwarding indexes without the lock while a rehash freed the
+  table under it: `tests/python/test_gc_index_unlocked_readers.py` (its
+  find-only harness failed every run on the old index module).
+- One thread-state word (be58921a7): the no-park depth, the object-graph
+  lock depth, the scheduler-lock marker, registration, the parked mark and a
+  deferred-tripwire flag share `pcc_tls_thread_state_py`, so a graph lock
+  and unlock look up one thread-local each (were seven) and a safepoint
+  poll one (were four).
+- st_alloc (60000, interleaved runs, medians): GC4 6.65 s at 8362f0f34 ->
+  5.76 s with the provenance change -> 5.03 s with the state word; GC0
+  0.98 s -> 0.87 s.
+- Virtual threads on several carriers (00f6b6238): a thread that
+  parked or yielded could be woken and run by a second carrier before its
+  first carrier had returned from the resume; a thread could be queued
+  twice, and the stale pop cleared the running carrier's mark; and the
+  step, after re-queueing the thread, read its state and completed it with
+  None when another carrier was already running it. A thread is now marked
+  as running from its dequeue until the step's last action
+  (`_step_finished`); wakeups in that window only make it READY and the
+  step queues it. The vthread lock program
+  (`tests/python/test_virtual_thread_lock_mechanisms.py`) lost counts or
+  results in about 8% of runs on GC1-GC4 and passes 500/500 now;
+  `tests/python/test_vthread_carrier_migration.py` (twelve threads, four
+  carriers, no shared data) failed about every other run before.
+- Test fixes: the granule-growth probe passed an untyped address to `c_ptr`
+  parameters, which pass an untyped int on as the int object (c1d2b70ff);
+  the super-call result-root test still selected the removed
+  `PCC_WITH_THREADS=0` runtime.
+- Remaining GC4 lock costs in st_alloc: `pcc_gc_store_root` (24% of the
+  lock's time), foreign leases (26%) and scheduler-root registration (14%).
+  GC3's generational root scan runs between stops and relies on the graph
+  lock and the registry revision, so scheduler-root registration cannot drop
+  the graph lock on GC3/GC4 without redesigning that scan. On Darwin each
+  thread-local lookup is still a `_tlv_get_addr` call with register saves.
+
 ## P0 follow-up: GC4 costs and a GC4 virtual-thread fault (2026-10-22, Claude)
 
 Source: `shenming/master` 6b5a484e9.
