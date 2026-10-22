@@ -8,7 +8,51 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BinOp, BoolType, Call, ClassDef, Compare, DynType, Expr, ExprStmt, For, FuncDef, If, IntType, Name, NoneType, Return, Stmt, ExceptHandler, Try, TupleExpr, While, With
+from pcc.frontends.python.py_ast import (
+    Assign,
+    Attr,
+    AugAssign,
+    BinOp,
+    BoolExpr,
+    BoolLit,
+    BoolType,
+    BytesLit,
+    Call,
+    ClassDef,
+    Compare,
+    ComplexLit,
+    ComplexType,
+    DictExpr,
+    DynType,
+    ExceptHandler,
+    Expr,
+    ExprStmt,
+    FloatLit,
+    FloatType,
+    For,
+    FuncDef,
+    If,
+    IfExpr,
+    IntLit,
+    IntType,
+    Lambda,
+    ListExpr,
+    Name,
+    NoneLit,
+    NoneType,
+    Raise,
+    RawPointerType,
+    Return,
+    Slice,
+    Stmt,
+    StrLit,
+    Subscript,
+    Try,
+    TupleExpr,
+    UnaryOp,
+    While,
+    With,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names as _ast_field_names
@@ -857,6 +901,483 @@ def _dataclass_field_names(obj):
     if isinstance(obj, Stmt):
         return _ast_field_names(obj)
     return ()
+
+
+# A resumable function suspends inside an expression wherever a call parks:
+# its resume edge enters after the park, where no SSA value computed before
+# it is defined, and every operand Python evaluated before the park must keep
+# that value. A simple statement therefore evaluates those operands, and the
+# parking operand itself, into operand roots of the generator frame first, in
+# Python evaluation order, and lowers the rest of the statement from them.
+
+_SPILL_LITERALS = (IntLit, FloatLit, ComplexLit, BoolLit, NoneLit, StrLit, BytesLit)
+_SPILL_WRAPPERS = ("*", "__starred__", "**")
+_SPILL_SCALAR_TYPES = (IntType, FloatType, BoolType, ComplexType)
+# Receivers whose method lookup cannot observe argument evaluation.
+_SPILL_FIXED_METHOD_TYPES = ("list", "dict", "set", "frozenset", "str", "bytes",
+                             "bytearray", "tuple", "int", "float", "bool", "complex")
+
+
+def generator_call_suspends(host, node, fd, owner_class_name) -> bool:
+    """Whether ``node`` can park its resumable caller.
+
+    The classification is frame planning's: source yields and awaits,
+    virtual-thread primitives and callbacks, proven may-park functions and
+    methods, and (in a module with parking callables) threading primitives
+    that park through their receiver.
+    """
+    if not isinstance(node, Call):
+        return False
+    if host._yield_sentinel_call(node) is not None:
+        return True
+    func = node.func
+    if isinstance(func, Name) and func.ident == "__await__":
+        return True
+    if host._vthread_suspension_call(node, fd):
+        return True
+    if host._vthread_dynamic_callback_call(node, fd):
+        return True
+    cache = getattr(host, "_vthread_binding_cache", None)
+    may_park_names = getattr(host, "_vthread_may_park_func_names", set())
+    may_park_method_keys = getattr(host, "_vthread_may_park_method_keys", set())
+    if isinstance(func, Name):
+        return vthread_proven_direct_name_call(fd, node, may_park_names, cache) is not None
+    if isinstance(func, Attr):
+        receiver_type = getattr(getattr(func.obj, "ty", None), "name", "")
+        if (func.name in ("acquire", "wait", "join")
+                and (may_park_names or may_park_method_keys)
+                and not isinstance(func.obj, StrLit) and not isinstance(func.obj, BytesLit)
+                and receiver_type not in ("str", "bytes")):
+            return True
+        if vthread_proven_method_call_key(
+            node,
+            owner_class_name,
+            may_park_method_keys,
+            host.ast_module,
+            fd,
+            proof_cache=cache,
+        ) is not None:
+            return True
+        return vthread_proven_export_method_call_key(
+            node, getattr(host, "_native_module_exports", None), host.ast_module, cache,
+        ) is not None
+    return False
+
+
+def generator_expr_suspends(host, expr, fd, owner_class_name) -> bool:
+    """Whether evaluating ``expr`` can park its resumable function."""
+    work = [expr]
+    while work:
+        node = work.pop()
+        if node is None:
+            continue
+        if isinstance(node, tuple):
+            for item in node:
+                work.append(item)
+            continue
+        if isinstance(node, FuncDef) or isinstance(node, ClassDef) or isinstance(node, Lambda):
+            continue
+        if isinstance(node, Call) and generator_call_suspends(host, node, fd, owner_class_name):
+            return True
+        for field in _dataclass_field_names(node):
+            if field != "span" and field != "ty":
+                work.append(_dataclass_field_value(node, field, None))
+    return False
+
+
+def _spill_wrapped_operand(node):
+    if (isinstance(node, Call) and isinstance(node.func, Name)
+            and node.func.ident in _SPILL_WRAPPERS
+            and len(node.args) == 1 and not node.kwargs):
+        return node.args[0]
+    return None
+
+
+def _spill_placeholder(host, operand, state):
+    """Record ``operand`` for evaluation into a frame root; return its name."""
+    ty = getattr(operand, "ty", None)
+    if isinstance(ty, RawPointerType) or (ty is not None and host._is_valueclass_payload_type(ty)):
+        state["refused"] = True
+        return operand
+    if ty is None or isinstance(ty, _SPILL_SCALAR_TYPES):
+        # A root holds the boxed object of a scalar operand.
+        ty = DynType(name="dyn")
+    ident = host._fresh("pcc.spill")
+    state["hoists"].append((ident, operand))
+    return Name(span=operand.span, ty=ty, ident=ident)
+
+
+def _spill_ordered(host, operands, fd, owner, state):
+    """Spill every operand up to the last one that can park; None if none can."""
+    last = -1
+    for index, operand in enumerate(operands):
+        if operand is None:
+            continue
+        inner = _spill_wrapped_operand(operand)
+        if generator_expr_suspends(host, inner if inner is not None else operand, fd, owner):
+            last = index
+    if last < 0:
+        return None
+    result = []
+    for index, operand in enumerate(operands):
+        if operand is None or index > last or state["refused"]:
+            result.append(operand)
+            continue
+        inner = _spill_wrapped_operand(operand)
+        if inner is not None and index < last:
+            # Python expands the iterable before the later park; a root
+            # holding the iterable would expand it after.
+            state["refused"] = True
+            result.append(operand)
+            continue
+        target = inner if inner is not None else operand
+        if index < last and isinstance(target, _SPILL_LITERALS):
+            result.append(operand)
+            continue
+        spilled = _spill_placeholder(
+            host, _spill_normalize(host, target, fd, owner, state), state,
+        )
+        if inner is not None:
+            spilled = Call(span=operand.span, ty=operand.ty, func=operand.func,
+                           args=(spilled,), kwargs=())
+        result.append(spilled)
+    return result
+
+
+def _spill_static_namespace(host, obj) -> bool:
+    """A module or class whose attribute lowering is static, not a value."""
+    if not isinstance(obj, Name) or obj.ident in host.env:
+        return False
+    if host._native_module_name_for_object_expr(obj) is not None:
+        return True
+    ident = obj.ident
+    for aliases in (
+        getattr(host, "_native_builtin_module_aliases", {}),
+        getattr(host, "_native_module_aliases", {}),
+        getattr(host, "_native_module_object_aliases", {}),
+    ):
+        if ident in aliases:
+            return True
+    return ident in host.class_lowering.classes
+
+
+def _spill_receiver_lookup_is_fixed(host, obj) -> bool:
+    """Whether the method lookup on ``obj`` may follow argument evaluation."""
+    if host._class_hint_for_expr(obj) is not None:
+        return True
+    ty = getattr(obj, "ty", None)
+    return ty is not None and getattr(ty, "name", "") in _SPILL_FIXED_METHOD_TYPES
+
+
+def _spill_call(host, call, fd, owner, state):
+    func = call.func
+    operands = []
+    func_kind = ""
+    if isinstance(func, Attr):
+        if not _spill_static_namespace(host, func.obj):
+            if _spill_receiver_lookup_is_fixed(host, func.obj):
+                func_kind = "receiver"
+                operands.append(func.obj)
+            else:
+                # Python looks the method up before the arguments run.
+                func_kind = "bound"
+                operands.append(func)
+    elif not isinstance(func, Name):
+        func_kind = "callable"
+        operands.append(func)
+    if call.is_set_literal:
+        if len(call.args) != 1 or not isinstance(call.args[0], ListExpr):
+            return call
+        elems = call.args[0].elems
+        spilled = _spill_ordered(host, list(elems), fd, owner, state)
+        if spilled is None:
+            return call
+        listed = ListExpr(span=call.args[0].span, ty=call.args[0].ty, elems=tuple(spilled))
+        return Call(span=call.span, ty=call.ty, func=call.func, args=(listed,),
+                    kwargs=call.kwargs, operand_order=call.operand_order,
+                    is_set_literal=True)
+    order = []
+    if call.operand_order:
+        for kind, index in call.operand_order:
+            if kind == "arg" or kind == "kw":
+                order.append((kind, index))
+    else:
+        for index in range(len(call.args)):
+            order.append(("arg", index))
+        for index in range(len(call.kwargs)):
+            order.append(("kw", index))
+    for kind, index in order:
+        if kind == "arg":
+            operands.append(call.args[index])
+        else:
+            operands.append(call.kwargs[index][1])
+    spilled = _spill_ordered(host, operands, fd, owner, state)
+    if spilled is None:
+        return call
+    position = 0
+    new_func = func
+    if func_kind == "receiver":
+        new_func = Attr(span=func.span, ty=func.ty, obj=spilled[0], name=func.name)
+        position = 1
+    elif func_kind == "bound" or func_kind == "callable":
+        new_func = spilled[0]
+        position = 1
+    args = list(call.args)
+    kwargs = list(call.kwargs)
+    for kind, index in order:
+        value = spilled[position]
+        position += 1
+        if kind == "arg":
+            args[index] = value
+        else:
+            kwargs[index] = (kwargs[index][0], value)
+    return Call(span=call.span, ty=call.ty, func=new_func, args=tuple(args),
+                kwargs=tuple(kwargs), operand_order=call.operand_order,
+                is_set_literal=call.is_set_literal)
+
+
+def _spill_normalize(host, expr, fd, owner, state):
+    """``expr`` with no SSA value live across a park inside it.
+
+    Operands evaluated before the last parking operand, and that operand,
+    move into ``state["hoists"]``; evaluating the result can still park, but
+    only at its own root. Conditional operands (the right of ``and``/``or``,
+    the arms of ``x if c else y``) and nested scopes stay in place.
+    """
+    if expr is None or state["refused"]:
+        return expr
+    if not generator_expr_suspends(host, expr, fd, owner):
+        return expr
+    if isinstance(expr, Call):
+        if host._vthread_dynamic_callback_call(expr, fd):
+            # vt.call keeps its callable and argument list in frame roots
+            # while a later argument parks.
+            return expr
+        return _spill_call(host, expr, fd, owner, state)
+    if isinstance(expr, Attr):
+        spilled = _spill_ordered(host, [expr.obj], fd, owner, state)
+        if spilled is None:
+            return expr
+        return Attr(span=expr.span, ty=expr.ty, obj=spilled[0], name=expr.name)
+    if isinstance(expr, Subscript):
+        index = expr.idx
+        if isinstance(index, Slice):
+            spilled = _spill_ordered(
+                host, [expr.obj, index.lo, index.hi, index.step], fd, owner, state,
+            )
+            if spilled is None:
+                return expr
+            sliced = Slice(span=index.span, ty=index.ty, lo=spilled[1],
+                           hi=spilled[2], step=spilled[3])
+            return Subscript(span=expr.span, ty=expr.ty, obj=spilled[0], idx=sliced)
+        spilled = _spill_ordered(host, [expr.obj, index], fd, owner, state)
+        if spilled is None:
+            return expr
+        return Subscript(span=expr.span, ty=expr.ty, obj=spilled[0], idx=spilled[1])
+    if isinstance(expr, BinOp):
+        spilled = _spill_ordered(host, [expr.lhs, expr.rhs], fd, owner, state)
+        if spilled is None:
+            return expr
+        return BinOp(span=expr.span, ty=expr.ty, op=expr.op, lhs=spilled[0], rhs=spilled[1])
+    if isinstance(expr, Compare):
+        spilled = _spill_ordered(host, [expr.lhs, expr.rhs], fd, owner, state)
+        if spilled is None:
+            return expr
+        return Compare(span=expr.span, ty=expr.ty, op=expr.op, lhs=spilled[0], rhs=spilled[1])
+    if isinstance(expr, UnaryOp):
+        spilled = _spill_ordered(host, [expr.operand], fd, owner, state)
+        if spilled is None:
+            return expr
+        return UnaryOp(span=expr.span, ty=expr.ty, op=expr.op, operand=spilled[0])
+    if isinstance(expr, BoolExpr):
+        spilled = _spill_ordered(host, [expr.left], fd, owner, state)
+        if spilled is None:
+            return expr
+        return BoolExpr(span=expr.span, ty=expr.ty, op=expr.op, left=spilled[0], right=expr.right)
+    if isinstance(expr, IfExpr):
+        spilled = _spill_ordered(host, [expr.cond], fd, owner, state)
+        if spilled is None:
+            return expr
+        return IfExpr(span=expr.span, ty=expr.ty, cond=spilled[0],
+                      then_e=expr.then_e, else_e=expr.else_e)
+    if isinstance(expr, ListExpr):
+        spilled = _spill_ordered(host, list(expr.elems), fd, owner, state)
+        if spilled is None:
+            return expr
+        return ListExpr(span=expr.span, ty=expr.ty, elems=tuple(spilled))
+    if isinstance(expr, TupleExpr):
+        spilled = _spill_ordered(host, list(expr.elems), fd, owner, state)
+        if spilled is None:
+            return expr
+        return TupleExpr(span=expr.span, ty=expr.ty, elems=tuple(spilled))
+    if isinstance(expr, DictExpr):
+        operands = []
+        for key, value in expr.pairs:
+            unpack = isinstance(key, Name) and key.ident == "**"
+            operands.append(None if unpack else key)
+            operands.append(value)
+        spilled = _spill_ordered(host, operands, fd, owner, state)
+        if spilled is None:
+            return expr
+        pairs = []
+        for index, pair in enumerate(expr.pairs):
+            key = pair[0] if spilled[2 * index] is None else spilled[2 * index]
+            pairs.append((key, spilled[2 * index + 1]))
+        return DictExpr(span=expr.span, ty=expr.ty, pairs=tuple(pairs))
+    return expr
+
+
+def _spill_plain_local(host, fd, ident) -> bool:
+    """A local only this activation can rebind while it is parked."""
+    if ident not in host.env or ident in getattr(host, "_current_global_names", set()):
+        return False
+    boxed = getattr(host, "_closure_boxed_params", {}).get(fd.name, ())
+    return ident not in boxed
+
+
+def _spill_function(host):
+    """The resumable function being lowered and its method owner, or None."""
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if not contexts or contexts[-1].get("resume_function") is not host.current_function:
+        return None
+    fd = host.current_func_def
+    if fd is None:
+        return None
+    owner = vthread_method_owner_for_funcdef(
+        host.ast_module, fd, getattr(host, "_vthread_binding_cache", None),
+    )
+    return fd, owner
+
+
+def plan_generator_expression_spills(host, expr):
+    """``(hoists, expression)`` for one truth test that parks after
+    evaluating other operands, else None; see the statement plan."""
+    function = _spill_function(host)
+    if function is None:
+        return None
+    fd, owner = function
+    state = {"hoists": [], "refused": False}
+    rebuilt = _spill_normalize(host, expr, fd, owner, state)
+    if state["refused"] or not state["hoists"]:
+        return None
+    return state["hoists"], rebuilt
+
+
+def plan_generator_statement_spills(host, stmt):
+    """Return ``(hoists, statement)`` for a statement that parks after
+    evaluating other operands, else None.
+
+    ``hoists`` lists ``(name, operand)`` in Python evaluation order; the
+    statement reads each spilled operand through its name. A ``for``
+    statement keeps the roots of its iterable's operands until the loop
+    ends, as its iterator usually keeps those values alive anyway.
+    """
+    if not (isinstance(stmt, ExprStmt) or isinstance(stmt, Assign) or isinstance(stmt, Return)
+            or isinstance(stmt, Raise) or isinstance(stmt, AugAssign)
+            or isinstance(stmt, For)):
+        return None
+    function = _spill_function(host)
+    if function is None:
+        return None
+    fd, owner = function
+    state = {"hoists": [], "refused": False}
+    rebuilt = None
+    if isinstance(stmt, ExprStmt):
+        rebuilt = ExprStmt(span=stmt.span, expr=_spill_normalize(host, stmt.expr, fd, owner, state))
+    elif isinstance(stmt, Assign):
+        for target in stmt.targets:
+            if generator_expr_suspends(host, target, fd, owner):
+                return None
+        rebuilt = Assign(span=stmt.span, targets=stmt.targets,
+                         value=_spill_normalize(host, stmt.value, fd, owner, state),
+                         annotation=stmt.annotation, has_value=stmt.has_value)
+    elif isinstance(stmt, Return):
+        if stmt.value is None:
+            return None
+        rebuilt = Return(span=stmt.span, value=_spill_normalize(host, stmt.value, fd, owner, state))
+    elif isinstance(stmt, Raise):
+        spilled = _spill_ordered(host, [stmt.exc, stmt.cause], fd, owner, state)
+        if spilled is None:
+            return None
+        rebuilt = Raise(span=stmt.span, exc=spilled[0], cause=spilled[1])
+    elif isinstance(stmt, For):
+        if stmt.is_async or generator_expr_suspends(host, stmt.target, fd, owner):
+            return None
+        rebuilt = For(span=stmt.span, target=stmt.target,
+                      iter=_spill_normalize(host, stmt.iter, fd, owner, state),
+                      body=stmt.body, else_body=stmt.else_body, is_async=False)
+    else:
+        # The current value of a local that only this activation writes is
+        # the same before and after the park.
+        if (not isinstance(stmt.target, Name)
+                or not _spill_plain_local(host, fd, stmt.target.ident)
+                or not generator_expr_suspends(host, stmt.value, fd, owner)):
+            return None
+        value = _spill_placeholder(
+            host, _spill_normalize(host, stmt.value, fd, owner, state), state,
+        )
+        rebuilt = AugAssign(span=stmt.span, target=stmt.target, op=stmt.op, value=value)
+    if state["refused"] or not state["hoists"]:
+        return None
+    return state["hoists"], rebuilt
+
+
+def begin_generator_statement_spills(host, hoists):
+    """Evaluate each spilled operand into a frame root and bind its name."""
+    previous = host._current_try_err_block()
+    saved_error = host._try_err_block
+    saved_cpy = host._cpy_operand_cleanup_block
+    target = previous if previous is not None else host._ensure_fn_err_exit()
+    roots = []
+    bound = []
+    rooted = getattr(host, "_gc_rooted_local_names", None)
+    borrowed = getattr(host, "_borrowed_gc_rooted_local_names", None)
+    for ident, operand in hoists:
+        hint = host._class_hint_for_expr(operand)
+        root = host._emit_slot_call_operand(operand, "spill")
+        roots.append(root)
+        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
+        host._cpy_operand_cleanup_block = host._try_err_block
+        owner_name = None
+        for name, entry in host.env.items():
+            if entry[0] is root:
+                owner_name = name
+                break
+        if owner_name is None:
+            raise L1CodegenError("spilled operand root has no frame binding")
+        host.env[ident] = host.env[owner_name]
+        added = []
+        if rooted is not None and owner_name in rooted:
+            rooted.add(ident)
+            added.append(rooted)
+        if borrowed is not None and owner_name in borrowed:
+            borrowed.add(ident)
+            added.append(borrowed)
+        if hint is not None:
+            host.env_class_hint[ident] = hint
+        bound.append((ident, added, hint is not None))
+    return {"roots": roots, "bound": bound, "error": saved_error, "cpy": saved_cpy}
+
+
+def finish_generator_statement_spills(host, spills) -> None:
+    """Release the spilled operands once the statement completed normally.
+
+    An exception reaches the cleanup block installed for them, and a return
+    leaves them to the frame's owned-root cleanup.
+    """
+    if not host._builder_block_is_terminated():
+        host._release_slot_call_roots(tuple(spills["roots"]))
+
+
+def unbind_generator_statement_spills(host, spills) -> None:
+    host._try_err_block = spills["error"]
+    host._cpy_operand_cleanup_block = spills["cpy"]
+    for ident, added, hinted in spills["bound"]:
+        host.env.pop(ident, None)
+        for names in added:
+            names.discard(ident)
+        if hinted:
+            host.env_class_hint.pop(ident, None)
 
 
 class GeneratorLoweringMixin:

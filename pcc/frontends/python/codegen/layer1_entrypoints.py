@@ -13,6 +13,12 @@ from pcc.frontends.python.py_ast import Expr, Module, Stmt
 from pcc.frontends.python.codegen.expr_dispatch_lowering import ExprDispatchLoweringMixin
 from pcc.frontends.python.codegen.errors import CodegenDiagnosticError
 from pcc.frontends.python.codegen.generation_lowering import GenerationLoweringMixin
+from pcc.frontends.python.codegen.generator_lowering import (
+    begin_generator_statement_spills,
+    finish_generator_statement_spills,
+    plan_generator_statement_spills,
+    unbind_generator_statement_spills,
+)
 from pcc.frontends.python.codegen.layer1_init import Layer1InitMixin
 from pcc.frontends.python.codegen.stmt_dispatch_lowering import StmtDispatchLoweringMixin
 
@@ -371,7 +377,16 @@ class L1CodeGenEntrypointMixin:
             self._try_err_block = scope_error
             self._cpy_operand_cleanup_block = scope_error
         try:
-            StmtDispatchLoweringMixin._emit_stmt_impl(self, stmt)
+            spill = plan_generator_statement_spills(self, stmt)
+            if spill is None:
+                StmtDispatchLoweringMixin._emit_stmt_impl(self, stmt)
+            else:
+                spills = begin_generator_statement_spills(self, spill[0])
+                try:
+                    StmtDispatchLoweringMixin._emit_stmt_impl(self, spill[1])
+                    finish_generator_statement_spills(self, spills)
+                finally:
+                    unbind_generator_statement_spills(self, spills)
         except BaseException as exc:
             self._codegen_trace_dump(exc)
             raise
