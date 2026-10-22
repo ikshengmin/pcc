@@ -268,6 +268,9 @@ pcc_gc_precise_stack_diff_if_requested = extern(
     "pcc_gc_precise_stack_diff_if_requested", (), c_void
 )
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_reclaim_retired_index_tables = extern(
+    "pcc_gc_reclaim_retired_index_tables", (), c_int64
+)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
@@ -1288,6 +1291,7 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
+    pcc_gc_reclaim_retired_index_tables()
     pcc_gc_begin_explicit_tracing_collect()
     collected: int = 0
     idle_rounds: int = 0
@@ -1529,6 +1533,7 @@ def pcc_gc_collect(reason: int) -> int:
         while stw != 0:
             pcc_thread_safepoint()
             stw = pcc_stop_the_world()
+        pcc_gc_reclaim_retired_index_tables()
         if backend == 3 or backend == 4:
             # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
             # compare the stopped stack's mapped roots with the registered ones.

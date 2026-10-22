@@ -64,6 +64,9 @@ pcc_thread_owns_stopped_world = extern(
 )
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_reclaim_retired_index_tables = extern(
+    "pcc_gc_reclaim_retired_index_tables", (), c_int64
+)
 pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
 pcc_gc_trace_cext_referents_unlocked = extern(
     "pcc_gc_trace_cext_referents_unlocked", (c_ptr, c_ptr), c_void
@@ -935,6 +938,7 @@ def pcc_gc_backend4_maybe_auto_step() -> None:
     stopped: i64 = pcc_stop_the_world()
     processed: i64 = 0
     if stopped == 0:
+        pcc_gc_reclaim_retired_index_tables()
         processed = pcc_gc_step(budget)
         pcc_gc_tracing_discharge_debt(processed)
         if processed == 0:

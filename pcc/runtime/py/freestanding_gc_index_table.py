@@ -24,6 +24,8 @@ one of the two places.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, extern
 from pcc.unsafe import (
+    atomic_load_i64,
+    atomic_store_i64,
     calloc,
     define_global_i64,
     define_global_ptr_null,
@@ -37,6 +39,7 @@ from pcc.unsafe import (
     logical_shift_right_i64,
     null,
     wrapping_mul_i64,
+    ptr_add,
     ptr_diff,
     ptr_eq,
     ptr_is_null,
@@ -66,12 +69,17 @@ define_global_i64("pcc_py_gc_object_used", 0)
 
 # Key-only provenance set for managed objects that deliberately have no GC
 # object node (backend 0, graph leaves, and explicitly registered runtime
-# objects).  A slot is either NULL or one exact managed pointer; callers hold
-# the common GC graph lock, so lookup never needs to inspect the candidate's
-# header or guess from its virtual address.
+# objects).  A slot is either NULL or one exact managed pointer; writers and
+# the full lookup hold the common GC graph lock, so lookup never needs to
+# inspect the candidate's header or guess from its virtual address.
 define_global_ptr_null("pcc_py_gc_managed_pointer_slots")
 define_global_i64("pcc_py_gc_managed_pointer_cap", 0)
 define_global_i64("pcc_py_gc_managed_pointer_count", 0)
+
+# Tables that a rehash, clear or plan commit replaced in an index read
+# without the graph lock (see _index_slots_cell_is_shared): a list of
+# 16-byte nodes {next, table}, freed by pcc_gc_index_reclaim_retired.
+define_global_ptr_null("pcc_py_gc_index_retired_tables")
 
 define_global_ptr_null("pcc_py_gc_forwarding_slots")
 define_global_i64("pcc_py_gc_forwarding_cap", 0)
@@ -174,6 +182,133 @@ def pcc_gc_index_py_hash_ptr(key: c_ptr) -> i64:
     return value ^ logical_shift_right_i64(value, 32)
 
 
+@c_abi_export("pcc_gc_index_slots_cell_is_shared")
+def _index_slots_cell_is_shared(slots_cell: c_ptr) -> i64:
+    """Whether this index is read without the graph lock.
+
+    The GC4 load barrier (pcc_gc_load_ptr -> pcc_gc_backend4_slot_needs_resolve)
+    probes the forwarding and object indexes without the lock, and
+    pcc_gc_pointer_is_managed probes the object and managed-pointer indexes
+    with pcc_gc_index_py_seen. Their replaced tables are retired, not freed,
+    and their slots/capacity pair is published in the order readers check.
+    """
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        return 1
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_managed_pointer_slots")) != 0:
+        return 1
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_forwarding_slots")) != 0:
+        return 1
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_forwarding_target_slots")) != 0:
+        return 1
+    return 0
+
+
+@c_abi_export("pcc_gc_index_table_publish")
+def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) -> None:
+    """Install ``slots``/``cap`` so that an unlocked reader's checked pair is safe.
+
+    Unlocked readers (pcc_gc_index_py_seen, pcc_gc_index_py_find) load the
+    slots, the capacity and the slots again, and use the pair only when both
+    slot loads agree. Growing stores the slots first and shrinking the
+    capacity first, so a capacity read between two equal slot loads never
+    exceeds the table it is paired with. Retired tables are never reused
+    before a stopped world, so equal loads cannot be two different tables.
+    """
+    if cap >= load_i64(cap_cell, 0):
+        atomic_store_i64(slots_cell, 0, ptr_diff(slots, null()), "release")
+        atomic_store_i64(cap_cell, 0, cap, "release")
+    else:
+        atomic_store_i64(cap_cell, 0, cap, "release")
+        atomic_store_i64(slots_cell, 0, ptr_diff(slots, null()), "release")
+
+
+@c_abi_export("pcc_gc_index_table_release")
+def _index_table_release(slots_cell: c_ptr, table) -> None:
+    """Free a replaced table, or retire it when unlocked readers may hold it."""
+    if ptr_is_null(table) != 0:
+        return
+    if _index_slots_cell_is_shared(slots_cell) == 0:
+        free(table)
+        return
+    node = calloc(1, 16)
+    if ptr_is_null(node) != 0:
+        # A table that cannot be retired leaks: freeing it could free memory
+        # a reader is probing.
+        return
+    store_ptr(node, 0, global_load_ptr("pcc_py_gc_index_retired_tables"))
+    store_ptr(node, 8, table)
+    global_store_ptr("pcc_py_gc_index_retired_tables", node)
+
+
+@c_abi_export("pcc_gc_index_py_seen")
+def pcc_gc_index_py_seen(
+    slots_cell: c_ptr, cap_cell: c_ptr, key: c_ptr, stride: i64
+) -> i64:
+    """1 when ``key`` is in the index, read without the graph lock; 0 = unknown.
+
+    For an index whose tables are retired (_index_slots_cell_is_shared).
+    ``stride`` is the slot size: 16 for key/node tables, 8 for the
+    managed-pointer set. A 1 is exact: a slot only ever holds a key that was
+    inserted, written with one 8-byte store, so finding ``key`` means it was
+    present when the slot was read (a concurrent removal is the free of an
+    object the caller still references, which no caller may race). A 0
+    decides nothing: a backward-shift removal may move a key past the probe,
+    and the probe gives up after 16 slots, so callers then take the locked
+    lookup.
+
+    This module is freestanding, so its functions carry no implicit stop
+    polls (pipeline.py): no thread parks between loading a table here and its
+    last slot read. Every thread a stopped world parked or exited is
+    therefore outside this probe, which is what lets the world's holder free
+    retired tables (pcc_gc_index_reclaim_retired).
+    """
+    key_bits: i64 = ptr_diff(key, null())
+    if key_bits == 0 or (key_bits & 1) != 0:
+        return 0
+    table_bits: i64 = atomic_load_i64(slots_cell, 0, "acquire")
+    cap: i64 = atomic_load_i64(cap_cell, 0, "acquire")
+    while atomic_load_i64(slots_cell, 0, "acquire") != table_bits:
+        # A rehash published between the two loads (_index_table_publish).
+        table_bits = atomic_load_i64(slots_cell, 0, "acquire")
+        cap = atomic_load_i64(cap_cell, 0, "acquire")
+    if table_bits == 0 or cap <= 0:
+        return 0
+    slots = ptr_add(null(), table_bits)
+    mask: i64 = cap - 1
+    index: i64 = pcc_gc_index_py_hash_ptr(key) & mask
+    probes: i64 = 0
+    while probes < 16:
+        candidate: i64 = atomic_load_i64(slots, index * stride, "relaxed")
+        if candidate == key_bits:
+            return 1
+        if candidate == 0:
+            return 0
+        index = (index + 1) & mask
+        probes = probes + 1
+    return 0
+
+
+@c_abi_export("pcc_gc_index_reclaim_retired")
+def pcc_gc_index_reclaim_retired() -> i64:
+    """Free the retired tables; returns how many.
+
+    Only the holder of a stopped world may call this (see
+    pcc_gc_reclaim_retired_index_tables): every other mutator is parked or
+    exited, so none is inside an unlocked probe, and none can load a retired
+    table again because its replacement was published before it was retired.
+    """
+    freed: i64 = 0
+    node = global_load_ptr("pcc_py_gc_index_retired_tables")
+    global_store_ptr("pcc_py_gc_index_retired_tables", null())
+    while ptr_is_null(node) == 0:
+        older = load_ptr(node, 0)
+        free(load_ptr(node, 8))
+        free(node)
+        freed = freed + 1
+        node = older
+    return freed
+
+
 @c_abi_export("pcc_gc_index_slot_size")
 def pcc_gc_index_slot_size() -> i64:
     """Bytes per opaque index slot, also used by preallocated GC plans."""
@@ -266,11 +401,10 @@ def pcc_gc_index_py_rehash_slots(
                 )
                 new_used = new_used + 1
             index = index + 1
-        free(old_slots)
 
-    store_ptr(slots_cell, 0, new_slots)
-    store_i64(cap_cell, 0, new_cap)
+    _index_table_publish(slots_cell, cap_cell, new_slots, new_cap)
     store_i64(used_cell, 0, new_used)
+    _index_table_release(slots_cell, old_slots)
     return 0
 
 
@@ -278,12 +412,21 @@ def pcc_gc_index_py_rehash_slots(
 def pcc_gc_index_py_find(
     slots_cell: c_ptr, cap_cell: c_ptr, key: c_ptr, reject_tagged: i64
 ) -> c_ptr:
-    slots = load_ptr(slots_cell, 0)
-    if ptr_is_null(slots) or ptr_is_null(key):
+    if ptr_is_null(key):
         return null()
     if reject_tagged != 0 and is_tagged_int(key):
         return null()
-    result: i64 = pcc_gc_index_py_find_slot(slots, load_i64(cap_cell, 0), key)
+    # Unlocked callers (the GC4 load barrier) need a slots/capacity pair from
+    # one table (_index_table_publish); under the lock the first pair is it.
+    table_bits: i64 = atomic_load_i64(slots_cell, 0, "acquire")
+    cap: i64 = atomic_load_i64(cap_cell, 0, "acquire")
+    while atomic_load_i64(slots_cell, 0, "acquire") != table_bits:
+        table_bits = atomic_load_i64(slots_cell, 0, "acquire")
+        cap = atomic_load_i64(cap_cell, 0, "acquire")
+    if table_bits == 0 or cap <= 0:
+        return null()
+    slots = ptr_add(null(), table_bits)
+    result: i64 = pcc_gc_index_py_find_slot(slots, cap, key)
     if result < 0:
         return null()
     return load_ptr(
@@ -540,11 +683,11 @@ def pcc_gc_index_py_clear(
     count_cell: c_ptr,
     used_cell: c_ptr,
 ) -> None:
-    free(load_ptr(slots_cell, 0))
-    store_ptr(slots_cell, 0, null())
-    store_i64(cap_cell, 0, 0)
+    old_slots = load_ptr(slots_cell, 0)
+    _index_table_publish(slots_cell, cap_cell, null(), 0)
     store_i64(count_cell, 0, 0)
     store_i64(used_cell, 0, 0)
+    _index_table_release(slots_cell, old_slots)
 
 
 @c_abi_export("pcc_gc_managed_pointer_find_slot")
@@ -567,7 +710,8 @@ def _managed_pointer_rehash(requested_cap: i64) -> i64:
     new_slots = calloc(new_cap, 8)
     if ptr_is_null(new_slots) != 0:
         return -1
-    old_slots = global_load_ptr("pcc_py_gc_managed_pointer_slots")
+    slots_cell = global_addr("pcc_py_gc_managed_pointer_slots")
+    old_slots = load_ptr(slots_cell, 0)
     old_cap: i64 = load_i64(global_addr("pcc_py_gc_managed_pointer_cap"), 0)
     index: i64 = 0
     while index < old_cap:
@@ -576,10 +720,39 @@ def _managed_pointer_rehash(requested_cap: i64) -> i64:
             result: i64 = _managed_pointer_find_slot(new_slots, new_cap, key)
             store_ptr(new_slots, (-result - 1) * 8, key)
         index = index + 1
-    free(old_slots)
-    global_store_ptr("pcc_py_gc_managed_pointer_slots", new_slots)
-    store_i64(global_addr("pcc_py_gc_managed_pointer_cap"), 0, new_cap)
+    _index_table_publish(
+        slots_cell, global_addr("pcc_py_gc_managed_pointer_cap"), new_slots, new_cap
+    )
+    _index_table_release(slots_cell, old_slots)
     return 0
+
+
+@c_abi_export("pcc_gc_managed_pointer_index_seen")
+def pcc_gc_managed_pointer_index_seen(obj) -> i64:
+    """1 when ``obj`` is in the managed-pointer set, without the graph lock.
+
+    0 = unknown; see pcc_gc_index_py_seen.
+    """
+    return pcc_gc_index_py_seen(
+        global_addr("pcc_py_gc_managed_pointer_slots"),
+        global_addr("pcc_py_gc_managed_pointer_cap"),
+        obj,
+        8,
+    )
+
+
+@c_abi_export("pcc_gc_object_index_seen")
+def pcc_gc_object_index_seen(obj) -> i64:
+    """1 when ``obj`` has a GC1-4 object node, without the graph lock.
+
+    0 = unknown; see pcc_gc_index_py_seen.
+    """
+    return pcc_gc_index_py_seen(
+        global_addr("pcc_py_gc_object_slots"),
+        global_addr("pcc_py_gc_object_cap"),
+        obj,
+        16,
+    )
 
 
 @c_abi_export("pcc_gc_managed_pointer_index_contains")
@@ -800,10 +973,15 @@ def pcc_gc_object_index_plan_commit(
             )
             new_used = new_used + 1
         index = index + 1
-    global_store_ptr("pcc_py_gc_object_slots", new_slots)
-    store_i64(global_addr("pcc_py_gc_object_cap"), 0, prepared_cap)
+    slots_cell = global_addr("pcc_py_gc_object_slots")
+    _index_table_publish(
+        slots_cell, global_addr("pcc_py_gc_object_cap"), new_slots, prepared_cap
+    )
     store_i64(global_addr("pcc_py_gc_object_used"), 0, new_used)
-    store_ptr(prepared_slots_io, 0, old_slots)
+    # Unlocked readers may still probe the old table: it is retired here and
+    # the caller, which frees what it gets back, gets nothing.
+    _index_table_release(slots_cell, old_slots)
+    store_ptr(prepared_slots_io, 0, null())
     return 1
 
 
@@ -951,10 +1129,14 @@ def pcc_gc_forwarding_plan_index_commit(
             )
             new_used = new_used + 1
         index = index + 1
-    store_ptr(slots_cell, 0, new_slots)
-    store_i64(cap_cell, 0, prepared_cap)
+    _index_table_publish(slots_cell, cap_cell, new_slots, prepared_cap)
     store_i64(used_cell, 0, new_used)
-    store_ptr(prepared_slots_io, 0, old_slots)
+    if _index_slots_cell_is_shared(slots_cell) != 0:
+        # Retired for unlocked readers; the caller frees what it gets back.
+        _index_table_release(slots_cell, old_slots)
+        store_ptr(prepared_slots_io, 0, null())
+    else:
+        store_ptr(prepared_slots_io, 0, old_slots)
     return 1
 
 
@@ -1235,8 +1417,7 @@ def pcc_gc_frame_index_plan_commit(
             )
             new_used = new_used + 1
         index = index + 1
-    store_ptr(slots_cell, 0, new_slots)
-    store_i64(cap_cell, 0, prepared_cap)
+    _index_table_publish(slots_cell, cap_cell, new_slots, prepared_cap)
     store_i64(used_cell, 0, new_used)
     store_ptr(prepared_slots_io, 0, old_slots)
     return 1

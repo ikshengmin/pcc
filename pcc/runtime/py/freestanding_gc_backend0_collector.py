@@ -60,6 +60,9 @@ pcc_gc_note_object_freeing = extern(
 )
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_reclaim_retired_index_tables = extern(
+    "pcc_gc_reclaim_retired_index_tables", (), c_int64
+)
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_gc_trace_continuation_roots = extern(
     "pcc_gc_trace_continuation_roots", (), c_int64
@@ -309,6 +312,7 @@ def py_gc_collect() -> i64:
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
+    pcc_gc_reclaim_retired_index_tables()
     pcc_gc_default_table_lock()
     store_i32(collecting_slot, 0, 1)
 

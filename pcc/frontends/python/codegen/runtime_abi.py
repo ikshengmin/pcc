@@ -2345,6 +2345,10 @@ def _cross_object_signatures_part_5():
     "pcc_gc_remembered_member_taint": ((), "c_void"),
     "pcc_gc_remembered_member_head": (("c_ptr",), "c_ptr"),
     "pcc_gc_remembered_member_set_head": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_managed_pointer_index_seen": (("c_ptr",), "c_int64"),
+    "pcc_gc_object_index_seen": (("c_ptr",), "c_int64"),
+    "pcc_gc_index_reclaim_retired": ((), "c_int64"),
+    "pcc_gc_reclaim_retired_index_tables": ((), "c_int64"),
     "pcc_gc_store_buffer_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promote_cext_owner_referents": (
         ("c_ptr",),

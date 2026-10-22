@@ -131,6 +131,15 @@ pcc_gc_object_index_clear = extern("pcc_gc_object_index_clear", (), c_void)
 pcc_gc_managed_pointer_index_contains = extern(
     "pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64
 )
+pcc_gc_managed_pointer_index_seen = extern(
+    "pcc_gc_managed_pointer_index_seen", (c_ptr,), c_int64
+)
+pcc_gc_object_index_seen = extern(
+    "pcc_gc_object_index_seen", (c_ptr,), c_int64
+)
+pcc_gc_index_reclaim_retired = extern(
+    "pcc_gc_index_reclaim_retired", (), c_int64
+)
 pcc_gc_granule_is_object_start = extern(
     "pcc_gc_granule_is_object_start", (c_ptr,), c_int64
 )
@@ -2530,14 +2539,35 @@ def pcc_gc_pointer_is_managed(o) -> int:
     # less, so singleton refcount traffic is too rare to pay for it here.
     # The allocator publishes LIVE with release ordering only after the object
     # header is complete.  Readers may therefore accept this exact positive
-    # without the graph lock.  Every other result takes the lock and executes
-    # the complete historical provenance chain.
+    # without the graph lock.
     if pcc_gc_granule_is_object_start(o) == 1:
+        return 1
+    # Objects outside the allocator's slabs -- every GC4 zpage object -- are
+    # registered in the GC1-4 object index once tracked and in the
+    # managed-pointer set before that. Both answer an exact positive without
+    # the lock (pcc_gc_index_py_seen). Every other result takes the lock and
+    # executes the complete historical provenance chain.
+    if pcc_gc_object_index_seen(o) != 0:
+        return 1
+    if pcc_gc_managed_pointer_index_seen(o) != 0:
         return 1
     _object_graph_lock()
     managed: int = _pointer_is_managed_no_lock(o)
     _object_graph_unlock()
     return managed
+
+
+@c_abi_export("pcc_gc_reclaim_retired_index_tables")
+def pcc_gc_reclaim_retired_index_tables() -> int:
+    """Free index tables that rehashes retired, when this thread holds a
+    stopped world; collections call it after they stop the world.
+
+    Returns the number freed, or -1 when the caller does not hold a stopped
+    world (lock-free readers may then still be probing a retired table).
+    """
+    if pcc_thread_owns_stopped_world() == 0:
+        return -1
+    return pcc_gc_index_reclaim_retired()
 
 
 @c_abi_export("pcc_gc_pointer_register")
