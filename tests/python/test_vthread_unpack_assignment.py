@@ -3,6 +3,8 @@
 import subprocess
 import sys
 
+import pytest
+
 
 PROGRAM = '''import gc
 import pcc.virtual_thread as vt
@@ -32,7 +34,7 @@ def destination(number):
 
 def worker():
     items = [0, 0]
-    values = [11, 22]
+    values = VALUES
     items[index(items, 0)], items[index(items, 1)] = values
     sink = Sink()
     sink[destination(0)], sink[destination(1)] = Value('first'), Value('second')
@@ -42,16 +44,22 @@ def worker():
 def main():
     task = vt.spawn(worker)
     vt.run(1, 128)
+    error = vt.exception(task)
+    if error is not None:
+        raise error
     print(vt.result(task))
 
 main()
 '''
 
 
+@pytest.mark.parametrize('values', ('[11, 22]', '[2**80 + 11, -(2**90 + 22)]'),
+                         ids=('small-int', 'big-int'))
 def test_unpack_preserves_values_and_target_order_across_parking(
-    tmp_path, python_program_compiler, pcc_runtime_archive,
+    tmp_path, python_program_compiler, pcc_runtime_archive, values,
 ):
-    reference = PROGRAM.split('def main():', 1)[0].replace('    vt.yield_now()', '    pass')
+    program = PROGRAM.replace('VALUES', values)
+    reference = program.split('def main():', 1)[0].replace('    vt.yield_now()', '    pass')
     reference += '\nprint(worker())\n'
     expected = subprocess.run(
         [sys.executable, '-c', reference], check=True, capture_output=True,
@@ -59,7 +67,7 @@ def test_unpack_preserves_values_and_target_order_across_parking(
     ).stdout
     source = tmp_path / 'unpack_targets.py'
     output = tmp_path / 'unpack_targets'
-    source.write_text(PROGRAM, encoding='utf-8')
+    source.write_text(program, encoding='utf-8')
     python_program_compiler(
         str(source), str(output), backend='self', libpython_mode='off',
         runtime_archive=str(pcc_runtime_archive),
