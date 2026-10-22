@@ -271,7 +271,7 @@ class DictMemory(Memory):
             self.write(slot, 0, value)
         return caller
 
-    def init(self, arguments=(), keywords=None, flags=4, exception=False, reenter=False):
+    def init(self, arguments=(), keywords=None, flags=abi.PY_FLAG_CLASS_DICT_SUBCLASS, exception=False, reenter=False):
         cls = self.make(None, abi.PY_TYPE_CLASS)
         cls.fields.update({abi.PYOBJECTHEADER_FLAGS_OFFSET: flags,
                           abi.PYCLASSOBJECT_N_FIELDS_OFFSET: 0,
@@ -302,7 +302,10 @@ def test_dict_initializer_real_bodies_move_every_boundary(phase):
     assert memory.collections > 0
 
 
-@pytest.mark.parametrize("flags", (4, 6))
+@pytest.mark.parametrize("flags", (
+    abi.PY_FLAG_CLASS_DICT_SUBCLASS,
+    abi.PY_FLAG_CLASS_DICT_SUBCLASS | abi.PY_FLAG_CLASS_SLOTS_ONLY,
+), ids=("dict", "dict-slots-only"))
 def test_dict_initializer_repeated_and_slots_storage(flags):
     memory = DictMemory("none")
     status, env, caller = memory.init(({"first": 1},), {"second": 2}, flags=flags)

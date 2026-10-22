@@ -20,6 +20,9 @@ class DeallocationModel(FinalizerModel):
         super().__init__(backend, resurrect=resurrect, pending=pending)
         self.tag = tag
         self.store(1000, 8, tag)
+        # The instance owns one reference to its class (py_instance_new);
+        # py_instance_dealloc releases it after the instance's own slots.
+        self.store(2000, 0, 1)
         self.ns.update(
             PYOBJECTHEADER_REFCOUNT_OFFSET=0, PYOBJECTHEADER_TYPE_TAG_OFFSET=8,
             PYINSTANCEOBJECT_CLS_OFFSET=16, PYCLASSOBJECT_N_FIELDS_OFFSET=24,
@@ -107,6 +110,7 @@ def test_actual_deallocation_finalizes_before_weakrefs(backend, pending):
     assert model.lifecycle.index('finalizer') < model.lifecycle.index('weakref')
     assert model.lifecycle.index('weakref') < model.lifecycle.index('free')
     assert model.calls == 1 and model.freed and not model.weakref_live
+    assert model.load(2000, 0) == 0
     assert model.count() == model.active() == model.depth == 0
 
 
@@ -118,6 +122,7 @@ def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
     assert model.lifecycle == ['finalizer']
     assert model.tracked == [1000]
     assert model.weakref_live and not model.freed and model.load(1000, 0) == 1
+    assert model.load(2000, 0) == 1
     assert model.pending == (4000 if pending else 0)
     assert not model.load(1000, 12) & TERMINAL
     assert model.count() == model.active() == model.depth == 0
@@ -126,7 +131,7 @@ def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
     model.store(1000, 12, model.load(1000, 12) | TERMINAL)
     model.finish()
     assert model.calls == 1 and model.lifecycle.count('weakref') == 1
-    assert model.freed and not model.weakref_live
+    assert model.freed and not model.weakref_live and model.load(2000, 0) == 0
 
 
 @pytest.mark.parametrize('backend', range(5))

@@ -29,6 +29,10 @@ def _constants():
     return values
 
 
+# A class whose instances have no public __dict__ (__slots__ without it).
+SLOTS_ONLY = _constants()["PY_FLAG_CLASS_SLOTS_ONLY"]
+
+
 @lru_cache(maxsize=1)
 def _production_code():
     path = RUNTIME / "py_class.py"
@@ -152,7 +156,7 @@ class _Memory:
         self.allocations.append(inst)
         return inst
 
-    def instance(self, n_fields=2, flags=2):
+    def instance(self, n_fields=2, flags=SLOTS_ONLY):
         cls = self.class_object(n_fields, flags)
         inst = self.ns["py_instance_new"](cls)
         return inst, cls
@@ -233,7 +237,7 @@ class _Memory:
 
 
 @pytest.mark.parametrize("n_fields", [-1, 0, 2])
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 def test_reserved_storage_is_independent_of_public_dict_visibility(n_fields, flags):
     model = _Memory()
     inst, cls = model.instance(n_fields, flags)
@@ -242,13 +246,13 @@ def test_reserved_storage_is_independent_of_public_dict_visibility(n_fields, fla
     assert slot == model.reserved(inst, n_fields)
     assert model.read_ptr(slot) is owner
     visible = model.ns["_dynamic_attr_slot"](inst)
-    assert visible == (None if flags & 2 else slot)
+    assert visible == (None if flags & SLOTS_ONLY else slot)
     public_dict = model.ns["_instance_dict_of"](inst, cls)
-    assert public_dict is (None if flags & 2 else owner)
+    assert public_dict is (None if flags & SLOTS_ONLY else owner)
 
 
 @pytest.mark.parametrize("n_fields", [-1, 0, 2])
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 def test_instance_allocation_reserves_slot_even_for_malformed_count(n_fields, flags):
     model = _Memory()
     inst, cls = model.instance(n_fields, flags)
@@ -259,7 +263,7 @@ def test_instance_allocation_reserves_slot_even_for_malformed_count(n_fields, fl
 
 
 @pytest.mark.parametrize("n_fields", [-1, 0, 2])
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 def test_deallocation_clears_reserved_owner_before_reentrant_finalizer(n_fields, flags):
     model = _Memory()
     inst, _cls = model.instance(n_fields, flags)
@@ -284,7 +288,7 @@ def test_deallocation_clears_reserved_owner_before_reentrant_finalizer(n_fields,
 
 
 @pytest.mark.parametrize("backend", [0, 3, 4])
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 def test_resurrection_preserves_static_and_reserved_owners(backend, flags):
     model = _Memory(backend)
     inst, _cls = model.instance(2, flags)
@@ -302,7 +306,7 @@ def test_resurrection_preserves_static_and_reserved_owners(backend, flags):
 
 
 @pytest.mark.parametrize("relocate_payload", [False, True])
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 def test_reserved_owner_copy_retains_current_payload_once(flags, relocate_payload):
     model = _Memory()
     source, cls = model.instance(2, flags)
@@ -328,11 +332,14 @@ def test_reserved_owner_copy_retains_current_payload_once(flags, relocate_payloa
     assert model.barriers == [(model.reserved(destination, 2), current)]
 
 
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 def test_empty_reserved_owner_copy_is_balanced(flags):
     model = _Memory()
     source, cls = model.instance(0, flags)
     destination = model.ns["py_instance_new"](cls)
+    # Each instance owns its class (py_instance_new); the copy retains nothing.
+    assert model.retains == Counter({cls: 2})
+    model.retains.clear()
     model.ns["_copy_instance_reserved_owner"](source, destination, cls)
     assert model.depth == 0
     assert model.read_ptr(model.reserved(destination, 0)) is None
@@ -340,7 +347,7 @@ def test_empty_reserved_owner_copy_is_balanced(flags):
 
 
 @pytest.mark.parametrize("api", ["py_dataclass_replace", "py_dataclass_replace_from_dict"])
-@pytest.mark.parametrize("flags", [0, 2])
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 @pytest.mark.parametrize("n_fields", [-1, 2])
 def test_both_replacement_variants_preserve_and_balance_reserved_owner(api, flags, n_fields):
     model = _Memory()
