@@ -6159,6 +6159,9 @@ def test_backend4_thread_start_loads_forwarded_args_slot(tmp_path):
             if (loaded_args == args) return 9;
 
             if (py_threading_thread_start(thread_root) != 0) return 10;
+            /* start() returns once a real platform thread runs the target;
+               its reads, through the load barrier, are complete after join. */
+            if (py_threading_thread_join_args(thread_root, 0) != 0) return 30;
 
             ProbeThreadObject *loaded_thread = (ProbeThreadObject *)pcc_gc_load_ptr(
                 0,
