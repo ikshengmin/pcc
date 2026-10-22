@@ -2340,6 +2340,10 @@ def _cross_object_signatures_part_5():
     "pcc_gc_remembered_member_require": (("c_ptr",), "c_void"),
     "pcc_gc_remembered_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_remembered_member_clear": ((), "c_void"),
+    "pcc_gc_remembered_member_exact": ((), "c_int64"),
+    "pcc_gc_remembered_member_taint": ((), "c_void"),
+    "pcc_gc_remembered_member_head": (("c_ptr",), "c_ptr"),
+    "pcc_gc_remembered_member_set_head": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_store_buffer_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promote_cext_owner_referents": (
         ("c_ptr",),

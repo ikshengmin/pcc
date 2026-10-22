@@ -1728,13 +1728,15 @@ def pcc_gc_remembered_member_note(obj: c_ptr) -> None:
     if present != 0:
         return
     store_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0, 1)
+    # The value is the head of obj's remembered-entry chain, empty until the
+    # caller links its first entry (pcc_gc_remembered_member_set_head).
     inserted: i64 = pcc_gc_index_py_insert(
         global_addr("pcc_py_gc_remembered_member_slots"),
         global_addr("pcc_py_gc_remembered_member_cap"),
         global_addr("pcc_py_gc_remembered_member_count"),
         global_addr("pcc_py_gc_remembered_member_used"),
         obj,
-        obj,
+        null(),
         1,
         0,
         256,
@@ -1742,6 +1744,58 @@ def pcc_gc_remembered_member_note(obj: c_ptr) -> None:
     if inserted != 1:
         store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
     store_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0, 0)
+
+
+@c_abi_export("pcc_gc_remembered_member_exact")
+def pcc_gc_remembered_member_exact() -> i64:
+    """1 when every remembered owner is in the index and none is being
+    inserted: membership answers are exact and each owner's chain head
+    reaches all of its entries."""
+    if (
+        load_i64(global_addr("pcc_py_gc_remembered_member_busy"), 0) != 0
+        or load_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0) != 0
+    ):
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_gc_remembered_member_taint")
+def pcc_gc_remembered_member_taint() -> None:
+    """The remembered set changed while the index could not follow it (it
+    was being written, or already incomplete): membership stays a superset
+    and no owner chain is trusted until the next clear."""
+    store_i64(global_addr("pcc_py_gc_remembered_member_incomplete"), 0, 1)
+
+
+@c_abi_export("pcc_gc_remembered_member_head")
+def pcc_gc_remembered_member_head(obj: c_ptr) -> c_ptr:
+    """The first entry of obj's remembered chain; NULL when obj holds none."""
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return null()
+    slots = global_load_ptr("pcc_py_gc_remembered_member_slots")
+    if ptr_is_null(slots) != 0:
+        return null()
+    cap: i64 = load_i64(global_addr("pcc_py_gc_remembered_member_cap"), 0)
+    index: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
+    if index < 0:
+        return null()
+    return load_ptr(slots, index * 16 + 8)
+
+
+@c_abi_export("pcc_gc_remembered_member_set_head")
+def pcc_gc_remembered_member_set_head(obj: c_ptr, head: c_ptr) -> i64:
+    """Record head as obj's chain head; -1 when obj is not in the index."""
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return -1
+    slots = global_load_ptr("pcc_py_gc_remembered_member_slots")
+    if ptr_is_null(slots) != 0:
+        return -1
+    cap: i64 = load_i64(global_addr("pcc_py_gc_remembered_member_cap"), 0)
+    index: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
+    if index < 0:
+        return -1
+    store_ptr(slots, index * 16 + 8, head)
+    return 0
 
 
 @c_abi_export("pcc_gc_remembered_member_require")

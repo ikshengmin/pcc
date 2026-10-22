@@ -81,6 +81,12 @@ pcc_gc_remembered_member_note = extern("pcc_gc_remembered_member_note", (c_ptr,)
 pcc_gc_remembered_member_maybe = extern("pcc_gc_remembered_member_maybe", (c_ptr,), c_int64)
 pcc_gc_remembered_member_require = extern("pcc_gc_remembered_member_require", (c_ptr,), c_void)
 pcc_gc_remembered_member_forget = extern("pcc_gc_remembered_member_forget", (c_ptr,), c_void)
+pcc_gc_remembered_member_exact = extern("pcc_gc_remembered_member_exact", (), c_int64)
+pcc_gc_remembered_member_taint = extern("pcc_gc_remembered_member_taint", (), c_void)
+pcc_gc_remembered_member_head = extern("pcc_gc_remembered_member_head", (c_ptr,), c_ptr)
+pcc_gc_remembered_member_set_head = extern(
+    "pcc_gc_remembered_member_set_head", (c_ptr, c_ptr), c_int64
+)
 pcc_gc_store_buffer_member_note = extern("pcc_gc_store_buffer_member_note", (c_ptr,), c_void)
 pcc_gc_store_buffer_member_taint = extern("pcc_gc_store_buffer_member_taint", (), c_void)
 pcc_gc_store_buffer_member_maybe = extern("pcc_gc_store_buffer_member_maybe", (c_ptr,), c_int64)
@@ -1875,6 +1881,85 @@ def _set_remembered_set_head(head) -> None:
     global_store_ptr("pcc_gc_backend4_remembered_slots_head", head)
 
 
+# A remembered entry: owner @0, slot @8, next @16 and prev @24 in the set's
+# list, then next @32 and prev @40 in its owner's chain, whose head is the
+# owner's value in the remembered member index. While that index is exact
+# (pcc_gc_remembered_member_exact), an owner's chain reaches all of its
+# entries, so removing, counting or retargeting an owner's entries walks
+# only them instead of the whole set; otherwise those walk the set list.
+# Chains are read and written only while the index is exact: an entry
+# linked or unlinked while it is not leaves the index tainted, so no chain
+# is trusted again before the set is cleared.
+
+
+def _remembered_entry_link(owner, slot, node) -> None:
+    store_ptr(node, 0, owner)
+    store_ptr(node, 8, slot)
+    head = _remembered_set_head()
+    store_ptr(node, 16, head)
+    store_ptr(node, 24, null())
+    if ptr_is_null(head) == 0:
+        store_ptr(head, 24, node)
+    _set_remembered_set_head(node)
+    _remembered_entry_owner_push(owner, node)
+
+
+def _remembered_entry_owner_push(owner, node) -> None:
+    store_ptr(node, 32, null())
+    store_ptr(node, 40, null())
+    if pcc_gc_remembered_member_exact() == 0:
+        pcc_gc_remembered_member_taint()
+        return
+    first = pcc_gc_remembered_member_head(owner)
+    if pcc_gc_remembered_member_set_head(owner, node) != 0:
+        pcc_gc_remembered_member_taint()
+        return
+    store_ptr(node, 32, first)
+    if ptr_is_null(first) == 0:
+        store_ptr(first, 40, node)
+
+
+def _remembered_entry_owner_unlink(node) -> None:
+    if pcc_gc_remembered_member_exact() == 0:
+        pcc_gc_remembered_member_taint()
+        return
+    owner_next = load_ptr(node, 32)
+    owner_prev = load_ptr(node, 40)
+    if ptr_is_null(owner_prev) == 0:
+        store_ptr(owner_prev, 32, owner_next)
+    elif ptr_eq(pcc_gc_remembered_member_head(load_ptr(node, 0)), node) != 0:
+        pcc_gc_remembered_member_set_head(load_ptr(node, 0), owner_next)
+    if ptr_is_null(owner_next) == 0:
+        store_ptr(owner_next, 40, owner_prev)
+    store_ptr(node, 32, null())
+    store_ptr(node, 40, null())
+
+
+def _remembered_entry_unlink(node) -> None:
+    """Take node out of the set list and its owner's chain."""
+    nxt = load_ptr(node, 16)
+    prev = load_ptr(node, 24)
+    if ptr_is_null(prev) != 0:
+        _set_remembered_set_head(nxt)
+    else:
+        store_ptr(prev, 16, nxt)
+    if ptr_is_null(nxt) == 0:
+        store_ptr(nxt, 24, prev)
+    _remembered_entry_owner_unlink(node)
+
+
+def _remembered_entries_count_decrement() -> None:
+    entries: int = load_i32(
+        global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
+    )
+    if entries > 0:
+        store_i32(
+            global_addr("pcc_gc_backend4_remembered_set_entries_count"),
+            0,
+            entries - 1,
+        )
+
+
 def _backend4_remembered_set_contains(owner, slot) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
@@ -1899,8 +1984,14 @@ def _backend4_remembered_set_contains(owner, slot) -> int:
 def _backend4_owner_remembered_slots(owner) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
-    node = _remembered_set_head()
     total: int = 0
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(owner)
+        while ptr_is_null(node) == 0:
+            total = total + 1
+            node = load_ptr(node, 32)
+        return total
+    node = _remembered_set_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), owner) != 0:
             total = total + 1
@@ -2199,16 +2290,13 @@ def _backend4_remembered_set_add(owner, slot) -> int:
             skips + 1,
         )
         return 0
-    node = malloc(24)
+    node = malloc(48)
     if ptr_is_null(node) != 0:
         return 0
     # Index allocation may reenter: do it before publishing this node, then
     # read the current head below. Unknown membership preserves the old walk.
     pcc_gc_remembered_member_note(owner)
-    store_ptr(node, 0, owner)
-    store_ptr(node, 8, slot)
-    store_ptr(node, 16, _remembered_set_head())
-    _set_remembered_set_head(node)
+    _remembered_entry_link(owner, slot, node)
     entries: int = load_i32(
         global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
     )
@@ -2236,29 +2324,21 @@ def _backend4_remembered_set_remove(owner) -> None:
         return
     if pcc_gc_remembered_member_maybe(owner) == 0:
         return
-    prev = null()
-    node = _remembered_set_head()
+    # The owner's own chain when the index is exact, else the set list.
+    node = null()
+    next_offset: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(owner)
+        next_offset = 32
+    else:
+        node = _remembered_set_head()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = load_ptr(node, next_offset)
         if ptr_eq(load_ptr(node, 0), owner) != 0:
             _backend4_remembered_entry_detach(load_ptr(node, 0), load_ptr(node, 8))
-            if ptr_is_null(prev) != 0:
-                _set_remembered_set_head(nxt)
-            else:
-                store_ptr(prev, 16, nxt)
-            entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
-            )
-            if entries > 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_remembered_set_entries_count"),
-                    0,
-                    entries - 1,
-                )
+            _remembered_entry_unlink(node)
+            _remembered_entries_count_decrement()
             free(node)
-            node = nxt
-            continue
-        prev = node
         node = nxt
     # A free callback can add a new head after the walk passed it. Retire the
     # owner key only after a fresh, callback-free absence proof. Slot/card
@@ -2270,31 +2350,16 @@ def _backend4_remembered_set_remove(owner) -> None:
 def _backend4_remembered_set_remove_slot(slot) -> int:
     if ptr_is_null(slot) != 0:
         return 0
-    prev = null()
     node = _remembered_set_head()
     removed: int = 0
     while ptr_is_null(node) == 0:
         nxt = load_ptr(node, 16)
         if ptr_eq(load_ptr(node, 8), slot) != 0:
             _backend4_remembered_entry_detach(load_ptr(node, 0), load_ptr(node, 8))
-            if ptr_is_null(prev) != 0:
-                _set_remembered_set_head(nxt)
-            else:
-                store_ptr(prev, 16, nxt)
-            entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
-            )
-            if entries > 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_remembered_set_entries_count"),
-                    0,
-                    entries - 1,
-                )
+            _remembered_entry_unlink(node)
+            _remembered_entries_count_decrement()
             free(node)
             removed = 1
-            node = nxt
-            continue
-        prev = node
         node = nxt
     return removed
 
@@ -2314,16 +2379,27 @@ def _backend4_remembered_set_retarget_slot(
     # Prepare before taking a cursor: index allocation may invoke callbacks.
     # Retaining the old owner key is conservative, including multiple slots.
     pcc_gc_remembered_member_note(to_owner)
-    node = _remembered_set_head()
+    # from_owner's chain when the index is exact, else the set list.
+    node = null()
+    next_offset: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(from_owner)
+        next_offset = 32
+    else:
+        node = _remembered_set_head()
     while ptr_is_null(node) == 0:
+        nxt = load_ptr(node, next_offset)
         if ptr_eq(load_ptr(node, 0), from_owner) != 0:
             if ptr_eq(load_ptr(node, 8), from_slot) != 0:
                 _backend4_remembered_entry_detach(from_owner, from_slot)
                 pcc_gc_remembered_member_require(to_owner)
-                store_ptr(node, 0, to_owner)
+                if ptr_eq(from_owner, to_owner) == 0:
+                    _remembered_entry_owner_unlink(node)
+                    store_ptr(node, 0, to_owner)
+                    _remembered_entry_owner_push(to_owner, node)
                 store_ptr(node, 8, to_slot)
                 _backend4_remembered_entry_attach(to_owner, to_slot)
-        node = load_ptr(node, 16)
+        node = nxt
 
 
 def _backend4_remembered_set_retarget_inline_slot(
@@ -3833,9 +3909,16 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
     # Nothing below adds a remembered entry for owner, so one answer covers
     # both walks.
     owner_remembered: int = pcc_gc_remembered_member_maybe(owner)
+    # With an exact member index both walks follow owner's own chain.
+    entry_next: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        entry_next = 32
     entry = null()
     if owner_remembered != 0:
-        entry = _remembered_set_head()
+        if entry_next == 32:
+            entry = pcc_gc_remembered_member_head(owner)
+        else:
+            entry = _remembered_set_head()
     while ptr_is_null(entry) == 0:
         if ptr_eq(load_ptr(entry, 0), owner) != 0:
             old_slot = load_ptr(entry, 8)
@@ -3858,7 +3941,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                     _backend4_zpage_note_remembered_slot(owner, -1)
                     _backend4_zpage_note_remembered_card(owner, old_slot, -1)
                 store_ptr(entry, 8, mapped)
-        entry = load_ptr(entry, 16)
+        entry = load_ptr(entry, entry_next)
 
     if has_payload_span != 0:
         old_span_size: int = load_i64(payload_span, 16)
@@ -3890,7 +3973,10 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 store_i64(page, 64, span_end)
     entry = null()
     if owner_remembered != 0:
-        entry = _remembered_set_head()
+        if entry_next == 32:
+            entry = pcc_gc_remembered_member_head(owner)
+        else:
+            entry = _remembered_set_head()
     while ptr_is_null(entry) == 0:
         if ptr_eq(load_ptr(entry, 0), owner) != 0:
             new_slot = load_ptr(entry, 8)
@@ -3900,7 +3986,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 if has_payload_span != 0:
                     _backend4_zpage_note_remembered_slot(owner, 1)
                     _backend4_zpage_note_remembered_card(owner, new_slot, 1)
-        entry = load_ptr(entry, 16)
+        entry = load_ptr(entry, entry_next)
     if has_payload_span != 0:
         return 1
     return 2
@@ -4207,34 +4293,26 @@ def pcc_gc_backend4_zpage_clear_remembered_card(owner, slot) -> int:
         _object_graph_unlock()
         return 0
     removed: int = 0
-    prev = null()
-    node = _remembered_set_head()
+    # The owner's own chain when the member index is exact, else the set.
+    node = null()
+    next_offset: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(owner)
+        next_offset = 32
+    else:
+        node = _remembered_set_head()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = load_ptr(node, next_offset)
         if (
             ptr_eq(load_ptr(node, 0), owner) != 0
             and _backend4_zpage_card_for_node_slot(owner_node, load_ptr(node, 8))
             == card
         ):
             _backend4_remembered_entry_detach(owner, load_ptr(node, 8))
-            if ptr_is_null(prev) != 0:
-                _set_remembered_set_head(nxt)
-            else:
-                store_ptr(prev, 16, nxt)
-            entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
-            )
-            if entries > 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_remembered_set_entries_count"),
-                    0,
-                    entries - 1,
-                )
+            _remembered_entry_unlink(node)
+            _remembered_entries_count_decrement()
             free(node)
             removed = removed + 1
-            node = nxt
-            continue
-        prev = node
         node = nxt
     _object_graph_unlock()
     return removed
