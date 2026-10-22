@@ -17,7 +17,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "x86_64-unknown-linux-gnu"
-CONFIG = {"threads": False, "refcount": "atomic"}
+CONFIG = {"threads": True, "refcount": "atomic"}
 OUTPUT_DIRECTORY = "build/stage1-native-export"
 ARCHIVE_NAME = "stage1-native.tar.gz"
 

@@ -18,6 +18,8 @@ from scripts import ci_stage1_artifact_export as exporter
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
 SOURCE = "b" * 64
+# Independent producer contract, not a copy of the exporter's acceptance policy.
+RUNTIME_CONFIG = {"threads": True, "refcount": "atomic"}
 SHARED = "build/platform-qualification/shared/"
 RUNTIME = "build/worker-prior-gate/runtime/libpy_runtime_pcc_py.a"
 STAGE_RECEIPT = "build/worker-prior-gate/stage1.json"
@@ -57,7 +59,7 @@ def admitted(tmp_path, monkeypatch):
         "phase": "stage1", "status": "PASS", "source": source,
         "compiler": {"path": str(compiler), "sha256": _sha(compiler.read_bytes())},
         "runtime": {"path": str(runtime), "target": exporter.TARGET,
-                    "config": exporter.CONFIG.copy(), "hashes": hashes},
+                    "config": RUNTIME_CONFIG.copy(), "hashes": hashes},
     }
     shared = {
         "source": source, "compiler_path": str(compiler), "target": exporter.TARGET,
@@ -101,6 +103,11 @@ def _assert_unpublished(admitted):
 
 
 def test_export_preserves_exact_bytes_modes_receipts_and_whitelist(admitted, monkeypatch):
+    from pcc.frontends.python.owned_runtime_build import runtime_build_config
+
+    monkeypatch.setenv("PCC_WITH_THREADS", "1")
+    monkeypatch.setenv("PCC_REFCOUNT_KIND", "atomic")
+    assert runtime_build_config() == RUNTIME_CONFIG
     root, runtime, compiler, stage_path, shared_path = admitted
     omitted = compiler.parent / "huge-intermediate.pco"
     omitted.write_bytes(b"excluded intermediate")
@@ -129,7 +136,7 @@ def test_export_preserves_exact_bytes_modes_receipts_and_whitelist(admitted, mon
     assert result["schema"] == "pcc.ci-stage1-bundle.v1"
     assert result["claim"] == "Stage1 identity only; not five-GC, prior, wheel or fixed-point qualification"
     assert result["source"] == {"commit": COMMIT, "source_sha256": SOURCE, "clean_commit": True}
-    assert result["target"] == exporter.TARGET and result["runtime_config"] == exporter.CONFIG
+    assert result["target"] == exporter.TARGET and result["runtime_config"] == RUNTIME_CONFIG
     manifest_bytes = (directory / "manifest.json").read_bytes()
     assert json.loads(manifest_bytes) == result
     with tarfile.open(directory / exporter.ARCHIVE_NAME, "r:gz") as archive:
@@ -243,7 +250,7 @@ def test_export_rejects_disagreeing_receipt_hashes(admitted, member):
 
 
 @pytest.mark.parametrize("field,value", (("path", "/other/runtime.a"), ("target", "aarch64-unknown-linux-gnu"),
-                                        ("config", {"threads": True, "refcount": "atomic"})))
+                                        ("config", {"threads": False, "refcount": "atomic"})))
 def test_export_rejects_wrong_runtime_identity(admitted, field, value):
     path = admitted[3]
     record = json.loads(path.read_text())
@@ -391,7 +398,8 @@ def test_exported_relocated_tree_passes_the_real_platform_consumer(tmp_path, mon
     _save(root / STAGE_RECEIPT, {
         "phase": "stage1", "status": "PASS", "source": shared["source"],
         "compiler": {"path": shared["compiler_path"], "sha256": shared["stages"][0]["sha256"]},
-        "runtime": {"path": str(runtime), "target": exporter.TARGET, "config": exporter.CONFIG,
+        "runtime": {"path": str(runtime), "target": exporter.TARGET,
+                    "config": shared["configuration"]["runtime"].copy(),
                     "hashes": {suffix: shared["runtime"][key] for suffix, key in (
                         ("", "sha256"), (".provenance.json", "provenance_sha256"),
                         (".capi_syms", "capi_inventory_sha256"))}},
