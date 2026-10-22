@@ -134,9 +134,9 @@ class _SelectorMemory:
             assert 0 <= self.read(result, 8) <= 16
             return outcome
 
-        def bounded_commit(owner, seed, budget, large, plan, result):
+        def bounded_commit(owner, seed, budget, large, reached_only, plan, result):
             assert self.locked
-            outcome = commit(owner, seed, budget, large, plan, result)
+            outcome = commit(owner, seed, budget, large, reached_only, plan, result)
             assert 0 <= self.read(result, 0) <= 16
             self.commit_chunks += 1
             return outcome
