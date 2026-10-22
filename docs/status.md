@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `b772b28be`, initially based on
+Source: published through `da4626652`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -19,6 +19,8 @@ Unpack execution and the first Stage1 timeout (including partial native objects)
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/unpack-through-46d994978-and-stage1-timeout/README.md`.
 Large-integer unpacking and the byte-matched worker profile:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/bigint-through-b772b28be-and-worker-profile/README.md`.
+Accepted arena work, both earlier denials, current Stage1 diagnostics and gateway evidence:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/arena-da4626652-gateway-f260a0c/README.md`.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -159,18 +161,52 @@ replayed under cProfile. The result matches the original module 308 PCO byte
 for byte. Instrumented time was 201.05 seconds, peak RSS 3,173,892,096 bytes;
 `_native_managed_liveness` takes 85.45 seconds inclusive and `append_zeros`
 40.65 seconds inclusive. Total list.append calls are 346,136,083. These are
-one instrumented worker's costs, not whole-build wall shares. A bounded host
+one instrumented worker's costs, not whole-build wall shares. An initial bounded host
 zero-fill candidate completed three alternating uninstrumented A/B pairs at
 `/private/tmp/pcc-p0-followup/arena-worker-ab`: all objects are byte-identical,
 median wall speedup is 1.083x and instructions decrease about 10.5%, but one
 candidate peak is 13.9% above its paired baseline, so the strict result is
-DENY. A similar peak occurs in a different baseline run. A new predeclared
-three-pair comparison fixes `PYTHONHASHSEED=0` to investigate this variation,
-without relaxing the thresholds; no performance change is accepted yet.
-Its focused host/lowering/PCO controls pass 15 tests. After correcting the
+DENY. A similar peak occurs in a different baseline run. The predeclared
+fixed-`PYTHONHASHSEED=0` repeat also remains DENY; both packets are preserved.
+The revised implementation (`c0f96bdd4`, tests `da4626652`) initializes an empty
+host plane by in-place list repetition, retaining aliases and avoiding repeated
+growth; nonempty spans use bounded scratch and custom containers retain their
+append callbacks. The native memset path is preserved. Three new alternating
+pairs pass the unchanged thresholds: paired median speedup 1.094x, about 10.6%
+fewer instructions, all PCOs byte-identical, and worst paired RSS ratio 1.014
+under the 1.02 limit. This is a host-worker component result. Final boundary
+and PCO controls pass 24 tests; the real production arena source runs on all
+five collectors and explicitly reports each selected backend. After correcting the
 new probe to compile the actual private class source (ordinary app discovery
 does not bundle compiler internals), native arena execution, record inventory
-and liveness controls pass 132 tests, with one pcc1 variant deselected.
+and liveness controls on the earlier prototype passed 132 tests, with one pcc1
+variant deselected.
+
+The second full Stage1 at frozen `da4626652` also timed out at 1,800 seconds,
+after 220 direct objects, without pcc1. Its peak tree RSS was 3,201,253,376 bytes
+under a 6,059,958,272-byte cap. The full 482-worker AST/export context was
+retained before cleanup. The admission audit shows about 1.77 GB startup
+reservations even for small modules. A bounded probe of the existing host
+indexed-process split reproduces one heavy and five smaller modules with
+byte-identical PCOs under no larger budget. A new Stage1 uses that explicitly
+selected process topology, with the same source/runtime and 1,800-second limit:
+`/private/tmp/pcc-p0-followup/bootstrap-host-split`, live log
+`/private/tmp/pcc-p0-followup/logs/bootstrap-host-split.stdout`. It is still running;
+neither a compiler nor its native integration gate is claimed from partial objects.
+
+Gateway work is isolated at `/private/tmp/pcc-p0-gateway-task/pcc-gateway`.
+Code `13cd35b`, tests/fixture `f260a0c` and documentation `ca9a012` use
+`ikshenming <shenming2020@gmail.com>` and the authorized `shenming/main` fork.
+Active handler/layer/lifetime runners and the default test fixture select the
+threaded atomic runtime. Host controls pass 34 and 55 tests, and real archive
+admission succeeds. A one-repeat C100/zero-wait smoke validates 1,000 requests
+per arm: host-pcc 11,932.6 req/s versus CPython 3.15 asyncio 94,803.6 req/s.
+The pcc1 arm is explicitly omitted; these are handler counts, not HTTP QPS or
+a qualified multi-repeat comparison. Caller-attribution sampling of the same
+native binary validates 500,000 requests. Its only dynamic dependency is
+libSystem. Refcount/root/graph-lock/TLS costs are spread across runtime calls;
+the encoding helper is only about 3.6% inclusive, so it cannot explain the
+whole gap. No gateway throughput win is claimed.
 Stage1, native integration, full fixed point and five-GC qualification remain
 unfinished. The separate fallback-baseline check was stopped when its complete
 compiler-closure work was identified, to avoid competing heavy builds; do not
