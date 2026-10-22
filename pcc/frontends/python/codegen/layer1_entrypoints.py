@@ -15,6 +15,7 @@ from pcc.frontends.python.codegen.errors import CodegenDiagnosticError
 from pcc.frontends.python.codegen.generation_lowering import GenerationLoweringMixin
 from pcc.frontends.python.codegen.generator_lowering import (
     begin_generator_statement_spills,
+    emit_generator_spilled_inplace,
     finish_generator_statement_spills,
     plan_generator_statement_spills,
     unbind_generator_statement_spills,
@@ -383,7 +384,10 @@ class L1CodeGenEntrypointMixin:
             else:
                 spills = begin_generator_statement_spills(self, spill[0])
                 try:
-                    StmtDispatchLoweringMixin._emit_stmt_impl(self, spill[1])
+                    rebuilt = spill[1]
+                    if spill[2] is not None:
+                        rebuilt = emit_generator_spilled_inplace(self, spills, spill[2])
+                    StmtDispatchLoweringMixin._emit_stmt_impl(self, rebuilt)
                     finish_generator_statement_spills(self, spills)
                 finally:
                     unbind_generator_statement_spills(self, spills)

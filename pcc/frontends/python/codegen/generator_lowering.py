@@ -37,6 +37,7 @@ from pcc.frontends.python.py_ast import (
     IntType,
     Lambda,
     ListExpr,
+    ListType,
     Name,
     NoneLit,
     NoneType,
@@ -1025,10 +1026,18 @@ def _spill_ordered(host, operands, fd, owner, state):
             continue
         inner = _spill_wrapped_operand(operand)
         if inner is not None and index < last:
-            # Python expands the iterable before the later park; a root
-            # holding the iterable would expand it after.
-            state["refused"] = True
-            result.append(operand)
+            # Python expands the iterable before the later park: spill a
+            # list of its items then, and expand that list afterwards.
+            if operand.func.ident == "**":
+                state["refused"] = True
+                result.append(operand)
+                continue
+            starred = Call(span=operand.span, ty=operand.ty, func=operand.func,
+                           args=(_spill_normalize(host, inner, fd, owner, state),), kwargs=())
+            items = ListExpr(span=operand.span, ty=ListType(name="list", elem=DynType(name="dyn")),
+                             elems=(starred,))
+            result.append(Call(span=operand.span, ty=operand.ty, func=operand.func,
+                               args=(_spill_placeholder(host, items, state),), kwargs=()))
             continue
         target = inner if inner is not None else operand
         if index < last and isinstance(target, _SPILL_LITERALS):
@@ -1263,14 +1272,56 @@ def plan_generator_expression_spills(host, expr):
     return state["hoists"], rebuilt
 
 
+# py_obj_inplace_op's operator codes (PyNumber_InPlace* order).
+_SPILL_INPLACE_CODES = {
+    "+": 0,
+    "-": 1,
+    "*": 2,
+    "/": 3,
+    "//": 4,
+    "%": 5,
+    "|": 6,
+    "&": 7,
+    "^": 8,
+    "<<": 9,
+    ">>": 10,
+    "**": 11,
+    "@": 12,
+}
+
+
+def _spill_target_operands(host, target, state):
+    """Spill an attribute or subscript target's operands; the new target."""
+    if isinstance(target, Attr):
+        obj = target.obj
+        if not _spill_static_namespace(host, obj):
+            obj = _spill_placeholder(host, obj, state)
+        return Attr(span=target.span, ty=target.ty, obj=obj, name=target.name)
+    index = target.idx
+    obj = _spill_placeholder(host, target.obj, state)
+    if isinstance(index, Slice):
+        parts = []
+        for part in (index.lo, index.hi, index.step):
+            if part is None or isinstance(part, _SPILL_LITERALS):
+                parts.append(part)
+            else:
+                parts.append(_spill_placeholder(host, part, state))
+        index = Slice(span=index.span, ty=index.ty, lo=parts[0], hi=parts[1], step=parts[2])
+    elif not isinstance(index, _SPILL_LITERALS):
+        index = _spill_placeholder(host, index, state)
+    return Subscript(span=target.span, ty=target.ty, obj=obj, idx=index)
+
+
 def plan_generator_statement_spills(host, stmt):
-    """Return ``(hoists, statement)`` for a statement that parks after
-    evaluating other operands, else None.
+    """Return ``(hoists, statement, inplace)`` for a statement that parks
+    after evaluating other operands, else None.
 
     ``hoists`` lists ``(name, operand)`` in Python evaluation order; the
     statement reads each spilled operand through its name. A ``for``
     statement keeps the roots of its iterable's operands until the loop
     ends, as its iterator usually keeps those values alive anyway.
+    ``inplace`` describes an augmented assignment whose target's current
+    value was spilled; it replaces ``statement``.
     """
     if not (isinstance(stmt, ExprStmt) or isinstance(stmt, Assign) or isinstance(stmt, Return)
             or isinstance(stmt, Raise) or isinstance(stmt, AugAssign)
@@ -1282,15 +1333,45 @@ def plan_generator_statement_spills(host, stmt):
     fd, owner = function
     state = {"hoists": [], "refused": False}
     rebuilt = None
+    inplace = None
     if isinstance(stmt, ExprStmt):
         rebuilt = ExprStmt(span=stmt.span, expr=_spill_normalize(host, stmt.expr, fd, owner, state))
     elif isinstance(stmt, Assign):
-        for target in stmt.targets:
-            if generator_expr_suspends(host, target, fd, owner):
+        parked_targets = [target for target in stmt.targets
+                          if generator_expr_suspends(host, target, fd, owner)]
+        if not parked_targets:
+            rebuilt = Assign(span=stmt.span, targets=stmt.targets,
+                             value=_spill_normalize(host, stmt.value, fd, owner, state),
+                             annotation=stmt.annotation, has_value=stmt.has_value)
+        else:
+            # Python evaluates the value, then the target's operands, then
+            # stores; a later target's operands follow an earlier store, so
+            # only a single attribute or subscript target is rewritten.
+            target = stmt.targets[0]
+            if len(stmt.targets) != 1 or not (isinstance(target, Attr) or isinstance(target, Subscript)):
                 return None
-        rebuilt = Assign(span=stmt.span, targets=stmt.targets,
-                         value=_spill_normalize(host, stmt.value, fd, owner, state),
-                         annotation=stmt.annotation, has_value=stmt.has_value)
+            operands = [stmt.value]
+            if isinstance(target, Attr):
+                operands.append(target.obj)
+            elif isinstance(target.idx, Slice):
+                operands.extend([target.obj, target.idx.lo, target.idx.hi, target.idx.step])
+            else:
+                operands.extend([target.obj, target.idx])
+            spilled = _spill_ordered(host, operands, fd, owner, state)
+            if spilled is None:
+                return None
+            if isinstance(target, Attr):
+                new_target = Attr(span=target.span, ty=target.ty, obj=spilled[1], name=target.name)
+            elif isinstance(target.idx, Slice):
+                new_target = Subscript(
+                    span=target.span, ty=target.ty, obj=spilled[1],
+                    idx=Slice(span=target.idx.span, ty=target.idx.ty,
+                              lo=spilled[2], hi=spilled[3], step=spilled[4]),
+                )
+            else:
+                new_target = Subscript(span=target.span, ty=target.ty, obj=spilled[1], idx=spilled[2])
+            rebuilt = Assign(span=stmt.span, targets=(new_target,), value=spilled[0],
+                             annotation=stmt.annotation, has_value=stmt.has_value)
     elif isinstance(stmt, Return):
         if stmt.value is None:
             return None
@@ -1307,56 +1388,100 @@ def plan_generator_statement_spills(host, stmt):
                       iter=_spill_normalize(host, stmt.iter, fd, owner, state),
                       body=stmt.body, else_body=stmt.else_body, is_async=False)
     else:
-        # The current value of a local that only this activation writes is
-        # the same before and after the park.
-        if (not isinstance(stmt.target, Name)
-                or not _spill_plain_local(host, fd, stmt.target.ident)
-                or not generator_expr_suspends(host, stmt.value, fd, owner)):
+        target = stmt.target
+        if (not generator_expr_suspends(host, stmt.value, fd, owner)
+                or generator_expr_suspends(host, target, fd, owner)):
             return None
-        value = _spill_placeholder(
-            host, _spill_normalize(host, stmt.value, fd, owner, state), state,
-        )
-        rebuilt = AugAssign(span=stmt.span, target=stmt.target, op=stmt.op, value=value)
+        if isinstance(target, Name) and _spill_plain_local(host, fd, target.ident):
+            # The current value of a local that only this activation writes
+            # is the same before and after the park.
+            value = _spill_placeholder(
+                host, _spill_normalize(host, stmt.value, fd, owner, state), state,
+            )
+            rebuilt = AugAssign(span=stmt.span, target=target, op=stmt.op, value=value)
+        else:
+            # Python evaluates the target's operands and reads its current
+            # value before the value parks, then applies the in-place
+            # operator and stores into the same target.
+            code = _SPILL_INPLACE_CODES.get(stmt.op.rstrip("="))
+            if code is None:
+                return None
+            if isinstance(target, Name):
+                new_target = target
+            elif isinstance(target, Attr) or isinstance(target, Subscript):
+                new_target = _spill_target_operands(host, target, state)
+            else:
+                return None
+            current = _spill_placeholder(host, new_target, state)
+            value = _spill_placeholder(
+                host, _spill_normalize(host, stmt.value, fd, owner, state), state,
+            )
+            inplace = (code, current.ident, value.ident, new_target, stmt.span)
     if state["refused"] or not state["hoists"]:
         return None
-    return state["hoists"], rebuilt
+    return state["hoists"], rebuilt, inplace
+
+
+def _bind_spill_root(host, spills, ident, root, hint) -> None:
+    """Read ``ident`` from ``root`` exactly as the root's own frame binding."""
+    spills["roots"].append(root)
+    host._try_err_block = host._slot_call_cleanup_block(tuple(spills["roots"]), spills["target"])
+    host._cpy_operand_cleanup_block = host._try_err_block
+    owner_name = None
+    for name, entry in host.env.items():
+        if entry[0] is root:
+            owner_name = name
+            break
+    if owner_name is None:
+        raise L1CodegenError("spilled operand root has no frame binding")
+    host.env[ident] = host.env[owner_name]
+    added = []
+    rooted = getattr(host, "_gc_rooted_local_names", None)
+    borrowed = getattr(host, "_borrowed_gc_rooted_local_names", None)
+    if rooted is not None and owner_name in rooted:
+        rooted.add(ident)
+        added.append(rooted)
+    if borrowed is not None and owner_name in borrowed:
+        borrowed.add(ident)
+        added.append(borrowed)
+    if hint is not None:
+        host.env_class_hint[ident] = hint
+    spills["bound"].append((ident, added, hint is not None))
 
 
 def begin_generator_statement_spills(host, hoists):
     """Evaluate each spilled operand into a frame root and bind its name."""
     previous = host._current_try_err_block()
-    saved_error = host._try_err_block
-    saved_cpy = host._cpy_operand_cleanup_block
-    target = previous if previous is not None else host._ensure_fn_err_exit()
-    roots = []
-    bound = []
-    rooted = getattr(host, "_gc_rooted_local_names", None)
-    borrowed = getattr(host, "_borrowed_gc_rooted_local_names", None)
+    spills = {
+        "roots": [],
+        "bound": [],
+        "error": host._try_err_block,
+        "cpy": host._cpy_operand_cleanup_block,
+        "target": previous if previous is not None else host._ensure_fn_err_exit(),
+    }
     for ident, operand in hoists:
         hint = host._class_hint_for_expr(operand)
         root = host._emit_slot_call_operand(operand, "spill")
-        roots.append(root)
-        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
-        host._cpy_operand_cleanup_block = host._try_err_block
-        owner_name = None
-        for name, entry in host.env.items():
-            if entry[0] is root:
-                owner_name = name
-                break
-        if owner_name is None:
-            raise L1CodegenError("spilled operand root has no frame binding")
-        host.env[ident] = host.env[owner_name]
-        added = []
-        if rooted is not None and owner_name in rooted:
-            rooted.add(ident)
-            added.append(rooted)
-        if borrowed is not None and owner_name in borrowed:
-            borrowed.add(ident)
-            added.append(borrowed)
-        if hint is not None:
-            host.env_class_hint[ident] = hint
-        bound.append((ident, added, hint is not None))
-    return {"roots": roots, "bound": bound, "error": saved_error, "cpy": saved_cpy}
+        _bind_spill_root(host, spills, ident, root, hint)
+    return spills
+
+
+def emit_generator_spilled_inplace(host, spills, inplace):
+    """Apply a spilled augmented assignment's operator; the store statement.
+
+    The current value and the right operand are frame roots; the in-place
+    result is published into a third root that the returned assignment
+    stores into the target.
+    """
+    code, current, value, target, span = inplace
+    result = host._new_slot_call_root("spill.inplace")
+    host._slot_call_runtime_call(
+        "py_obj_inplace_op", (host.env[current][0], host.env[value][0]),
+        result_slot=result, suffix_args=(ir.Constant(_I64, code),), span=span,
+    )
+    ident = host._fresh("pcc.spill")
+    _bind_spill_root(host, spills, ident, result, None)
+    return Assign(span=span, targets=(target,), value=Name(span=span, ty=DynType(name="dyn"), ident=ident))
 
 
 def finish_generator_statement_spills(host, spills) -> None:
