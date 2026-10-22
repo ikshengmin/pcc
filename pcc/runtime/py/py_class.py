@@ -6627,6 +6627,19 @@ def py_obj_call_method(method, self_obj, args):
     return out
 
 
+@c_abi_export("py_obj_call_loaded_method")
+def py_obj_call_loaded_method(method, receiver, args, has_self: int):
+    """Call what `py_obj_load_method` loaded for an operand's receiver.
+
+    The compiled caller keeps the receiver, the loaded method and the
+    argument tuple in its registered roots and passes them freshly loaded;
+    `has_self` says whether `py_obj_load_method` stored the receiver as the
+    method's `self`."""
+    if has_self == 0:
+        return py_obj_call_method(method, null(), args)
+    return py_obj_call_method(method, receiver, args)
+
+
 @c_abi_export("py_obj_call_method_kwargs")
 def py_obj_call_method_kwargs(method, self_obj, args, kwargs):
     """`py_obj_call_method` with a keywords dict (or NULL).

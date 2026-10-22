@@ -288,7 +288,7 @@ class MethodCallExpressionLoweringMixin:
     ) -> ir.Value:
         """The override fallback: one MRO lookup when that is provably enough."""
         if call_expr is not None and self._slot_call_result_sink(call_expr) is not None:
-            return self._emit_slot_call_object(call_expr, "method." + attr_name)
+            return self._emit_slot_method_call(call_expr, "method." + attr_name)
         if (
             self._direct_virtual_dispatch_enabled()
             and not kwargs
@@ -313,7 +313,7 @@ class MethodCallExpressionLoweringMixin:
         finds the function object that the defining execution published.
         """
         if call_expr is not None and self._slot_call_result_sink(call_expr) is not None:
-            return self._emit_slot_call_object(call_expr, "method." + attr_name)
+            return self._emit_slot_method_call(call_expr, "method." + attr_name)
         return self._emit_callable_attribute_call(obj_expr, attr_name, args, kwargs, span)
 
     def _emit_callable_attribute_call(
@@ -329,7 +329,7 @@ class MethodCallExpressionLoweringMixin:
             # Preserve the original Call identity through lookup and invocation.
             # The shared object-call ABI roots the callable before its arguments
             # and publishes the NEW result before retiring any of those owners.
-            return self._emit_slot_call_object(call_expr, "method." + attr_name)
+            return self._emit_slot_method_call(call_expr, "method." + attr_name)
         obj_val = self._emit_expr(obj_expr)
         return self._emit_callable_attribute_call_on_value(
             obj_val, attr_name, args, kwargs, span,
@@ -487,6 +487,74 @@ class MethodCallExpressionLoweringMixin:
         if dynamic_result:
             self._note_owned_dynamic_call_value(result)
         return result
+
+    def _emit_slot_method_call(self, expr, label):
+        """``obj.name(args)`` whose result an expression consumes as an object.
+
+        Positional calls load the method without binding it; keywords and
+        unpacked operands bind through the generic object call."""
+        if expr.kwargs or self._has_unpacked_operands(expr.args, expr.kwargs):
+            return self._emit_slot_call_object(expr, label)
+        return self._emit_slot_loaded_method_call(expr, label)
+
+    def _emit_slot_loaded_method_call(self, expr, label):
+        """A positional ``obj.name(args)`` object operand without a bound method.
+
+        The receiver, the method ``py_obj_load_method`` resolves (before the
+        arguments evaluate, as the attribute load did) and the argument
+        tuple each live in a registered root while the arguments evaluate,
+        so a collector that moves them updates them; the call reads them
+        back and publishes its result into the consumer's slot. A plain
+        class function is called with the receiver as ``self``.
+        """
+        attr = expr.func
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        output = self._slot_call_result_sink(expr)
+        roots = []
+        try:
+            self._try_err_block = self._slot_call_cleanup_block((), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, label + ".receiver")
+            roots.append(receiver)
+            method = self._new_slot_call_root(label + ".method")
+            roots.append(method)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # py_obj_load_method stores the receiver here when the method is
+            # a plain class function; only whether it did is kept.
+            loaded_self = self._alloca_in_entry(
+                _CSTR, self._fresh(label + ".self"), init_null=True
+            )
+            self._slot_call_runtime_call(
+                "py_obj_load_method", (receiver,), result_slot=method,
+                suffix_args=(self._attr_name_ptr(attr.name), loaded_self),
+                span=expr.span,
+            )
+            has_self = self.builder.zext(
+                self.builder.icmp_unsigned(
+                    "!=",
+                    self.builder.load(loaded_self, name=self._fresh(label + ".self.value")),
+                    ir.Constant(_CSTR, None),
+                    name=self._fresh(label + ".self.bound"),
+                ),
+                _I64,
+                name=self._fresh(label + ".self.flag"),
+            )
+            args = self._emit_slot_call_args_tuple(expr.args, label + ".args")
+            roots.append(args)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_obj_call_loaded_method", (method, receiver, args),
+                result_slot=output, suffix_args=(has_self,), span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return self.builder.load(output, name=self._fresh(label + ".output"))
 
     def _resumable_may_park_method(self, owner, method_name: str) -> bool:
         """Whether a resumable caller delegates to this method's continuation."""
@@ -2312,7 +2380,7 @@ class MethodCallExpressionLoweringMixin:
                     name=self._fresh("dyn.bit_count"),
                 )
             if self._slot_call_result_sink(expr) is not None:
-                return self._emit_slot_call_object(expr, "method." + attr.name)
+                return self._emit_slot_method_call(expr, "method." + attr.name)
             recv_obj = self._emit_as_object(attr.obj)
             release_receiver = self._method_receiver_is_owned(attr.obj, recv_obj)
             if not expr.kwargs and self._split_starstar_kwargs_unpack(expr.args) is None:
@@ -2938,7 +3006,7 @@ class MethodCallExpressionLoweringMixin:
             # compatibility path; it supplies no native class/domain evidence.
             if (self._slot_call_result_sink(expr) is not None
                     and not self._expr_looks_cpython(attr.obj)):
-                return self._emit_slot_call_object(expr, "method." + attr.name)
+                return self._emit_slot_method_call(expr, "method." + attr.name)
             raw_val = self._emit_expr(attr.obj)
             if raw_val not in getattr(self, "_cpy_values", ()) and (
                 getattr(self, "_strict_no_libpython", False)

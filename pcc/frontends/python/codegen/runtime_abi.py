@@ -848,6 +848,7 @@ def _runtime_signatures_part_18():
     "py_obj_getattr": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_load_method": (_PYOBJ, [_PYOBJ, _CSTR, _CSTR_PTR], False),
     "py_obj_call_method": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_loaded_method": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _I64], False),
     "py_obj_call_method_kwargs": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_getattr_default": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_getattr_maybe": (_PYOBJ, [_PYOBJ, _CSTR], False),
