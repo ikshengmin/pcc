@@ -1019,6 +1019,15 @@ def _spill_ordered(host, operands, fd, owner, state):
             last = index
     if last < 0:
         return None
+    for index, operand in enumerate(operands):
+        if (index < last and _spill_wrapped_operand(operand) is not None
+                and operand.func.ident == "**"):
+            # The keyword binder must expand and merge this mapping before
+            # the later operand, including duplicate-key errors. Leave this
+            # group intact; its nested values spill at their operand boundary.
+            # Do not refuse the enclosing plan: its earlier receiver/operands
+            # still need roots while this entire call is evaluated.
+            return None
     result = []
     for index, operand in enumerate(operands):
         if operand is None or index > last or state["refused"]:
@@ -1028,10 +1037,6 @@ def _spill_ordered(host, operands, fd, owner, state):
         if inner is not None and index < last:
             # Python expands the iterable before the later park: spill a
             # list of its items then, and expand that list afterwards.
-            if operand.func.ident == "**":
-                state["refused"] = True
-                result.append(operand)
-                continue
             starred = Call(span=operand.span, ty=operand.ty, func=operand.func,
                            args=(_spill_normalize(host, inner, fd, owner, state),), kwargs=())
             items = ListExpr(span=operand.span, ty=ListType(name="list", elem=DynType(name="dyn")),
@@ -1502,6 +1507,25 @@ def begin_generator_statement_spills(host, hoists):
                 else host._emit_slot_call_operand(operand, "spill"))
         _bind_spill_root(host, spills, ident, root, hint)
     return spills
+
+
+def emit_generator_operand_spills(host, operand, label):
+    """Spill a nested operand when its enclosing binder must keep its order.
+
+    Keyword expansion, for example, must merge an earlier mapping and detect
+    duplicates before evaluating a later value. It cannot hoist the whole
+    call, but each value still needs the same suspension-safe expression plan.
+    """
+    plan = plan_generator_expression_spills(host, operand)
+    if plan is None:
+        return None
+    spills = begin_generator_statement_spills(host, plan[0])
+    try:
+        result = host._emit_slot_call_operand(plan[1], label)
+        finish_generator_statement_spills(host, spills)
+        return result
+    finally:
+        unbind_generator_statement_spills(host, spills)
 
 
 def emit_generator_spilled_inplace(host, spills, inplace):

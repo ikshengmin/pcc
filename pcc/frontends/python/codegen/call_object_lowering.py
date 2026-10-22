@@ -620,6 +620,14 @@ class CallObjectLoweringMixin:
 
     def _emit_slot_call_operand(self, expr: Expr, label: str):
         """Evaluate one operand into an independent owning authoritative root."""
+        if getattr(self, "_generator_ctx_stack", ()):
+            from pcc.frontends.python.codegen.generator_lowering import (
+                emit_generator_operand_spills,
+            )
+
+            spilled = emit_generator_operand_spills(self, expr, label)
+            if spilled is not None:
+                return spilled
         if self._expr_returns_unsafe_raw_pointer(expr):
             raise L1CodegenError(
                 "raw pointer cannot be a slot-call operand: " + type(expr).__name__
