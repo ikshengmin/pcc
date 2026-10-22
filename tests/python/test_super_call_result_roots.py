@@ -101,8 +101,9 @@ class Child(Base):
 }
 
 
-def _emit(source, monkeypatch, threads="0"):
-    monkeypatch.setenv("PCC_WITH_THREADS", threads)
+def _emit(source, monkeypatch):
+    # Every runtime is threaded; PCC_WITH_THREADS=0 now fails explicitly.
+    monkeypatch.delenv("PCC_WITH_THREADS", raising=False)
     module = infer_module(parse_and_lift(source, "super_result.py", "super_result"))
     codegen = L1CodeGen(module, ir_scaffold_mode="on")
     codegen._strict_no_libpython = True
@@ -152,17 +153,15 @@ def _contract(parsed, blocks, *, static=False):
     return invocations, roots
 
 
-@pytest.mark.parametrize("threads", ["0", "1"])
-def test_original_super_arithmetic_result_is_an_authoritative_operand(monkeypatch, threads):
-    _text, parsed, blocks = _emit(ALIGNMENT, monkeypatch, threads)
+def test_original_super_arithmetic_result_is_an_authoritative_operand(monkeypatch):
+    _text, parsed, blocks = _emit(ALIGNMENT, monkeypatch)
     _contract(parsed, blocks)
 
 
-@pytest.mark.parametrize("threads", ["0", "1"])
 @pytest.mark.parametrize("kind", list(CASES))
-def test_super_result_dispatch_branches_publish_into_same_root(monkeypatch, threads, kind):
+def test_super_result_dispatch_branches_publish_into_same_root(monkeypatch, kind):
     source = "def keep(value):\n    return value\n" + CASES[kind]
-    text, parsed, blocks = _emit(source, monkeypatch, threads)
+    text, parsed, blocks = _emit(source, monkeypatch)
     invocations, roots = _contract(parsed, blocks, static=kind == "staticmethod")
     if kind in ("keywords", "variadic", "splats"):
         assert any(ins.data[2] == "py_func_call_kwargs" for _, _, ins in invocations)
