@@ -22,8 +22,8 @@ PCC_PY_GC_SUBSTRATE_SYMBOLS = {
     "g_tls_pcc_py_gc_deferred_tripwire_message$tlv$init",
     "g_tls_pcc_py_gc_minor_current",
     "g_tls_pcc_py_gc_minor_current$tlv$init",
-    "g_tls_pcc_py_gc_minor_graph_lock_depth",
-    "g_tls_pcc_py_gc_minor_graph_lock_depth$tlv$init",
+    # The graph lock's per-thread depth is kept by the thread kernel, in its
+    # state word with the no-park depth (pcc_tls_thread_state_py).
     "g_tls_pcc_py_gc_pending_minor_block",
     "g_tls_pcc_py_gc_pending_minor_block$tlv$init",
     "pcc_py_gc_defer_tripwire",

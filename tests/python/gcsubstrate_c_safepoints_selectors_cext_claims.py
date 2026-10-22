@@ -1580,30 +1580,38 @@ def test_graph_lock_outermost_ownership_is_one_no_park_lease():
     strict_lock = strict.split("def pcc_py_gc_minor_graph_lock() -> None:", 1)[
         1
     ].split('@c_abi_export("pcc_py_gc_minor_graph_unlock")', 1)[0]
-    # The outermost acquisition is the thread kernel's fused entry, which
-    # registers the thread, takes the word and then raises the no-park depth;
-    # the substrate records its own depth only after that.
-    assert strict_lock.index("pcc_thread_graph_lock_enter(") < strict_lock.index(
-        "store_i32(depth_slot, 0, 1)"
-    )
+    # The acquisition is the thread kernel's: the outermost one registers the
+    # thread, takes the word and then raises the no-park depth together with
+    # the lock's own depth, in the kernel's one thread state word.
+    assert "pcc_thread_graph_lock_acquire(" in strict_lock
     kernel = (
         RUNTIME_DIR / "py" / "freestanding_thread_kernel_pthread.py"
     ).read_text(encoding="utf-8")
     kernel_enter = kernel.split(
-        "def pcc_thread_graph_lock_enter(lock_word) -> None:", 1
-    )[1].split('@c_abi_export("pcc_thread_no_park_exit")', 1)[0]
+        "def pcc_thread_graph_lock_acquire(lock_word) -> None:", 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_release")', 1)[0]
     strict_registration = kernel_enter.index("pcc_current_thread_id()")
     strict_cas = kernel_enter.index("atomic_cas_i32(lock_word")
-    strict_enter = kernel_enter.index("store_i32(depth_slot, 0, depth + 1)")
+    strict_enter = kernel_enter.index("store_i64(state_slot, 0, state + 16777217)")
     assert strict_registration < strict_cas < strict_enter
+    # The outermost release frees the word first; a deferred tripwire is
+    # handed back before the no-park exit, which the caller then performs
+    # after reporting it.
+    kernel_release = kernel.split(
+        "def pcc_thread_graph_lock_release(lock_word) -> int:", 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_depth")', 1)[0]
+    strict_physical = kernel_release.index('atomic_store_i32(lock_word, 0, 0, "release")')
+    strict_handback = kernel_release.index("return 1", strict_physical)
+    strict_own_exit = kernel_release.index("pcc_thread_safepoint()", strict_handback)
+    assert strict_physical < strict_handback < strict_own_exit
     strict_unlock = strict.split(
         "def pcc_py_gc_minor_graph_unlock() -> None:", 1
     )[1]
-    strict_physical = strict_unlock.index("atomic_store_i32(")
+    strict_release = strict_unlock.index("pcc_thread_graph_lock_release(")
     strict_deferred = strict_unlock.index(
-        "_finish_deferred_tripwire()", strict_physical
+        "_finish_deferred_tripwire()", strict_release
     )
     strict_exit = strict_unlock.index(
         "pcc_thread_no_park_exit()", strict_deferred
     )
-    assert strict_physical < strict_deferred < strict_exit
+    assert strict_release < strict_deferred < strict_exit
