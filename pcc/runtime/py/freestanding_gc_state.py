@@ -244,6 +244,13 @@ define_global_i64("pcc_gc_tracing_cycle_epoch", 0)
 define_global_i64("pcc_gc_tracing_finish_claim_epoch", 0)
 define_global_i64("pcc_gc_tracing_finish_claim_backend", -1)
 define_global_i64("pcc_gc_tracing_finish_commits", 0)
+# The finish commit at which a walk found no sweep candidate; -1: none yet.
+define_global_i64("pcc_gc_tracing_no_candidate_commit", -1)
+# The stopped-world epoch the last mark finished in (-1: the world ran).
+define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
+# Finalizers (__del__, generator close) that ran user code; a sweep
+# rechecks reachability after PASS 0 only when this moved.
+define_global_i64("pcc_gc_user_finalizer_runs", 0)
 define_global_i32("pcc_gc_trace_extension_roots_pending", 0)
 define_global_i64("pcc_gc_trace_extension_roots_epoch", 0)
 define_global_i64("pcc_gc_trace_extension_roots_backend", -1)

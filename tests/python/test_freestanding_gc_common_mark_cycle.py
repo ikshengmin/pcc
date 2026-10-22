@@ -47,6 +47,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_py_gc_minor_graph_unlock",
     "pcc_gc_visit_object_slots",
     "pcc_platform_abort",
+    "pcc_thread_world_stop_epoch_held",
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
@@ -65,6 +66,9 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_tracing_finish_claim_backend",
     "pcc_gc_tracing_finish_claim_epoch",
     "pcc_gc_tracing_finish_commits",
+    # The stopped world the mark finished in: a sweep in the same one skips
+    # the pre-finalizer reachability recheck.
+    "pcc_gc_tracing_finish_stop_epoch",
     # A completed mark records the bytes it found reachable for pacing and
     # pays the allocation debt.
     "pcc_gc_tracing_marked_bytes",

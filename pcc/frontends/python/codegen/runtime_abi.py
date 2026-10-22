@@ -1825,6 +1825,9 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_finish_claim_backend',
         'pcc_gc_tracing_finish_claim_epoch',
         'pcc_gc_tracing_finish_commits',
+        'pcc_gc_tracing_no_candidate_commit',
+        'pcc_gc_tracing_finish_stop_epoch',
+        'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
         'pcc_gc_root_registry_revision',
         'pcc_gc_stack_diff_capacity',
@@ -2104,6 +2107,7 @@ def _cross_object_signatures_part_0():
 
 def _cross_object_signatures_part_1():
     return {
+    "pcc_thread_world_stop_epoch_held": ((), "c_int64"),
     "pcc_gc_tracing_discharge_debt": (("c_int64",), "c_void"),
     "pcc_gc_tracing_debt_threshold": ((), "c_int64"),
     "pcc_gc_stackmap_roots_mode": ((), "c_int64"),

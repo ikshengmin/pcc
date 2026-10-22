@@ -8,6 +8,7 @@ from pcc.unsafe import (
     global_load_ptr,
     is_tagged_int,
     load_i32,
+    load_i64,
     load_ptr,
     ptr_is_null,
     stack_alloc,
@@ -97,11 +98,22 @@ py_dealloc_vthread_channel = extern(
     "py_dealloc_vthread_channel", (c_ptr,), c_void
 )
 py_dealloc_generic = extern("py_dealloc_generic", (c_ptr,), c_void)
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
 
 
 @c_abi_export("pcc_gc_tracing_has_sweep_candidate")
 def pcc_gc_tracing_has_sweep_candidate() -> i64:
+    # Only a finished mark sets SWEEP_CANDIDATE (1024), and it commits after
+    # flagging (pcc_gc_tracing_finish_commits). A walk that finds none stays
+    # true until the next commit; schedulers ask once per step, so walking
+    # every tracked object per question made a GC3 collection quadratic.
     pcc_py_gc_minor_graph_lock()
+    commits: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    if load_i64(global_addr("pcc_gc_tracing_no_candidate_commit"), 0) == commits:
+        pcc_py_gc_minor_graph_unlock()
+        return 0
     node = global_load_ptr("pcc_gc_object_head")
     while ptr_is_null(node) == 0:
         if pcc_gc_object_node_is_active(node) == 0:
@@ -113,6 +125,9 @@ def pcc_gc_tracing_has_sweep_candidate() -> i64:
             pcc_py_gc_minor_graph_unlock()
             return 1
         node = load_ptr(node, 16)
+    # A finish that committed during the walk may have flagged nodes behind it.
+    if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits:
+        store_i64(global_addr("pcc_gc_tracing_no_candidate_commit"), 0, commits)
     pcc_py_gc_minor_graph_unlock()
     return 0
 
@@ -255,8 +270,13 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # A completed concurrent/incremental mark may leave a pending candidate
     # that is reachable at this sweep boundary.  Revalidate before invoking
     # user finalizers: rescuing it only after __del__ is already too late.
-    # Keep the separate post-finalizer refresh for PEP 442 resurrection.
-    pcc_gc_tracing_recheck_reachability_after_finalizers()
+    # A mark finished in this same stopped world saw no mutator since, so
+    # its verdicts stand. Keep the separate post-finalizer refresh for PEP
+    # 442 resurrection.
+    held: i64 = pcc_thread_world_stop_epoch_held()
+    if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
+    finalizer_runs: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded
     # because their lifecycle is owned by the C-API bridge.
@@ -272,7 +292,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     py_user_del_dispatch(obj)
         node = nxt
 
-    pcc_gc_tracing_recheck_reachability_after_finalizers()
+    # Only user code -- a finalizer -- can resurrect a candidate or change
+    # the graph during this stopped-world sweep.
+    if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
 
     # PASS 1: clear at most budget candidates without freeing any sibling.
     cleared: i64 = 0

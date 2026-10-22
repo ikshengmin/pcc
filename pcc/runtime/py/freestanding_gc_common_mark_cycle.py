@@ -57,6 +57,9 @@ pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
 py_incref = extern("py_incref", (c_ptr,), c_void)
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
@@ -336,6 +339,13 @@ def pcc_gc_finish_tracing_cycle(
     )
     store_i64(global_addr("pcc_gc_trace_extension_roots_epoch"), 0, 0)
     store_i64(global_addr("pcc_gc_trace_extension_roots_backend"), 0, -1)
+    # A sweep in this same stopped world needs no reachability recheck
+    # before its finalizers: no mutator ran since these verdicts.
+    store_i64(
+        global_addr("pcc_gc_tracing_finish_stop_epoch"),
+        0,
+        pcc_thread_world_stop_epoch_held(),
+    )
     # Preserve cycle_requested: roots/barriers/reset may have published work
     # while this claimant was waiting for the stopped-world cut.
     store_i64(

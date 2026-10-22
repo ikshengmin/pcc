@@ -234,6 +234,20 @@ def pcc_thread_stop_requested_acquire() -> int:
     )
 
 
+@c_abi_export("pcc_thread_world_stop_epoch_held")
+def pcc_thread_world_stop_epoch_held() -> int:
+    """The epoch of the stopped world when the calling thread holds it, else
+    -1. Two calls answering the same epoch bracket runtime code during which
+    every other mutator stayed parked: only the holder resumes the world, and
+    each outermost stop takes a new epoch. The holder reads its own state, so
+    no lock is needed."""
+    if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+        return -1
+    if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) != pcc_current_thread_id():
+        return -1
+    return _world_i64(global_addr("pcc_stop_epoch_py"))
+
+
 @c_abi_export("pcc_refcount_strategy")
 def pcc_refcount_strategy() -> int:
     return 1
