@@ -1150,8 +1150,8 @@ def _spill_normalize(host, expr, fd, owner, state):
 
     Operands evaluated before the last parking operand, and that operand,
     move into ``state["hoists"]``; evaluating the result can still park, but
-    only at its own root. Conditional operands (the right of ``and``/``or``,
-    the arms of ``x if c else y``) and nested scopes stay in place.
+    only at its own root. Conditional expressions become a shared root whose
+    selected branch is emitted as a statement; nested scopes stay in place.
     """
     if expr is None or state["refused"]:
         return expr
@@ -1199,16 +1199,9 @@ def _spill_normalize(host, expr, fd, owner, state):
             return expr
         return UnaryOp(span=expr.span, ty=expr.ty, op=expr.op, operand=spilled[0])
     if isinstance(expr, BoolExpr):
-        spilled = _spill_ordered(host, [expr.left], fd, owner, state)
-        if spilled is None:
-            return expr
-        return BoolExpr(span=expr.span, ty=expr.ty, op=expr.op, left=spilled[0], right=expr.right)
+        return _spill_placeholder(host, expr, state)
     if isinstance(expr, IfExpr):
-        spilled = _spill_ordered(host, [expr.cond], fd, owner, state)
-        if spilled is None:
-            return expr
-        return IfExpr(span=expr.span, ty=expr.ty, cond=spilled[0],
-                      then_e=expr.then_e, else_e=expr.else_e)
+        return _spill_placeholder(host, expr, state)
     if isinstance(expr, ListExpr):
         spilled = _spill_ordered(host, list(expr.elems), fd, owner, state)
         if spilled is None:
@@ -1422,18 +1415,19 @@ def plan_generator_statement_spills(host, stmt):
     return state["hoists"], rebuilt, inplace
 
 
+def _spill_root_owner_name(host, root):
+    for name, entry in host.env.items():
+        if entry[0] is root:
+            return name
+    raise L1CodegenError("spilled operand root has no frame binding")
+
+
 def _bind_spill_root(host, spills, ident, root, hint) -> None:
     """Read ``ident`` from ``root`` exactly as the root's own frame binding."""
     spills["roots"].append(root)
     host._try_err_block = host._slot_call_cleanup_block(tuple(spills["roots"]), spills["target"])
     host._cpy_operand_cleanup_block = host._try_err_block
-    owner_name = None
-    for name, entry in host.env.items():
-        if entry[0] is root:
-            owner_name = name
-            break
-    if owner_name is None:
-        raise L1CodegenError("spilled operand root has no frame binding")
+    owner_name = _spill_root_owner_name(host, root)
     host.env[ident] = host.env[owner_name]
     added = []
     rooted = getattr(host, "_gc_rooted_local_names", None)
@@ -1449,6 +1443,48 @@ def _bind_spill_root(host, spills, ident, root, hint) -> None:
     spills["bound"].append((ident, added, hint is not None))
 
 
+def _emit_conditional_spill(host, operand):
+    """Let each selected arm use statement spill planning and one owner.
+
+    Assign the root's actual owned-local name, not its read-only placeholder:
+    an alias has no independent ownership flag to update across suspension.
+    """
+    root = host._new_slot_call_root("spill.conditional")
+    target = Name(span=operand.span, ty=DynType(name="dyn"),
+                  ident=_spill_root_owner_name(host, root))
+    previous = host._current_try_err_block()
+    error = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    host._try_err_block = host._slot_call_cleanup_block((root,), error)
+    host._cpy_operand_cleanup_block = host._try_err_block
+    try:
+        if isinstance(operand, IfExpr):
+            statement = If(
+                span=operand.span, cond=operand.cond,
+                body=(Assign(span=operand.span, targets=(target,), value=operand.then_e),),
+                else_body=(Assign(span=operand.span, targets=(target,), value=operand.else_e),),
+            )
+        else:
+            host._emit_stmt(Assign(span=operand.span, targets=(target,), value=operand.left))
+            # A discarded left temporary dies before evaluating the right
+            # operand, including before its side effects or first suspension.
+            right = (
+                Assign(span=operand.span, targets=(target,),
+                       value=NoneLit(span=operand.span, ty=NoneType(name="None"))),
+                Assign(span=operand.span, targets=(target,), value=operand.right),
+            )
+            statement = If(
+                span=operand.span, cond=target,
+                body=right if operand.op == "and" else (),
+                else_body=right if operand.op == "or" else (),
+            )
+        host._emit_stmt(statement)
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+    return root
+
+
 def begin_generator_statement_spills(host, hoists):
     """Evaluate each spilled operand into a frame root and bind its name."""
     previous = host._current_try_err_block()
@@ -1461,7 +1497,9 @@ def begin_generator_statement_spills(host, hoists):
     }
     for ident, operand in hoists:
         hint = host._class_hint_for_expr(operand)
-        root = host._emit_slot_call_operand(operand, "spill")
+        root = (_emit_conditional_spill(host, operand)
+                if isinstance(operand, (BoolExpr, IfExpr))
+                else host._emit_slot_call_operand(operand, "spill"))
         _bind_spill_root(host, spills, ident, root, hint)
     return spills
 
