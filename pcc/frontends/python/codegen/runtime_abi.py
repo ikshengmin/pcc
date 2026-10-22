@@ -2112,6 +2112,8 @@ def _cross_object_signatures_part_0():
 
 def _cross_object_signatures_part_1():
     return {
+    "pcc_gc_scheduler_root_list_acquire": ((), "c_void"),
+    "pcc_gc_scheduler_root_list_release": ((), "c_void"),
     "pcc_thread_graph_lock_enter": (("c_ptr",), "c_void"),
     "pcc_thread_world_stop_epoch_held": ((), "c_int64"),
     "pcc_gc_store_buffer_entry_forget": (("c_ptr", "c_ptr"), "c_void"),

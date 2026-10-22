@@ -8,7 +8,11 @@ collector resolver can move as one slot-contract slice.
 from pcc import i64
 from pcc.extern import c_abi_export, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_cas_i32,
+    atomic_load_i32,
     atomic_store_i32,
+    define_global_i32,
+    define_global_ptr_null,
     free,
     gc_backend_current,
     global_addr,
@@ -36,6 +40,69 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
+
+
+# The scheduler-root list is changed only under this word, held for a few
+# loads and stores and never across a safepoint, so no holder parks. The
+# tracing collectors (GC1-GC4) also hold the graph lock around every change
+# and read the list under it. GC0 reads the list only with the world stopped,
+# when no mutator is inside a change, so a GC0 registration takes this word
+# alone: the graph lock's no-park, thread-local and poll protocol was most of
+# what a registration cost. Freed nodes ([0] slot, [8] next, [16] previous)
+# are kept for reuse, up to 4096.
+define_global_i32("pcc_py_gc_scheduler_root_spin", 0)
+define_global_ptr_null("pcc_py_gc_scheduler_root_free_head")
+define_global_i32("pcc_py_gc_scheduler_root_free_count", 0)
+
+
+@c_abi_export("pcc_gc_scheduler_root_list_acquire")
+def _scheduler_root_spin_acquire() -> None:
+    """Hold the list word around a change or a walk of the list."""
+    word = global_addr("pcc_py_gc_scheduler_root_spin")
+    while atomic_cas_i32(word, 0, 0, 1, "acq_rel", "acquire") != 0:
+        while atomic_load_i32(word, 0, "relaxed") != 0:
+            word = global_addr("pcc_py_gc_scheduler_root_spin")
+
+
+@c_abi_export("pcc_gc_scheduler_root_list_release")
+def _scheduler_root_spin_release() -> None:
+    atomic_store_i32(global_addr("pcc_py_gc_scheduler_root_spin"), 0, 0, "release")
+
+
+@c_abi_export("pcc_gc_scheduler_root_node_take")
+def _scheduler_root_node_take(slot):
+    """A cleared node for ``slot``, reused when one is free."""
+    _scheduler_root_spin_acquire()
+    node = global_load_ptr("pcc_py_gc_scheduler_root_free_head")
+    if ptr_is_null(node) == 0:
+        global_store_ptr("pcc_py_gc_scheduler_root_free_head", load_ptr(node, 8))
+        store_i32(
+            global_addr("pcc_py_gc_scheduler_root_free_count"),
+            0,
+            load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0) - 1,
+        )
+    _scheduler_root_spin_release()
+    if ptr_is_null(node) != 0:
+        node = malloc(24)
+        if ptr_is_null(node) != 0:
+            return node
+    memset(node, 0, 24)
+    store_ptr(node, 0, slot)
+    return node
+
+
+@c_abi_export("pcc_gc_scheduler_root_node_give")
+def _scheduler_root_node_give(node) -> None:
+    _scheduler_root_spin_acquire()
+    count: i64 = load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0)
+    if count < 4096:
+        store_ptr(node, 8, global_load_ptr("pcc_py_gc_scheduler_root_free_head"))
+        global_store_ptr("pcc_py_gc_scheduler_root_free_head", node)
+        store_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0, count + 1)
+        node = null()
+    _scheduler_root_spin_release()
+    if ptr_is_null(node) == 0:
+        free(node)
 
 
 @c_abi_export("pcc_gc_cycle_requested_store_release")
@@ -83,6 +150,13 @@ def pcc_gc_root_map_is_borrowed(frame_map) -> i64:
 def pcc_gc_scheduler_root_link_locked(node) -> None:
     if ptr_is_null(node) != 0:
         return
+    _scheduler_root_spin_acquire()
+    _scheduler_root_link(node)
+    _scheduler_root_spin_release()
+
+
+@c_abi_export("pcc_gc_scheduler_root_link_held")
+def _scheduler_root_link(node) -> None:
     head = global_load_ptr("pcc_gc_scheduler_root_head")
     store_ptr(node, 8, head)
     store_ptr(node, 16, null())
@@ -96,6 +170,14 @@ def pcc_gc_scheduler_root_link_locked(node) -> None:
 def pcc_gc_scheduler_root_unlink_locked(node) -> i64:
     if ptr_is_null(node) != 0:
         return 0
+    _scheduler_root_spin_acquire()
+    unlinked: i64 = _scheduler_root_unlink(node)
+    _scheduler_root_spin_release()
+    return unlinked
+
+
+@c_abi_export("pcc_gc_scheduler_root_unlink_held")
+def _scheduler_root_unlink(node) -> i64:
     previous = load_ptr(node, 16)
     next_node = load_ptr(node, 8)
     if ptr_eq(
@@ -134,17 +216,18 @@ def pcc_gc_scheduler_root_unlink_locked(node) -> i64:
 
 @c_abi_export("pcc_gc_scheduler_root_register_handle")
 def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
-    gc_backend_current()
+    backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return null()
-    node = malloc(24)
+    node = _scheduler_root_node_take(slot)
     if ptr_is_null(node) != 0:
         return null()
-    memset(node, 0, 24)
-    store_ptr(node, 0, slot)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_scheduler_root_link_locked(node)
-    pcc_py_gc_minor_graph_unlock()
+    if backend == 0:
+        pcc_gc_scheduler_root_link_locked(node)
+    else:
+        pcc_py_gc_minor_graph_lock()
+        pcc_gc_scheduler_root_link_locked(node)
+        pcc_py_gc_minor_graph_unlock()
     pcc_gc_cycle_requested_store_release(1)
     return node
 
@@ -156,33 +239,40 @@ def pcc_gc_scheduler_root_register(slot) -> None:
 
 @c_abi_export("pcc_gc_scheduler_root_unregister_handle")
 def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
-    gc_backend_current()
+    backend: i64 = gc_backend_current()
     if ptr_is_null(handle) != 0:
         return
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_scheduler_root_unlink_locked(handle)
-    pcc_py_gc_minor_graph_unlock()
-    free(handle)
+    if backend == 0:
+        pcc_gc_scheduler_root_unlink_locked(handle)
+    else:
+        pcc_py_gc_minor_graph_lock()
+        pcc_gc_scheduler_root_unlink_locked(handle)
+        pcc_py_gc_minor_graph_unlock()
+    _scheduler_root_node_give(handle)
     pcc_gc_cycle_requested_store_release(1)
 
 
 @c_abi_export("pcc_gc_scheduler_root_unregister")
 def pcc_gc_scheduler_root_unregister(slot) -> None:
-    gc_backend_current()
+    backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return
     dead = null()
-    pcc_py_gc_minor_graph_lock()
+    if backend != 0:
+        pcc_py_gc_minor_graph_lock()
+    _scheduler_root_spin_acquire()
     node = global_load_ptr("pcc_gc_scheduler_root_head")
-    while ptr_is_null(node) == 0:
+    while ptr_is_null(node) == 0 and ptr_is_null(dead) != 0:
         if ptr_eq(load_ptr(node, 0), slot) != 0:
             dead = node
-            pcc_gc_scheduler_root_unlink_locked(node)
-            break
-        node = load_ptr(node, 8)
-    pcc_py_gc_minor_graph_unlock()
+            _scheduler_root_unlink(node)
+        else:
+            node = load_ptr(node, 8)
+    _scheduler_root_spin_release()
+    if backend != 0:
+        pcc_py_gc_minor_graph_unlock()
     if ptr_is_null(dead) == 0:
-        free(dead)
+        _scheduler_root_node_give(dead)
         pcc_gc_cycle_requested_store_release(1)
 
 
