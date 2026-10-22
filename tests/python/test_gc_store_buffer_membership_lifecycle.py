@@ -80,6 +80,10 @@ class _Memory:
             "pcc_gc_index_py_remove",
             *("pcc_gc_store_buffer_member_" + suffix for suffix in
               ("note", "taint", "maybe", "forget", "owner_count", "clear")),
+            "pcc_gc_store_buffer_index_taint", "pcc_gc_store_buffer_owner_entries",
+            "pcc_gc_store_buffer_slot_pending", "pcc_gc_store_buffer_entry_note",
+            "pcc_gc_store_buffer_entry_forget", "pcc_gc_store_buffer_slot_move",
+            "pcc_gc_store_buffer_index_clear",
         })
         _load_functions(BACKEND, self.namespace, {
             "_store_buffer_head", "_set_store_buffer_head",
@@ -258,7 +262,8 @@ def test_partial_batch_retains_owner_until_last_entry_without_index_allocation(q
         if queues == "global" or (queues == "both" and index == 4):
             memory.flush()
     slots = memory.read(MEMBERS + "slots", 0)
-    assert memory.drain(20) == 8
+    # A budget below the queue length drains a partial batch.
+    assert memory.drain(8) == 8
     assert memory.owners() == {owner: 2}
     assert memory.count() == memory.maybe(owner) == 1
     assert memory.read(owner, 12) & 512

@@ -2108,6 +2108,8 @@ def _cross_object_signatures_part_0():
 def _cross_object_signatures_part_1():
     return {
     "pcc_thread_world_stop_epoch_held": ((), "c_int64"),
+    "pcc_gc_store_buffer_entry_forget": (("c_ptr", "c_ptr"), "c_void"),
+    "pcc_gc_store_buffer_owner_entries": (("c_ptr",), "c_int64"),
     "pcc_gc_tracing_discharge_debt": (("c_int64",), "c_void"),
     "pcc_gc_tracing_debt_threshold": ((), "c_int64"),
     "pcc_gc_stackmap_roots_mode": ((), "c_int64"),

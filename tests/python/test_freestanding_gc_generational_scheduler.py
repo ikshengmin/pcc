@@ -78,6 +78,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_root_registry_revision",
     "pcc_gc_scheduler_root_head",
     "pcc_gc_store_buffer_member_forget",
+    "pcc_gc_store_buffer_entry_forget",
+    "pcc_gc_store_buffer_owner_entries",
+    # The young step visits the walked mutator stack roots.
+    "pcc_gc_visit_walked_stack_roots",
     "pcc_gc_trace_referents_for_promotion",
     "pcc_gc_visit_mapped_root_slot",
     "pcc_py_gc_minor_graph_lock",

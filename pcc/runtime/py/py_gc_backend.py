@@ -86,6 +86,12 @@ pcc_gc_store_buffer_member_maybe = extern("pcc_gc_store_buffer_member_maybe", (c
 pcc_gc_store_buffer_member_forget = extern("pcc_gc_store_buffer_member_forget", (c_ptr,), c_void)
 pcc_gc_store_buffer_member_owner_count = extern("pcc_gc_store_buffer_member_owner_count", (), c_int64)
 pcc_gc_store_buffer_member_clear = extern("pcc_gc_store_buffer_member_clear", (), c_void)
+pcc_gc_store_buffer_entry_note = extern("pcc_gc_store_buffer_entry_note", (c_ptr, c_ptr), c_void)
+pcc_gc_store_buffer_entry_forget = extern("pcc_gc_store_buffer_entry_forget", (c_ptr, c_ptr), c_void)
+pcc_gc_store_buffer_owner_entries = extern("pcc_gc_store_buffer_owner_entries", (c_ptr,), c_int64)
+pcc_gc_store_buffer_slot_pending = extern("pcc_gc_store_buffer_slot_pending", (c_ptr,), c_int64)
+pcc_gc_store_buffer_slot_move = extern("pcc_gc_store_buffer_slot_move", (c_ptr, c_ptr), c_void)
+pcc_gc_store_buffer_index_clear = extern("pcc_gc_store_buffer_index_clear", (), c_void)
 pcc_gc_remembered_member_clear = extern("pcc_gc_remembered_member_clear", (), c_void)
 
 
@@ -1261,6 +1267,7 @@ def _backend4_store_buffer_append_global_owned(owner, slot, value) -> None:
         py_decref(value)
         # The owner may or may not keep other entries; queries walk again.
         pcc_gc_store_buffer_member_taint()
+        pcc_gc_store_buffer_entry_forget(owner, slot)
         return
     store_ptr(node, 0, owner)
     store_ptr(node, 8, slot)
@@ -1350,7 +1357,16 @@ def _backend4_store_buffer_enqueue(owner, slot, value) -> int:
         return 0
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
-    if _backend4_store_buffer_contains(owner, slot, value) != 0:
+    # The drain promotes whatever a recorded slot holds when it runs, so a
+    # slot with an entry pending needs no second one. The slot index answers
+    # without walking the queues; an owner-wide (NULL slot) entry or an
+    # incomplete index falls back to the exact walk.
+    duplicate: int = -1
+    if ptr_is_null(slot) == 0:
+        duplicate = pcc_gc_store_buffer_slot_pending(slot)
+    if duplicate < 0:
+        duplicate = _backend4_store_buffer_contains(owner, slot, value)
+    if duplicate != 0:
         skips: int = load_i32(
             global_addr("pcc_gc_backend4_store_buffer_duplicate_skips_count"), 0
         )
@@ -1383,6 +1399,7 @@ def _backend4_store_buffer_enqueue(owner, slot, value) -> int:
     _set_store_buffer_medium_head(node)
     _backend4_store_buffer_medium_set_count(_backend4_store_buffer_medium_count() + 1)
     pcc_gc_store_buffer_member_note(owner)
+    pcc_gc_store_buffer_entry_note(owner, slot)
     _backend4_remembered_set_add(owner, slot)
     store_i32(owner, 12, flags | 512)
     pending: int = load_i32(
@@ -1445,6 +1462,7 @@ def _backend4_store_buffer_remove(owner) -> None:
             count: int = _backend4_store_buffer_medium_count()
             if count > 0:
                 _backend4_store_buffer_medium_set_count(count - 1)
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
             py_decref(load_ptr(node, 16))
             free(node)
             node = nxt
@@ -1461,6 +1479,7 @@ def _backend4_store_buffer_remove(owner) -> None:
             else:
                 store_ptr(prev, 24, nxt)
             _backend4_store_buffer_dec()
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
             py_decref(load_ptr(node, 16))
             free(node)
             node = nxt
@@ -1586,6 +1605,7 @@ def pcc_gc_backend4_source_side_table_plan_commit(plan) -> int:
             medium_count: int = _backend4_store_buffer_medium_count()
             if medium_count > 0:
                 _backend4_store_buffer_medium_set_count(medium_count - 1)
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
             free(node)
             removed = removed + 1
             node = nxt
@@ -1602,6 +1622,7 @@ def pcc_gc_backend4_source_side_table_plan_commit(plan) -> int:
             else:
                 store_ptr(prev, 24, nxt)
             _backend4_store_buffer_dec()
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
             free(node)
             removed = removed + 1
             node = nxt
@@ -1651,6 +1672,9 @@ def pcc_gc_backend4_source_side_table_plan_finish(
 def _backend4_store_buffer_owner_pending(owner) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
+    indexed: int = pcc_gc_store_buffer_owner_entries(owner)
+    if indexed >= 0:
+        return 1 if indexed > 0 else 0
     node = _store_buffer_medium_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), owner) != 0:
@@ -1667,6 +1691,9 @@ def _backend4_store_buffer_owner_pending(owner) -> int:
 def _backend4_store_buffer_owner_fanout(owner) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
+    indexed: int = pcc_gc_store_buffer_owner_entries(owner)
+    if indexed >= 0:
+        return indexed
     node = _store_buffer_medium_head()
     count: int = 0
     while ptr_is_null(node) == 0:
@@ -1802,6 +1829,7 @@ def _backend4_store_buffer_clear() -> None:
         free(node)
         node = nxt
     pcc_gc_store_buffer_member_clear()
+    pcc_gc_store_buffer_index_clear()
     store_i32(global_addr("pcc_gc_backend4_store_buffer_entries_count"), 0, 0)
     store_i32(global_addr("pcc_gc_backend4_store_buffer_high_water_count"), 0, 0)
     store_i32(
@@ -3688,6 +3716,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 slot_pairs,
                 pair_count,
             )
+            pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
             store_ptr(entry, 8, mapped)
         entry = load_ptr(entry, 24)
     entry = _store_buffer_head()
@@ -3702,6 +3731,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 slot_pairs,
                 pair_count,
             )
+            pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
             store_ptr(entry, 8, mapped)
         entry = load_ptr(entry, 24)
 

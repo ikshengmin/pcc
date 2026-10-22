@@ -65,6 +65,12 @@ pcc_gc_object_is_known_no_lock = extern(
 pcc_gc_store_buffer_member_forget = extern(
     "pcc_gc_store_buffer_member_forget", (c_ptr,), c_void
 )
+pcc_gc_store_buffer_entry_forget = extern(
+    "pcc_gc_store_buffer_entry_forget", (c_ptr, c_ptr), c_void
+)
+pcc_gc_store_buffer_owner_entries = extern(
+    "pcc_gc_store_buffer_owner_entries", (c_ptr,), c_int64
+)
 pcc_gc_generational_promote_owned_slot_mode = extern(
     "pcc_gc_generational_promote_owned_slot_mode",
     (c_ptr, c_int64, c_int64),
@@ -461,9 +467,10 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
     """Drain one GC4 remembered batch with callback-capable cleanup unlocked."""
     if remaining_budget <= 0:
         return 0
+    # The whole budget: an eight-entry cap fell behind any mutator that
+    # stores young values into old objects, and while entries remain a GC4
+    # step does no other work.
     batch_limit: i64 = remaining_budget
-    if batch_limit > 8:
-        batch_limit = 8
     cleanup = null()
     local_drained: i64 = 0
 
@@ -599,24 +606,31 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
 
         # Membership follows both queues even when promotion is inapplicable.
         # Forget is raw deletion only; cleanup can reenqueue after unlocking.
-        owner_pending: i64 = 0
-        pending_node = load_ptr(
-            global_addr("pcc_gc_backend4_store_buffer_medium_head"), 0
-        )
-        while ptr_is_null(pending_node) == 0:
-            if ptr_eq(load_ptr(pending_node, 0), owner) != 0:
-                owner_pending = 1
-                break
-            pending_node = load_ptr(pending_node, 24)
-        if owner_pending == 0:
+        # The entry index answers whether the owner keeps another entry; an
+        # incomplete index falls back to walking the queues.
+        pcc_gc_store_buffer_entry_forget(owner, slot)
+        owner_pending: i64 = pcc_gc_store_buffer_owner_entries(owner)
+        if owner_pending > 0:
+            owner_pending = 1
+        elif owner_pending < 0:
+            owner_pending = 0
             pending_node = load_ptr(
-                global_addr("pcc_gc_backend4_store_buffer_head"), 0
+                global_addr("pcc_gc_backend4_store_buffer_medium_head"), 0
             )
             while ptr_is_null(pending_node) == 0:
                 if ptr_eq(load_ptr(pending_node, 0), owner) != 0:
                     owner_pending = 1
                     break
                 pending_node = load_ptr(pending_node, 24)
+            if owner_pending == 0:
+                pending_node = load_ptr(
+                    global_addr("pcc_gc_backend4_store_buffer_head"), 0
+                )
+                while ptr_is_null(pending_node) == 0:
+                    if ptr_eq(load_ptr(pending_node, 0), owner) != 0:
+                        owner_pending = 1
+                        break
+                    pending_node = load_ptr(pending_node, 24)
         if owner_pending == 0:
             pcc_gc_store_buffer_member_forget(owner)
             if owner_known != 0 and (flags & 512) != 0:

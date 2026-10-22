@@ -146,6 +146,19 @@ define_global_i64("pcc_py_gc_store_buffer_member_cap", 0)
 define_global_i64("pcc_py_gc_store_buffer_member_count", 0)
 define_global_i64("pcc_py_gc_store_buffer_member_used", 0)
 define_global_i64("pcc_py_gc_store_buffer_member_incomplete", 0)
+# GC4 store-buffer entries by owner (an i64 multiplicity in the value word)
+# and by recorded slot (presence). Both mirror the two store-buffer queues; a
+# path that cannot keep them exact marks them incomplete, and callers walk
+# the queues until the next clear.
+define_global_ptr_null("pcc_py_gc_store_buffer_owner_slots")
+define_global_i64("pcc_py_gc_store_buffer_owner_cap", 0)
+define_global_i64("pcc_py_gc_store_buffer_owner_count", 0)
+define_global_i64("pcc_py_gc_store_buffer_owner_used", 0)
+define_global_ptr_null("pcc_py_gc_store_buffer_slot_slots")
+define_global_i64("pcc_py_gc_store_buffer_slot_cap", 0)
+define_global_i64("pcc_py_gc_store_buffer_slot_count", 0)
+define_global_i64("pcc_py_gc_store_buffer_slot_used", 0)
+define_global_i64("pcc_py_gc_store_buffer_index_incomplete", 0)
 
 
 
@@ -1851,6 +1864,186 @@ def pcc_gc_store_buffer_member_clear() -> None:
     store_i64(global_addr("pcc_py_gc_store_buffer_member_used"), 0, 0)
     store_i64(global_addr("pcc_py_gc_store_buffer_member_incomplete"), 0, 0)
     free(slots)
+
+
+@c_abi_export("pcc_gc_store_buffer_index_taint")
+def pcc_gc_store_buffer_index_taint() -> None:
+    store_i64(global_addr("pcc_py_gc_store_buffer_index_incomplete"), 0, 1)
+
+
+@c_abi_export("pcc_gc_store_buffer_owner_entries")
+def pcc_gc_store_buffer_owner_entries(owner: c_ptr) -> i64:
+    """Buffered entries recorded for owner, or -1 while the index is incomplete."""
+    if load_i64(global_addr("pcc_py_gc_store_buffer_index_incomplete"), 0) != 0:
+        return -1
+    if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
+        return 0
+    slots = global_load_ptr("pcc_py_gc_store_buffer_owner_slots")
+    if ptr_is_null(slots) != 0:
+        return 0
+    cap: i64 = load_i64(global_addr("pcc_py_gc_store_buffer_owner_cap"), 0)
+    result: i64 = pcc_gc_index_py_find_slot(slots, cap, owner)
+    if result < 0:
+        return 0
+    return load_i64(slots, result * 16 + 8)
+
+
+@c_abi_export("pcc_gc_store_buffer_slot_pending")
+def pcc_gc_store_buffer_slot_pending(slot: c_ptr) -> i64:
+    """1 when an entry records slot, 0 when none does, -1 when unknown."""
+    if load_i64(global_addr("pcc_py_gc_store_buffer_index_incomplete"), 0) != 0:
+        return -1
+    if ptr_is_null(slot) != 0:
+        return 0
+    slots = global_load_ptr("pcc_py_gc_store_buffer_slot_slots")
+    if ptr_is_null(slots) != 0:
+        return 0
+    cap: i64 = load_i64(global_addr("pcc_py_gc_store_buffer_slot_cap"), 0)
+    return 1 if pcc_gc_index_py_find_slot(slots, cap, slot) >= 0 else 0
+
+
+@c_abi_export("pcc_gc_store_buffer_entry_note")
+def pcc_gc_store_buffer_entry_note(owner: c_ptr, slot: c_ptr) -> None:
+    """One entry for (owner, slot) joined the buffer; slot may be NULL."""
+    entries: i64 = pcc_gc_store_buffer_owner_entries(owner)
+    if entries < 0:
+        return
+    if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
+        pcc_gc_store_buffer_index_taint()
+        return
+    if entries == 0:
+        if pcc_gc_index_py_insert(
+            global_addr("pcc_py_gc_store_buffer_owner_slots"),
+            global_addr("pcc_py_gc_store_buffer_owner_cap"),
+            global_addr("pcc_py_gc_store_buffer_owner_count"),
+            global_addr("pcc_py_gc_store_buffer_owner_used"),
+            owner,
+            owner,
+            1,
+            0,
+            256,
+        ) != 1:
+            pcc_gc_store_buffer_index_taint()
+            return
+    # Insertion may rehash: find the owner's slot in the current table.
+    slots = global_load_ptr("pcc_py_gc_store_buffer_owner_slots")
+    cap: i64 = load_i64(global_addr("pcc_py_gc_store_buffer_owner_cap"), 0)
+    result: i64 = pcc_gc_index_py_find_slot(slots, cap, owner)
+    if result < 0:
+        pcc_gc_store_buffer_index_taint()
+        return
+    store_i64(slots, result * 16 + 8, entries + 1)
+    if ptr_is_null(slot) != 0:
+        return
+    # Callers skip a slot that already has an entry; a second one means the
+    # queues and this index disagree.
+    if pcc_gc_index_py_insert(
+        global_addr("pcc_py_gc_store_buffer_slot_slots"),
+        global_addr("pcc_py_gc_store_buffer_slot_cap"),
+        global_addr("pcc_py_gc_store_buffer_slot_count"),
+        global_addr("pcc_py_gc_store_buffer_slot_used"),
+        slot,
+        slot,
+        1,
+        0,
+        256,
+    ) != 1:
+        pcc_gc_store_buffer_index_taint()
+
+
+@c_abi_export("pcc_gc_store_buffer_entry_forget")
+def pcc_gc_store_buffer_entry_forget(owner: c_ptr, slot: c_ptr) -> None:
+    """One entry for (owner, slot) left the buffer."""
+    entries: i64 = pcc_gc_store_buffer_owner_entries(owner)
+    if entries < 0:
+        return
+    if entries == 0:
+        pcc_gc_store_buffer_index_taint()
+        return
+    if entries > 1:
+        slots = global_load_ptr("pcc_py_gc_store_buffer_owner_slots")
+        cap: i64 = load_i64(global_addr("pcc_py_gc_store_buffer_owner_cap"), 0)
+        result: i64 = pcc_gc_index_py_find_slot(slots, cap, owner)
+        if result < 0:
+            pcc_gc_store_buffer_index_taint()
+            return
+        store_i64(slots, result * 16 + 8, entries - 1)
+    else:
+        pcc_gc_index_py_remove(
+            global_addr("pcc_py_gc_store_buffer_owner_slots"),
+            global_addr("pcc_py_gc_store_buffer_owner_cap"),
+            global_addr("pcc_py_gc_store_buffer_owner_count"),
+            global_addr("pcc_py_gc_store_buffer_owner_used"),
+            owner,
+            1,
+        )
+    if ptr_is_null(slot) != 0:
+        return
+    if ptr_is_null(
+        pcc_gc_index_py_remove(
+            global_addr("pcc_py_gc_store_buffer_slot_slots"),
+            global_addr("pcc_py_gc_store_buffer_slot_cap"),
+            global_addr("pcc_py_gc_store_buffer_slot_count"),
+            global_addr("pcc_py_gc_store_buffer_slot_used"),
+            slot,
+            1,
+        )
+    ) != 0:
+        pcc_gc_store_buffer_index_taint()
+
+
+@c_abi_export("pcc_gc_store_buffer_slot_move")
+def pcc_gc_store_buffer_slot_move(old_slot: c_ptr, new_slot: c_ptr) -> None:
+    """A relocation rewrote a buffered entry's slot."""
+    if load_i64(global_addr("pcc_py_gc_store_buffer_index_incomplete"), 0) != 0:
+        return
+    if ptr_eq(old_slot, new_slot) != 0:
+        return
+    if ptr_is_null(old_slot) != 0 or ptr_is_null(new_slot) != 0:
+        pcc_gc_store_buffer_index_taint()
+        return
+    if ptr_is_null(
+        pcc_gc_index_py_remove(
+            global_addr("pcc_py_gc_store_buffer_slot_slots"),
+            global_addr("pcc_py_gc_store_buffer_slot_cap"),
+            global_addr("pcc_py_gc_store_buffer_slot_count"),
+            global_addr("pcc_py_gc_store_buffer_slot_used"),
+            old_slot,
+            1,
+        )
+    ) != 0:
+        pcc_gc_store_buffer_index_taint()
+        return
+    if pcc_gc_index_py_insert(
+        global_addr("pcc_py_gc_store_buffer_slot_slots"),
+        global_addr("pcc_py_gc_store_buffer_slot_cap"),
+        global_addr("pcc_py_gc_store_buffer_slot_count"),
+        global_addr("pcc_py_gc_store_buffer_slot_used"),
+        new_slot,
+        new_slot,
+        1,
+        0,
+        256,
+    ) != 1:
+        pcc_gc_store_buffer_index_taint()
+
+
+@c_abi_export("pcc_gc_store_buffer_index_clear")
+def pcc_gc_store_buffer_index_clear() -> None:
+    # Call after both queues are empty; this also ends an incomplete epoch.
+    owner_slots = global_load_ptr("pcc_py_gc_store_buffer_owner_slots")
+    global_store_ptr("pcc_py_gc_store_buffer_owner_slots", null())
+    store_i64(global_addr("pcc_py_gc_store_buffer_owner_cap"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_store_buffer_owner_count"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_store_buffer_owner_used"), 0, 0)
+    slot_slots = global_load_ptr("pcc_py_gc_store_buffer_slot_slots")
+    global_store_ptr("pcc_py_gc_store_buffer_slot_slots", null())
+    store_i64(global_addr("pcc_py_gc_store_buffer_slot_cap"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_store_buffer_slot_count"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_store_buffer_slot_used"), 0, 0)
+    store_i64(global_addr("pcc_py_gc_store_buffer_index_incomplete"), 0, 0)
+    free(owner_slots)
+    free(slot_slots)
 
 
 @c_abi_export("pcc_gc_ptr_index_tls_pool_drain")
