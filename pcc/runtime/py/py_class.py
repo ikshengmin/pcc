@@ -227,6 +227,7 @@ py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
+pcc_gc_immortalize = extern("pcc_gc_immortalize", (c_ptr,), c_void)
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
 )
@@ -331,9 +332,8 @@ def _ptr_is_class_of_validated_instance(cls) -> bool:
 
     The caller has just proved `o` is a managed object whose type tag says
     instance.  `py_instance_new` only ever stores a validated class there, the
-    slot is documented as a borrowed uncounted class pointer, and classes carry
-    PY_FLAG_IMMORTAL -- so reading this header is safe on the strength of the
-    instance being valid.  Probing again cost a second lock plus hash probe on
+    slot holds a counted reference (py_instance_dealloc releases it last) -- so
+    reading this header is safe on the strength of the instance being valid.  Probing again cost a second lock plus hash probe on
     the hottest path in the runtime: every attribute access and method dispatch
     ran `_ptr_is_instance`, which paid the probe once for the instance and once
     more for its class.
@@ -374,7 +374,8 @@ def _dealloc_ptr_is_instance(o) -> bool:
     # so the radix-walk ``_ptr_can_have_header`` probe is skipped.
     o = pcc_gc_note_relocation_read(o)
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag != PY_TYPE_INSTANCE:
+    # A valuebox is an instance of its class too, with the same layout.
+    if tag != PY_TYPE_INSTANCE and tag != PY_TYPE_VALUEBOX:
         if tag < PY_TYPE_USER_CLASS_START:
             return False
     cls = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
@@ -2652,8 +2653,8 @@ def py_class_set_metaclass(cls, metaclass) -> None:
         if not _ptr_is_class(metaclass):
             return
         metaclass = pcc_gc_note_relocation_read(metaclass)
-    # A metaclass is a real class owner, even while user classes remain
-    # immortal. The retaining store also retires the previous relation.
+    # A metaclass is a counted class owner. The retaining store also retires
+    # the previous relation.
     pcc_gc_store_ptr(
         cls, ptr_add(cls, PYCLASSOBJECT_METACLASS_OFFSET), metaclass,
     )
@@ -2685,6 +2686,9 @@ def py_instance_new(cls) -> c_ptr:
     type_tag_alloc: int = load_i32(cls, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET)
     store_i32(inst, PYOBJECTHEADER_TYPE_TAG_OFFSET, type_tag_alloc)
     store_ptr(inst, PYINSTANCEOBJECT_CLS_OFFSET, cls)
+    # An instance owns its class, as a CPython object owns its heap type;
+    # py_instance_dealloc releases it last.
+    py_incref(cls)
     py_gc_track(inst)
     # The freshly allocated instance is already a new reference; keep this as
     # a raw pointer expression so return lowering does not retain it again.
@@ -5715,8 +5719,17 @@ def py_class_dealloc(o) -> None:
     if ptr_is_null(attrs) == 0:
         store_ptr(o, PYCLASSOBJECT_ATTRS_OFFSET, null())
         py_decref(attrs)
+    # The class owns its bases (py_class_new), as CPython's tp_bases.
     bases = load_ptr(o, PYCLASSOBJECT_BASES_OFFSET)
     if ptr_is_null(bases) == 0:
+        store_ptr(o, PYCLASSOBJECT_BASES_OFFSET, null())
+        n_bases: int = load_i32(o, PYCLASSOBJECT_N_BASES_OFFSET)
+        base_index: int = 0
+        while base_index < n_bases:
+            base = pcc_gc_load_ptr(bases, ptr_add(bases, base_index * C_POINTER_SIZE))
+            if ptr_is_null(base) == 0:
+                py_decref(base)
+            base_index = base_index + 1
         free(bases)
     mro = load_ptr(o, PYCLASSOBJECT_MRO_OFFSET)
     if ptr_is_null(mro) == 0:
@@ -5814,6 +5827,12 @@ def py_instance_dealloc(o) -> None:
         payload_slot = _instance_builtin_payload_slot(o, cls)
         if ptr_is_null(payload_slot) == 0:
             pcc_gc_store_ptr(o, payload_slot, null())
+        # Release the class (py_instance_new) once its layout is no longer
+        # read. Reload it: the releases above may have run code that moved it.
+        owner_class = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
+        store_ptr(o, PYINSTANCEOBJECT_CLS_OFFSET, null())
+        if ptr_is_null(owner_class) == 0:
+            py_decref(owner_class)
     delayed_zpage_note: int = 0
     if _gc_backend_selected_fast() == 4:
         if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & 65536) != 0:
@@ -6041,10 +6060,6 @@ def _class_construct_finish(roots, borrowed, success: int):
         result = pcc_gc_load_ptr(null(), roots)
         prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
         pcc_gc_pin(result)
-    else:
-        value = pcc_gc_load_ptr(null(), roots)
-        if ptr_is_null(value) == 0:
-            atomic_rmw_i32("and", value, PYOBJECTHEADER_FLAGS_OFFSET, ~PY_FLAG_IMMORTAL, "relaxed")
     store_ptr(borrowed, 0, null())
     store_ptr(borrowed, 8, null())
     index: int = 4
@@ -6122,9 +6137,9 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
             py_raise_owned(py_exc_new(3, cstr("struct sequence type is not an acceptable base type")))
             return _class_construct_finish(roots, borrowed, 0)
         base_index = base_index + 1
-    # The class keeps its name for its immortal life, like the bases and
-    # field names copied below. type(name, bases, namespace) passes a str's
-    # bytes, which die or move with the str.
+    # The class keeps its own copies of its name, bases and field names for
+    # its life. type(name, bases, namespace) passes a str's bytes, which die
+    # or move with the str.
     own_name = null()
     if ptr_is_null(name) == 0:
         name_size: int = strlen(name) + 1
@@ -6145,7 +6160,6 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     memset(ptr_add(c, PYCLASSOBJECT_NAME_OFFSET), 0, PYCLASSOBJECT_SIZE - PYCLASSOBJECT_NAME_OFFSET)
     store_i64(c, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
     store_i32(c, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_CLASS)
-    store_i32(c, PYOBJECTHEADER_FLAGS_OFFSET, load_i32(c, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_IMMORTAL)
     store_ptr(c, PYCLASSOBJECT_NAME_OFFSET, own_name)
     store_i32(c, PYCLASSOBJECT_N_BASES_OFFSET, n_bases)
     store_i32(c, PYCLASSOBJECT_N_FIELDS_OFFSET, n_fields)
@@ -6171,7 +6185,11 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
         owners = pcc_gc_load_ptr(null(), ptr_add(roots, 8))
         index = 0
         while index < n_bases:
-            store_ptr(copied, index * C_POINTER_SIZE, pcc_gc_load_ptr(owners, ptr_add(owners, 24 + index * C_POINTER_SIZE)))
+            base = pcc_gc_load_ptr(owners, ptr_add(owners, 24 + index * C_POINTER_SIZE))
+            # A class owns its bases, as CPython's tp_bases does; released in
+            # py_class_dealloc.
+            py_incref(base)
+            store_ptr(copied, index * C_POINTER_SIZE, base)
             index = index + 1
         store_ptr(c, PYCLASSOBJECT_BASES_OFFSET, copied)
         pcc_gc_backend4_zpage_register_owner_payload_span(c, copied, n_bases * C_POINTER_SIZE)
@@ -6326,7 +6344,22 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     pcc_gc_store_root(doc_slot, global_load_ptr("py_None"))
     if py_class_write_namespace_slots(roots, cstr("__doc__"), doc_slot, 0) != 0:
         return _class_construct_finish(roots, borrowed, 0)
+    # A class is a collectable container, as a CPython heap type is: its
+    # namespace usually refers back to it (methods, __class__ cells).
+    py_gc_track(pcc_gc_load_ptr(null(), roots))
     return _class_construct_finish(roots, borrowed, 1)
+
+
+@c_abi_export("py_class_new_builtin")
+def py_class_new_builtin(name, bases, n_bases: int, field_names, n_fields: int):
+    """A class the runtime keeps in a raw global for the whole run, such as a
+    builtin type: immortal and untracked, as a CPython static type is. Every
+    class a program defines comes from py_class_new and is collectable."""
+    cls = py_class_new(name, bases, n_bases, field_names, n_fields)
+    if ptr_is_null(cls) == 0:
+        py_gc_untrack(cls)
+        pcc_gc_immortalize(cls)
+    return cls
 
 
 # type(name, bases, namespace) protects every operand before allocations.
@@ -6406,8 +6439,9 @@ def _class_new_from_objects_body(slots: c_ptr, tokens: c_ptr) -> int:
     status: int = _class_apply_namespace_bound(ptr_add(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE),
                                               ptr_add(slots, _CLASS_OBJECTS_NAMESPACE * C_POINTER_SIZE), 0)
     if status != 0:
-        # This fresh class has not escaped. Classes remain immortal, so a
-        # decref alone would leave the partially installed namespace alive.
+        # This fresh class has not escaped. Its partially installed namespace
+        # may refer back to it, so detach it now instead of leaving the cycle
+        # to the collector.
         py_class_abort_definition_slots(ptr_add(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE))
     return status
 
@@ -8601,7 +8635,7 @@ def _tuple_type_fill(slots, tokens) -> int:
     if ptr_is_null(global_load_ptr("pcc_type_cls_tuple")) == 0:
         return _special_copy(slots, tokens, _TUPLE_TYPE_RESULT, global_addr("pcc_type_cls_tuple"), 0)
     store_ptr(slots, _TUPLE_TYPE_CLASS * C_POINTER_SIZE,
-        py_class_new(cstr("tuple"), null(), 0, null(), 0))
+        py_class_new_builtin(cstr("tuple"), null(), 0, null(), 0))
     if _special_adopt(slots, tokens, _TUPLE_TYPE_CLASS) != 0:
         return -1
     if ptr_is_null(load_ptr(slots, _TUPLE_TYPE_CLASS * C_POINTER_SIZE)) != 0:
@@ -9241,7 +9275,7 @@ def _str_type_fill(slots, tokens) -> int:
     if ptr_is_null(global_load_ptr("pcc_type_cls_str")) == 0:
         return _special_copy(slots, tokens, _STR_TYPE_RESULT, global_addr("pcc_type_cls_str"), 0)
     store_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE,
-        py_class_new(cstr("str"), null(), 0, null(), 0))
+        py_class_new_builtin(cstr("str"), null(), 0, null(), 0))
     if _special_adopt(slots, tokens, _STR_TYPE_CLASS) != 0:
         return -1
     if ptr_is_null(load_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE)) != 0:

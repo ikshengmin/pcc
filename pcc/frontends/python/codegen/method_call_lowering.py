@@ -592,11 +592,20 @@ class MethodCallLoweringMixin:
         kwargs: tuple = (),
         park_expr: Optional[Call] = None,
         result_slot=None,
+        receiver_expr: Optional[Expr] = None,
     ) -> ir.Value:
+        # A receiver the call expression created (``Box(2).method()``) is an
+        # owned temporary that this call consumes, as it does its arguments.
+        receiver_owned = bool(
+            receiver_expr is not None
+            and self._method_receiver_is_owned(receiver_expr, self_val)
+        )
         if self.class_lowering.method_name_is_closure(info, method_name):
             value = self.class_lowering.emit_definition_default_method_call(
                 method_fn, self_val, info, method_name, arg_exprs, kwargs
             )
+            if receiver_owned:
+                self._gc_release(self_val)
             if result_slot is not None and isinstance(value.type, ir.PointerType):
                 self._publish_slot_call_owned(result_slot, value, label="closure method call")
                 return self.builder.load(result_slot, name=self._fresh("closure.method.result"))
@@ -609,9 +618,12 @@ class MethodCallLoweringMixin:
             ast_fd is None
             or not _statically_bindable_call(arg_exprs, kwargs, ast_fd.args, True)
         ):
-            return self.class_lowering.emit_definition_default_method_call(
+            value = self.class_lowering.emit_definition_default_method_call(
                 method_fn, self_val, info, method_name, arg_exprs, kwargs
             )
+            if receiver_owned:
+                self._gc_release(self_val)
+            return value
         if ast_fd is not None and ast_fd.args:
             receiver_ty = ast_fd.args[0].annotation
             if (
@@ -681,10 +693,10 @@ class MethodCallLoweringMixin:
                 args_tuple,
             )
         label = f"method {info.name}.{method_name}"
-        receiver_provenance = _method_pin_arg_provenance(
-            self,
-            _method_managed_receiver_provenance(self, self_val),
-        )
+        receiver_provenance = _method_managed_receiver_provenance(self, self_val)
+        if receiver_owned and receiver_provenance[1]:
+            receiver_provenance = (self_val, True, False, True)
+        receiver_provenance = _method_pin_arg_provenance(self, receiver_provenance)
         emitted_args, _, arg_provenance = _method_emit_ast_args(
             self,
             method_fn,

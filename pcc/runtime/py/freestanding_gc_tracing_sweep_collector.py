@@ -159,7 +159,10 @@ def pcc_gc_tracing_finalize_unreachable(obj) -> None:
         py_dealloc_func(obj)
     elif tag == abi_constant("object.type.class"):
         py_class_dealloc(obj)
-    elif tag == abi_constant("object.type.instance"):
+    elif (
+        tag == abi_constant("object.type.instance")
+        or tag == abi_constant("object.type.valuebox")
+    ):
         py_instance_dealloc(obj)
     elif tag == abi_constant("object.type.exc"):
         py_dealloc_exc(obj)
@@ -298,6 +301,11 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         flags = load_i32(obj, 12)
         if (flags & 1024) != 0:
             if (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
+                store_i32(obj, 12, flags & ~1024)
+            elif load_i32(obj, 8) == abi_constant("object.type.class"):
+                # Its instances and subclasses own counted references and
+                # read it while they are freed: it dies by reference count
+                # when the last of them releases it.
                 store_i32(obj, 12, flags & ~1024)
             elif reclaimed < cleared:
                 pcc_gc_tracing_finalize_unreachable(obj)

@@ -57,7 +57,7 @@ from pcc.unsafe import (
     strlen,
 )
 
-py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int64, c_ptr, c_int64), c_ptr)
+py_class_new_builtin = extern("py_class_new_builtin", (c_ptr, c_ptr, c_int64, c_ptr, c_int64), c_ptr)
 py_class_add_method = extern("py_class_add_method", (c_ptr, c_ptr, c_ptr), c_void)
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
 py_instance_setattr = extern("py_instance_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
@@ -142,7 +142,7 @@ def _capsule_class() -> c_ptr:
         3 * C_POINTER_SIZE,
         global_addr("pcc_capi_capsule_field_destructor"),
     )
-    cls = py_class_new(cstr("capsule"), null(), 0, names, 4)
+    cls = py_class_new_builtin(cstr("capsule"), null(), 0, names, 4)
     if not ptr_is_null(cls):
         py_class_add_method(
             cls, cstr("__del__"), function_addr("pcc_capi_capsule_del_runtime")

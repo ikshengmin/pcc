@@ -201,7 +201,7 @@ def PyTuple_GetSlice(tuple_obj, lo: int, hi: int) -> c_ptr:
 # --- PyUnicode_Format / PySys_GetObject -------------------------------
 
 py_str_mod = extern("py_str_mod", (c_ptr, c_ptr), c_ptr)
-py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int64, c_ptr, c_int64), c_ptr)
+py_class_new_builtin = extern("py_class_new_builtin", (c_ptr, c_ptr, c_int64, c_ptr, c_int64), c_ptr)
 PyLong_FromLong = extern("PyLong_FromLong", (c_int64,), c_ptr)
 PyUnicode_FromString = extern("PyUnicode_FromString", (c_ptr,), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -218,7 +218,7 @@ def PyUnicode_Format(format_obj, args) -> c_ptr:
 
 
 def _sys_flags_class() -> c_ptr:
-    cls = py_class_new(cstr("sys.flags"), null(), 0, null(), 0)
+    cls = py_class_new_builtin(cstr("sys.flags"), null(), 0, null(), 0)
     if ptr_is_null(cls):
         return null()
     pcc_gc_pin(cls)

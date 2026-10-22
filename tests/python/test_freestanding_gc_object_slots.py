@@ -504,8 +504,9 @@ int main(void) {
         "continuation:xr1\n"
         "continuation:xr1\n"
         "continuation:h1\n"
+        # bases (counted), the MRO (derived metadata: update-only), methods
         "class:xr2\n"
-        "class:xr2\n"
+        "class:xr3\n"
         "class:xr3\n"
         "class:o96r3\n"
         "class:o104r1\n"

@@ -261,7 +261,10 @@ def _dealloc_unreachable(obj) -> None:
         py_dealloc_func(obj)
     elif tag == abi_constant("object.type.class"):
         py_class_dealloc(obj)
-    elif tag == abi_constant("object.type.instance"):
+    elif (
+        tag == abi_constant("object.type.instance")
+        or tag == abi_constant("object.type.valuebox")
+    ):
         py_instance_dealloc(obj)
     elif tag == abi_constant("object.type.exc"):
         py_dealloc_exc(obj)
@@ -355,6 +358,9 @@ def py_gc_collect() -> i64:
             pcc_gc_backend0_clear_referents(obj)
         i = i + 1
 
+    # A class is not freed here: its instances and subclasses own counted
+    # references to it and read it while they are freed, so it dies by
+    # reference count when the last of them releases it.
     i: i64 = 0
     collected: i64 = 0
     while i < count:
@@ -363,6 +369,7 @@ def py_gc_collect() -> i64:
             ptr_is_null(node) == 0
             and ptr_is_null(load_ptr(node, 0)) == 0
             and load_i32(node, 16) == 0
+            and load_i32(load_ptr(node, 0), 8) != abi_constant("object.type.class")
         ):
             obj = load_ptr(node, 0)
             pcc_gc_default_unlink_tracked_node(node)

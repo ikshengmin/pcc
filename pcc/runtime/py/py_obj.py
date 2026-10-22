@@ -55,6 +55,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_TUPLE,
     PY_TYPE_USER,
     PY_TYPE_USER_CLASS_START,
+    PY_TYPE_VALUEBOX,
     PY_TYPE_VIRTUAL_THREAD,
     PY_TYPE_VTHREAD_CHANNEL,
     PY_TYPE_WEAKREF,
@@ -1877,7 +1878,11 @@ def _py_decref_finish(prepared) -> None:
     if backend == 4 and (flags & 65536) != 0:
         delay_zpage_freeing_note = 1
     delay_instance_metadata: int = 0
-    if tag_dbg == PY_TYPE_INSTANCE or tag_dbg >= PY_TYPE_USER_CLASS_START:
+    if (
+        tag_dbg == PY_TYPE_INSTANCE
+        or tag_dbg == PY_TYPE_VALUEBOX
+        or tag_dbg >= PY_TYPE_USER_CLASS_START
+    ):
         delay_instance_metadata = 1
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(3, 2, new_rc, tag_dbg, o)

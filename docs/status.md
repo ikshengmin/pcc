@@ -706,8 +706,13 @@ Open:
   per-module fast paths (see AGENTS.md).
 - Uncommitted: GC0 lease guard for immortal objects (`json-wt`, model tests
   only); str Unicode whitespace (`push-wt2`, native run fails at a float error
-  path); `tests/python/test_native_class_collection.py` (GC0 keeps classes
-  immortal; the maintainer is still evaluating class collection).
+  path).
+- Runtime classes are collected on GC0-GC4 (2026-10-22): classes are mortal
+  and tracked, instances own their class, classes own their bases, and a
+  method call releases a receiver its expression created. Repro:
+  `uv run pytest -x -q -n0 tests/python/test_native_class_collection.py`.
+  Open: user type tags are not recycled at class dealloc; pcc1 self-host with
+  mortal classes is not yet run.
 - Local-class `super()` segfaults on GC0-GC4 (repros in the archive).
 - `pcc/stdlib/json.py` differs from CPython json (escapes, key conversion,
   messages, circular check, missing parameters); the module needs CPython's

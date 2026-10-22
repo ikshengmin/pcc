@@ -377,6 +377,9 @@ def _visit_class_slots(o, visitor, context) -> i64:
                 context,
             )
             index = index + 1
+    # The MRO is derived metadata, not an owning edge: it starts with the
+    # class itself, and the bases keep the rest alive. Update-only (role 3),
+    # so reference counting and trial deletion never count it.
     count = load_i32(o, abi_constant("object.class.n_mro_offset"))
     slots = load_ptr(o, abi_constant("object.class.mro_offset"))
     index: i64 = 0
@@ -385,7 +388,7 @@ def _visit_class_slots(o, visitor, context) -> i64:
             _visit_slot(
                 slots,
                 index * abi_constant("object.pointer.size"),
-                2,
+                3,
                 visitor,
                 context,
             )
@@ -789,9 +792,10 @@ def pcc_gc_visit_object_slots_slice(
                 slot_offset = cursor * 8
                 role = 2
             elif cursor < n_bases + n_mro:
+                # Derived metadata, as in _visit_class_slots.
                 slot_base = load_ptr(o, abi_constant("object.class.mro_offset"))
                 slot_offset = (cursor - n_bases) * 8
-                role = 2
+                role = 3
             elif cursor < n_bases + n_mro + n_methods:
                 slot_base = load_ptr(o, abi_constant("object.class.methods_offset"))
                 slot_offset = (

@@ -234,7 +234,7 @@ py_set_symmetric_difference = extern(
     "py_set_symmetric_difference", (c_ptr, c_ptr), c_ptr
 )
 
-py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
+py_class_new_builtin = extern("py_class_new_builtin", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
 py_class_new_from_objects = extern("py_class_new_from_objects", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_exception_subclass_init_slots = extern(
     "py_exception_subclass_init_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
@@ -2400,7 +2400,7 @@ def py_slice_new(start, stop, step):
         step = none
     cls = global_load_ptr("pcc_slice_cls")
     if ptr_is_null(cls) != 0:
-        cls = py_class_new(cstr("slice"), null(), 0, null(), 0)
+        cls = py_class_new_builtin(cstr("slice"), null(), 0, null(), 0)
         if ptr_is_null(cls) != 0:
             return null()
         global_store_ptr("pcc_slice_cls", cls)
@@ -2435,49 +2435,49 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == -3:
         cls = global_load_ptr("pcc_type_cls_super")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("super"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("super"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_super", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_ELLIPSIS:
         cls = global_load_ptr("pcc_type_cls_ellipsis")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("ellipsis"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("ellipsis"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_ellipsis", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_NOTIMPLEMENTED:
         cls = global_load_ptr("pcc_type_cls_notimplemented")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("NotImplementedType"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("NotImplementedType"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_notimplemented", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_FUNC:
         cls = global_load_ptr("pcc_type_cls_function")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("function"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("function"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_function", cls)
         return _return_builtin_type(cls)
     if tag == -4:
         cls = global_load_ptr("pcc_type_cls_builtin_function")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("builtin_function_or_method"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("builtin_function_or_method"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_builtin_function", cls)
         return _return_builtin_type(cls)
     if tag == -5:
         cls = global_load_ptr("pcc_type_cls_method")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("method"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("method"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_method", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_NONE:  # PY_TYPE_NONE
         cls = global_load_ptr("pcc_type_cls_none")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("NoneType"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("NoneType"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_none", cls)
         return _return_builtin_type(cls)
@@ -2491,7 +2491,7 @@ def _builtin_type_class_for_tag(tag: int):
                 return null()
             bases = stack_alloc(8)
             store_ptr(bases, 0, int_cls)
-            cls = py_class_new(cstr("bool"), bases, 1, null(), 0)
+            cls = py_class_new_builtin(cstr("bool"), bases, 1, null(), 0)
             py_decref(int_cls)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bool", cls)
@@ -2499,14 +2499,14 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == PY_TYPE_INT:  # PY_TYPE_INT
         cls = global_load_ptr("pcc_type_cls_int")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("int"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("int"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_int", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_FLOAT:  # PY_TYPE_FLOAT
         cls = global_load_ptr("pcc_type_cls_float")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("float"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("float"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_float", cls)
         return _return_builtin_type(cls)
@@ -2515,14 +2515,14 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == PY_TYPE_LIST:  # PY_TYPE_LIST
         cls = global_load_ptr("pcc_type_cls_list")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("list"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("list"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_list", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_DICT:  # PY_TYPE_DICT
         cls = global_load_ptr("pcc_type_cls_dict")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("dict"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("dict"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_dict", cls)
         return _return_builtin_type(cls)
@@ -2531,70 +2531,70 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == PY_TYPE_SET:  # PY_TYPE_SET
         cls = global_load_ptr("pcc_type_cls_set")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("set"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("set"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_set", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_CLASS:  # PY_TYPE_CLASS
         cls = global_load_ptr("pcc_type_cls_type")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("type"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("type"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_type", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_COMPLEX:  # PY_TYPE_COMPLEX
         cls = global_load_ptr("pcc_type_cls_complex")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("complex"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("complex"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_complex", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_BYTES:  # PY_TYPE_BYTES
         cls = global_load_ptr("pcc_type_cls_bytes")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("bytes"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("bytes"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bytes", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_BYTEARRAY:  # PY_TYPE_BYTEARRAY
         cls = global_load_ptr("pcc_type_cls_bytearray")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("bytearray"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("bytearray"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bytearray", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_MEMORYVIEW:  # PY_TYPE_MEMORYVIEW
         cls = global_load_ptr("pcc_type_cls_memoryview")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("memoryview"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("memoryview"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_memoryview", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_COROUTINE:  # PY_TYPE_COROUTINE
         cls = global_load_ptr("pcc_type_cls_coroutine")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("coroutine"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("coroutine"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_coroutine", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_STATICMETHOD:
         cls = global_load_ptr("pcc_type_cls_staticmethod")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("staticmethod"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("staticmethod"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_staticmethod", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_CLASSMETHOD:
         cls = global_load_ptr("pcc_type_cls_classmethod")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("classmethod"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("classmethod"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_classmethod", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_PROPERTY:
         cls = global_load_ptr("pcc_type_cls_property")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("property"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("property"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_property", cls)
         return _return_builtin_type(cls)
@@ -2618,25 +2618,25 @@ def _file_type_class(o):
     if kind == 0:
         cls = global_load_ptr("pcc_type_cls_textiowrapper")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("TextIOWrapper"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("TextIOWrapper"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_textiowrapper", cls)
     elif kind == 1:
         cls = global_load_ptr("pcc_type_cls_bufferedreader")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("BufferedReader"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("BufferedReader"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bufferedreader", cls)
     elif kind == 2:
         cls = global_load_ptr("pcc_type_cls_bufferedwriter")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("BufferedWriter"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("BufferedWriter"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bufferedwriter", cls)
     else:
         cls = global_load_ptr("pcc_type_cls_bufferedrandom")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("BufferedRandom"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("BufferedRandom"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bufferedrandom", cls)
     if ptr_is_null(cls) == 0 and ptr_is_null(_class_own_module(cls)) != 0:

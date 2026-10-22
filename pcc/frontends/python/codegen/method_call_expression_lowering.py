@@ -332,7 +332,26 @@ class MethodCallExpressionLoweringMixin:
             return self._emit_slot_call_object(call_expr, "method." + attr_name)
         obj_val = self._emit_expr(obj_expr)
         return self._emit_callable_attribute_call_on_value(
-            obj_val, attr_name, args, kwargs, span
+            obj_val, attr_name, args, kwargs, span,
+            release_receiver=self._method_receiver_is_owned(obj_expr, obj_val),
+        )
+
+    def _method_receiver_is_owned(self, obj_expr: Expr, obj_val: ir.Value) -> bool:
+        """Whether a method call's receiver is a temporary it must release.
+
+        ``make()(2).method()`` creates its receiver: the call consumes it as
+        it consumes argument temporaries, or the object (and, through it, its
+        class) leaks. A receiver loaded from a name or a field is borrowed.
+        The emitter's own record decides first; the expression shape covers
+        the receivers no emitter recorded.
+        """
+        return bool(
+            isinstance(obj_val.type, ir.PointerType)
+            and obj_val not in getattr(self, "_cpy_values", ())
+            and (
+                self._value_is_owned_object(obj_val)
+                or self._pcc_pointer_source_is_owned(obj_expr)
+            )
         )
 
     def _emit_callable_attribute_call_on_value(
@@ -342,11 +361,14 @@ class MethodCallExpressionLoweringMixin:
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
         span,
+        *,
+        release_receiver: bool = False,
     ) -> ir.Value:
         name_ptr = self._attr_name_ptr(attr_name)
         if not kwargs and self._split_starstar_kwargs_unpack(args) is None:
             return self._emit_loaded_method_call(
-                obj_val, name_ptr, attr_name, args, span
+                obj_val, name_ptr, attr_name, args, span,
+                release_receiver=release_receiver,
             )
         # Keywords too take the loaded-method route: binding a method object
         # (captures tuple plus a copied signature) for a single call was most
@@ -359,6 +381,8 @@ class MethodCallExpressionLoweringMixin:
             [obj_val, name_ptr, self_slot],
             name=self._fresh(f"callable.attr.{attr_name}"),
         )
+        if release_receiver:
+            self._release_receiver_if_lookup_failed(callable_obj, obj_val, attr_name)
         self._emit_post_call_err_check(span)
         kwdict_unpack = self._split_starstar_kwargs_unpack(args)
         arg_exprs = args
@@ -383,8 +407,34 @@ class MethodCallExpressionLoweringMixin:
         if kwargs:
             self._gc_release(kwargs_obj)
         self._gc_release(callable_obj)
+        if release_receiver:
+            self._gc_release(obj_val)
         self._emit_post_call_err_check(span)
         return result
+
+    def _release_receiver_if_lookup_failed(
+        self, callable_obj: ir.Value, obj_val: ir.Value, attr_name: str
+    ) -> None:
+        """Release an owned receiver when ``py_obj_load_method`` failed.
+
+        The lookup error leaves no call to consume the receiver; the success
+        edge releases it after the call.
+        """
+        missing = self.builder.icmp_unsigned(
+            "==", callable_obj, ir.Constant(callable_obj.type, None),
+            name=self._fresh(f"callable.attr.{attr_name}.missing"),
+        )
+        release_bb = self.current_function.append_basic_block(
+            self._fresh(f"callable.attr.{attr_name}.release.receiver")
+        )
+        loaded_bb = self.current_function.append_basic_block(
+            self._fresh(f"callable.attr.{attr_name}.loaded")
+        )
+        self.builder.cbranch(missing, release_bb, loaded_bb)
+        self.builder.position_at_end(release_bb)
+        self._gc_release(obj_val)
+        self.builder.branch(loaded_bb)
+        self.builder.position_at_end(loaded_bb)
 
     def _emit_loaded_method_call(
         self,
@@ -396,6 +446,7 @@ class MethodCallExpressionLoweringMixin:
         *,
         attribute_error_span=None,
         dynamic_result: bool = False,
+        release_receiver: bool = False,
     ) -> ir.Value:
         """Positional ``obj.name(args)`` without allocating a bound method.
 
@@ -411,6 +462,8 @@ class MethodCallExpressionLoweringMixin:
             [obj_val, name_ptr, self_slot],
             name=self._fresh(f"callable.attr.{attr_name}"),
         )
+        if release_receiver:
+            self._release_receiver_if_lookup_failed(callable_obj, obj_val, attr_name)
         if attribute_error_span is not None:
             self._emit_attribute_error_if_null(
                 callable_obj, attr_name, attribute_error_span
@@ -428,6 +481,8 @@ class MethodCallExpressionLoweringMixin:
         )
         self._gc_release(args_tuple)
         self._gc_release(callable_obj)
+        if release_receiver:
+            self._gc_release(obj_val)
         self._emit_post_call_err_check(span)
         if dynamic_result:
             self._note_owned_dynamic_call_value(result)
@@ -1431,6 +1486,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         kwargs=expr.kwargs,
                         park_expr=expr,
+                        receiver_expr=attr.obj,
                     )
                 except L1CodegenError as e:
                     if "too many positional args" not in str(e):
@@ -1789,7 +1845,13 @@ class MethodCallExpressionLoweringMixin:
                             park_expr=expr,
                         )
                     obj_val = self._emit_direct_method_receiver(attr.obj, info, attr.name)
+                    receiver_expr = attr.obj
                     if kind == "classmethod":
+                        # The classmethod binds the class; an instance the receiver
+                        # expression created is released here, not passed on.
+                        if self._method_receiver_is_owned(attr.obj, obj_val):
+                            self._gc_release(obj_val)
+                        receiver_expr = None
                         obj_val = self.builder.load(
                             info.global_var, name=self._fresh(".cls.recv")
                         )
@@ -1802,6 +1864,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         kwargs=expr.kwargs,
                         park_expr=expr,
+                        receiver_expr=receiver_expr,
                     )
                 class_info = self.class_lowering.classes.get(hint)
                 if class_info is not None and self._class_attr_needs_runtime_lookup(
@@ -1857,7 +1920,13 @@ class MethodCallExpressionLoweringMixin:
                         park_expr=expr,
                     )
                 obj_val = self._emit_direct_method_receiver(attr.obj, info, attr.name)
+                receiver_expr = attr.obj
                 if kind == "classmethod":
+                    # The classmethod binds the class; an instance the receiver
+                    # expression created is released here, not passed on.
+                    if self._method_receiver_is_owned(attr.obj, obj_val):
+                        self._gc_release(obj_val)
+                    receiver_expr = None
                     obj_val = self.builder.load(
                         info.global_var, name=self._fresh(".cls.recv")
                     )
@@ -1870,6 +1939,7 @@ class MethodCallExpressionLoweringMixin:
                     expr.args,
                     kwargs=expr.kwargs,
                     park_expr=expr,
+                    receiver_expr=receiver_expr,
                 )
             class_info = self.class_lowering.classes.get(receiver_hint)
             if class_info is not None:
@@ -1984,7 +2054,13 @@ class MethodCallExpressionLoweringMixin:
                             park_expr=expr,
                         )
                     obj_val = self._emit_direct_method_receiver(attr.obj, candidate_info, attr.name)
+                    receiver_expr = attr.obj
                     if kind == "classmethod":
+                        # The classmethod binds the class; an instance the receiver
+                        # expression created is released here, not passed on.
+                        if self._method_receiver_is_owned(attr.obj, obj_val):
+                            self._gc_release(obj_val)
+                        receiver_expr = None
                         obj_val = self.builder.load(
                             candidate_info.global_var,
                             name=self._fresh(".cls.recv"),
@@ -1999,6 +2075,7 @@ class MethodCallExpressionLoweringMixin:
                         expr.args,
                         kwargs=expr.kwargs,
                         park_expr=expr,
+                        receiver_expr=receiver_expr,
                     )
 
         if (
@@ -2228,6 +2305,7 @@ class MethodCallExpressionLoweringMixin:
             if self._slot_call_result_sink(expr) is not None:
                 return self._emit_slot_call_object(expr, "method." + attr.name)
             recv_obj = self._emit_as_object(attr.obj)
+            release_receiver = self._method_receiver_is_owned(attr.obj, recv_obj)
             if not expr.kwargs and self._split_starstar_kwargs_unpack(expr.args) is None:
                 return self._emit_loaded_method_call(
                     recv_obj,
@@ -2237,12 +2315,17 @@ class MethodCallExpressionLoweringMixin:
                     expr.span,
                     attribute_error_span=attr.span,
                     dynamic_result=True,
+                    release_receiver=release_receiver,
                 )
             method_obj = self.builder.call(
                 self.runtime["py_obj_getattr"],
                 [recv_obj, self._attr_name_ptr(attr.name)],
                 name=self._fresh(f"dyn.attr.{attr.name}"),
             )
+            # The bound method holds its own reference to the receiver; a
+            # receiver this expression created is consumed here.
+            if release_receiver:
+                self._gc_release(recv_obj)
             self._emit_attribute_error_if_null(method_obj, attr.name, attr.span)
             kwdict_unpack = self._split_starstar_kwargs_unpack(expr.args)
             arg_exprs = expr.args
@@ -2862,6 +2945,7 @@ class MethodCallExpressionLoweringMixin:
                     expr.args,
                     expr.kwargs,
                     expr.span,
+                    release_receiver=self._method_receiver_is_owned(attr.obj, raw_val),
                 )
             cpy_val, owned = self._marshal_to_cpython_consuming_source(
                 raw_val,

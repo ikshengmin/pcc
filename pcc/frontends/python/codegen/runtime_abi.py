@@ -1416,6 +1416,7 @@ def _runtime_signatures_part_31():
 
 def _runtime_signatures_part_32():
     return {
+    "py_class_new_builtin": (_PYOBJ, [_CSTR, _PTR, _I32, _PTR, _I32], False),
     "py_class_delattr": (_I64, [_PYOBJ, _CSTR], False),
     "py_valuebox_new": (_PYOBJ, [_PYOBJ], False),
     "py_valuebox_get_field": (_PYOBJ, [_PYOBJ, _I32], False),

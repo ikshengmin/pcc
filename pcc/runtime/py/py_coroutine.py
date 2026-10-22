@@ -49,8 +49,8 @@ from pcc.unsafe import (
     store_ptr,
 )
 
-py_class_new = extern(
-    "py_class_new",
+py_class_new_builtin = extern(
+    "py_class_new_builtin",
     (c_ptr, c_ptr, c_int32, c_ptr, c_int32),
     c_ptr,
 )
@@ -149,7 +149,7 @@ def py_coroutine_class():
     cls = global_load_ptr("py_coroutine_class_cache")
     if not ptr_is_null(cls):
         return cls
-    cls = py_class_new(cstr("coroutine"), null(), 0, null(), 0)
+    cls = py_class_new_builtin(cstr("coroutine"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
         flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
         store_i32(
@@ -1132,7 +1132,7 @@ def py_continuation_class():
     cls = global_load_ptr("py_continuation_class_cache")
     if not ptr_is_null(cls):
         return cls
-    cls = py_class_new(cstr("continuation"), null(), 0, null(), 0)
+    cls = py_class_new_builtin(cstr("continuation"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
         flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
         store_i32(

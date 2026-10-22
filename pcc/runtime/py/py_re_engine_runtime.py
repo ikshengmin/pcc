@@ -50,8 +50,8 @@ py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
 py_func_new_named = extern("py_func_new_named", (c_ptr, c_ptr, c_ptr), c_ptr)
-py_class_new = extern(
-    "py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr
+py_class_new_builtin = extern(
+    "py_class_new_builtin", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr
 )
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
@@ -156,7 +156,7 @@ def _raise_engine_status(status: int) -> None:
 def _match_class():
     cls = global_load_ptr("pcc_re_match_class")
     if ptr_is_null(cls) != 0:
-        cls = py_class_new(cstr("re.Match"), null(), 0, null(), 0)
+        cls = py_class_new_builtin(cstr("re.Match"), null(), 0, null(), 0)
         if ptr_is_null(cls) == 0:
             store_i32(cls, 12, load_i32(cls, 12) | 1)
             global_store_ptr("pcc_re_match_class", cls)
@@ -166,7 +166,7 @@ def _match_class():
 def _pattern_class():
     cls = global_load_ptr("pcc_re_pattern_class")
     if ptr_is_null(cls) != 0:
-        cls = py_class_new(cstr("re.Pattern"), null(), 0, null(), 0)
+        cls = py_class_new_builtin(cstr("re.Pattern"), null(), 0, null(), 0)
         if ptr_is_null(cls) == 0:
             store_i32(cls, 12, load_i32(cls, 12) | 1)
             global_store_ptr("pcc_re_pattern_class", cls)
