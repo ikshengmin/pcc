@@ -1094,7 +1094,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
 @pytest.mark.parametrize("direct", (False, True))
 @pytest.mark.parametrize("policy", (False, True))
 @pytest.mark.parametrize("defer", ("", "PCC_DEFER_SELF_LINK_PLAN", "PCC_DEFER_FRONTEND_CODEGEN_PLAN"))
-def test_coordinator_construction_uses_existing_linux_direct_policy_only(monkeypatch, platform, direct, policy, defer):
+def test_coordinator_construction_uses_existing_direct_policy_on_supported_hosts(monkeypatch, platform, direct, policy, defer):
     function = _source_function("pcc/frontends/python/pipeline.py", "compile_python_multi")
     blocks = [node for node in ast.walk(function) if isinstance(node, ast.If)
               and isinstance(node.test, ast.Name) and node.test.id == "direct_emit"
@@ -1115,7 +1115,7 @@ def test_coordinator_construction_uses_existing_linux_direct_policy_only(monkeyp
                      os=types.SimpleNamespace(environ={defer: "plan"} if defer else {}))
     module = ast.Module(body=blocks, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), "<coordinator policy>", "exec"), namespace)
-    expected = platform == "linux" and direct and policy and not defer
+    expected = platform in ("linux", "win32") and direct and policy and not defer
     assert calls == (["construct"] if expected else [])
     assert namespace["coordinator_timing"] is (sentinel if expected else None)
     assert "PCC_INDEXED_PHASE_TIMING" not in ast.unparse(blocks[0])
@@ -1138,13 +1138,15 @@ def test_coordinator_setup_baseexception_cannot_change_build(monkeypatch, failur
         raise error
 
     _stub(monkeypatch, "pcc.backend.indexed_phase_timing", CoarsePhaseTiming=construct)
-    namespace = dict(direct_emit=True, out_path="out", coordinator_timing=None,
-                     _prepare_direct_native_object_dir=lambda path: "work",
-                     _python_frontend_worker_timing_enabled=policy,
-                     sys=types.SimpleNamespace(platform="linux"), os=types.SimpleNamespace(environ={}))
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[block], type_ignores=[])),
-                 "<coordinator setup failure>", "exec"), namespace)
-    assert namespace["coordinator_timing"] is None
+    for platform in ("linux", "win32"):
+        namespace = dict(direct_emit=True, out_path="out", coordinator_timing=None,
+                         _prepare_direct_native_object_dir=lambda path: "work",
+                         _python_frontend_worker_timing_enabled=policy,
+                         sys=types.SimpleNamespace(platform=platform),
+                         os=types.SimpleNamespace(environ={}))
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[block], type_ignores=[])),
+                     "<coordinator setup failure>", "exec"), namespace)
+        assert namespace["coordinator_timing"] is None
 
 
 @pytest.mark.parametrize("enabled", (False, True))

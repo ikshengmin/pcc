@@ -3889,7 +3889,7 @@ def compile_python_multi(
             )
             try:
                 if (
-                    sys.platform.startswith("linux")
+                    (sys.platform.startswith("linux") or sys.platform == "win32")
                     and _python_frontend_worker_timing_enabled()
                     and not str(
                         os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
