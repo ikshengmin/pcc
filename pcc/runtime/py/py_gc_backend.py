@@ -3690,6 +3690,7 @@ def _backend4_map_mutator_payload_slot(
     new_size_bytes: int,
     slot_pairs,
     pair_count: int,
+    pairs_ascending: int,
 ):
     if ptr_is_null(slot) != 0:
         return slot
@@ -3698,12 +3699,29 @@ def _backend4_map_mutator_payload_slot(
         return slot
     if (offset & 7) != 0:
         return null()
-    i: int = 0
-    while i < pair_count:
-        old_slot = load_ptr(slot_pairs, i * 16)
-        if ptr_eq(old_slot, slot) != 0:
-            return load_ptr(slot_pairs, i * 16 + 8)
-        i = i + 1
+    if pairs_ascending != 0:
+        # Every caller lists its pairs by ascending old slot. A retarget maps
+        # each pending store-buffer and remembered slot of the owner, and a
+        # list growth passes one pair per element: a scan per slot cost
+        # pending slots times list length.
+        lo: int = 0
+        hi: int = pair_count
+        while lo < hi:
+            mid: int = (lo + hi) // 2
+            if ptr_diff(load_ptr(slot_pairs, mid * 16), old_base) < offset:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo < pair_count:
+            if ptr_eq(load_ptr(slot_pairs, lo * 16), slot) != 0:
+                return load_ptr(slot_pairs, lo * 16 + 8)
+    else:
+        i: int = 0
+        while i < pair_count:
+            old_slot = load_ptr(slot_pairs, i * 16)
+            if ptr_eq(old_slot, slot) != 0:
+                return load_ptr(slot_pairs, i * 16 + 8)
+            i = i + 1
     if offset >= new_size_bytes:
         return null()
     return ptr_add(new_base, offset)
@@ -3755,6 +3773,8 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
         if span_offset < -1:
             return 0
 
+    pairs_ascending: int = 1
+    previous_offset: int = -1
     i = 0
     while i < pair_count:
         old_slot = load_ptr(slot_pairs, i * 16)
@@ -3767,6 +3787,9 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
             return 0
         if (old_offset & 7) != 0 or (new_offset & 7) != 0:
             return 0
+        if old_offset <= previous_offset:
+            pairs_ascending = 0
+        previous_offset = old_offset
         i = i + 1
 
     entry = _store_buffer_medium_head()
@@ -3780,6 +3803,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 new_size_bytes,
                 slot_pairs,
                 pair_count,
+                pairs_ascending,
             )
             pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
             store_ptr(entry, 8, mapped)
@@ -3795,6 +3819,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 new_size_bytes,
                 slot_pairs,
                 pair_count,
+                pairs_ascending,
             )
             pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
             store_ptr(entry, 8, mapped)
@@ -3824,6 +3849,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                     new_size_bytes,
                     slot_pairs,
                     pair_count,
+                    pairs_ascending,
                 )
                 if ptr_is_null(mapped) != 0:
                     return 0
