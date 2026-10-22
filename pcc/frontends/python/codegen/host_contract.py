@@ -738,6 +738,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_emit_generator_yield_value",
     "_emit_generator_take_send",
     "_generator_frame_helper",
+    "_generator_frame_take",
     "_generator_current_object",
     "_generator_current_frame",
     "_iterator_builtin_is_shadowed",

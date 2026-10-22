@@ -1530,9 +1530,11 @@ int64_t   py_obj_is_slice(PyObject *o);
 /* ---- Native generator objects ------------------------------------------ */
 PyObject *py_gen_frame_new(int64_t slot_count); /* fixed-size, None-filled list frame */
 /* Compiler-private fixed-size frames: caller owns the frame, every slot is
- * a managed object, tagged value or NULL. Get returns NEW; set retains.
- * GC1-4 use the ordinary list operations and their existing barriers. */
+ * a managed object, tagged value or NULL. Get returns NEW; take moves the
+ * slot's owner out and leaves NULL; set retains. GC1-4 use the ordinary
+ * list operations and their existing barriers. */
 PyObject *py_gen_frame_get(PyObject *frame, int64_t index);
+PyObject *py_gen_frame_take(PyObject *frame, int64_t index);
 void      py_gen_frame_set(PyObject *frame, int64_t index, PyObject *value);
 /* Save compiler-owned, rooted local slots. Returns 0 without mutation when
  * the collector/frame is not eligible; callers retain their ordinary path. */

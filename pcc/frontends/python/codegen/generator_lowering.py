@@ -124,10 +124,7 @@ def register_generator_operand_root(host, name, slot, flag) -> None:
     # before these restores and dominating every saved continuation edge.
     host.builder.position_before(ctx["dispatch_bb"]._instrs[-1])
     frame = host.builder.load(ctx["frame_root"], name=host._fresh("gen.operand.frame"))
-    current = host.builder.call(
-        host._generator_frame_helper("get"), [frame, ir.Constant(_I64, index)],
-        name=host._fresh("gen.operand.restore"),
-    )
+    current = host._generator_frame_take(frame, index, host._fresh("gen.operand.restore"))
     host.builder.store(current, slot)
     host.builder.store(ir.Constant(_I1, 1), flag)
     host.builder.position_at_end(saved)
@@ -1797,10 +1794,8 @@ class GeneratorLoweringMixin:
                 # list read before the function has executed its first line.
                 item = self._emit_none_literal()
             else:
-                item = self.builder.call(
-                    self._generator_frame_helper("get"),
-                    [frame_current, ir.Constant(_I64, idx)],
-                    name=self._fresh(f"gen.frame.{local_name}"),
+                item = self._generator_frame_take(
+                    frame_current, idx, self._fresh(f"gen.frame.{local_name}"),
                 )
             self.builder.store(item, slot)
             self.env[local_name] = (slot, _CSTR, DynType(name="dyn"))
@@ -1824,10 +1819,8 @@ class GeneratorLoweringMixin:
             for local_name, (idx, slot) in frame_slots.items():
                 if local_name in argument_names:
                     continue
-                item = self.builder.call(
-                    self._generator_frame_helper("get"),
-                    [frame_current, ir.Constant(_I64, idx)],
-                    name=self._fresh(f"gen.frame.{local_name}"),
+                item = self._generator_frame_take(
+                    frame_current, idx, self._fresh(f"gen.frame.{local_name}"),
                 )
                 # This root still contains only its initial immortal None.
                 self.builder.store(item, slot)
@@ -1934,6 +1927,24 @@ class GeneratorLoweringMixin:
         )
         prefix = "py_gen_frame_" if proven else "py_list_"
         return self.runtime[prefix + operation]
+
+    def _generator_frame_take(self, frame: ir.Value, index: int, name: str) -> ir.Value:
+        """Move one saved owner out of the frame into the resumed activation.
+
+        The frame holds a generator's locals and operand roots only while it
+        is suspended; a copy would keep each value alive until the next
+        suspension or completion, after the body rebound or dropped it.
+        """
+        position = ir.Constant(_I64, index)
+        take = self._generator_frame_helper("get")
+        if take.name == "py_gen_frame_get":
+            return self.builder.call(self.runtime["py_gen_frame_take"], [frame, position], name=name)
+        value = self.builder.call(take, [frame, position], name=name)
+        self.builder.call(
+            self._generator_frame_helper("set"),
+            [frame, position, ir.Constant(_CSTR, None)],
+        )
+        return value
 
     def _emit_generator_save_frame(self) -> None:
         ctx = self._generator_ctx_stack[-1]

@@ -694,6 +694,7 @@ def _part_58(out):
 
 
 def _part_59(out):
+    _append_method(out, '_generator_frame_take', (('self', 'pos', False), ('frame', 'pos', False), ('index', 'pos', False), ('name', 'pos', False)))
     _append_method(out, '_generator_current_object', (('self', 'pos', False), ('ctx', 'pos', False)))
     _append_method(out, '_generator_current_frame', (('self', 'pos', False), ('ctx', 'pos', False)))
     _append_method(out, '_iterator_builtin_is_shadowed', (('self', 'pos', False), ('name', 'pos', False)))
@@ -701,10 +702,10 @@ def _part_59(out):
     _append_method(out, '_iterator_install_cleanup', (('self', 'pos', False), ('roots', 'pos', False), ('target', 'pos', False)))
     _append_method(out, '_emit_next_owned_step', (('self', 'pos', False), ('iterator', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('found', 'pos', False), ('exhausted', 'pos', False)))
     _append_method(out, '_emit_next_pending_or_default', (('self', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('exhausted', 'pos', False)))
-    _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
 
 
 def _part_60(out):
+    _append_method(out, '_emit_next_filter_truth', (('self', 'pos', False), ('output', 'pos', False), ('predicate', 'pos', False), ('call_args', 'pos', False), ('pred_result', 'pos', False), ('none_obj', 'pos', False), ('span', 'pos', False)))
     _append_method(out, '_emit_owned_padding_method', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_owned_strip_method', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_emit_ellipsis_literal', (('self', 'pos', False), ('expr', 'pos', False)))
@@ -712,10 +713,10 @@ def _part_60(out):
     _append_method(out, '_emit_virtual_thread_generator_slot', (('self', 'pos', False), ('output', 'pos', False), ('fn', 'pos', False), ('formals', 'pos', False), ('arguments', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_spawn_allocation_check', (('self', 'pos', False), ('output', 'pos', False)))
     _append_method(out, '_emit_virtual_thread_owned_spawn', (('self', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('value_args', 'pos', False), ('runtime_formals', 'pos', False), ('call_expr', 'pos', False), ('generator', 'pos', False)))
-    _append_method(out, '_clear_owned_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False)))
 
 
 def _part_61(out):
+    _append_method(out, '_clear_owned_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_copy_valueclass_payload', (('self', 'pos', False), ('destination', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False), ('module_destination', 'pos', True)))
     _append_method(out, '_copy_valueclass_payload_fields', (('self', 'pos', False), ('destination', 'pos', False), ('destination_path', 'pos', False), ('value', 'pos', False), ('ty', 'pos', False), ('module_destination', 'pos', True)))
     _append_method(out, '_emit_owned_valueclass_cleanup', (('self', 'pos', False), ('skip_payload', 'pos', True)))
@@ -723,10 +724,10 @@ def _part_61(out):
     _append_method(out, '_load_valueclass_payload', (('self', 'pos', False), ('slot', 'pos', False), ('ty', 'pos', False), ('path', 'pos', True), ('module_source', 'pos', True)))
     _append_method(out, '_new_owned_valueclass_payload', (('self', 'pos', False), ('ty', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_statement_uses_managed_valueclass', (('self', 'pos', False), ('stmt', 'pos', False)))
-    _append_method(out, '_valueclass_payload_owned_roots', (('self', 'pos', False), ('slot', 'pos', False)))
 
 
 def _part_62(out):
+    _append_method(out, '_valueclass_payload_owned_roots', (('self', 'pos', False), ('slot', 'pos', False)))
     _append_method(out, '_valueclass_payload_source', (('self', 'pos', False), ('value', 'pos', False)))
     _append_method(out, '_ensure_valueclass_error_owner', (('self', 'pos', False),))
     _append_method(out, '_emit_valueclass_payload_expr', (('self', 'pos', False), ('expr', 'pos', False), ('ty', 'pos', False)))
@@ -734,10 +735,10 @@ def _part_62(out):
     _append_method(out, '_emit_native_adapter_scalar_from_root', (('self', 'pos', False), ('source_root', 'pos', False), ('target_ty', 'pos', False)))
     _append_method(out, '_emit_native_aggregate_adapter_body', (('self', 'pos', False), ('adapter_ir', 'pos', False), ('full_fn', 'pos', False), ('original_args', 'pos', False), ('free_names', 'pos', False), ('return_ty', 'pos', False), ('adapter_fd', 'pos', False)))
     _append_method(out, '_valueclass_indexed_element_type', (('self', 'pos', False), ('ty', 'pos', False)))
-    _append_method(out, '_emit_rooted_valueclass_indexed_loop', (('self', 'pos', False), ('iterable', 'pos', False), ('target', 'pos', False), ('statement', 'pos', True), ('comprehension', 'pos', True)))
 
 
 def _part_63(out):
+    _append_method(out, '_emit_rooted_valueclass_indexed_loop', (('self', 'pos', False), ('iterable', 'pos', False), ('target', 'pos', False), ('statement', 'pos', True), ('comprehension', 'pos', True)))
     _append_method(out, '_emit_direct_method_receiver', (('self', 'pos', False), ('expression', 'pos', False), ('info', 'pos', False), ('method_name', 'pos', False)))
     _append_method(out, '_slot_call_status_report_helper', (('self', 'pos', False),))
     _append_method(out, '_guard_integer_power_operand_provenance', (('self', 'pos', False), ('lhs', 'pos', False), ('rhs', 'pos', False)))

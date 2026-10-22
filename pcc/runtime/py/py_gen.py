@@ -101,6 +101,32 @@ def py_gen_frame_get(frame, index: int):
     return pcc_gc_retain_known(load_ptr(items, index * C_POINTER_SIZE))
 
 
+@c_abi_export("py_gen_frame_take")
+def py_gen_frame_take(frame, index: int):
+    """Move the owner out of a compiler-private frame cell, emptying it.
+
+    A running generator owns its locals and operand roots in its own rooted
+    slots; the frame holds them only while it is suspended. Copying them out
+    on resume kept every saved value alive until the next suspension or
+    completion, after the function had already rebound or dropped it.
+    """
+    if ptr_is_null(frame) != 0:
+        return py_list_get(frame, index)
+    if pcc_gc_backend() != 0:
+        value = py_list_get(frame, index)
+        py_list_set(frame, index, null())
+        return value
+    if index < 0 or index >= load_i64(frame, PYLISTOBJECT_LENGTH_OFFSET):
+        return py_list_get(frame, index)
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_diagnostics_runtime_log_event_code(2, 3, 0, 0, frame)
+    items = load_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET)
+    slot = ptr_add(items, index * C_POINTER_SIZE)
+    value = load_ptr(slot, 0)
+    store_ptr(slot, 0, null())
+    return value
+
+
 @c_abi_export("py_gen_frame_set")
 def py_gen_frame_set(frame, index: int, value) -> None:
     """Retaining frame store; caller keeps the private frame alive.
