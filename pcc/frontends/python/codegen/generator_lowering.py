@@ -566,6 +566,28 @@ def emit_generator_may_park_child(
         result_root_ptr = host._as_gc_ptr(
             child_slot, name=host._fresh("vthread.delegate.result.ready.root")
         )
+    return generator_frame_result_value(
+        host, expr, callee_name, child_slot, result_root_ptr,
+    )
+
+
+def generator_frame_result_value(
+    host,
+    expr: Call,
+    callee_name: str,
+    child_slot,
+    result_root_ptr=None,
+) -> ir.Value:
+    """Return the call result held in ``child_slot`` as the call's value.
+
+    The hidden frame slot owns the result object. An object result moves to
+    an independent owner; another representation is restored from it, and
+    the slot is cleared.
+    """
+    if result_root_ptr is None:
+        result_root_ptr = host._as_gc_ptr(
+            child_slot, name=host._fresh("vthread.delegate.result.root")
+        )
     rooted_result = host.builder.call(
         host.runtime["pcc_gc_load_ptr"],
         [ir.Constant(_CSTR, None), result_root_ptr],

@@ -1644,8 +1644,12 @@ class CallObjectLoweringMixin:
                 or isinstance(return_type, ir.IntType) and return_type.width in (1, 64))
 
     def _emit_slot_call_from_roots(self, callable_root, positional_roots, keyword_roots,
-                                   output, held_roots, target, span, label):
-        """The dynamic call of already evaluated roots, publishing ``output``."""
+                                   output, held_roots, target, span, label, deferred=False):
+        """The dynamic call of already evaluated roots, publishing ``output``.
+
+        A ``deferred`` call returns a lifted callable's continuation instead
+        of driving it; its resumable caller drives it.
+        """
         roots = list(held_roots)
 
         def guard():
@@ -1687,6 +1691,13 @@ class CallObjectLoweringMixin:
                                                   label + ".kwargs")
             roots.append(kwargs)
             guard()
+        if deferred:
+            self._slot_call_runtime_call(
+                "py_obj_call_deferred", (callable_root, args, kwargs),
+                result_slot=output, span=span,
+            )
+            self._release_slot_call_roots((args, kwargs))
+            return
         status = self.builder.call(
             self.runtime["py_obj_call_slots"],
             [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),

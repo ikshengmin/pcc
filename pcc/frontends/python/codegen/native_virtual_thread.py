@@ -9,16 +9,29 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, Call, DynType, Expr, FuncDef, Name, NoneType
+from pcc.frontends.python.py_ast import (
+    Attr,
+    Call,
+    DynType,
+    Expr,
+    FuncDef,
+    Name,
+    NoneType,
+    RawPointerType,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_GEN
 from pcc.frontends.python.codegen.generator_lowering import (
     emit_generator_may_park_child,
+    generator_frame_result_value,
     generator_may_park_child_slot,
     take_generator_frame_result,
 )
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.vthread_effect_analysis import (
+    vthread_proven_direct_name_call,
+)
 
 _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
@@ -171,7 +184,6 @@ class NativeVirtualThreadLoweringMixin:
                 "pcc.virtual_thread.call requires a resumable parent"
             )
 
-        parent_fn = self.current_function
         child_slot, child_root_ptr = generator_may_park_child_slot(
             self, expr, "pcc.virtual_thread.call"
         )
@@ -202,27 +214,33 @@ class NativeVirtualThreadLoweringMixin:
                 suffix_args=(self._emit_none_literal(),),
                 result_slot=result_root, span=expr.span,
             )
-            result_is_null = self.builder.icmp_unsigned(
-                "==", self.builder.load(result_root), ir.Constant(_CSTR, None),
+            self._move_call_result_to_frame(
+                result_root, child_root_ptr, expr.span, "virtual-thread callback",
             )
-            status = self.builder.select(
-                result_is_null, ir.Constant(_I64, -1), ir.Constant(_I64, 0),
-            )
-            self._slot_call_check_status(status, "virtual-thread callback", expr.span)
-            self.builder.call(
-                self.runtime["pcc_gc_store_root"],
-                [child_root_ptr, ir.Constant(_CSTR, None)],
-            )
-            moved = self.builder.call(
-                self.runtime["pcc_gc_root_move"],
-                [child_root_ptr, self._as_gc_ptr(result_root)],
-                name=self._fresh("vthread.call.child.move"),
-            )
-            self._slot_call_check_status(moved, "continuation frame move", expr.span)
             self._release_slot_call_roots(tuple(roots))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
+        return self._drive_or_take_frame_result(
+            expr, "pcc.virtual_thread.call", child_slot, child_root_ptr, False,
+        )
+
+    def _drive_or_take_frame_result(
+        self,
+        expr: Call,
+        callee_name: str,
+        child_slot,
+        child_root_ptr,
+        typed_value: bool,
+    ) -> ir.Value:
+        """Drive the continuation a deferred call left in ``child_slot``.
+
+        A lifted callable's continuation runs through this resumable parent,
+        whose suspensions forward its own. Any other value is the call's
+        result: taken as an object, or with ``typed_value`` restored in the
+        call expression's semantic representation.
+        """
+        parent_fn = self.current_function
         rooted_result = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
             [ir.Constant(_CSTR, None), child_root_ptr],
@@ -276,7 +294,12 @@ class NativeVirtualThreadLoweringMixin:
         self.builder.position_at_end(direct_bb)
         # The marker check can safepoint. Copy directly from the authoritative
         # child cell into the consumer owner before retiring this frame cell.
-        direct_value = take_generator_frame_result(self, expr, child_slot)
+        if typed_value:
+            direct_value = generator_frame_result_value(
+                self, expr, callee_name, child_slot,
+            )
+        else:
+            direct_value = take_generator_frame_result(self, expr, child_slot)
         direct_block = self.builder._block
         self.builder.branch(done_bb)
 
@@ -289,7 +312,7 @@ class NativeVirtualThreadLoweringMixin:
         delegated = emit_generator_may_park_child(
             self,
             expr,
-            "pcc.virtual_thread.call",
+            callee_name,
             continuation_rooted_result,
             child_already_rooted=True,
         )
@@ -299,12 +322,207 @@ class NativeVirtualThreadLoweringMixin:
 
         self.builder.position_at_end(done_bb)
         merged = self.builder.phi(
-            _CSTR,
+            direct_value.type,
             name=self._fresh("vthread.call.value"),
         )
         merged.add_incoming(direct_value, direct_block)
         merged.add_incoming(delegated, delegated_block)
         return merged
+
+    def _emit_may_park_import_call(self, expr: Call, name: str) -> Optional[ir.Value]:
+        """Call a live ``from m import f`` binding whose provider may park.
+
+        Effect analysis gives the provider's ``f`` the generator ABI. Python
+        reads the binding when the call runs: while it is still the
+        provider's function, its native body creates the child directly, as
+        for a local may_park callee; another callable is called deferred,
+        which returns a lifted callable's continuation or the call's value.
+        Either outcome lands in the call site's hidden frame slot, and a
+        continuation is driven through this resumable parent.
+        """
+        if len(getattr(self, "_generator_ctx_stack", ())) == 0:
+            return None
+        may_park_names = getattr(self, "_vthread_may_park_func_names", set())
+        current_fd = getattr(self, "current_func_def", None)
+        if (
+            name not in may_park_names
+            or current_fd is None
+            or vthread_proven_direct_name_call(
+                current_fd,
+                expr,
+                may_park_names,
+                getattr(self, "_vthread_binding_cache", None),
+            )
+            is None
+        ):
+            return None
+        child_slot, child_root_ptr = generator_may_park_child_slot(self, expr, name)
+        adapter_name = self._cross_module_static_entries.get(name)
+        fn = self.functions.get(name)
+        fd = self._cross_module_func_defs.get(name)
+        native = (
+            adapter_name is not None
+            and isinstance(fn, ir.Function)
+            and fd is not None
+            and not fd.is_async
+            and not self._has_unpacked_operands(expr.args, expr.kwargs)
+            and not isinstance(fd.return_ty, RawPointerType)
+            and fn.name not in self._manual_pointer_abi_functions
+            and self._static_import_call_abi(fn)
+            and not self._ordinary_call_needs_runtime_binding(expr, fd)
+        )
+        if native:
+            try:
+                self._resolve_call_kwargs(expr.args, expr.kwargs, fd.args)
+            except L1CodegenError:
+                native = False
+        span = expr.span
+        label = name + ".park.import"
+        parent_fn = self.current_function
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = []
+        placeholders = []
+        try:
+            # Python evaluates the callee, then each argument once. The roots
+            # are enrolled in the persistent generator frame.
+            callable_root = self._emit_slot_call_operand(expr.func, label + ".callable")
+            roots.append(callable_root)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            if native:
+                positional = []
+                positional_roots = []
+                for argument in expr.args:
+                    root = self._emit_slot_call_operand(argument, label + ".arg")
+                    roots.append(root)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    placeholder = self._fresh(".import.operand")
+                    self.env[placeholder] = (root, _CSTR, DynType(name="dyn"))
+                    placeholders.append(placeholder)
+                    positional.append(Name(span=span, ty=DynType(name="dyn"), ident=placeholder))
+                    positional_roots.append(root)
+                keywords = []
+                keyword_roots = []
+                for keyword, argument in expr.kwargs:
+                    root = self._emit_slot_call_operand(argument, label + ".kwarg")
+                    roots.append(root)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    placeholder = self._fresh(".import.operand")
+                    self.env[placeholder] = (root, _CSTR, DynType(name="dyn"))
+                    placeholders.append(placeholder)
+                    keywords.append(
+                        (keyword, Name(span=span, ty=DynType(name="dyn"), ident=placeholder))
+                    )
+                    keyword_roots.append((keyword, root))
+                result_root = self._new_slot_call_root(label + ".result")
+                roots.append(result_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                adapter = self.module.globals.get(adapter_name)
+                if not isinstance(adapter, ir.Function):
+                    adapter = ir.Function(
+                        self.module,
+                        ir.FunctionType(_CSTR, [_CSTR, _CSTR]),
+                        name=adapter_name,
+                    )
+                is_static = self.builder.call(
+                    self.runtime["py_func_slot_has_native_entry"],
+                    [self._as_gc_ptr(callable_root), self.builder.bitcast(adapter, _CSTR)],
+                    name=self._fresh(label + ".is.static"),
+                )
+                direct_bb = parent_fn.append_basic_block(self._fresh(label + ".direct"))
+                dynamic_bb = parent_fn.append_basic_block(self._fresh(label + ".dynamic"))
+                stored_bb = parent_fn.append_basic_block(self._fresh(label + ".stored"))
+                self.builder.cbranch(
+                    self.builder.icmp_signed("!=", is_static, ir.Constant(_I64, 0)),
+                    direct_bb,
+                    dynamic_bb,
+                )
+                self.builder.position_at_end(direct_bb)
+                child = self._emit_direct_user_function_call(
+                    display_name=name,
+                    fn=fn,
+                    ast_func_def=fd,
+                    args=tuple(positional),
+                    kwargs=tuple(keywords),
+                )
+                # The hidden frame slot becomes the child's single local owner.
+                self.builder.call(self.runtime["pcc_gc_pin"], [child])
+                self.builder.call(self.runtime["pcc_gc_store_root"], [child_root_ptr, child])
+                self.builder.call(
+                    self.runtime["pcc_gc_unpin"],
+                    [self._value_available_at_insertion_point(child)],
+                )
+                self._gc_release(child)
+                self.builder.branch(stored_bb)
+                self.builder.position_at_end(dynamic_bb)
+                self._emit_slot_call_from_roots(
+                    callable_root, positional_roots, keyword_roots, result_root,
+                    tuple(roots), target, span, label, deferred=True,
+                )
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._move_call_result_to_frame(result_root, child_root_ptr, span, "deferred call")
+                self.builder.branch(stored_bb)
+                self.builder.position_at_end(stored_bb)
+            else:
+                positional, keywords = self._slot_call_split_operands(expr)
+                deferred_star = self._slot_call_deferred_star(positional)
+                if deferred_star is not None:
+                    args_root = self._emit_slot_call_operand(deferred_star, label + ".args")
+                else:
+                    args_root = self._emit_slot_call_args_tuple(positional, label + ".args")
+                roots.append(args_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                kwargs_root = self._emit_slot_call_kwargs_object(
+                    keywords, None, span, label + ".kwargs", callable_root,
+                )
+                roots.append(kwargs_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                if deferred_star is not None:
+                    self._finish_slot_call_deferred_star(args_root, span, label + ".star")
+                result_root = self._new_slot_call_root(label + ".result")
+                roots.append(result_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_call_deferred", (callable_root, args_root, kwargs_root),
+                    result_slot=result_root, span=span,
+                )
+                self._move_call_result_to_frame(result_root, child_root_ptr, span, "deferred call")
+            self._release_slot_call_roots(tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+            for placeholder in placeholders:
+                self.env.pop(placeholder, None)
+        return self._drive_or_take_frame_result(expr, name, child_slot, child_root_ptr, True)
+
+    def _move_call_result_to_frame(self, result_root, child_root_ptr, span, what) -> None:
+        """Move a published call result into the call site's hidden frame slot."""
+        result_is_null = self.builder.icmp_unsigned(
+            "==", self.builder.load(result_root), ir.Constant(_CSTR, None),
+        )
+        status = self.builder.select(
+            result_is_null, ir.Constant(_I64, -1), ir.Constant(_I64, 0),
+        )
+        self._slot_call_check_status(status, what, span)
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [child_root_ptr, ir.Constant(_CSTR, None)],
+        )
+        moved = self.builder.call(
+            self.runtime["pcc_gc_root_move"],
+            [child_root_ptr, self._as_gc_ptr(result_root)],
+            name=self._fresh("vthread.call.child.move"),
+        )
+        self._slot_call_check_status(moved, "continuation frame move", span)
 
     def _virtual_thread_frame_map(self, n_slots: int) -> ir.GlobalVariable:
         name = f".pcc.vthread.frame.map.{n_slots}"

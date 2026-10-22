@@ -1093,6 +1093,9 @@ class CallExpressionLoweringMixin:
             return result
         name = func_name
         if live_import_name_slot(self, name) is not None:
+            parked = self._emit_may_park_import_call(expr, name)
+            if parked is not None:
+                return parked
             direct = self._emit_slot_call_static_import(expr, name)
             if direct is not None:
                 return direct
