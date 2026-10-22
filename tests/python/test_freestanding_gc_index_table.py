@@ -29,6 +29,10 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_managed_pointer_index_contains",
     "pcc_gc_managed_pointer_index_insert",
     "pcc_gc_managed_pointer_index_remove",
+    "pcc_gc_managed_pointer_index_seen",
+    "pcc_gc_object_index_seen",
+    "pcc_gc_index_py_seen",
+    "pcc_gc_index_reclaim_retired",
     "pcc_gc_forwarding_index_find",
     "pcc_gc_forwarding_index_insert",
     "pcc_gc_forwarding_index_remove",
@@ -127,6 +131,9 @@ void pcc_gc_ptr_index_tls_pool_drain(void);
 int64_t pcc_gc_managed_pointer_index_contains(void *obj);
 int64_t pcc_gc_managed_pointer_index_insert(void *obj);
 int64_t pcc_gc_managed_pointer_index_remove(void *obj);
+int64_t pcc_gc_managed_pointer_index_seen(void *obj);
+int64_t pcc_gc_object_index_seen(void *obj);
+int64_t pcc_gc_index_reclaim_retired(void);
 
 #define DECL_INDEX(prefix) \
     void *prefix##_find(void *key); \
@@ -275,9 +282,20 @@ int main(void) {
         return 60;
     }
     if (pcc_gc_object_index_find(keys[1]) != &nodes[1]) return 61;
+    /* The unlocked probe agrees with the locked lookup on a colliding run
+       that wraps around the end of the table. */
+    for (i = 0; i < 6; i++) {
+        if (pcc_gc_object_index_seen(keys[i]) != 1) return 140;
+    }
+    if (pcc_gc_object_index_seen(0) != 0) return 141;
+    if (pcc_gc_object_index_seen((void *)(uintptr_t)3) != 0) return 142;
     if (pcc_gc_object_index_remove(keys[0]) != &nodes[0]) return 62;
     if (pcc_gc_object_index_remove(keys[2]) != &nodes[2]) return 63;
     if (pcc_gc_object_index_find(keys[5]) != &nodes[5]) return 64;
+    for (i = 0; i < 6; i++) {
+        int64_t expected = (i == 0 || i == 2) ? 0 : 1;
+        if (pcc_gc_object_index_seen(keys[i]) != expected) return 143;
+    }
     pcc_gc_object_index_clear();
     if (pcc_gc_object_index_find(keys[5]) != 0) return 65;
     if (pcc_gc_object_index_insert(keys[5], &nodes[5]) != 1) return 66;
@@ -348,8 +366,14 @@ int main(void) {
         if (
             pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1) != 1
         ) return 122;
-        if (prepared == 0) return 123;
-        free(prepared);
+        /* The forwarding index is probed without the graph lock (the GC4
+           load barrier), so a commit retires the table it replaces instead
+           of handing it back to be freed; the stopped world's holder frees
+           retired tables. The object, forwarding and target clears above
+           retired theirs too. */
+        if (prepared != 0) return 123;
+        if (pcc_gc_index_reclaim_retired() < 1) return 131;
+        if (pcc_gc_index_reclaim_retired() != 0) return 132;
         {
             void *key = (void *)(uintptr_t)0x9900000u;
             if (
@@ -491,6 +515,8 @@ int main(void) {
     {
         void *managed_keys[520];
         cursor = 200000;
+        /* Drop the tables earlier sections retired. */
+        pcc_gc_index_reclaim_retired();
         if (pcc_gc_managed_pointer_index_insert(0) != -1) return 100;
         if (pcc_gc_managed_pointer_index_insert((void *)(uintptr_t)3) != -1) {
             return 101;
@@ -531,7 +557,15 @@ int main(void) {
             if (pcc_gc_managed_pointer_index_contains(managed_keys[i]) != expected) {
                 return 108;
             }
+            /* The set grew from 256 to 1024 slots: the unlocked probe reads
+               the current table and answers like the locked lookup. */
+            if (pcc_gc_managed_pointer_index_seen(managed_keys[i]) != expected) {
+                return 109;
+            }
         }
+        /* Its two growths retired the 256- and 512-slot tables and the two
+           records that published them. */
+        if (pcc_gc_index_reclaim_retired() != 4) return 133;
     }
 
     pcc_gc_ptr_index_tls_pool_drain();
