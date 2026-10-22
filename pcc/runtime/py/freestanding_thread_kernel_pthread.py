@@ -657,32 +657,71 @@ def pcc_thread_no_park_enter() -> None:
     # acquires any managed owner/slot.  Do not safepoint an already-registered
     # live caller here: it may have just canonicalized the owner, and
     # live/unparked accounting makes the STW owner wait for outer exit.
-    depth = load_i32(global_addr("pcc_tls_no_park_depth_py"), 0)
+    # Each thread-local address is taken once: on Darwin every lookup is a
+    # _tlv_get_addr call.
+    depth_slot = global_addr("pcc_tls_no_park_depth_py")
+    depth = load_i32(depth_slot, 0)
     if depth < 0 or depth == 2147483647:
         pcc_platform_abort()
         return
     if depth != 0:
-        store_i32(global_addr("pcc_tls_no_park_depth_py"), 0, depth + 1)
+        store_i32(depth_slot, 0, depth + 1)
         return
-    pcc_current_thread_id()
-    if _tls_i64(global_addr("pcc_tls_thread_id_py")) == 0:
+    if pcc_current_thread_id() == 0:
         # Defensive fail-stop: depth must never become nonzero unless this
         # pthread is represented in the live-thread count.
         pcc_platform_abort()
         return
-    store_i32(global_addr("pcc_tls_no_park_depth_py"), 0, depth + 1)
+    store_i32(depth_slot, 0, 1)
+
+
+@c_abi_export("pcc_thread_graph_lock_enter")
+def pcc_thread_graph_lock_enter(lock_word) -> None:
+    """Take a graph lock word for a thread that holds no graph lock yet, then
+    enter its no-park region: the outermost acquisition, fused so each
+    thread-local is looked up once.
+
+    The caller is registered first (a raw newcomer joins the live set here),
+    contention polls a safepoint, and the no-park depth rises only after the
+    word is held, as pcc_thread_no_park_enter would raise it."""
+    if ptr_to_int(load_ptr(global_addr("pcc_tls_thread_id_py"), 0)) <= 0:
+        if pcc_current_thread_id() <= 0:
+            pcc_platform_abort()
+            return
+    acquired: int = 0
+    while acquired == 0:
+        if atomic_cas_i32(lock_word, 0, 0, 1, "acq_rel", "acquire") == 0:
+            acquired = 1
+        else:
+            pcc_thread_safepoint()
+    depth_slot = global_addr("pcc_tls_no_park_depth_py")
+    depth = load_i32(depth_slot, 0)
+    if depth < 0 or depth == 2147483647:
+        pcc_platform_abort()
+        return
+    store_i32(depth_slot, 0, depth + 1)
 
 
 @c_abi_export("pcc_thread_no_park_exit")
 def pcc_thread_no_park_exit() -> None:
-    depth = load_i32(global_addr("pcc_tls_no_park_depth_py"), 0)
+    depth_slot = global_addr("pcc_tls_no_park_depth_py")
+    depth = load_i32(depth_slot, 0)
     if depth <= 0:
         pcc_platform_abort()
         return
     depth = depth - 1
-    store_i32(global_addr("pcc_tls_no_park_depth_py"), 0, depth)
+    store_i32(depth_slot, 0, depth)
     if depth == 0:
-        # Use the real locked safepoint path instead of a racy stop-flag poll.
+        # Leaving the last no-park level is pcc_thread_safepoint's poll. This
+        # thread is registered (entering no-park required it) and not marked
+        # parked (it is running), so with no stop pending that poll returns
+        # at once; the stop-flag read is the same acquire load it makes. A
+        # pending stop takes the real locked path.
+        if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+            pcc_platform_abort()
+            return
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+            return
         pcc_thread_safepoint()
 
 
@@ -693,14 +732,16 @@ def pcc_thread_no_park_depth() -> int:
 
 @c_abi_export("pcc_thread_safepoint")
 def pcc_thread_safepoint() -> None:
-    # A normal implicit poll inside a valid lease remains suppressed.  Check
-    # independent lock ownership first so a broken/missing lease fails closed.
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0 and load_i32(
-        global_addr("pcc_tls_no_park_depth_py"), 0
-    ) <= 0:
+    # A normal implicit poll inside a valid lease remains suppressed. Outside
+    # one, scheduler-lock ownership fails closed: a broken or missing lease
+    # must not poll.
+    no_park: int = load_i32(global_addr("pcc_tls_no_park_depth_py"), 0)
+    if no_park > 0:
+        return
+    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
         pcc_platform_abort()
         return
-    if load_i32(global_addr("pcc_tls_no_park_depth_py"), 0) != 0:
+    if no_park != 0:
         return
     # Nothing requested and nothing to undo: this thread is registered
     # (pcc_current_thread_id admits a newcomer under the world lock), it is

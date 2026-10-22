@@ -11,7 +11,6 @@ from pcc.extern import (
     extern,
 )
 from pcc.unsafe import (
-    atomic_cas_i32,
     atomic_store_i32,
     define_global_i32,
     define_thread_local_i32,
@@ -23,7 +22,6 @@ from pcc.unsafe import (
     null,
     ptr_is_null,
     store_i32,
-    thread_safepoint,
 )
 
 
@@ -35,10 +33,11 @@ define_thread_local_ptr_null("g_tls_pcc_py_gc_pending_minor_block")
 define_thread_local_i32("g_tls_pcc_py_gc_minor_graph_lock_depth", 0)
 define_global_i32("g_pcc_py_gc_minor_graph_lock", 0)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
-pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
-pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_thread_graph_lock_enter = extern(
+    "pcc_thread_graph_lock_enter", (c_ptr,), c_void
+)
 
 
 define_thread_local_ptr_null("g_tls_pcc_py_gc_deferred_tripwire_message")
@@ -154,25 +153,9 @@ def pcc_py_gc_minor_graph_lock() -> None:
         store_i32(depth_slot, 0, depth + 1)
         return
 
-    if pcc_current_thread_id() <= 0:
-        pcc_platform_abort()
-        return
-
-    acquired: i64 = 0
-    while acquired == 0:
-        old: i64 = atomic_cas_i32(
-            global_addr("g_pcc_py_gc_minor_graph_lock"),
-            0,
-            0,
-            1,
-            "acq_rel",
-            "acquire",
-        )
-        if old == 0:
-            acquired: i64 = 1
-        else:
-            thread_safepoint()
-    pcc_thread_no_park_enter()
+    # Register, take the word (polling a safepoint while it is contended) and
+    # enter no-park, with the thread kernel's thread-locals looked up once.
+    pcc_thread_graph_lock_enter(global_addr("g_pcc_py_gc_minor_graph_lock"))
     store_i32(depth_slot, 0, 1)
 
 
