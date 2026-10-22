@@ -1607,6 +1607,11 @@ class AssignmentStatementLoweringMixin:
         Anything else (e.g. list RHS, unknown iterable) remains
         unsupported.
         """
+        from pcc.frontends.python.codegen.generator_lowering import (
+            emit_generator_unpack_assignment,
+        )
+        if emit_generator_unpack_assignment(self, stmt, target):
+            return
         star_indices = [
             i for i, lhs in enumerate(target.elems) if self._is_starred_unpack_expr(lhs)
         ]

@@ -1427,6 +1427,58 @@ def _spill_root_owner_name(host, root):
     raise L1CodegenError("spilled operand root has no frame binding")
 
 
+def emit_generator_unpack_assignment(host, stmt, target) -> bool:
+    """Unpack into frame owners before evaluating any suspending target.
+
+    The unpack itself precedes all target stores. Each destination then uses
+    ordinary statement lowering, so a later target sees earlier stores and
+    its operands can suspend without retaining pre-suspension SSA values.
+    """
+    function = _spill_function(host)
+    if function is None:
+        return False
+    fd, owner = function
+    if not generator_expr_suspends(host, target, fd, owner):
+        return False
+    roots = []
+    values = []
+    temporary_targets = []
+    for destination in target.elems:
+        root = host._new_slot_call_root("unpack.target")
+        roots.append(root)
+        value = Name(span=destination.span, ty=DynType(name="dyn"),
+                     ident=_spill_root_owner_name(host, root))
+        values.append(value)
+        if host._is_starred_unpack_expr(destination):
+            temporary_targets.append(Call(
+                span=destination.span, ty=destination.ty,
+                func=destination.func, args=(value,), kwargs=(),
+            ))
+        else:
+            temporary_targets.append(value)
+    temporary = TupleExpr(span=target.span, ty=target.ty,
+                          elems=tuple(temporary_targets))
+    previous = host._current_try_err_block()
+    error = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
+    host._cpy_operand_cleanup_block = host._try_err_block
+    try:
+        host._emit_stmt(Assign(span=stmt.span, targets=(temporary,), value=stmt.value))
+        for index, destination in enumerate(target.elems):
+            if host._is_starred_unpack_expr(destination):
+                destination = destination.args[0]
+            host._emit_stmt(Assign(span=stmt.span, targets=(destination,), value=values[index]))
+            if not host._builder_block_is_terminated():
+                # A consumed item dies before the next target's side effects,
+                # even if a setter discards it instead of retaining it.
+                host._release_slot_call_roots((roots[index],))
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+    return True
+
+
 def _bind_spill_root(host, spills, ident, root, hint) -> None:
     """Read ``ident`` from ``root`` exactly as the root's own frame binding."""
     spills["roots"].append(root)
