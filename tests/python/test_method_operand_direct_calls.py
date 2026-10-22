@@ -61,6 +61,17 @@ class Scaled(Vec):
         return "s" + str(self.x)
 
 
+def apply(o, other):
+    # Parameters of no known class: the receiver's class is found at run
+    # time; an instance attribute shadows a method of the same name.
+    total = o.dot(other) % 7 + len(o.name())
+    try:
+        total += o.missing() + 1
+    except AttributeError as error:
+        total += len(str(error))
+    return total
+
+
 def main():
     acc = Vec(0, 0)
     s = 0
@@ -87,6 +98,9 @@ def main():
     w = Scaled(3, 4)
     print(acc.x, acc.y, s, total, len(names), names[-1])
     print(w.dot(Vec(1, 1)) + 1, Vec.unit(5).dot(Vec(1, 2)) * 3, w.name() + "?")
+    shadowed = Vec(2, 3)
+    shadowed.ratio = lambda: 100
+    print(apply(Vec(1, 2), w), apply(w, shadowed), apply(shadowed, w), shadowed.ratio() + 1)
 
 
 main()
@@ -117,32 +131,47 @@ def test_method_operands_match_cpython_on_five_collectors(tmp_path: Path, pcc_ru
         assert ran.stdout == expected, f"GC{backend}: {ran.stdout}"
 
 
-def _main_ir(tmp_path: Path) -> str:
+def _ir_text(tmp_path: Path) -> str:
     from pcc.frontends.python.pipeline import compile_python
 
-    source = tmp_path / "method_operands.py"
-    source.write_text(PROGRAM, encoding="utf-8")
     ir_path = tmp_path / "method_operands.ll"
-    compile_python(str(source), str(ir_path), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
-    text = ir_path.read_text(encoding="utf-8")
-    body = re.search(r"^define [^\n]*@user_method_operands_main\(.*?^}", text, re.M | re.S)
+    if not ir_path.exists():
+        source = tmp_path / "method_operands.py"
+        source.write_text(PROGRAM, encoding="utf-8")
+        compile_python(str(source), str(ir_path), emit_llvm_only=True, backend="self",
+                       libpython_mode="off", ir_scaffold_mode="on")
+    return ir_path.read_text(encoding="utf-8")
+
+
+def _main_ir(tmp_path: Path) -> str:
+    body = re.search(r"^define [^\n]*@user_method_operands_main\(.*?^}", _ir_text(tmp_path),
+                     re.M | re.S)
     assert body is not None
     return body.group(0)
 
 
 def test_method_operand_calls_the_method_and_publishes_at_return(tmp_path: Path):
     body = _main_ir(tmp_path)
-    # Every Vec method no subclass overrides is called directly on a receiver
-    # of known class; none is bound. ``name`` (Scaled overrides it) keeps the
-    # run-time lookup, as does ``dot`` on ``Vec.unit(5)``, whose class the
-    # compiler does not know.
-    for method in ("add", "dot", "big", "ratio", "positive", "nothing", "fail"):
+    # Every Vec method no subclass overrides and nothing rebinds is called
+    # directly on a receiver of known class; none is bound. ``name`` (Scaled
+    # overrides it) and ``ratio`` (an instance attribute shadows it) keep
+    # the run-time lookup, as does ``dot`` on ``Vec.unit(5)``, whose class
+    # the compiler does not know.
+    for method in ("add", "dot", "big", "positive", "nothing", "fail"):
         assert re.search(r"\bcall [^\n]*@user_method_operands_Vec_" + method + r"\(", body), method
-    assert not re.search(r"@py_obj_getattr\([^\n]*@\.pyattr\.(add|big|ratio|positive|nothing|fail)\b",
+    for method in ("name", "ratio"):
+        assert not re.search(r"\bcall [^\n]*@user_method_operands_Vec_" + method + r"\(", body), method
+    assert not re.search(r"@py_obj_getattr\([^\n]*@\.pyattr\.(add|dot|big|positive|nothing|fail)\b",
                          body)
-    assert len(re.findall(r"@py_obj_getattr\([^\n]*@\.pyattr\.dot\b", body)) == 1
-    assert not re.search(r"\bcall [^\n]*@user_method_operands_Vec_name\(", body)
+    # ``o.dot(other) % 7`` on receivers of unknown class loads the method
+    # (py_obj_load_method) before the arguments and calls it with the
+    # receiver; no bound method, no generic slot call.
+    apply_body = re.search(r"^define [^\n]*@user_method_operands_apply\(.*?^}",
+                           _ir_text(tmp_path), re.M | re.S).group(0)
+    assert re.search(r"\bcall [^\n]*@py_obj_load_method\(", apply_body)
+    assert re.search(r"\bcall [^\n]*@py_obj_call_loaded_method\(", apply_body)
+    assert not re.search(r"@py_obj_getattr\(", apply_body)
+    assert not re.search(r"\bcall [^\n]*@py_obj_call_slots\(", apply_body)
     # The dot result in ``v.dot(acc) % 7`` is stored into its operand slot
     # by the very next instruction after the call returns.
     call = re.search(r"(%[\w.]+) = call [^\n]*@user_method_operands_Vec_dot\(ptr %v[^\n]*\n\s*([^\n]+)", body)
