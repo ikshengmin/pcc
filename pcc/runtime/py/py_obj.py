@@ -271,6 +271,9 @@ pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
+pcc_gc_reclaim_retired_index_tables_if_alone = extern(
+    "pcc_gc_reclaim_retired_index_tables_if_alone", (), c_void
+)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
@@ -472,6 +475,9 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     if pcc_gc_pointer_register(obj) < 0:
         return null()
     pcc_gc_note_object_allocated_sized(obj, size)
+    # Tracking may rehash the object index, which is read without the lock;
+    # with one thread the replaced table can go now.
+    pcc_gc_reclaim_retired_index_tables_if_alone()
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(1, 2, size, type_tag, obj)
     return obj

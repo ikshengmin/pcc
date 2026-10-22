@@ -581,6 +581,10 @@ pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_thread_owns_stopped_world = extern(
     "pcc_thread_owns_stopped_world", (), c_int64
 )
+pcc_thread_world_lock_if_sole = extern(
+    "pcc_thread_world_lock_if_sole", (), c_int64
+)
+pcc_thread_world_unlock = extern("pcc_thread_world_unlock", (), c_void)
 pcc_py_gc_minor_graph_lock_depth = extern(
     "pcc_py_gc_minor_graph_lock_depth", (), c_int64
 )
@@ -2559,15 +2563,37 @@ def pcc_gc_pointer_is_managed(o) -> int:
 
 @c_abi_export("pcc_gc_reclaim_retired_index_tables")
 def pcc_gc_reclaim_retired_index_tables() -> int:
-    """Free index tables that rehashes retired, when this thread holds a
-    stopped world; collections call it after they stop the world.
+    """Free the index tables that rehashes retired, when no thread can hold one.
 
-    Returns the number freed, or -1 when the caller does not hold a stopped
-    world (lock-free readers may then still be probing a retired table).
+    That is when this thread is the only registered one (it keeps the world
+    lock, which registration takes, across the free) or holds a stopped
+    world, where every other thread is parked or exited and so outside the
+    lock-free probes. Collections call it after they stop the world, and
+    pcc_gc_alloc after a rehash in a single-threaded process. Returns the
+    number freed, or -1 when another thread may still be probing.
     """
+    if pcc_thread_world_lock_if_sole() != 0:
+        freed: int = pcc_gc_index_reclaim_retired()
+        pcc_thread_world_unlock()
+        return freed
     if pcc_thread_owns_stopped_world() == 0:
         return -1
     return pcc_gc_index_reclaim_retired()
+
+
+@c_abi_export("pcc_gc_reclaim_retired_index_tables_if_alone")
+def pcc_gc_reclaim_retired_index_tables_if_alone() -> None:
+    """After a registration or tracking: free retired tables in a one-thread process.
+
+    The thread count read here is only the hint that keeps a multi-threaded
+    process from taking the world lock on every allocation; the reclaim
+    decides under that lock.
+    """
+    if ptr_is_null(global_load_ptr("pcc_py_gc_index_retired_tables")) != 0:
+        return
+    if load_i64(global_addr("pcc_live_thread_count_py"), 0) > 1:
+        return
+    pcc_gc_reclaim_retired_index_tables()
 
 
 @c_abi_export("pcc_gc_pointer_register")
@@ -2582,6 +2608,8 @@ def pcc_gc_pointer_register(o) -> int:
     _object_graph_lock()
     result: int = pcc_gc_managed_pointer_index_insert(o)
     _object_graph_unlock()
+    # The insert may have grown the set (see pcc_gc_reclaim_retired_index_tables).
+    pcc_gc_reclaim_retired_index_tables_if_alone()
     return result
 
 

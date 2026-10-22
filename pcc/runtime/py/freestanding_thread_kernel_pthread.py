@@ -434,6 +434,31 @@ def pcc_current_thread_id() -> int:
     return thread_id
 
 
+@c_abi_export("pcc_thread_world_lock_if_sole")
+def pcc_thread_world_lock_if_sole() -> int:
+    """Take the world lock when the caller is the only registered thread.
+
+    Returns 1 with the lock held (release it with pcc_thread_world_unlock),
+    else 0. A thread registers under this lock, so until the release no
+    other thread can join and read state that only registered threads read.
+    """
+    if _world_init() != 0:
+        return 0
+    if _tls_i64(global_addr("pcc_tls_thread_id_py")) == 0:
+        return 0
+    lock = global_load_ptr("pcc_world_lock_py")
+    pthread_mutex_lock(lock)
+    if _world_i64(global_addr("pcc_live_thread_count_py")) == 1:
+        return 1
+    pthread_mutex_unlock(lock)
+    return 0
+
+
+@c_abi_export("pcc_thread_world_unlock")
+def pcc_thread_world_unlock() -> None:
+    pthread_mutex_unlock(global_load_ptr("pcc_world_lock_py"))
+
+
 @c_abi_export("pcc_thread_registered")
 def pcc_thread_registered() -> int:
     """Whether the calling thread is in the live set already."""
