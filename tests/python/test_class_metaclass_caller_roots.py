@@ -56,7 +56,8 @@ class Example(metaclass=Meta):
             live, registered, leases = set(live), set(registered), set(leases)
             successors = []
             for line in blocks[block]:
-                enter = re.search(r'@pcc_gc_frame_enter(?:_lifo)?\(ptr [^,]+, ptr (%[-\w.]+)\)', line)
+                # Frames register through the plain or the mapped entries.
+                enter = re.search(r'@pcc_gc_frame_enter(?:_lifo)?(?:_mapped)?\(ptr [^,]+, ptr (%[-\w.]+)\)', line)
                 if enter:
                     registered.add(physical(enter.group(1)))
                 store = re.search(r'store ptr (null|%[-\w.]+), ptr (%[-\w.]+)', line)
@@ -85,7 +86,7 @@ class Example(metaclass=Meta):
                         assert root in live and root in registered, (block, root, live, registered)
                         assert any(slot == root for token, slot in leases), (block, root, leases)
                     calls += 1
-                leave = re.search(r'@pcc_gc_frame_leave(?:_lifo)?\(ptr (%[-\w.]+)\)', line)
+                leave = re.search(r'@pcc_gc_frame_leave(?:_lifo)?(?:_mapped)?\(ptr (%[-\w.]+)\)', line)
                 if leave:
                     registered.discard(physical(leave.group(1)))
                 if line.startswith('br '):
