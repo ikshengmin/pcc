@@ -177,7 +177,8 @@ def test_exhausted_constructor_uses_actual_partial_owner_cleanup(allocation):
     assert memory[1024 + abi.PYCLASSOBJECT_NAME_OFFSET] == NAME
     assert ('error', 'class type tag allocation', 'user class type tag space exhausted') in events
     assert ('drop_root', 1024) in events
-    assert not memory[1024 + abi.PYOBJECTHEADER_FLAGS_OFFSET] & abi.PY_FLAG_IMMORTAL
+    # A class is mortal from creation; the model's header flags start at zero.
+    assert not memory.get(1024 + abi.PYOBJECTHEADER_FLAGS_OFFSET, 0) & abi.PY_FLAG_IMMORTAL
     assert 1024 + abi.PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET not in memory
     assert counter.value == LIMIT
 
