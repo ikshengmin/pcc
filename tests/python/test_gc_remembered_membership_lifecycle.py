@@ -85,6 +85,10 @@ class _Memory:
             "_backend4_finish_remap_retirement": lambda finish: None,
         }
         index_names = {
+            # Generic rehashes use these production helpers even for this
+            # graph-locked index, which needs no unlocked-reader record.
+            "_index_published_cell", "_index_retire",
+            "_index_table_publish", "_index_table_release",
             "pcc_gc_index_py_hash_ptr", "pcc_gc_index_py_next_pow2",
             "pcc_gc_index_py_rehash_capacity", "pcc_gc_index_py_find_slot",
             "pcc_gc_index_py_rehash_slots", "pcc_gc_index_py_insert",
