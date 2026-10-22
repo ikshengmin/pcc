@@ -103,6 +103,10 @@ typedef union {
 static ObjectStorage objects[THREADS * PER_THREAD];
 static void *tokens[THREADS];
 
+/* A raw pthread that calls into the runtime joins the live set; like a
+ * PyGILState_Ensure thread it must leave it before it exits, or every later
+ * stop-the-world waits for a thread that no longer exists. */
+
 static void *track_range(void *raw) {
     intptr_t thread = (intptr_t)raw;
     tokens[thread] = pcc_current_native_thread_token();
@@ -111,6 +115,7 @@ static void *track_range(void *raw) {
     for (int i = start; i < end; i++) {
         py_gc_track((PyObject *)objects[i].bytes);
     }
+    pcc_thread_unregister_current();
     return NULL;
 }
 
@@ -121,13 +126,25 @@ static void *untrack_range(void *raw) {
     for (int i = start; i < end; i++) {
         py_gc_untrack((PyObject *)objects[i].bytes);
     }
+    pcc_thread_unregister_current();
     return NULL;
 }
 
 static void *collect_rounds(void *raw) {
     (void)raw;
     for (int i = 0; i < 256; i++) py_gc_collect();
+    pcc_thread_unregister_current();
     return NULL;
+}
+
+/* The main thread is registered (py_gc_init polls a safepoint). Waiting in a
+ * raw pthread_join, it must be in the blocking state, as a CPython thread
+ * releases the GIL around a blocking call, or a stop never completes. */
+static void join_all(pthread_t *threads, int count, pthread_t collector) {
+    int64_t entered = pcc_thread_blocking_enter(__builtin_frame_address(0));
+    for (int i = 0; i < count; i++) pthread_join(threads[i], NULL);
+    pthread_join(collector, NULL);
+    pcc_thread_blocking_leave(entered);
 }
 
 int main(void) {
@@ -139,8 +156,7 @@ int main(void) {
     for (intptr_t i = 0; i < THREADS; i++) {
         if (pthread_create(&threads[i], NULL, track_range, (void *)i) != 0) return 2;
     }
-    for (int i = 0; i < THREADS; i++) pthread_join(threads[i], NULL);
-    pthread_join(collector, NULL);
+    join_all(threads, THREADS, collector);
     for (int i = 0; i < THREADS; i++) {
         if (tokens[i] == NULL) return 5;
         for (int j = i + 1; j < THREADS; j++) {
@@ -157,8 +173,7 @@ int main(void) {
     for (intptr_t i = 0; i < THREADS; i++) {
         if (pthread_create(&threads[i], NULL, untrack_range, (void *)i) != 0) return 3;
     }
-    for (int i = 0; i < THREADS; i++) pthread_join(threads[i], NULL);
-    pthread_join(collector, NULL);
+    join_all(threads, THREADS, collector);
     int remaining = 0;
     for (int i = 0; i < THREADS * PER_THREAD; i++) {
         remaining += (int)py_gc_is_tracked((PyObject *)objects[i].bytes);
@@ -298,6 +313,17 @@ TRACKING_EXPECTED = (
     "untrack-first:1,0,1\n"
     "empty:0\n"
 )
+# The threaded GC4 tracks the objects it allocates in its own object index;
+# the CPython-compatible table ignores track and untrack, so storage GC4 did
+# not allocate stays untracked and uncounted.
+TRACKING_EXPECTED_GC4 = (
+    "ignored:0\n"
+    "first:0,0\n"
+    "duplicate:0\n"
+    "second:0,0\n"
+    "untrack-first:0,0,0\n"
+    "empty:0\n"
+)
 
 
 def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
@@ -348,7 +374,8 @@ def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
             timeout=30,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == TRACKING_EXPECTED
+        expected = TRACKING_EXPECTED_GC4 if backend == 4 else TRACKING_EXPECTED
+        assert result.stdout == expected, f"GC{backend}"
 
 
 def test_production_archive_tracking_lock_survives_real_pthread_contention(
