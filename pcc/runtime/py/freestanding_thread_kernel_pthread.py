@@ -52,9 +52,17 @@ define_global_i32("pcc_thread_stop_requested", 0)
 define_global_i32("pcc_thread_world_stop_py", 0)
 define_thread_local_i32("pcc_native_thread_identity_token", 0)
 define_thread_local_ptr_null("pcc_tls_thread_id_py")
-define_thread_local_i32("pcc_tls_thread_parked_py", 0)
-define_thread_local_i32("pcc_tls_no_park_depth_py", 0)
-define_thread_local_i32("pcc_tls_scheduler_lock_held_py", 0)
+# This thread's lock, lease and stop state in one word, so the object-graph
+# lock and the safepoint poll look up a single thread-local (on Darwin each
+# lookup is a _tlv_get_addr call, and a graph lock and unlock made seven):
+#   bits  0-23  no-park depth            mask 16777215
+#   bits 24-47  object-graph lock depth  unit 16777216, mask 281474959933440
+#   bit  48     scheduler lock held      281474976710656
+#   bit  49     registered               562949953421312
+#   bit  50     parked for a stop        1125899906842624
+#   bit  51     deferred tripwire        2251799813685248
+# Only the owning thread reads or writes it.
+define_thread_local_ptr_null("pcc_tls_thread_state_py")
 define_thread_local_i32("pcc_tls_unregister_in_progress_py", 0)
 define_thread_local_ptr_null("pcc_tls_parked_epoch_py")
 define_global_ptr_null("pcc_world_lock_py")
@@ -139,13 +147,27 @@ def _suspend_permitted(lock) -> int:
     # Recheck at the actual suspension boundary, before publishing parked.
     # A full logger here could deadlock. Release the world lock and fail-stop;
     # never clear a lease/ownership marker to make an unsafe suspension pass.
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0 or load_i32(
-        global_addr("pcc_tls_no_park_depth_py"), 0
-    ) != 0:
+    # Scheduler lock held (bit 48) or any no-park depth (bits 0-23).
+    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 281474993487871) != 0:
         pthread_mutex_unlock(lock)
         pcc_platform_abort()
         return 0
     return 1
+
+
+def _state_parked() -> int:
+    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 1125899906842624) != 0:
+        return 1
+    return 0
+
+
+def _state_set_parked(parked: int) -> None:
+    slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(slot, 0)
+    if parked != 0:
+        store_i64(slot, 0, state | 1125899906842624)
+    elif (state & 1125899906842624) != 0:
+        store_i64(slot, 0, state - 1125899906842624)
 
 
 def _flush_suspend_trace(records, count: int, last_epoch: int, thread_id: int) -> None:
@@ -428,6 +450,8 @@ def pcc_current_thread_id() -> int:
             _world_i64(global_addr("pcc_live_thread_count_py")) + 1,
         )
         _tls_store_i64(global_addr("pcc_tls_thread_id_py"), thread_id)
+        state_slot = global_addr("pcc_tls_thread_state_py")
+        store_i64(state_slot, 0, load_i64(state_slot, 0) | 562949953421312)
         _thread_record_link(thread_id)
         pcc_cond_broadcast(global_load_ptr("pcc_world_cond_py"))
     pthread_mutex_unlock(lock)
@@ -617,7 +641,9 @@ def _enter_exited(frame) -> int:
     # a no-park scope, or one the kernel never registered, keeps running
     # state: the stop owner then waits for it as before.
     record = global_load_ptr("pcc_tls_thread_record_py")
-    if ptr_is_null(record) or load_i32(global_addr("pcc_tls_no_park_depth_py"), 0) != 0:
+    if ptr_is_null(record) or (
+        load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 16777215
+    ) != 0:
         return 0
     if _world_init() != 0:
         return 0
@@ -677,18 +703,22 @@ def pcc_thread_blocking_leave(entered: int) -> None:
 def pcc_thread_scheduler_lock_acquired() -> None:
     # Independent ownership evidence: a missing no-park lease must not turn
     # a scheduler-lock holder into a suspendable thread.
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 281474976710656) != 0:
         pcc_platform_abort()
         return
-    store_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0, 1)
+    store_i64(state_slot, 0, state | 281474976710656)
 
 
 @c_abi_export("pcc_thread_scheduler_lock_released")
 def pcc_thread_scheduler_lock_released() -> None:
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 1:
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 281474976710656) == 0:
         pcc_platform_abort()
         return
-    store_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0, 0)
+    store_i64(state_slot, 0, state - 281474976710656)
 
 
 @c_abi_export("pcc_thread_no_park_enter")
@@ -697,34 +727,42 @@ def pcc_thread_no_park_enter() -> None:
     # acquires any managed owner/slot.  Do not safepoint an already-registered
     # live caller here: it may have just canonicalized the owner, and
     # live/unparked accounting makes the STW owner wait for outer exit.
-    # Each thread-local address is taken once: on Darwin every lookup is a
-    # _tlv_get_addr call.
-    depth_slot = global_addr("pcc_tls_no_park_depth_py")
-    depth = load_i32(depth_slot, 0)
-    if depth < 0 or depth == 2147483647:
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    depth: int = state & 16777215
+    if depth == 16777215:
         pcc_platform_abort()
         return
     if depth != 0:
-        store_i32(depth_slot, 0, depth + 1)
+        store_i64(state_slot, 0, state + 1)
         return
     if pcc_current_thread_id() == 0:
         # Defensive fail-stop: depth must never become nonzero unless this
         # pthread is represented in the live-thread count.
         pcc_platform_abort()
         return
-    store_i32(depth_slot, 0, 1)
+    # Registration sets the registered bit: reload.
+    store_i64(state_slot, 0, load_i64(state_slot, 0) + 1)
 
 
-@c_abi_export("pcc_thread_graph_lock_enter")
-def pcc_thread_graph_lock_enter(lock_word) -> None:
-    """Take a graph lock word for a thread that holds no graph lock yet, then
-    enter its no-park region: the outermost acquisition, fused so each
-    thread-local is looked up once.
+@c_abi_export("pcc_thread_graph_lock_acquire")
+def pcc_thread_graph_lock_acquire(lock_word) -> None:
+    """Take the object-graph lock word, reentrantly, with one thread-local.
 
-    The caller is registered first (a raw newcomer joins the live set here),
-    contention polls a safepoint, and the no-park depth rises only after the
-    word is held, as pcc_thread_no_park_enter would raise it."""
-    if ptr_to_int(load_ptr(global_addr("pcc_tls_thread_id_py"), 0)) <= 0:
+    A nested acquisition only counts. The outermost one registers a raw
+    newcomer, takes the word (a contended wait polls a safepoint outside any
+    no-park region) and then enters no-park, as pcc_thread_no_park_enter
+    would. The depth in the thread state word is this one lock's."""
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    graph_depth: int = state & 281474959933440
+    if graph_depth != 0:
+        if graph_depth == 281474959933440:
+            pcc_platform_abort()
+            return
+        store_i64(state_slot, 0, state + 16777216)
+        return
+    if (state & 562949953421312) == 0:
         if pcc_current_thread_id() <= 0:
             pcc_platform_abort()
             return
@@ -734,30 +772,81 @@ def pcc_thread_graph_lock_enter(lock_word) -> None:
             acquired = 1
         else:
             pcc_thread_safepoint()
-    depth_slot = global_addr("pcc_tls_no_park_depth_py")
-    depth = load_i32(depth_slot, 0)
-    if depth < 0 or depth == 2147483647:
+    # Registration and the polls above change the word: reload it.
+    state = load_i64(state_slot, 0)
+    if (state & 16777215) == 16777215:
         pcc_platform_abort()
         return
-    store_i32(depth_slot, 0, depth + 1)
+    store_i64(state_slot, 0, state + 16777217)
+
+
+@c_abi_export("pcc_thread_graph_lock_release")
+def pcc_thread_graph_lock_release(lock_word) -> int:
+    """Release one object-graph lock level with one thread-local lookup.
+
+    The outermost release frees the word, then leaves no-park (polling a
+    pending stop) and returns 0; when a tripwire was deferred while the lock
+    was held it returns 1 before leaving no-park, and the caller reports the
+    tripwire and then calls pcc_thread_no_park_exit. A release without a
+    held level returns 0 and changes nothing."""
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 281474959933440) == 0:
+        return 0
+    state = state - 16777216
+    if (state & 281474959933440) != 0:
+        store_i64(state_slot, 0, state)
+        return 0
+    atomic_store_i32(lock_word, 0, 0, "release")
+    if (state & 2251799813685248) != 0:
+        store_i64(state_slot, 0, state - 2251799813685248)
+        return 1
+    if (state & 16777215) == 0:
+        pcc_platform_abort()
+        return 0
+    state = state - 1
+    store_i64(state_slot, 0, state)
+    if (state & 16777215) == 0:
+        # As in pcc_thread_no_park_exit.
+        if (state & 281474976710656) != 0:
+            pcc_platform_abort()
+            return 0
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
+            pcc_thread_safepoint()
+    return 0
+
+
+@c_abi_export("pcc_thread_graph_lock_depth")
+def pcc_thread_graph_lock_depth() -> int:
+    """This thread's object-graph lock nesting depth."""
+    return (
+        load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 281474959933440
+    ) // 16777216
+
+
+@c_abi_export("pcc_thread_note_deferred_tripwire")
+def pcc_thread_note_deferred_tripwire() -> None:
+    """Have the outermost graph-lock release report a deferred tripwire."""
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    store_i64(state_slot, 0, load_i64(state_slot, 0) | 2251799813685248)
 
 
 @c_abi_export("pcc_thread_no_park_exit")
 def pcc_thread_no_park_exit() -> None:
-    depth_slot = global_addr("pcc_tls_no_park_depth_py")
-    depth = load_i32(depth_slot, 0)
-    if depth <= 0:
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 16777215) == 0:
         pcc_platform_abort()
         return
-    depth = depth - 1
-    store_i32(depth_slot, 0, depth)
-    if depth == 0:
+    state = state - 1
+    store_i64(state_slot, 0, state)
+    if (state & 16777215) == 0:
         # Leaving the last no-park level is pcc_thread_safepoint's poll. This
         # thread is registered (entering no-park required it) and not marked
         # parked (it is running), so with no stop pending that poll returns
         # at once; the stop-flag read is the same acquire load it makes. A
         # pending stop takes the real locked path.
-        if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+        if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
         if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
@@ -767,7 +856,7 @@ def pcc_thread_no_park_exit() -> None:
 
 @c_abi_export("pcc_thread_no_park_depth")
 def pcc_thread_no_park_depth() -> int:
-    return load_i32(global_addr("pcc_tls_no_park_depth_py"), 0)
+    return load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 16777215
 
 
 @c_abi_export("pcc_thread_safepoint")
@@ -775,13 +864,11 @@ def pcc_thread_safepoint() -> None:
     # A normal implicit poll inside a valid lease remains suppressed. Outside
     # one, scheduler-lock ownership fails closed: a broken or missing lease
     # must not poll.
-    no_park: int = load_i32(global_addr("pcc_tls_no_park_depth_py"), 0)
-    if no_park > 0:
+    state: int = load_i64(global_addr("pcc_tls_thread_state_py"), 0)
+    if (state & 16777215) != 0:
         return
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+    if (state & 281474976710656) != 0:
         pcc_platform_abort()
-        return
-    if no_park != 0:
         return
     # Nothing requested and nothing to undo: this thread is registered
     # (pcc_current_thread_id admits a newcomer under the world lock), it is
@@ -792,13 +879,13 @@ def pcc_thread_safepoint() -> None:
     # mutator. Taking the world lock on every poll put it on every graph
     # unlock, allocation gate and, inside a stopped-world collection, every
     # object the collector frees.
-    if load_i32(global_addr("pcc_tls_thread_parked_py"), 0) == 0:
-        poller: int = _tls_i64(global_addr("pcc_tls_thread_id_py"))
-        if poller != 0:
-            if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
-                return
-            if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == poller:
-                return
+    if (state & 1125899906842624) == 0 and (state & 562949953421312) != 0:
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+            return
+        if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == _tls_i64(
+            global_addr("pcc_tls_thread_id_py")
+        ):
+            return
     if _world_init() != 0:
         pcc_platform_abort()
         return
@@ -827,10 +914,10 @@ def pcc_thread_safepoint() -> None:
                 store_i64(trace_records, trace_count * 16 + 8, 0)
             trace_count = trace_count + 1
             trace_epoch = epoch
-        if load_i32(global_addr("pcc_tls_thread_parked_py"), 0) == 0 or _tls_i64(
+        if _state_parked() == 0 or _tls_i64(
             global_addr("pcc_tls_parked_epoch_py")
         ) != epoch:
-            store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 1)
+            _state_set_parked(1)
             _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), epoch)
             _thread_record_mark(1, frame_address())
             _world_store_i64(
@@ -843,7 +930,7 @@ def pcc_thread_safepoint() -> None:
             store_i64(trace_records, offset, load_i64(trace_records, offset) + 1)
         pthread_cond_wait(cond, lock)
     if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0:
-        store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 0)
+        _state_set_parked(0)
         _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), 0)
         _thread_record_mark(0, null())
     pthread_mutex_unlock(lock)
@@ -896,7 +983,7 @@ def pcc_thread_registration_waiter_count() -> int:
 @c_abi_export("pcc_stop_the_world")
 def pcc_stop_the_world() -> int:
     # A scheduler-lock owner cannot wait for mutators that need this lock.
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 281474976710656) != 0:
         pcc_platform_abort()
         return -1
     if _world_init() != 0:
@@ -923,10 +1010,10 @@ def pcc_stop_the_world() -> int:
                 store_i64(trace_records, trace_count * 16 + 8, 0)
             trace_count = trace_count + 1
             trace_epoch = epoch
-        if load_i32(global_addr("pcc_tls_thread_parked_py"), 0) == 0 or _tls_i64(
+        if _state_parked() == 0 or _tls_i64(
             global_addr("pcc_tls_parked_epoch_py")
         ) != epoch:
-            store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 1)
+            _state_set_parked(1)
             _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), epoch)
             _thread_record_mark(1, frame_address())
             _world_store_i64(
@@ -938,10 +1025,8 @@ def pcc_stop_the_world() -> int:
             offset: int = (trace_count - 1) * 16 + 8
             store_i64(trace_records, offset, load_i64(trace_records, offset) + 1)
         pthread_cond_wait(cond, lock)
-    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0 and load_i32(
-        global_addr("pcc_tls_thread_parked_py"), 0
-    ) != 0:
-        store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 0)
+    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0 and _state_parked() != 0:
+        _state_set_parked(0)
         _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), 0)
         _thread_record_mark(0, null())
     if load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0:
@@ -1030,7 +1115,7 @@ def pcc_resume_world() -> int:
 
 @c_abi_export("pcc_thread_unregister_current")
 def pcc_thread_unregister_current() -> None:
-    if load_i32(global_addr("pcc_tls_scheduler_lock_held_py"), 0) != 0:
+    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 281474976710656) != 0:
         pcc_platform_abort()
         return
     if pcc_thread_no_park_depth() != 0:
@@ -1070,8 +1155,8 @@ def pcc_thread_unregister_current() -> None:
         pcc_platform_abort()
         return
     if self_id != 0:
-        if load_i32(global_addr("pcc_tls_thread_parked_py"), 0) != 0:
-            store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 0)
+        if _state_parked() != 0:
+            _state_set_parked(0)
             parked = _world_i64(global_addr("pcc_parked_thread_count_py"))
             if parked > 0:
                 _world_store_i64(
@@ -1079,6 +1164,10 @@ def pcc_thread_unregister_current() -> None:
                 )
             _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), 0)
         _tls_store_i64(global_addr("pcc_tls_thread_id_py"), 0)
+        state_slot = global_addr("pcc_tls_thread_state_py")
+        unregistered: int = load_i64(state_slot, 0)
+        if (unregistered & 562949953421312) != 0:
+            store_i64(state_slot, 0, unregistered - 562949953421312)
         _thread_record_unlink()
         live = _world_i64(global_addr("pcc_live_thread_count_py"))
         if live > 0:
