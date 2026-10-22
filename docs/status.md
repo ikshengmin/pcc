@@ -7,6 +7,94 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## P0 packages: what landed, measurements, method operands (2026-10-22, Claude)
+
+Source: `shenming/master` 92c9daf56. Package state against
+`docs/plans/p0-threaded-concurrent-gc-runtime.md`, read from the code:
+
+- 1 (threaded runtime only): done (`tests/test_threaded_only_runtime.py`).
+- 2 (lock-free rooting): partial. GC0/1/2 foreign leases return the no-op
+  token; pin/unpin are still calls, and each one also adds to the shared
+  `pcc_gc_metric_pin` counter atomically.
+- 3 (stack walks for every thread): the walk covers every registered
+  thread (`pcc_thread_collect_stopped_frames`), but compiled code still
+  calls `pcc_gc_frame_{enter,leave}{,_lifo}_mapped` for every frame; on
+  GC1..GC4 each call asks `pcc_gc_frame_slots_walked`, a thread-local
+  lookup (a `_tlv_get_addr` call on Darwin).
+- 4 (protocol-free compiled code): not done; frame, lease, pin and
+  `store_root` calls remain.
+- 5 (biased reference counts): not started.
+- 6 (collector threads): GC1 and GC2 only.
+- 7 (measurement): landed in 5c1386b4a. Programs in
+  `tests/benchmarks/threading/programs`; `scripts/run_threading_benchmarks.py`
+  records a time only for a run whose result fields equal CPython's;
+  `tests/benchmarks/threading/test_threading_benchmark_programs.py` checks
+  every program at check sizes on all five collectors.
+
+Baseline at 22e184a61 (Darwin arm64, default sizes, median of 3 runs, the
+program's own seconds): st_fib CPython 0.054, GC0 0.284, GC4 1.012;
+st_alloc CPython 0.387, GC0 3.27, GC4 39.3; st_objects CPython 0.617, GC0
+26.3. The run was stopped there to profile; the threaded programs and the
+other collectors are not measured yet. Repro:
+`uv run python scripts/run_threading_benchmarks.py --out /tmp/t.jsonl --backends 0,4 --threads 1,4 --repeats 3`.
+
+Method operands (4a49cb029). A method call whose result an expression
+consumes as an object (`s += v.dot(acc) % 7`) took the runtime-bound route:
+getattr built a bound method (signature tuple, captured defaults,
+fourteen scheduler-root handles) and `py_obj_call_slots` called it. In
+st_objects that was 39% of GC0 time in method binding and 23% in the
+generic call. A known class's method on an instance receiver now calls
+directly and publishes into the operand slot at the return instruction.
+st_objects: GC0 26.3 s -> 6.4 s (CPython 0.61 s); at 600,000 iterations GC4
+35.5 s -> 6.4 s. Direct dispatch also ignored a method rebound in another
+function (`A.f = g` in main, `a.f()` in g); a method name the module
+assigns or deletes anywhere is now looked up at run time everywhere. Tests:
+`tests/python/test_method_operand_direct_calls.py`,
+`tests/python/test_class_method_rebinding.py`.
+
+C-API threads (25c2540cb): `PyGILState_Ensure`/`Release` attach and detach
+a raw thread, `PyEval_SaveThread`/`RestoreThread` put a thread in the
+blocking state, as CPython does. Test: `tests/python/test_capi_thread_attach.py`.
+
+Single-mutator mode (graph lock elided and plain GC0 counts until a second
+thread exists) measured 10.9k -> 13.2k req/s on the gateway C100 benchmark
+but was not committed: the maintainer's 2026-10-21 direction is no
+single-thread bridge; packages 4 and 5 are the route. Its patch is in the
+session scratchpad only.
+
+Gateway C100 (GC0, native 10.9k req/s against asyncio 86k on one thread):
+graph-lock protocol 12.5% of samples, `_tlv_get_addr` 7.2%, atomic
+incref/decref about 11.5%, frame enter/leave with slot zeroing 8.3%,
+`store_root`/store plans/`load_ptr` about 7.5%, pins and leases 3.4%.
+
+Open, in the order they are being taken:
+
+- Receivers of unknown class in operands (`o.m() + 1`) still bind and call
+  through `py_obj_call_slots`. The non-operand path `_emit_loaded_method_call`
+  avoids binding but holds the callable and receiver as raw values across
+  argument evaluation, which no moving collector updates (the precise
+  stack-map planner follows registered slots only); it needs pins or slots
+  before the operand path can reuse it.
+- `import mod; mod.f()` is a live module lookup plus `py_obj_call_slots` on
+  every call; `from mod import f` calls directly.
+- GC4 st_alloc is 12x GC0; not profiled yet.
+- Darwin thread-locals: each access calls the descriptor thunk. On macOS
+  26.5 the descriptor holds a 32-bit key at +8 and a 32-bit offset at +12
+  (older dyld: 64-bit fields at +8 and +16), so compiled code cannot inline
+  dyld's layout. Candidate: one pthread-key thread block read through
+  `tpidrro_el0` after a startup self-check, as Go does on darwin/arm64.
+- Failing on 92c9daf56's parent as well, proposed as separate sessions:
+  `test_virtual_thread_park_effect::test_cross_module_may_park_uses_generator_abi_and_resumes`
+  (prints None, CPython 42); `test_exception_constructor_owned_result`,
+  `test_generator_operand_root_groups`, `test_super_call_result_roots`
+  (`PCC_WITH_THREADS=0` case), `test_virtual_thread_spawn_slot_ownership`,
+  `test_virtual_thread_lowering_ownership`, `test_gc_update_referents`,
+  `test_method_dyn_parameter_abi`, and `test_pcc_native_extension_loader`
+  (its `PCC_SELF_LINK=cc` links lack `_pcc_precise_stackmap_table`).
+- The C probes of the GC substrate tests still compile with the host `cc`
+  (test harness only, `tests/python/_gc_substrate_common.py`); pcc's own C
+  frontend could build them.
+
 ## P0 threaded runtime: threading locks and virtual-thread locks (2026-10-22, Claude)
 
 Plan: `docs/plans/p0-threaded-concurrent-gc-runtime.md`. This change makes
