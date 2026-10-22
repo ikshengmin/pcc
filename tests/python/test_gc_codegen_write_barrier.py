@@ -78,8 +78,22 @@ def test_tls_exception_accessors_heal_forwarded_owner_reference():
         "py_decref(cur)",
     ):
         assert needle in helper
-    assert py_src.count("cur = _resolve_current_exception()") == 2
-    assert "return _resolve_current_exception()" in py_src
+
+    def body(name):
+        rest = py_src.split("\ndef " + name + "(", 1)[1]
+        return rest[:min(i for i in (rest.find("\ndef "), rest.find("\n@")) if i >= 0)]
+
+    # Every accessor that hands out or consumes the pending exception heals
+    # it through the helper; py_err_occurred only tests it for NULL.
+    for name, call in (
+        ("py_current_exception", "return _resolve_current_exception()"),
+        ("py_clear_exception", "cur = _resolve_current_exception()"),
+        ("_take_pending_exception", "current = _resolve_current_exception()"),
+        ("py_raise_rooted", "current = _resolve_current_exception()"),
+    ):
+        assert call in body(name), name
+    assert py_src.count("py_tls_exc_get()") == 2
+    assert "cur = py_tls_exc_get()" in body("py_err_occurred")
 
     py_traceback = _read(RUNTIME_PY / "py_exc_traceback.py")
     assert py_traceback.count("saved_exc = py_current_exception()") == 2
@@ -88,7 +102,9 @@ def test_tls_exception_accessors_heal_forwarded_owner_reference():
 def test_pcc_python_ports_mirror_gc_store_ptr_paths():
     expectations = {
         RUNTIME_PY / "py_list.py": [
-            "store_plan, lst, ptr_add(items, length * 8), item",
+            # append commits into the slot past the current length
+            "slot = ptr_add(items, length * 8)",
+            "store_plan, lst, slot, item",
             "store_plan, lst, ptr_add(items, idx * 8), item",
             "store_plans, lst, ptr_add(items, i * 8), right",
             "ptr_add(store_plans, 128), lst, ptr_add(items, j * 8), left",
@@ -290,8 +306,9 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
     assert 'extern("pcc_gc_store_ptr"' in py_src
 
     # Template sibling (append) idiom in the port.
-    assert "store_ptr(items, length * 8, null())" in py_src
-    assert "store_plan, lst, ptr_add(items, length * 8), item" in py_src
+    assert "slot = ptr_add(items, length * 8)" in py_src
+    assert "store_ptr(slot, 0, null())" in py_src
+    assert "store_plan, lst, slot, item" in py_src
 
     py_extend = py_src.split("def py_list_extend(a, b) -> None:", 1)[1]
     py_extend = py_extend.split("def py_list_insert", 1)[0]
@@ -303,6 +320,15 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
         "py_list.py extend must locked-plan-store in both moving paths"
     )
     assert py_extend.count("pcc_gc_store_ptr_plan_finish(store_plan)") == 2
+    # The GC0 fast paths (list and tuple source) keep the same idiom through
+    # the unlocked barrier store.
+    assert py_extend.count(
+        "store_ptr(fast_a_items, (fast_la + fast_i) * 8, null())"
+    ) == 2
+    assert py_extend.count(
+        "pcc_gc_store_ptr(\n                    fast_grown,\n"
+        "                    ptr_add(fast_a_items, (fast_la + fast_i) * 8),"
+    ) == 2
     assert "store_ptr(a_items, (la + i) * 8, v)" not in py_extend, (
         "py_list.py extend still has the raw, unbarriered element store"
     )
@@ -457,6 +483,11 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     )[0]
     assert "pcc_py_gc_minor_graph_lock" not in strict_get_fast
     assert "_prepare_moving_root" not in strict_get_fast
+    # Other collectors read through the shared rooted transaction.
+    assert "return _list_get_owned_rooted(lst, i, 0)" in strict_get
+    strict_get = strict_src.split(
+        "def _list_get_owned_rooted(lst, i: int, raising: int):", 1
+    )[1].split("\ndef ", 1)[0]
     strict_get_lock = strict_get.index("pcc_py_gc_minor_graph_lock()")
     strict_get_load = strict_get.index("pcc_gc_load_ptr(", strict_get_lock)
     strict_get_prepare = strict_get.index(
@@ -521,7 +552,6 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     assert "value = py_list_get(source, i)" in strict_snapshot
     assert "py_list_append(out, value)" in strict_snapshot
     for fn, next_export in (
-        ("py_list_concat", "py_list_copy"),
         ("py_list_copy", "py_list_repeat"),
         ("py_list_repeat", "py_list_contains"),
     ):
@@ -529,6 +559,20 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
             f'@c_abi_export("{next_export}")', 1
         )[0]
         assert "_append_snapshot_items(" in body
+    # concat fills a rooted result from both rooted operands, one item at a
+    # time through the same get-then-append pair.
+    strict_concat = strict_src.split("def py_list_concat(", 1)[1].split(
+        '@c_abi_export("py_list_copy")', 1
+    )[0]
+    assert "success: int = _list_concat_fill(slots)" in strict_concat
+    strict_fill = strict_src.split("def _list_concat_fill(slots) -> int:", 1)[1].split(
+        "\ndef ", 1
+    )[0]
+    assert strict_fill.index(
+        "py_list_get(load_ptr(source_slot, 0), source_index)"
+    ) < strict_fill.index(
+        "py_list_append(load_ptr(result_slot, 0), load_ptr(item_slot, 0))"
+    )
 
 
 def test_list_equality_callbacks_run_unlocked_and_remove_reloads_current_index():
