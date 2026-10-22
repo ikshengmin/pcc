@@ -132,6 +132,9 @@ class DefinitionAbort(Retirement):
         self.pending = 0
 
     def atomic(self, operation, pointer, offset, value, order):
+        if operation == 'or':
+            # The namespace's terminal-ownership publication (Retirement).
+            return super().atomic(operation, pointer, offset, value, order)
         assert self.locked and (operation, pointer, offset, value, order) == ('add', 8300, 0, 1, 'release')
         old = self.words[pointer]
         self.words[pointer] += 1
@@ -344,17 +347,22 @@ def test_original_failure_program_preserves_reference_and_ir_root_contract():
     body = re.search(r'^define [^\n]*@user_class_namespace_construct\([^\n]*\).*?^}', text, re.M | re.S).group(0)
     blocks = dict(re.findall(r'^([\w.$]+):\n(.*?)(?=^[\w.$]+:|^})', body, re.M | re.S))
     aliases = pointer_bitcast_aliases(body)
-    pending, visited, returns, aborts = [('entry', ())], set(), 0, 0
+    pending, visited, returns, aborts = [('entry', (), frozenset())], set(), 0, 0
     while pending:
         state = pending.pop()
         if state in visited:
             continue
         visited.add(state)
-        name, incoming = state
-        stack = list(incoming)
+        name, incoming, scoped = state
+        stack, live = list(incoming), set(scoped)
         for line in blocks[name].splitlines():
-            entered = re.search(r'@pcc_gc_frame_enter_lifo\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
-            left = re.search(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.$]+)\)', line)
+            # LIFO frames enter and leave through the plain or the mapped entry
+            # and nest; function-scoped frames (pcc_gc_frame_enter_mapped) are
+            # a set, entered at function entry and left at its exits.
+            entered = re.search(r'@pcc_gc_frame_enter_lifo(?:_mapped)?\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
+            left = re.search(r'@pcc_gc_frame_leave_lifo(?:_mapped)?\(ptr (%[\w.$]+)\)', line)
+            opened = re.search(r'@pcc_gc_frame_enter_mapped\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
+            closed = re.search(r'@pcc_gc_frame_leave_mapped\(ptr (%[\w.$]+)\)', line)
             if entered:
                 root = canonical_pointer(entered[1], aliases)
                 assert root not in stack
@@ -362,14 +370,21 @@ def test_original_failure_program_preserves_reference_and_ir_root_contract():
             if left:
                 root = canonical_pointer(left[1], aliases)
                 assert stack and stack.pop() == root
-            if '@py_class_abort_definition_slots(' in line:
+            if opened:
+                live.add(canonical_pointer(opened[1], aliases))
+            if closed:
+                live.discard(canonical_pointer(closed[1], aliases))
+            abort = re.search(r'@py_class_abort_definition_slots\(ptr (%[\w.$]+)\)', line)
+            if abort:
                 # The class remains rooted while namespace finalizers run.
-                assert stack and 'class.body' in stack[-1]
+                root = canonical_pointer(abort[1], aliases)
+                assert 'class.body' in root and (root in stack or root in live)
                 aborts += 1
             if line.strip().startswith('br '):
-                pending.extend((target, tuple(stack)) for target in re.findall(r'label %([\w.$]+)', line))
+                pending.extend((target, tuple(stack), frozenset(live))
+                               for target in re.findall(r'label %([\w.$]+)', line))
             if line.strip().startswith('ret '):
-                assert not stack
+                assert not stack and not live
                 returns += 1
     assert returns and aborts
 

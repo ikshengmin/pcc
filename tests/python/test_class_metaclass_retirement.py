@@ -12,12 +12,19 @@ from pcc.runtime.py import py_abi_constants as abi
 ROOT = Path(__file__).resolve().parents[2]
 
 
+# Module-level layout sizes the loaded bodies read.
+LAYOUT_CONSTANTS = ('_CLASS_METACLASS_STORE_PLAN_BYTES', 'GC_FREE_WATCH_BYTES')
+
+
 def load_functions(path, names, environment):
     nodes = []
     for node in ast.parse(path.read_text()).body:
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.target.id == '_CLASS_METACLASS_STORE_PLAN_BYTES':
+            if node.target.id in LAYOUT_CONSTANTS:
                 nodes.append(node)
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id in LAYOUT_CONSTANTS):
+            nodes.append(node)
         if isinstance(node, ast.FunctionDef) and node.name in names:
             node.decorator_list = []
             nodes.append(node)
@@ -49,7 +56,8 @@ class Retirement:
             ptr_add=lambda p,n: p+n, global_addr=self.globals.__getitem__,
             load_ptr=self.load, load_i32=self.load, load_i64=self.load,
             store_ptr=self.store, store_i32=self.store, store_i64=self.store,
-            stack_alloc=lambda n: 10000 if n == 128 else pytest.fail('unexpected layout'),
+            stack_alloc=self.allocate,
+            atomic_rmw_i32=self.atomic,
             memset=self.zero, pcc_py_gc_minor_graph_lock=self.lock,
             pcc_py_gc_minor_graph_unlock=self.unlock,
             pcc_gc_note_store=self.note_store,
@@ -76,6 +84,25 @@ class Retirement:
         ), env)
         load_functions(ROOT / 'pcc/runtime/py/freestanding_class_namespace.py',
                        ('pcc_class_retire_metaclass',), env)
+
+    def allocate(self, size):
+        # The 128-byte store plan, then the free-watch record of a final
+        # decref (_py_decref_finish); nothing else is stack-allocated.
+        if size == 128:
+            return 10000
+        if size == self.env['GC_FREE_WATCH_BYTES']:
+            return 11000
+        pytest.fail('unexpected layout')
+
+    def atomic(self, operation, pointer, offset, value, order):
+        # The metaclass's last decref publishes terminal ownership under the
+        # lock (_py_decref_prepare); unlock and deallocate check the flag.
+        assert self.locked and (operation, pointer, offset, value, order) == (
+            'or', self.meta, abi.PYOBJECTHEADER_FLAGS_OFFSET, 524288, 'release',
+        )
+        old = self.words.get(pointer + offset, 0)
+        self.words[pointer + offset] = old | value
+        return old
 
     def load(self, base, offset):
         assert not (self.retired_address is not None

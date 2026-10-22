@@ -148,10 +148,22 @@ def test_complete_and_cursor_walkers_agree_on_counted_metaclass(limit):
     assert all(role == 1 for slot, role in full if slot == memory.slot)
 
 
-def test_class_immortality_is_still_explicitly_preserved():
+def test_program_classes_are_collectable_and_runtime_global_classes_immortal():
+    # A class a program creates is a heap type: py_class_new tracks it and
+    # never makes it immortal (tests/python/test_native_class_collection.py
+    # runs the collection). A class the runtime keeps in a raw global comes
+    # from py_class_new_builtin, immortal and untracked as a static type.
     tree = ast.parse(CLASS_SOURCE.read_text())
-    constructor = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'py_class_new')
-    assert any(isinstance(node, ast.Name) and node.id == 'PY_FLAG_IMMORTAL' for node in ast.walk(constructor))
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+    def called(function):
+        return {node.func.id for node in ast.walk(function)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+
+    constructor = functions['py_class_new']
+    assert not any(isinstance(node, ast.Name) and node.id == 'PY_FLAG_IMMORTAL' for node in ast.walk(constructor))
+    assert 'py_gc_track' in called(constructor)
+    assert {'py_class_new', 'py_gc_untrack', 'pcc_gc_immortalize'} <= called(functions['py_class_new_builtin'])
 
 
 def test_class_retirement_keeps_relation_owned_across_cache_safepoint():
