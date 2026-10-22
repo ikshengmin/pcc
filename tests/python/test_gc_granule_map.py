@@ -542,10 +542,14 @@ def test_granule_grow_preserves_all_sixteen_keys_per_slab(
         from pcc.unsafe import malloc, null, ptr_add, ptr_diff
 
         gc_backend = extern("pcc_gc_backend", (), c_int64)
-        granule_span = extern("pcc_gc_granule_span", (c_ptr,), c_rawptr)
-        kind = extern("pcc_gc_granule_kind", (c_ptr,), c_int64)
+        # These take addresses. aligned_4k returns its address as an
+        # untyped value and a list keeps it untyped, and only a c_rawptr
+        # parameter turns such a value back into the address; a c_ptr
+        # parameter passes it on as the int object it is.
+        granule_span = extern("pcc_gc_granule_span", (c_rawptr,), c_rawptr)
+        kind = extern("pcc_gc_granule_kind", (c_rawptr,), c_int64)
         reg_slab = extern(
-            "pcc_gc_granule_register_slab", (c_ptr, c_int64, c_int64), c_int64
+            "pcc_gc_granule_register_slab", (c_rawptr, c_int64, c_int64), c_int64
         )
 
         def aligned_4k(p):
