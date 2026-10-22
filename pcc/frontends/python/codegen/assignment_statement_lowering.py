@@ -159,6 +159,13 @@ def _assign_is_dyn_type(ty) -> bool:
     return isinstance(ty, DynType) or _assign_type_name(ty) == "dyn"
 
 
+def _assign_unpack_needs_unbox(ty) -> bool:
+    # Container elements already own the exact Python integer. Preserve that
+    # object until the destination requests an explicit machine projection.
+    ordinary_int = isinstance(ty, IntType) and ty.name == "int"
+    return not _assign_is_dyn_type(ty) and not ordinary_int
+
+
 def _assign_is_list_type(ty) -> bool:
     return isinstance(ty, ListType) or (
         _assign_type_name(ty) == "list" and _assign_has_attr(ty, "elem")
@@ -1736,8 +1743,7 @@ class AssignmentStatementLoweringMixin:
                 # checked machine conversion is required; unboxing here
                 # first loses the bignum before an object slot can keep it.
                 native_val = elem_obj
-                ordinary_int = isinstance(elem_ty, IntType) and elem_ty.name == "int"
-                if not _assign_is_dyn_type(elem_ty) and not ordinary_int:
+                if _assign_unpack_needs_unbox(elem_ty):
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,
@@ -1823,7 +1829,7 @@ class AssignmentStatementLoweringMixin:
                     name=self._fresh(f"unpack.set.{i}"),
                 )
                 native_val = elem_obj
-                if not _assign_is_dyn_type(elem_ty):
+                if _assign_unpack_needs_unbox(elem_ty):
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,
@@ -1880,7 +1886,7 @@ class AssignmentStatementLoweringMixin:
                         name=self._fresh(f"unpack.{i}"),
                     )
                 native_val = elem_obj
-                if not _assign_is_dyn_type(elem_ty):
+                if _assign_unpack_needs_unbox(elem_ty):
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,
@@ -1977,7 +1983,7 @@ class AssignmentStatementLoweringMixin:
                 f"unpack.star.pre.{i}",
             )
             native_val = elem
-            if not isinstance(elem_ty, DynType):
+            if _assign_unpack_needs_unbox(elem_ty):
                 native_val = marshal.marshal_from_object(
                     self.builder,
                     self.module,
@@ -2082,7 +2088,7 @@ class AssignmentStatementLoweringMixin:
             )
             elem = load_elem(src_idx, f"unpack.star.post.{j}")
             native_val = elem
-            if not isinstance(elem_ty, DynType):
+            if _assign_unpack_needs_unbox(elem_ty):
                 native_val = marshal.marshal_from_object(
                     self.builder,
                     self.module,
