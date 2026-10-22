@@ -697,16 +697,28 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
             );
             extern PyObject *py_instance_new(struct PyClassObject *);
 
+            /* An update from an exact dict reuses the source's cached
+             * hashes, as CPython's dict merge does, so its callbacks are the
+             * destination's equality checks: both keys hash to 7, and
+             * inserting the second compares it with the first. */
             static PyObject *probe_hash(PyObject *self) {
                 (void)self;
-                if (armed == 1 && update_collects == 0) {
-                    (void)pcc_gc_collect(0);
-                    update_collects++;
-                } else if (armed == 2 && delete_collects == 0) {
+                if (armed == 2 && delete_collects == 0) {
                     (void)pcc_gc_collect(0);
                     delete_collects++;
                 }
                 return py_int_from_i64(7);
+            }
+
+            static PyObject *probe_eq(PyObject *self, PyObject *other) {
+                (void)self;
+                (void)other;
+                if (armed == 1 && update_collects == 0) {
+                    (void)pcc_gc_collect(0);
+                    update_collects++;
+                }
+                Py_INCREF(Py_False);
+                return Py_False;
             }
 
             /* The value removed by the delete.  Exactly one finalization. */
@@ -770,6 +782,9 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
                     hash_class, "__hash__", (PyObject *)(uintptr_t)probe_hash
                 );
                 py_class_add_method(
+                    hash_class, "__eq__", (PyObject *)(uintptr_t)probe_eq
+                );
+                py_class_add_method(
                     victim_class, "__del__",
                     (PyObject *)(uintptr_t)probe_victim_del
                 );
@@ -795,7 +810,7 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
                 py_decref(link);
                 py_decref(held);
 
-                /* ---- update: the source keys collect mid-walk ---- */
+                /* ---- update: a destination equality check collects mid-walk ---- */
                 dst_root = py_dict_new();
                 src_root = py_dict_new();
                 if (dst_root == NULL || src_root == NULL) return 5;
@@ -1300,9 +1315,13 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
     ``py_dict_update`` cached the source ``PyDictObject`` and ``entries_used``
     and re-read ``s->entries`` on every iteration, but each ``py_dict_set``
     runs the destination's user hash/equality.  With two or more source entries
-    a callback that relocates the source leaves the next iteration walking a
+    a callback that relocated the source left the next iteration walking a
     stale owner/table.  ``py_set_update`` already snapshots; this is the same
     contract for dict.
+
+    The update now holds an address lease on its source while destination
+    callbacks run, so GC4 must refuse to relocate it; a callback that shrinks
+    the source must still not make the update read a stale table.
     """
     executable = _compile_runtime_probe(
         tmp_path,
@@ -1320,12 +1339,15 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
 
             static PyObject *src_root;
             static int64_t relocations;
+            static int64_t source_pinned;
             static int64_t eq_calls;
             static int64_t armed;
+            static int64_t fired;
             static PyObject *mutate_key;
 
             extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
             extern int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void);
+            extern int64_t pcc_gc_object_is_address_pinned(PyObject *obj);
 
             static int relocate(PyObject **slot) {
                 PyObject *obj = pcc_gc_load_ptr(NULL, slot);
@@ -1343,7 +1365,9 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
                 return 1;
             }
 
-            /* Runs while dict.update is walking the source: relocate it. */
+            /* Runs while dict.update is walking the source: try to relocate
+             * it, then shrink it.  Fires once: the delete below compares keys
+             * through this callback again. */
             static PyObject *probe_eq(PyObject *self, PyObject *other, int op) {
                 (void)self;
                 (void)other;
@@ -1355,7 +1379,11 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
                 /* Only relocate during the update itself.  Relocating while
                  * the source is still being built would move an object that
                  * is not rooted yet and strand the global pointer. */
-                if (armed && relocations == 0) {
+                if (armed && fired == 0) {
+                    fired = 1;
+                    source_pinned = pcc_gc_object_is_address_pinned(
+                        pcc_gc_load_ptr(NULL, &src_root)
+                    );
                     if (relocate(&src_root)) relocations++;
                     /* Also shrink the source: py_dict_update cached
                      * entries_used before the loop, so a delete here makes the
@@ -1399,8 +1427,8 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
                 if (seed == NULL) return 5;
                 py_dict_set(dst, seed, py_int_from_i64(1));
 
-                /* Four source entries: the relocation happens on the first and
-                 * the rest must still be read from the reloaded source. */
+                /* Four source entries: the callback runs on the first and the
+                 * rest must still be read from the update's snapshot. */
                 PyObject *k[4];
                 for (int i = 0; i < 4; i++) {
                     k[i] = new_key();
@@ -1425,9 +1453,10 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
                     printf("update raised\n");
                     return 9;
                 }
-                if (relocations != 1) {
-                    printf("source was not relocated: relocations=%lld "
-                           "eq_calls=%lld\n",
+                if (fired != 1 || source_pinned != 1 || relocations != 0) {
+                    printf("leased source: fired=%lld pinned=%lld "
+                           "relocations=%lld eq_calls=%lld\n",
+                           (long long)fired, (long long)source_pinned,
                            (long long)relocations, (long long)eq_calls);
                     return 10;
                 }

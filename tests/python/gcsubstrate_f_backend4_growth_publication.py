@@ -496,11 +496,16 @@ def test_backend4_suspended_execution_constructor_publication(
 def test_strict_decref_does_not_accept_unmanaged_cext_tags_by_range_alone():
 
     py_src = PY_OBJ_PORT.read_text(encoding="utf-8")
-    assert "pcc_capi_is_cext_type_tag = extern(" not in py_src
+    # The C-extension registry decides; a tag in the C-extension range is
+    # not accepted on its range alone.
+    assert "pcc_capi_is_cext_type_tag = extern(" in py_src
     py_prepare = py_src.split("def _py_decref_prepare(o, prepared) -> None:", 1)[
         1
     ].split("def _py_decref_finish", 1)[0]
-    invalid_range = py_prepare.index("tag_dbg > 500")
+    invalid_range = py_prepare.index(
+        "or (tag_dbg >= (PY_TYPE_CEXT_TAG_BASE) "
+        "and pcc_capi_is_cext_type_tag(tag_dbg) == 0)"
+    )
     invalid_return = py_prepare.index("return", invalid_range)
     assert invalid_range < invalid_return
 
@@ -525,6 +530,10 @@ def test_store_ptr_shades_white_child_during_real_incremental_cycle(
             int main(void) {
                 static int32_t frame_map[ROOT_COUNT + 1] = {ROOT_COUNT};
                 static PyObject *roots[ROOT_COUNT];
+                /* Only the explicit step below advances the cycle: with
+                 * collection disabled the GC1 collector thread stays out,
+                 * so it cannot blacken the shaded child before the check. */
+                py_gc_disable();
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_INCREMENTAL_TRICOLOR
                     ) != 0) {

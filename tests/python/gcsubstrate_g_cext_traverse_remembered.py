@@ -607,6 +607,10 @@ def test_final_cut_cext_traverse_runs_outside_graph_lock(
             int main(void) {
                 int32_t frame_map[19] = {18};
                 PyObject *roots[18] = {0};
+                /* Only the explicit steps below advance the cycle: with
+                 * collection disabled the GC1 collector thread stays out and
+                 * cannot take the final cut before the callback is armed. */
+                py_gc_disable();
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_INCREMENTAL_TRICOLOR
                     ) != 0) return 2;
@@ -1251,7 +1255,9 @@ def test_colored_remembered_root_drain_counts_maintenance_work(
                     return 7;
                 }
 
-                int64_t first_work = pcc_gc_step(10);
+                /* A step drains eight-entry batches until its budget runs
+                 * out; a budget of one batch leaves the two oldest. */
+                int64_t first_work = pcc_gc_step(8);
                 if (first_work != 8) {
                     fprintf(
                         stderr,
@@ -1328,10 +1334,12 @@ def test_colored_remembered_root_drain_defers_blocking_tail_and_medium_flush():
     )
     strict_scheduler = PY_GC_GENERATIONAL_SCHEDULER.read_text(encoding="utf-8")
     assert "__pcc_freestanding__ = True" in strict_scheduler
-    strict_body = strict_scheduler.split(
-        '@c_abi_export("pcc_gc_backend4_step_remembered_roots")', 1
+    # One batch holds the graph lock for its entries only; its cleanup runs
+    # unlocked. The step drains batches, then promotion work, then polls.
+    strict_batch = strict_scheduler.split(
+        '@c_abi_export("pcc_gc_backend4_drain_remembered_batch")', 1
     )[1].split("\n@c_abi_export", 1)[0]
-    strict_locked = strict_body.split("pcc_py_gc_minor_graph_lock()", 1)[1].split(
+    strict_locked = strict_batch.split("pcc_py_gc_minor_graph_lock()", 1)[1].split(
         "pcc_py_gc_minor_graph_unlock()", 1
     )[0]
     assert 'global_addr("pcc_gc_backend4_store_buffer_medium_head")' in strict_locked
@@ -1343,12 +1351,17 @@ def test_colored_remembered_root_drain_defers_blocking_tail_and_medium_flush():
         "py_decref(",
     ):
         assert forbidden not in strict_locked
-    strict_tail = strict_body.split("pcc_py_gc_minor_graph_unlock()", 1)[1]
-    assert strict_tail.index("free(") < strict_tail.index("py_decref(")
-    assert strict_tail.index("py_decref(") < strict_tail.index(
+    strict_batch_tail = strict_batch.split("pcc_py_gc_minor_graph_unlock()", 1)[1]
+    assert strict_batch_tail.index("free(") < strict_batch_tail.index("py_decref(")
+    assert "pcc_thread_safepoint(" not in strict_batch
+    strict_body = strict_scheduler.split(
+        '@c_abi_export("pcc_gc_backend4_step_remembered_roots")', 1
+    )[1].split("\n@c_abi_export", 1)[0]
+    assert "pcc_py_gc_minor_graph_lock()" not in strict_body
+    assert strict_body.index("_backend4_drain_remembered_batch(") < strict_body.index(
         "pcc_gc_backend3_drain_promotion_worklist("
-    ) < strict_tail.index("pcc_thread_safepoint()")
-    assert "return local_drained + promotion_examined" in strict_tail
+    ) < strict_body.index("pcc_thread_safepoint()")
+    assert "return local_drained + promotion_examined" in strict_body
     strict_oldify_src = (
         RUNTIME_DIR / "py" / "freestanding_gc_generational_oldification.py"
     ).read_text(encoding="utf-8")
@@ -1360,12 +1373,21 @@ def test_colored_remembered_root_drain_defers_blocking_tail_and_medium_flush():
     ) < strict_oldify.index("malloc(")
     strict_dispatcher = PY_GC_BARRIER_DISPATCHER.read_text(encoding="utf-8")
     strict_step = strict_dispatcher.split('@c_abi_export("pcc_gc_step")', 1)[1]
+    explicit_guard = 'if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:'
+    explicit_step, background_step = strict_step.split(explicit_guard, 1)[1].split(
+        "\n        else:\n", 1
+    )
+    # An explicit collect drains pending entries before tracing.
+    assert explicit_step.index(
+        'global_addr("pcc_gc_backend4_store_buffer_entries_count")'
+    ) < explicit_step.index("pcc_gc_backend4_step_remembered_roots(")
+    # A background step ages generations only once the buffer is empty.
     assert (
-        strict_step.index("pcc_gc_backend4_step_remembered_roots(")
-        < strict_step.index(
+        background_step.index("pcc_gc_backend4_step_remembered_roots(")
+        < background_step.index(
             'global_addr("pcc_gc_backend4_store_buffer_entries_count")'
         )
-        < strict_step.index("pcc_gc_backend4_step_generation_aging(")
+        < background_step.index("pcc_gc_backend4_step_generation_aging(")
     )
 
 
