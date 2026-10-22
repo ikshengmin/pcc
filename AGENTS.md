@@ -77,6 +77,10 @@ These are required outcomes, not assertions that migration is complete. See
   pull/rebase/integration. Trust conflict-free peers' committed validation;
   check our changes and actual conflict resolutions without repeating their
   suites merely because upstream changed.
+- Commit order for collaboration (user, 2026-10-22: "优先提交，在测试，在修复
+  提交"): once a code change runs on its own repro and its new test, commit and
+  push it at once so other agents see it; run the focused suites after the
+  push; land each test fix or follow-up fix as its own commit and push.
 - Preserve other work. Re-read targets before narrow edits; no destructive
   restore/reset/revert/stash/clean or discarding branch switches without explicit
   user direction. Do not commit/push unless authorized in the current session.
