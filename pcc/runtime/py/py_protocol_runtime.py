@@ -1,8 +1,8 @@
 """User data-model protocol dispatch authored in pcc-Python.
 
-This owns the production ABI mirrored by ``src/py_protocol.c``: user dunder
+This owns the production ABI declared in ``py_internal.h``: user dunder
 dispatch, generic floor/in-place operators, and inherited dict-subclass
-storage/methods.  The C source remains a host-C oracle.
+storage/methods.
 """
 
 __pcc_runtime_port__ = True
@@ -27,7 +27,9 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_FUNC,
     PY_TYPE_INSTANCE,
     PY_TYPE_INT,
+    PY_TYPE_LIST,
     PY_TYPE_NONE,
+    PY_TYPE_SET,
     PY_TYPE_STR,
     PY_TYPE_TUPLE,
     PY_TYPE_USER_CLASS_START,
@@ -153,6 +155,21 @@ py_obj_sub = extern("py_obj_sub", (c_ptr, c_ptr), c_ptr)
 py_obj_mul = extern("py_obj_mul", (c_ptr, c_ptr), c_ptr)
 py_obj_truediv = extern("py_obj_truediv", (c_ptr, c_ptr), c_ptr)
 py_obj_mod = extern("py_obj_mod", (c_ptr, c_ptr), c_ptr)
+py_obj_or = extern("py_obj_or", (c_ptr, c_ptr), c_ptr)
+py_obj_and = extern("py_obj_and", (c_ptr, c_ptr), c_ptr)
+py_obj_xor = extern("py_obj_xor", (c_ptr, c_ptr), c_ptr)
+py_obj_lshift = extern("py_obj_lshift", (c_ptr, c_ptr), c_ptr)
+py_obj_rshift = extern("py_obj_rshift", (c_ptr, c_ptr), c_ptr)
+py_obj_pow = extern("py_obj_pow", (c_ptr, c_ptr), c_ptr)
+py_obj_set_slice = extern("py_obj_set_slice", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
+py_set_update = extern("py_set_update", (c_ptr, c_ptr), c_void)
+py_set_intersection_update = extern("py_set_intersection_update", (c_ptr, c_ptr), c_void)
+py_set_difference_update = extern("py_set_difference_update", (c_ptr, c_ptr), c_void)
+py_set_symmetric_difference_update = extern(
+    "py_set_symmetric_difference_update", (c_ptr, c_ptr), c_void
+)
+py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
 py_obj_issubclass = extern("py_obj_issubclass", (c_ptr, c_ptr), c_int64)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
@@ -1208,38 +1225,40 @@ def py_obj_divmod(a, b) -> c_ptr:
     return pcc_gc_take_pinned_slot(ptr_add(slots, 16), prior_result_pin)
 
 
-@c_abi_export("py_obj_inplace_op")
-def py_obj_inplace_op(a, b, op_code: int):
-    if (
-        ptr_is_null(a) == 0
-        and is_tagged_int(a) == 0
-        and op_code >= 0
-        and op_code < 6
-    ):
-        at: int = _type_of(a)
-        if pcc_capi_is_cext_type_tag(at) != 0:
-            result = pcc_capi_cext_inplace_number(a, b, op_code)
-            if ptr_is_null(result) != 0:
-                return null()
-            if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
-                return result
-            py_decref(result)
-        elif _is_user_instance(a) != 0:
-            name = cstr("__iadd__")
-            if op_code == 1:
-                name = cstr("__isub__")
-            elif op_code == 2:
-                name = cstr("__imul__")
-            elif op_code == 3:
-                name = cstr("__itruediv__")
-            elif op_code == 4:
-                name = cstr("__ifloordiv__")
-            elif op_code == 5:
-                name = cstr("__imod__")
-            selected = stack_alloc(8)
-            result = py_user_special_dispatch(a, name, b, null(), 1, 7, null(), selected)
-            if load_i64(selected, 0) != 0:
-                return result
+# In-place operator codes shared with codegen: 0 +, 1 -, 2 *, 3 /, 4 //,
+# 5 %, 6 |, 7 &, 8 ^, 9 <<, 10 >>, 11 **, 12 @.
+
+
+def _inplace_dunder(op_code: int):
+    if op_code == 1:
+        return cstr("__isub__")
+    if op_code == 2:
+        return cstr("__imul__")
+    if op_code == 3:
+        return cstr("__itruediv__")
+    if op_code == 4:
+        return cstr("__ifloordiv__")
+    if op_code == 5:
+        return cstr("__imod__")
+    if op_code == 6:
+        return cstr("__ior__")
+    if op_code == 7:
+        return cstr("__iand__")
+    if op_code == 8:
+        return cstr("__ixor__")
+    if op_code == 9:
+        return cstr("__ilshift__")
+    if op_code == 10:
+        return cstr("__irshift__")
+    if op_code == 11:
+        return cstr("__ipow__")
+    if op_code == 12:
+        return cstr("__imatmul__")
+    return cstr("__iadd__")
+
+
+def _binary_for_inplace(a, b, op_code: int):
+    """The binary operator an in-place operator falls back to."""
     if op_code == 0:
         return py_obj_add(a, b)
     if op_code == 1:
@@ -1252,8 +1271,135 @@ def py_obj_inplace_op(a, b, op_code: int):
         return py_obj_floordiv(a, b)
     if op_code == 5:
         return py_obj_mod(a, b)
+    if op_code == 6:
+        return py_obj_or(a, b)
+    if op_code == 7:
+        return py_obj_and(a, b)
+    if op_code == 8:
+        return py_obj_xor(a, b)
+    if op_code == 9:
+        return py_obj_lshift(a, b)
+    if op_code == 10:
+        return py_obj_rshift(a, b)
+    if op_code == 11:
+        return py_obj_pow(a, b)
+    if op_code == 12:
+        return py_user_matmul_dispatch(a, b)
     py_raise_owned(py_exc_new(3, cstr("unsupported in-place operand")))
     return null()
+
+
+def _same_object(a):
+    """NEW reference to ``a``, the result of an in-place mutation."""
+    py_incref(a)
+    return a
+
+
+def _sequence_inplace(a, b, op_code: int, handled):
+    """``list`` ``+=`` and ``*=``: CPython's sequence slots.
+
+    The right operand's reflected method runs first, as binary_op1 tries it
+    before PyNumber_InPlaceAdd/Multiply reach sq_inplace_concat/repeat.
+    (A native bytearray is replaced, not resized, by its mutators, so it
+    keeps the binary operator.)
+    """
+    if _is_user_instance(b) != 0:
+        reflected = cstr("__radd__") if op_code == 0 else cstr("__rmul__")
+        selected = stack_alloc(8)
+        result = py_user_special_dispatch(b, reflected, a, null(), 1, 7, null(), selected)
+        if load_i64(selected, 0) != 0:
+            store_i64(handled, 0, 1)
+            return result
+    if op_code == 0:
+        store_i64(handled, 0, 1)
+        py_list_extend(a, b)
+        if py_err_occurred() != 0:
+            return null()
+        return _same_object(a)
+    # *= repeats in place: build the repetition with the binary operator's
+    # checks and replace the sequence's contents with it.
+    store_i64(handled, 0, 1)
+    repeated = py_obj_mul(a, b)
+    if ptr_is_null(repeated) != 0:
+        return null()
+    none = global_load_ptr("py_None")
+    status: int = py_obj_set_slice(a, none, none, none, repeated)
+    py_decref(repeated)
+    if status < 0 or py_err_occurred() != 0:
+        return null()
+    return _same_object(a)
+
+
+def _builtin_inplace(a, b, op_code: int, handled):
+    """In-place slots of builtin mutable types; ``handled`` set when applied."""
+    at: int = _type_of(a)
+    if at == PY_TYPE_LIST and (op_code == 0 or op_code == 2):
+        return _sequence_inplace(a, b, op_code, handled)
+    if at == PY_TYPE_SET and (op_code == 1 or op_code == 6 or op_code == 7 or op_code == 8):
+        # A set takes only another set; anything else is NotImplemented and
+        # reaches the binary operator, which raises or reflects.
+        if ptr_is_null(b) != 0 or is_tagged_int(b) != 0 or _type_of(b) != PY_TYPE_SET:
+            return null()
+        store_i64(handled, 0, 1)
+        if op_code == 6:
+            py_set_update(a, b)
+        elif op_code == 7:
+            py_set_intersection_update(a, b)
+        elif op_code == 1:
+            py_set_difference_update(a, b)
+        else:
+            py_set_symmetric_difference_update(a, b)
+        if py_err_occurred() != 0:
+            return null()
+        return _same_object(a)
+    if at == PY_TYPE_DICT and op_code == 6:
+        # dict.__ior__ is update(): any mapping or iterable of pairs.
+        store_i64(handled, 0, 1)
+        py_dict_update(a, b)
+        if py_err_occurred() != 0:
+            return null()
+        return _same_object(a)
+    return null()
+
+
+@c_abi_export("py_obj_inplace_op")
+def py_obj_inplace_op(a, b, op_code: int):
+    """``a <op>= b`` as PyNumber_InPlace*: the left operand's in-place
+    method or slot first, then the binary operator; NEW reference."""
+    if op_code < 0 or op_code > 12:
+        py_raise_owned(py_exc_new(3, cstr("unsupported in-place operand")))
+        return null()
+    if ptr_is_null(a) == 0 and is_tagged_int(a) == 0:
+        at: int = _type_of(a)
+        if pcc_capi_is_cext_type_tag(at) != 0:
+            if op_code < 6:
+                result = pcc_capi_cext_inplace_number(a, b, op_code)
+                if ptr_is_null(result) != 0:
+                    return null()
+                if ptr_eq(result, global_load_ptr("py_NotImplemented")) == 0:
+                    return result
+                py_decref(result)
+        elif _is_user_instance(a) != 0:
+            selected = stack_alloc(8)
+            result = py_user_special_dispatch(a, _inplace_dunder(op_code), b, null(), 1, 7, null(), selected)
+            if load_i64(selected, 0) != 0:
+                return result
+            if op_code == 6 and _class_is_dict_subclass(a) != 0:
+                # An inherited dict.__ior__ updates the instance's storage.
+                backing = _dict_subclass_backing(a, 1)
+                if ptr_is_null(backing) != 0:
+                    return null()
+                py_dict_update(backing, b)
+                if py_err_occurred() != 0:
+                    return null()
+                return _same_object(a)
+        else:
+            handled = stack_alloc(8)
+            store_i64(handled, 0, 0)
+            result = _builtin_inplace(a, b, op_code, handled)
+            if load_i64(handled, 0) != 0:
+                return result
+    return _binary_for_inplace(a, b, op_code)
 
 
 @c_abi_export("py_user_setitem_dispatch")

@@ -54,6 +54,22 @@ from pcc.frontends.python.py_ast import assignment_storage_annotation
 _I1 = ir.IntType(1)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
+# py_obj_inplace_op's operator codes (PyNumber_InPlace* order).
+_INPLACE_OP_CODES = {
+    "+": 0,
+    "-": 1,
+    "*": 2,
+    "/": 3,
+    "//": 4,
+    "%": 5,
+    "|": 6,
+    "&": 7,
+    "^": 8,
+    "<<": 9,
+    ">>": 10,
+    "**": 11,
+    "@": 12,
+}
 
 
 def _assign_has_attr(obj, name: str) -> bool:
@@ -174,15 +190,15 @@ def _assign_list_elem(ty):
 
 def _emit_live_import_augassign(host, stmt, op):
     """Keep the loaded binding alive across RHS callbacks and replacement."""
-    code = {"+": 0, "-": 1, "*": 2, "/": 3, "//": 4, "%": 5}.get(op)
+    code = _INPLACE_OP_CODES.get(op)
     declared = host._module_globals[stmt.target.ident][1]
     set_update = (isinstance(declared, SetType)
                   and isinstance(stmt.value.ty, (SetType, DynType))
                   and op in ("|", "&", "-", "^"))
+    if (op == "**" and not isinstance(stmt.target.ty, (FloatType, ComplexType))
+            and not isinstance(stmt.value.ty, (FloatType, ComplexType))):
+        host._guard_integer_power_operand_provenance(stmt.target, stmt.value)
     if code is None and not set_update:
-        if (op == "**" and not isinstance(stmt.target.ty, (FloatType, ComplexType))
-                and not isinstance(stmt.value.ty, (FloatType, ComplexType))):
-            host._guard_integer_power_operand_provenance(stmt.target, stmt.value)
         combined = BinOp(span=stmt.span, ty=DynType(name="dyn"), op=op,
                          lhs=stmt.target, rhs=stmt.value)
         result = host._emit_slot_call_operand(combined, "import.augassign.result")
@@ -2099,17 +2115,11 @@ class AssignmentStatementLoweringMixin:
             rhs = self._emit_expr(stmt.value)
             # CPython augmented assignment tries type(a).__iop__ FIRST;
             # the plain binop only runs when __iop__ is missing or
-            # returns NotImplemented. Dyn pointer targets route through
-            # py_obj_inplace_op (instances dispatch __iadd__ etc.);
-            # everything else keeps the static binop path.
-            _inplace_code = {
-                "+": 0,
-                "-": 1,
-                "*": 2,
-                "/": 3,
-                "//": 4,
-                "%": 5,
-            }.get(op_bare)
+            # returns NotImplemented. Targets that can hold a mutable
+            # object route through py_obj_inplace_op (instances dispatch
+            # __iadd__ etc., lists extend, dicts and sets update in place);
+            # immutable scalars keep the static binop path.
+            _inplace_code = _INPLACE_OP_CODES.get(op_bare)
             if (
                 isinstance(declared_ty, SetType)
                 and isinstance(stmt.value.ty, (SetType, DynType))
@@ -2131,7 +2141,7 @@ class AssignmentStatementLoweringMixin:
                 self._gc_release_if_owned(rhs_obj, stmt.value)
             elif (
                 _inplace_code is not None
-                and isinstance(declared_ty, (DynType, ClassType, FuncType))
+                and isinstance(declared_ty, (DynType, ClassType, FuncType, ListType, DictType, SetType))
                 and isinstance(cur.type, ir.PointerType)
                 and cur not in getattr(self, "_cpy_values", ())
             ):
@@ -2268,14 +2278,7 @@ class AssignmentStatementLoweringMixin:
                 rhs,
                 stmt.value.ty,
             )
-            _ip_code = {
-                "+": 0,
-                "-": 1,
-                "*": 2,
-                "/": 3,
-                "//": 4,
-                "%": 5,
-            }.get(op_bare)
+            _ip_code = _INPLACE_OP_CODES.get(op_bare)
             if _ip_code is not None:
                 # CPython tries type(cur).__iop__ first (instances);
                 # plain values fall through to the binary dispatchers
@@ -2372,14 +2375,7 @@ class AssignmentStatementLoweringMixin:
                     rhs,
                     stmt.value.ty,
                 )
-                _ip_code = {
-                    "+": 0,
-                    "-": 1,
-                    "*": 2,
-                    "/": 3,
-                    "//": 4,
-                    "%": 5,
-                }.get(op_bare)
+                _ip_code = _INPLACE_OP_CODES.get(op_bare)
                 if _ip_code is not None:
                     result_obj = self.builder.call(
                         self.runtime["py_obj_inplace_op"],
@@ -2428,14 +2424,7 @@ class AssignmentStatementLoweringMixin:
                 rhs,
                 stmt.value.ty,
             )
-            _ip_code = {
-                "+": 0,
-                "-": 1,
-                "*": 2,
-                "/": 3,
-                "//": 4,
-                "%": 5,
-            }.get(op_bare)
+            _ip_code = _INPLACE_OP_CODES.get(op_bare)
             if _ip_code is not None:
                 # CPython tries type(cur).__iop__ first (instances);
                 # plain values fall through to the binary dispatchers
