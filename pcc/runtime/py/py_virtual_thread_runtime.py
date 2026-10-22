@@ -160,6 +160,10 @@ pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern(
+    "pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64
+)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -3055,7 +3059,28 @@ def _run_ready_step() -> int:
     ready = py_virtual_thread_poll_ready()
     if ptr_is_null(ready):
         return 0
-    continuation = pcc_gc_load_ptr(ready, ptr_add(ready, 16))
+    # The resume runs compiled code, whose application gates may relocate
+    # objects. This frame and _resume_generator_owned keep the thread and
+    # its continuation as raw pointers after the resume returns: reading the
+    # moved thread's old copy found it still RUNNING and completed it with
+    # None. A counted lease keeps each where it is until the step is done.
+    ready_cell = stack_alloc(8)
+    store_ptr(ready_cell, 0, ready)
+    ready_lease = pcc_gc_foreign_lease_acquire(ready_cell)
+    continuation_cell = stack_alloc(8)
+    store_ptr(continuation_cell, 0, pcc_gc_load_ptr(ready, ptr_add(ready, 16)))
+    continuation_lease = pcc_gc_foreign_lease_acquire(continuation_cell)
+    result = _run_ready_thread(ready, load_ptr(continuation_cell, 0))
+    if continuation_lease > 0:
+        pcc_gc_foreign_lease_release(continuation_cell, continuation_lease)
+    if ready_lease > 0:
+        pcc_gc_foreign_lease_release(ready_cell, ready_lease)
+    py_decref(ready)
+    return result
+
+
+def _run_ready_thread(ready, continuation) -> int:
+    """Run one ready thread; the caller holds and releases ``ready``."""
     continuation_kind: int = 0
     if ptr_is_null(continuation) == 0 and is_tagged_int(continuation) == 0:
         continuation_kind = load_i32(continuation, 8)
@@ -3086,18 +3111,14 @@ def _run_ready_step() -> int:
                 fail_result = py_virtual_thread_fail(ready, failure)
                 if fail_result == 0:
                     py_clear_exception()
-                py_decref(ready)
                 if fail_result == 0:
                     return 1
                 return -1
             if rc != 0:
-                py_decref(ready)
                 return -1
     if load_i64(ready, 32) == 2:
         if py_virtual_thread_complete(ready, global_load_ptr("py_None")) != 0:
-            py_decref(ready)
             return -1
-    py_decref(ready)
     return 1
 
 
