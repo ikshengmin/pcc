@@ -89,8 +89,12 @@ def test_user_sweep_preserves_leases_locks_protected_paths_and_installations(tmp
     installed.mkdir(parents=True)
     (installed / "pcc1").write_bytes(b"compiler")
     monkeypatch.setenv("PCC_COMPILER_CACHE_MAX_UNUSED_DAYS", "0")
+    from scripts.file_lock import exclusive_file_lock
+
     try:
-        report = retention.sweep_user_caches(home=tmp_path, protected_paths=[entries[2]])
+        # A builder is publishing: it holds the advisory lock on the file.
+        with exclusive_file_lock(lock):
+            report = retention.sweep_user_caches(home=tmp_path, protected_paths=[entries[2]])
         assert all(entry.is_dir() for entry in entries[:3])
         assert Path(lease).is_file()
         assert lock.is_file()
@@ -634,3 +638,23 @@ def test_frontend_publish_survives_retention_helper_failure(
     loaded = compile_cache.load_python_frontend_ir_cache(plan, ["demo"])
     assert loaded is not None
     assert loaded[0] == [("demo", ir_text)]
+
+
+def test_user_sweep_evicts_entries_whose_lock_file_nobody_holds(tmp_path, monkeypatch):
+    # tests/runtime_build_cache.py leaves KEY.lock behind after every build;
+    # a lock file that no process holds no longer protects its entry.
+    root = tmp_path / ".cache/pcc/test-artifacts/runtime-builds"
+    finished = root / "aaaaaaaaaaaaaaaaaaaaaaaa-pcc-py"
+    building = root / "bbbbbbbbbbbbbbbbbbbbbbbb-pcc-py"
+    for entry in (finished, building):
+        entry.mkdir(parents=True)
+        (entry / "libpy_runtime_pcc_py.a").write_bytes(b"archive")
+        Path(str(entry) + ".lock").write_text("")
+    monkeypatch.setenv("PCC_COMPILER_CACHE_MAX_UNUSED_DAYS", "0")
+    from scripts.file_lock import exclusive_file_lock
+
+    with exclusive_file_lock(Path(str(building) + ".lock")):
+        report = retention.sweep_user_caches(home=tmp_path)
+    assert not finished.exists()
+    assert building.is_dir()
+    assert report["removed"] == 1
