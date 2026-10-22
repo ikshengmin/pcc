@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+import textwrap
 
 
 def test_set_bindings_infer_first_class_set_type() -> None:
@@ -210,6 +212,63 @@ def test_dict_keys_view_union_with_set_is_set_operation(tmp_path) -> None:
 
     assert run.returncode == 0, run.stderr
     assert run.stdout == "True\nTrue\n"
+
+
+def test_dict_keys_set_operators_preserve_order_and_object_results(
+    tmp_path, python_program_compiler, pcc_runtime_archive,
+) -> None:
+    program = textwrap.dedent("""
+        events = []
+
+        def mapping(label: str) -> dict[str, int]:
+            events.append(label)
+            return {'a': 1, 'b': 2}
+
+        def peer(label: str) -> set[str]:
+            events.append(label)
+            return {'b', 'c'}
+
+        def fail() -> set[str]:
+            events.append('error')
+            raise ValueError('right operand')
+
+        def main():
+    """)
+    for operator in ("|", "&", "-", "^"):
+        for left, right in (
+            ("mapping('left').keys()", "peer('right')"),
+            ("peer('left')", "mapping('right').keys()"),
+            ("mapping('left').keys()", "mapping('right').keys()"),
+        ):
+            program += f"    print(sorted({left} {operator} {right}))\n"
+    program += textwrap.indent(textwrap.dedent("""
+        try:
+            result = mapping('left').keys() | fail()
+        except ValueError as error:
+            print(str(error))
+        try:
+            result = ['a'] | {'b'}
+        except TypeError:
+            print('list is not a keys view')
+        print(events)
+    """), "    ")
+    program += "\nmain()\n"
+    source = tmp_path / "keys_set_operands.py"
+    executable = tmp_path / "keys_set_operands"
+    source.write_text(program, encoding="utf-8")
+    expected = subprocess.run(
+        [sys.executable, str(source)], check=True, text=True,
+        capture_output=True, timeout=30,
+    ).stdout
+    python_program_compiler(
+        str(source), str(executable), backend="self", libpython_mode="off",
+        runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on",
+    )
+    run = subprocess.run(
+        [str(executable)], text=True, capture_output=True, timeout=30,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == expected
 
 
 def test_set_augassign_accepts_dynamic_set_and_preserves_identity(tmp_path) -> None:

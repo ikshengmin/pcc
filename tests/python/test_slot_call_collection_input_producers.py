@@ -71,8 +71,16 @@ def test_generic_method_input_retains_original_call_result_sink(expression, site
     else:
         body = '    return take(value=' + expression + (', later=fail()' if site == 'later-error' else '') + ')\n'
     text = _function(_emit(prefix + 'def probe(item, mapping):\n' + body))
-    assert '@py_obj_call_slots(' in text
-    assert '@py_obj_getattr(' in text
+    assert '@py_obj_load_method(' in text
+    assert '@py_obj_call_loaded_method(' in text
+    calls = list(re.finditer(
+        r'^  (%call\.slot\.runtime[^ ]*) = call [^\n]*'
+        r'@py_obj_(?:load_method|call_loaded_method)\([^\n]*\)\n',
+        text, re.M,
+    ))
+    assert calls
+    for call in calls:
+        assert text[call.end():].lstrip().startswith('store ptr ' + call.group(1) + ',')
     assert '@py_obj_call_method(' not in text
     assert '@py_obj_call_method_kwargs(' not in text
 
