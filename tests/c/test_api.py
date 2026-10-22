@@ -63,6 +63,31 @@ def multi_tu(tmp_path):
 
 class TestBuild:
 
+    def test_build_exe_links_an_independent_owned_object(self, tmp_path):
+        from unittest.mock import patch
+
+        import subprocess
+        from pcc import build
+
+        library = tmp_path / "external.c"
+        library.write_text("int external_add(int a, int b) { return a + b; }\n")
+        source = tmp_path / "caller.c"
+        source.write_text(
+            "#include <stdio.h>\n"
+            "int external_add(int, int);\n"
+            "int main(void) { printf(\"%d\\n\", external_add(19, 23)); return 0; }\n"
+        )
+        with patch("subprocess.Popen", side_effect=AssertionError("external build process")):
+            external = build(library, kind="object", backend="self",
+                             out_dir=tmp_path / "objects", use_compile_cache=False)
+            executable = build(source, kind="exe", backend="self",
+                               link_args=[external.output_path],
+                               out_dir=tmp_path / "program", use_compile_cache=False)
+        result = subprocess.run([executable.output_path], capture_output=True,
+                                text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "42\n"
+
     def test_build_exe(self, main_c):
         from pcc import build
         artifact = build(main_c, kind="exe")
