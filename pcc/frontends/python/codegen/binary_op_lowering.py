@@ -376,6 +376,7 @@ class BinaryOpLoweringMixin:
                 and self._slot_call_in_place_operand(expr.lhs)
                 and self._slot_call_in_place_operand(expr.rhs)):
             return self._emit_slot_call_binary_in_place(expr, label, runtime_name)
+        views = self._dict_keys_view_binop_receivers(expr)
         output = self._new_slot_call_root(label + ".result")
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
@@ -384,11 +385,19 @@ class BinaryOpLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            left = self._emit_slot_call_operand(expr.lhs, label + ".left")
+            left = (
+                self._emit_dict_keys_view_set_operand(expr.lhs, label + ".left")
+                if views is not None and views[0] is not None
+                else self._emit_slot_call_operand(expr.lhs, label + ".left")
+            )
             roots.append(left)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            right = self._emit_slot_call_operand(expr.rhs, label + ".right")
+            right = (
+                self._emit_dict_keys_view_set_operand(expr.rhs, label + ".right")
+                if views is not None and views[1] is not None
+                else self._emit_slot_call_operand(expr.rhs, label + ".right")
+            )
             roots.append(right)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block

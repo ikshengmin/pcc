@@ -376,14 +376,8 @@ class SetLoweringMixin:
         self._gc_release_if_owned(mapping_obj, receiver)
         return out
 
-    def _maybe_emit_dict_keys_view_binop(self, expr) -> Optional[ir.Value]:
-        """Lower set operators involving a real ``dict.keys()`` view.
-
-        This is intentionally source-shape constrained: ordinary lists must
-        continue to reject ``list | set``.  Both operands are materialised as
-        native sets only when the other side is a statically known set or
-        another keys view.
-        """
+    def _dict_keys_view_binop_receivers(self, expr):
+        """Keep keys-view set semantics distinct from ordinary list operands."""
         if expr.op not in ("|", "&", "-", "^"):
             return None
         lhs_receiver = self._dict_keys_view_receiver(expr.lhs)
@@ -394,6 +388,35 @@ class SetLoweringMixin:
             return None
         if rhs_receiver is None and not isinstance(expr.rhs.ty, SetType):
             return None
+        return lhs_receiver, rhs_receiver
+
+    def _emit_dict_keys_view_set_operand(self, expr, label):
+        """Materialise the keys result with both NEW owners in frame roots."""
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            keys = self._emit_slot_call_operand(expr, label + ".keys")
+            self._try_err_block = self._slot_call_cleanup_block((output, keys), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_set_from_iterable", (keys,), result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots((keys,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _maybe_emit_dict_keys_view_binop(self, expr) -> Optional[ir.Value]:
+        """Lower the legacy non-slot set operators involving keys views."""
+        receivers = self._dict_keys_view_binop_receivers(expr)
+        if receivers is None:
+            return None
+        lhs_receiver, rhs_receiver = receivers
 
         lhs = (
             self._materialize_dict_keys_view_set(lhs_receiver)

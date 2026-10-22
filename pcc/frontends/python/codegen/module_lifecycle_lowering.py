@@ -437,7 +437,11 @@ class ModuleLifecycleLoweringMixin:
         if not triple:
             from pcc.frontends.python.pipeline_targets import host_target_triple
             triple = host_target_triple()
-        if precise_stackmap_tables_enabled(triple) and precise_stackmap_target_publishes_tables(triple):
+        publishes_table = (
+            precise_stackmap_target_publishes_tables(triple)
+            and os.environ.get("PCC_SELF_LINK", "").strip().lower() != "cc"
+        )
+        if precise_stackmap_tables_enabled(triple) and publishes_table:
             # The Mach-O executable link defines this name at the start of the
             # linked table (ELF and PE links do not yet); the GC stack walk
             # finds the table through the pointer published here. It is
@@ -454,6 +458,9 @@ class ModuleLifecycleLoweringMixin:
                 self.runtime["pcc_gc_register_precise_stackmap_table"],
                 [table],
             )
+        # The explicit host-cc oracle does not synthesize the owned table.
+        # Without publication the mapped frame entries keep registering their
+        # slots; requiring this symbol would make that valid route fail link.
         self._emit_thread_safepoint()
 
         self.builder.call(
