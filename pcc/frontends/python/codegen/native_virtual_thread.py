@@ -2426,8 +2426,16 @@ class NativeVirtualThreadLoweringMixin:
                 [resumed],
                 name=self._fresh("vthread.join.result"),
             )
+            # An operand consumer (``vt.join(t) + 1``) registered a root for
+            # this call: the new result enters it before the release and the
+            # error check below can park or collect.
+            sink = self._slot_call_result_sink(call_expr) if call_expr is not None else None
+            if sink is not None:
+                self._publish_slot_call_owned(sink, result, label="virtual thread join result")
             self._gc_release(resumed)
             self._emit_post_call_err_check(args[0].span)
+            if sink is not None:
+                return self.builder.load(sink, name=self._fresh("vthread.join.result.current"))
             return result
         if kind == "pcc.virtual_thread.cancel":
             if len(args) != 1:
