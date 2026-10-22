@@ -286,6 +286,15 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
+            # Shell retirement owns this physical object, even when the
+            # same-world shortcut omitted the reachability refresh.
+            if (
+                (flags & 1024) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+                and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+            ):
+                flags = flags & ~1024
+                store_i32(obj, 12, flags)
             if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
                 tag: i64 = load_i32(obj, 8)
                 if pcc_capi_is_cext_type_tag(tag) == 0:
@@ -307,6 +316,14 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             continue
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
+        # Re-evaluate eligibility after callback-capable finalizers.
+        if (
+            (flags & 1024) != 0
+            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+            and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+        ):
+            flags = flags & ~1024
+            store_i32(obj, 12, flags)
         if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
             pcc_gc_tracing_clear_unreachable(obj)
             cleared = cleared + 1
@@ -323,7 +340,14 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
         if (flags & 1024) != 0:
-            if (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
+            # Slot/weakref cleanup may call user code; check again before
+            # generic destruction, without charging a shell to the budget.
+            if (
+                load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+                and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+            ):
+                store_i32(obj, 12, flags & ~1024)
+            elif (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
                 store_i32(obj, 12, flags & ~1024)
             elif load_i32(obj, 8) == abi_constant("object.type.class"):
                 # Its instances and subclasses own counted references and

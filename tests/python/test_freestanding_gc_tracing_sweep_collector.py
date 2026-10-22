@@ -342,6 +342,7 @@ class _SweepModel(_CandidateModel):
 
     def __init__(self, flags, *, finish_epoch, held_epoch, finalizer_runs):
         super().__init__(flags)
+        self.words["pcc_gc_backend_selected"] = 2
         self.words["pcc_gc_tracing_finish_stop_epoch"] = finish_epoch
         self.words["pcc_gc_user_finalizer_runs"] = 0
         self.held_epoch = held_epoch
@@ -379,6 +380,9 @@ class _SweepModel(_CandidateModel):
         load_i32 = env["load_i32"]
 
         def load_i32_tag(base, offset):
+            if base == "pcc_gc_backend_selected":
+                assert offset == 0
+                return model.words[base]
             if offset == 8:
                 return 11
             return load_i32(base, offset)
