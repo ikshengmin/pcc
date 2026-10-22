@@ -114,7 +114,8 @@ def _runtime(original=False, *, fault=None, instrument=True):
              and node.name in ("CompilerInt2", "CompilerInt3", "CompilerInt4", "CompilerIntArena")]
     arena = next(node for node in nodes if node.name == "CompilerIntArena")
     measured = {"copy_prefix_from_unchecked": "copy", "or_prefix_from_unchecked": "or",
-                "converge_liveness_row_unchecked": "converge"}
+                "converge_liveness_row_unchecked": "converge",
+                "converge_liveness_incoming_row_unchecked": "converge"}
     for method in arena.body:
         if not isinstance(method, ast.FunctionDef) or not instrument:
             continue
@@ -124,7 +125,8 @@ def _runtime(original=False, *, fault=None, instrument=True):
             for loop in ast.walk(method):
                 if isinstance(loop, ast.While) and ast.unparse(loop.test) == "index < count":
                     loop.body.insert(0, ast.parse("_tick(" + repr(measured[method.name]) + ")").body[0])
-        if method.name == "converge_liveness_row_unchecked":
+        if method.name in ("converge_liveness_row_unchecked",
+                           "converge_liveness_incoming_row_unchecked"):
             class ObserveReturn(ast.NodeTransformer):
                 def visit_Return(self, node):
                     return [ast.parse("_row(row_start, count, changed, live_out, live_in)").body[0], node]
@@ -303,6 +305,9 @@ def test_dirty_rows_source_keeps_frozen_fallback_and_unchanged_boundaries():
     converge = next(node for node in block_loop.body if isinstance(node, ast.If))
     assert ast.unparse(converge.body[-1].test) == "first_sweep"
     del converge.body[-1]
+    assert converge.test.func.attr == "converge_liveness_incoming_row_unchecked"
+    # Only the dependency-change report differs; the fallback remains exact.
+    converge.test.func.attr = "converge_liveness_row_unchecked"
     assert ast.dump(fast) == ast.dump(branch.orelse[0])
     close_names = [ast.unparse(node.value.func.value) for node in ast.walk(branch)
                    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
@@ -529,7 +534,7 @@ def test_dirty_rows_callback_failure_is_not_probed_before_original_read():
 
 @pytest.mark.parametrize("site", ("construct:row_state", "method:row_state:append_zeros",
                                   "construct:reverse_edges", "method:reverse_edges:append2",
-                                  "work:cfg_successor_count", "method:scratch:converge_liveness_row_unchecked"))
+                                  "work:cfg_successor_count", "method:scratch:converge_liveness_incoming_row_unchecked"))
 @pytest.mark.parametrize("exception_type", (RuntimeError, BaseException))
 @pytest.mark.parametrize("cleanup_fails", (False, True))
 def test_dirty_rows_exception_cleanup_attempts_every_constructed_arena(site, exception_type, cleanup_fails):
@@ -575,3 +580,127 @@ def test_dirty_rows_success_cleanup_failure_still_attempts_other_owned_arena(whi
     assert result.error is (row_error if which == "row_state" else edge_error)
     assert [name for name, _, _ in result.events.closes if name in ("row_state", "reverse_edges")] == ["reverse_edges", "row_state"]
     assert not result.events.labels["uses"]._closed
+
+
+def test_incoming_only_transfer_preserves_all_writes_and_native_call_shape():
+    arena = next(node for node in ast.parse(ARENA.read_text()).body
+                 if isinstance(node, ast.ClassDef) and node.name == "CompilerIntArena")
+    methods = {node.name: copy.deepcopy(node) for node in arena.body
+               if isinstance(node, ast.FunctionDef)}
+    old = methods["converge_liveness_row_unchecked"]
+    new = methods["converge_liveness_incoming_row_unchecked"]
+    assert ast.dump(new.args) == ast.dump(old.args)
+    assert len(new.args.args) == 8  # Preserve the existing self + seven arguments.
+    new.name = old.name
+    old.body.pop(0)
+    new.body.pop(0)  # The method's documentation, not an executable operation.
+    removed = []
+    for node in ast.walk(old):
+        if isinstance(node, ast.If) and ast.unparse(node.test) in (
+            "load_i64(live_out_address, matrix_index * 8) != outgoing",
+            "live_out._values[matrix_index] != outgoing",
+        ):
+            assert ast.unparse(node.body[-1]) == "changed = True"
+            removed.append(node.body.pop())
+    assert len(removed) == 2  # Both raw and host-list branches, all writes retained.
+    assert ast.dump(new) == ast.dump(old)
+
+
+@pytest.mark.parametrize("alias_uses", (False, True))
+@pytest.mark.parametrize("count", (0, 1, 3))
+def test_incoming_only_transfer_publishes_killed_live_out(alias_uses, count):
+    namespace, _ = _runtime(instrument=False)
+    cls = namespace["CompilerIntArena"]
+
+    def arena(values):
+        value = cls()
+        for word in values:
+            value.append(word)
+        return value
+
+    def transfer(method):
+        scratch = arena([3] * count)
+        uses = arena([99] + [1] * count + [88])
+        definitions = arena([99] + [2] * count + [88])
+        outgoing = arena([99] + [1] * count + [88])
+        incoming = uses if alias_uses else arena([99] + [1] * count + [88])
+        changed = getattr(scratch, method)(
+            uses, definitions, outgoing, incoming, 1, count, (1 << 30) - 1,
+        )
+        result = changed, tuple(outgoing._values), tuple(incoming._values)
+        for value in (scratch, uses, definitions, outgoing):
+            value.close()
+        if not alias_uses:
+            incoming.close()
+        return result
+
+    old = transfer("converge_liveness_row_unchecked")
+    new = transfer("converge_liveness_incoming_row_unchecked")
+    assert old[0] is bool(count)
+    assert new[0] is False
+    assert new[1:] == old[1:] == (
+        (99, *([3] * count), 88), (99, *([1] * count), 88),
+    )
+
+
+def _run_outgoing_dirty_control(blocks, count):
+    # Revert only the new call target, retaining the same seeded planes,
+    # reverse edges, row schedule, transfer writes and backward scan.
+    from unittest.mock import patch
+
+    current = _function()
+    calls = [node for node in ast.walk(current)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "converge_liveness_incoming_row_unchecked"]
+    assert len(calls) == 1
+    calls[0].func.attr = "converge_liveness_row_unchecked"
+    with patch(__name__ + "._function", lambda original=False: copy.deepcopy(current)):
+        return _run(blocks, count)
+
+
+def test_killed_live_out_does_not_redirty_predecessor_after_first_sweep():
+    blocks = [
+        dict(instructions=[(-1, [0], False, 0)]),
+        dict(edges=[0]),
+        dict(instructions=[(0, [], False, 0)], edges=[1]),
+        dict(instructions=[(-1, [], True, 0)], edges=[2]),
+    ]
+    old = _run_outgoing_dirty_control(blocks, 1)
+    new = _run(blocks, 1)
+    assert old.result is not None and new.result is not None
+    assert new.outcome == old.outcome
+    for matrix in ("uses", "definitions", "live_out"):
+        assert new.events.closed_values[matrix] == old.events.closed_values[matrix]
+    # Block 2 receives the bit on its second visit, after block 3 has run.
+    # Its definition kills the bit, so visiting predecessor 3 again is useless.
+    assert [offset for offset, *_ in old.events.rows] == [3, 2, 1, 0, 2, 3]
+    assert [offset for offset, *_ in new.events.rows] == [3, 2, 1, 0, 2]
+    assert new.events.rows[-1] == (2, 1, False, (1,), (0,))
+    assert new.events.words["fixedpoint", "converge"] == 5
+    assert old.events.words["fixedpoint", "converge"] == 6
+
+
+@pytest.mark.parametrize("shape", ("forward", "reverse", "cycle", "self-loop", "inline-error", "phi-cycle"))
+@pytest.mark.parametrize("count", (1, 65))
+def test_incoming_only_schedule_matches_outgoing_dirty_fixed_point(shape, count):
+    total = max(3, count) if shape.startswith("phi") else count
+    blocks = _shape(shape, total)
+    old = _run_outgoing_dirty_control(blocks, total)
+    new = _run(blocks, total)
+    assert old.result is not None and new.result is not None
+    assert new.outcome == old.outcome
+    for matrix in ("uses", "definitions", "live_out"):
+        assert new.events.closed_values[matrix] == old.events.closed_values[matrix]
+    for operation in ("copy", "or", "converge"):
+        assert new.events.words["fixedpoint", operation] <= old.events.words["fixedpoint", operation]
+
+
+def test_ci_observer_counts_the_incoming_only_transfer():
+    source = ast.parse((ROOT / "tests/managed_liveness_dirty_rows_ci_reference.py").read_text())
+    observer = next(node for node in ast.walk(source) if isinstance(node, ast.For)
+                    and ast.unparse(node.target) == "conditional")
+    predicate = compile(ast.Expression(observer.body[0].test), "<CI-row-observer>", "eval")
+    matches = [node for node in ast.walk(_function())
+               if eval(predicate, {"ast": ast, "conditional": node})]
+    assert len(matches) == 1
+    assert matches[0].test.func.attr == "converge_liveness_incoming_row_unchecked"

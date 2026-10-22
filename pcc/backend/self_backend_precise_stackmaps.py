@@ -4751,7 +4751,10 @@ def _native_managed_liveness(
                                 row_state.set_unchecked(head_offset, len(reverse_edges) + 1)
                                 reverse_edges.append2(block_id, previous_head)
                             successor_position += 1
-                        if scratch.converge_liveness_row_unchecked(
+                        # Reverse dependencies consume live-in only. Always
+                        # publish live-out, but do not propagate growth killed
+                        # by this block's definitions to its predecessors.
+                        if scratch.converge_liveness_incoming_row_unchecked(
                             uses,
                             definitions,
                             live_out,
