@@ -42,7 +42,14 @@ from pcc.unsafe import (
 )
 
 
+# The poll flag compiled code and runtime polls read: a running mutator
+# must come to a safepoint. Set with the stop request and cleared once
+# every other mutator is parked or exited, so the owner's own polls while
+# it holds the world take the fast path.
 define_global_i32("pcc_thread_stop_requested", 0)
+# Whether a stopped-world epoch is active, from the request to the resume;
+# registration, blocking leaves and the locked safepoint loop wait on it.
+define_global_i32("pcc_thread_world_stop_py", 0)
 define_thread_local_i32("pcc_native_thread_identity_token", 0)
 define_thread_local_ptr_null("pcc_tls_thread_id_py")
 define_thread_local_i32("pcc_tls_thread_parked_py", 0)
@@ -230,7 +237,7 @@ def pcc_thread_live_count() -> int:
 @c_abi_export("pcc_thread_stop_requested_acquire")
 def pcc_thread_stop_requested_acquire() -> int:
     return atomic_load_i32(
-        global_addr("pcc_thread_stop_requested"), 0, "acquire"
+        global_addr("pcc_thread_world_stop_py"), 0, "acquire"
     )
 
 
@@ -398,7 +405,7 @@ def pcc_current_thread_id() -> int:
     # count.  It must not return into user code until the owner resumes.
     waiting_for_admission = 0
     while thread_id == 0 and load_i32(
-        global_addr("pcc_thread_stop_requested"), 0
+        global_addr("pcc_thread_world_stop_py"), 0
     ) != 0:
         if waiting_for_admission == 0:
             _world_store_i64(
@@ -611,7 +618,7 @@ def _leave_exited(entered: int) -> None:
     lock = global_load_ptr("pcc_world_lock_py")
     cond = global_load_ptr("pcc_world_cond_py")
     pthread_mutex_lock(lock)
-    while load_i32(global_addr("pcc_thread_stop_requested"), 0) != 0 and _world_i64(
+    while load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0 and _world_i64(
         global_addr("pcc_stop_owner_thread_id_py")
     ) != self_id:
         pthread_cond_wait(cond, lock)
@@ -781,7 +788,7 @@ def pcc_thread_safepoint() -> None:
         # suspend. Actual waits are reported separately after world unlock.
         _thread_trace(13, 0, 0, null())
     pthread_mutex_lock(lock)
-    while load_i32(global_addr("pcc_thread_stop_requested"), 0) != 0 and _world_i64(
+    while load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0 and _world_i64(
         global_addr("pcc_stop_owner_thread_id_py")
     ) != self_id:
         if _suspend_permitted(lock) == 0:
@@ -810,7 +817,7 @@ def pcc_thread_safepoint() -> None:
             offset: int = (trace_count - 1) * 16 + 8
             store_i64(trace_records, offset, load_i64(trace_records, offset) + 1)
         pthread_cond_wait(cond, lock)
-    if load_i32(global_addr("pcc_thread_stop_requested"), 0) == 0:
+    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0:
         store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 0)
         _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), 0)
         _thread_record_mark(0, null())
@@ -828,7 +835,7 @@ def pcc_thread_owns_stopped_world() -> int:
     lock = global_load_ptr("pcc_world_lock_py")
     pthread_mutex_lock(lock)
     owns = 0
-    if load_i32(global_addr("pcc_thread_stop_requested"), 0) != 0 and _world_i64(
+    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0 and _world_i64(
         global_addr("pcc_stop_owner_thread_id_py")
     ) == self_id:
         owns = 1
@@ -843,7 +850,7 @@ def pcc_thread_world_stop_epoch_held() -> int:
     every other mutator stayed parked: only the holder resumes the world, and
     each outermost stop takes a new epoch. The holder reads its own state, so
     no lock is needed."""
-    if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+    if atomic_load_i32(global_addr("pcc_thread_world_stop_py"), 0, "acquire") == 0:
         return -1
     if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) != pcc_current_thread_id():
         return -1
@@ -877,7 +884,7 @@ def pcc_stop_the_world() -> int:
     trace_epoch: int = 0
     _thread_trace(16, 0, 0, null())
     pthread_mutex_lock(lock)
-    while load_i32(global_addr("pcc_thread_stop_requested"), 0) != 0 and _world_i64(
+    while load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0 and _world_i64(
         global_addr("pcc_stop_owner_thread_id_py")
     ) != self_id:
         if _suspend_permitted(lock) == 0:
@@ -906,13 +913,13 @@ def pcc_stop_the_world() -> int:
             offset: int = (trace_count - 1) * 16 + 8
             store_i64(trace_records, offset, load_i64(trace_records, offset) + 1)
         pthread_cond_wait(cond, lock)
-    if load_i32(global_addr("pcc_thread_stop_requested"), 0) == 0 and load_i32(
+    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0 and load_i32(
         global_addr("pcc_tls_thread_parked_py"), 0
     ) != 0:
         store_i32(global_addr("pcc_tls_thread_parked_py"), 0, 0)
         _tls_store_i64(global_addr("pcc_tls_parked_epoch_py"), 0)
         _thread_record_mark(0, null())
-    if load_i32(global_addr("pcc_thread_stop_requested"), 0) != 0:
+    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0:
         _world_store_i64(
             global_addr("pcc_stop_depth_py"),
             _world_i64(global_addr("pcc_stop_depth_py")) + 1,
@@ -923,6 +930,9 @@ def pcc_stop_the_world() -> int:
         _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
         _thread_trace(18, epoch, depth, null())
         return 0
+    atomic_store_i32(
+        global_addr("pcc_thread_world_stop_py"), 0, 1, "release"
+    )
     atomic_store_i32(
         global_addr("pcc_thread_stop_requested"), 0, 1, "release"
     )
@@ -942,6 +952,13 @@ def pcc_stop_the_world() -> int:
         if _suspend_permitted(lock) == 0:
             return -1
         pthread_cond_wait(cond, lock)
+    # Every other mutator is parked or exited: none of them polls before the
+    # world resumes (a thread leaving an exited wait or registering checks
+    # the stopped world under this lock), so this thread's own polls while
+    # it holds the world take the fast path.
+    atomic_store_i32(
+        global_addr("pcc_thread_stop_requested"), 0, 0, "release"
+    )
     live = _world_i64(global_addr("pcc_live_thread_count_py"))
     pthread_mutex_unlock(lock)
     _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
@@ -959,7 +976,7 @@ def pcc_resume_world() -> int:
     _thread_trace(19, 0, 0, null())
     pthread_mutex_lock(lock)
     epoch = _world_i64(global_addr("pcc_stop_epoch_py"))
-    if load_i32(global_addr("pcc_thread_stop_requested"), 0) == 0 or _world_i64(
+    if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0 or _world_i64(
         global_addr("pcc_stop_owner_thread_id_py")
     ) != self_id:
         pthread_mutex_unlock(lock)
@@ -973,6 +990,9 @@ def pcc_resume_world() -> int:
         return 0
     atomic_store_i32(
         global_addr("pcc_thread_stop_requested"), 0, 0, "release"
+    )
+    atomic_store_i32(
+        global_addr("pcc_thread_world_stop_py"), 0, 0, "release"
     )
     _world_store_i64(global_addr("pcc_stop_owner_thread_id_py"), 0)
     _world_store_i64(global_addr("pcc_stop_depth_py"), 0)
@@ -1018,7 +1038,7 @@ def pcc_thread_unregister_current() -> None:
     # ownership under the same lock that protects live/owner accounting.
     if pcc_thread_no_park_depth() != 0 or (
         self_id != 0
-        and load_i32(global_addr("pcc_thread_stop_requested"), 0) != 0
+        and load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0
         and _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == self_id
     ):
         pthread_mutex_unlock(lock)
