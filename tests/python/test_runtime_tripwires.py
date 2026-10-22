@@ -69,6 +69,8 @@ def test_armed_tripwires_accept_valid_roots_zpage_forwarding_and_native_handle(
 
         static int release_hits = 0;
 
+        extern void pcc_gc_publish_initialized(PyObject *obj);
+
         static void release_foreign(void *ptr) {
             if (ptr == (void *)(uintptr_t)0x2000) release_hits++;
         }
@@ -86,6 +88,9 @@ def test_armed_tripwires_accept_valid_roots_zpage_forwarding_and_native_handle(
              * places it on a zpage and the relocation selector can choose it. */
             PyObject *root = pcc_gc_alloc(64, PY_TYPE_LIST, 0);
             if (root == 0) return 5;
+            /* A relocatable tag stays unpublished, and the selector skips it,
+             * until its constructor publishes the initialized object. */
+            pcc_gc_publish_initialized(root);
             pcc_gc_scheduler_root_register(&root);
             if (pcc_gc_scheduler_root_count() != 1) return 6;
 
@@ -321,7 +326,9 @@ def test_strict_port_routes_locked_fatal_logs_through_deferred_slot():
     assert "_finish_deferred_tripwire" not in shallow
 
     for name, calls in (
-        ("freestanding_gc_forwarding_retirement.py", 3),
+        # Forwarding retirement also refuses a source that still holds a
+        # foreign-address lease, through the same deferred slot.
+        ("freestanding_gc_forwarding_retirement.py", 4),
         ("freestanding_gc_relocation_payload.py", 1),
         ("py_gc_backend.py", 1),
     ):

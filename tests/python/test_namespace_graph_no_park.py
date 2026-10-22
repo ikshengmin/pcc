@@ -25,11 +25,18 @@ class GraphPollModel:
                     'pcc_tls_no_park_depth_py':0,
                     'pcc_tls_scheduler_lock_held_py':0,
                     'pcc_tls_thread_id_py':7,
+                    'pcc_tls_thread_parked_py':0,
+                    # A pending stop belongs to another thread.
+                    'pcc_stop_owner_thread_id_py':8 if stop_requested else 0,
                     'pcc_thread_stop_requested':stop_requested}
         self.world_entries=[]
         self.env=dict(i64=int,c_ptr=int,
             global_addr=lambda name:name,
             load_i32=lambda address,offset:self.state[address],
+            load_ptr=lambda address,offset:self.state[address],
+            ptr_to_int=lambda value:value,
+            atomic_load_i32=lambda address,offset,order:self.state[address],
+            _world_i64=lambda address:self.state[address],
             store_i32=lambda address,offset,value:self.state.__setitem__(address,value),
             atomic_store_i32=lambda address,offset,value,order:self.state.__setitem__(address,value),
             atomic_cas_i32=self.compare_exchange,
@@ -40,6 +47,7 @@ class GraphPollModel:
             pcc_platform_abort=self.abort)
         self.load('freestanding_thread_kernel_pthread.py',{
             'pcc_thread_no_park_enter','pcc_thread_no_park_exit','pcc_thread_safepoint',
+            'pcc_thread_graph_lock_enter',
         })
         self.env['thread_safepoint']=self.env['pcc_thread_safepoint']
         self.load('freestanding_runtime_high_substrate.py',{
@@ -80,9 +88,17 @@ def test_actual_graph_transaction_suppresses_injected_thread_poll(nested,stop_re
     assert model.world_entries==[]
     for _ in range(nested-1):model.env['pcc_py_gc_minor_graph_unlock']()
     assert model.state['g_tls_pcc_py_gc_minor_graph_lock_depth']==1
-    with pytest.raises(SuspensionPathReached):
+    # Releasing the last level polls: a pending stop takes the suspension
+    # path only after the lock word, depth and no-park depth are released;
+    # with nothing pending the poll returns without the world lock.
+    if stop_requested:
+        with pytest.raises(SuspensionPathReached):
+            model.env['pcc_py_gc_minor_graph_unlock']()
+        reached=model.world_entries[0]
+    else:
         model.env['pcc_py_gc_minor_graph_unlock']()
-    reached=model.world_entries[0]
+        assert model.world_entries==[]
+        reached=model.state
     assert reached['g_pcc_py_gc_minor_graph_lock']==0
     assert reached['g_tls_pcc_py_gc_minor_graph_lock_depth']==0
     assert reached['pcc_tls_no_park_depth_py']==0
