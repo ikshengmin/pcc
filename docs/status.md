@@ -57,18 +57,29 @@ Source: `shenming/master` after 00e17faeb (commits named below).
 - Performance is unchanged since the 2026-10-22 sections below: st_alloc
   GC4 5.03 s / GC0 0.87 s; the gateway has not been re-measured.
 
-Open at the 2026-10-23 pause (maintainer asked to pause):
+Open at the 2026-10-23 pause (maintainer asked to pause). Handoff:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/session-77600949-uncommitted/HANDOFF.md`
+(with repro scripts, profiling and survey tools, and test logs beside it).
 
-- Uncommitted and unvalidated, saved with a README in
-  `/Users/jiamo/pcc-recovery-archive/2026-10-23/session-77600949-uncommitted/`
-  (base bb4f27eff): the in-place operator fix (all 13 augmented operators
-  through `py_obj_inplace_op` with CPython's in-place slots; codegen routes
-  list, dict, set, dyn and instance targets through it) and the remaining
-  parking-operand spills (`obj.a`, `d[k]` and `global` `op=` targets, a
-  parking assignment target, a star operand before the park), with
-  `test_inplace_operator_aliasing.py`.
-- Blocker for that test: pcc's own parser rejects `@=`
-  (`unexpected token '='` at `acc @= 7`).
+- Committed at the pause: `@=` in pcc's own lexer and parser (605072731);
+  augmented assignment in place as CPython does, through
+  `py_obj_inplace_op` for all thirteen operators and every list, dict, set,
+  dyn and instance target (a4f9e4ba7); the remaining parking-operand spills
+  for `obj.a`, `d[k]` and `global` `op=` targets, a parking assignment
+  target and a star operand before the park (cda11fcfd); tests 22c578d1d.
+  `test_inplace_operator_aliasing` and `test_vthread_parking_operands` pass
+  on all five collectors.
+- Not yet triaged against d5ccb2404 (the parent of these commits):
+  `test_py_set_type::test_dict_keys_view_union_with_set_is_set_operation`
+  (a runtime traceback; `keys() | set` is the first suspect),
+  `test_native_set_inplace_update::test_inplace_update_uses_native_runtime`
+  (6 IR-shape cases), `test_py_typed_int_unboxed` (7 IR-shape cases) and
+  `test_cext_inplace_number_dispatch::test_cext_inplace_true_divide_and_fallback`
+  (`PCC_SELF_LINK=cc` oracle output).
+- Still failing the self IR verifier: a park inside a conditional operand
+  in value context (`and`/`or` right side, `x if c else y` arms), a `**m`
+  operand before the park, and a parking target in a multi-target
+  assignment.
 - `tests/python/test_gc_index_unlocked_readers.py` compiles its C harness and
   the index module's assembly with external `clang`; move it to the owned
   C path (`tests/owned_c_execution.py`).
