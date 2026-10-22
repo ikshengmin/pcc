@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.pipeline_targets import host_target_triple
@@ -163,29 +164,36 @@ def _index_object(tmp_path: Path) -> Path:
         python_library=True,
         target_triple=host_target_triple(),
     )
-    from pcc.backend.self_backend_dispatch import emit_self_asm
+    from pcc.tools.ir_to_obj import emit_object
 
-    asm = tmp_path / "freestanding_gc_index_table.s"
-    asm.write_text(emit_self_asm(llvm_ir.read_text(encoding="utf-8")), encoding="utf-8")
     obj = tmp_path / "freestanding_gc_index_table.o"
-    build = subprocess.run(
-        ["clang", "-c", str(asm), "-o", str(obj)],
-        capture_output=True, text=True, timeout=60,
-    )
-    assert build.returncode == 0, build.stdout + build.stderr
+    obj.write_bytes(emit_object(llvm_ir.read_text(encoding="utf-8"),
+                                target_triple=host_target_triple()))
     return obj
 
 
 def test_index_lookups_without_the_lock_survive_concurrent_growth(tmp_path: Path):
-    obj = _index_object(tmp_path)
+    from pcc import build
+
     harness = tmp_path / "unlocked_readers.c"
     harness.write_text(HARNESS, encoding="utf-8")
-    executable = tmp_path / "unlocked_readers"
-    build = subprocess.run(
-        ["clang", "-std=c11", "-O1", str(harness), str(obj), "-lpthread", "-o", str(executable)],
-        capture_output=True, text=True, timeout=60,
-    )
-    assert build.returncode == 0, build.stdout + build.stderr
+    # Link only this freestanding index and its C stubs. A complete runtime
+    # would introduce conflicting allocator/index definitions and change the
+    # concurrency experiment. Preprocessing, object emission and linking are
+    # owned; any external build process or implicit runtime provision fails.
+    with (
+        patch("subprocess.Popen", side_effect=AssertionError("external build process")),
+        patch("pcc.frontends.python.owned_runtime_build.ensure_target_runtime",
+              side_effect=AssertionError("standalone index harness linked the full runtime")),
+    ):
+        obj = _index_object(tmp_path)
+        artifact = build(
+            harness, backend="self", kind="exe", optimize=1,
+            include_dirs=[REPO_ROOT / "utils/fake_libc_include"],
+            link_args=[str(obj)], out_dir=tmp_path / "owned",
+            use_compile_cache=False,
+        )
+    executable = Path(artifact.output_path)
     env = {**os.environ, "MallocScribble": "1"}
     for attempt in range(3):
         run = subprocess.run([str(executable)], capture_output=True, text=True,
