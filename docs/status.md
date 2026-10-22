@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `46d994978`, initially based on
+Source: published through `b772b28be`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -17,6 +17,8 @@ Subsequent completed-run receipts:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/followup-through-af72b15f6/README.md`.
 Unpack execution and the first Stage1 timeout (including partial native objects):
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/unpack-through-46d994978-and-stage1-timeout/README.md`.
+Large-integer unpacking and the byte-matched worker profile:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/bigint-through-b772b28be-and-worker-profile/README.md`.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -115,6 +117,14 @@ Subsequent published changes and executed evidence:
   target's side effects. It passes with the matching runtime; 19 related
   chain/conditional/keyword/unpack/ownership checks also pass (3 native variants
   deselected). Broader nested/starred unpack shapes still need execution proof.
+- Unpack element loads retain arbitrary-precision Python int objects until the
+  destination requests an explicit machine projection (`779ae5285`, tests
+  `b772b28be`). The large parked case previously raised OverflowError during
+  int64 conversion. List/list-target, tuple, set and starred prefix/suffix
+  cases now execute correctly, alongside float controls. Three compiled
+  programs pass all five collectors (15 executions) with host Python/pcc
+  unavailable during execution. These remain host-pcc-produced artifacts;
+  their native-pcc1 compiler variants have not run.
 - The C build API accepts independent owned object inputs (`143bf762a`, test
   `cc9ed4233`); the public module/console Python commands pass explicit `.o` and
   `.obj` files to the owned linker (`77901d162`, test `f8cd10ffd`). Emitted
@@ -143,12 +153,29 @@ Peak tree RSS was 3,367,763,968 bytes, below its admitted cap. The run is in
 `/private/tmp/pcc-p0-followup/bootstrap-darwin`; live log:
 `/private/tmp/pcc-p0-followup/logs/bootstrap-darwin.stdout`. Timeout cleanup
 removed the shared export file and some worker manifests; the partial state
-alone cannot replay the original context. Reconstruct the frozen export/AST
-context and profile one actual codegen worker before another full build.
+alone cannot replay the original context. The normal coordinator's export/AST
+context was reconstructed and its `method_call_expression_lowering` worker
+replayed under cProfile. The result matches the original module 308 PCO byte
+for byte. Instrumented time was 201.05 seconds, peak RSS 3,173,892,096 bytes;
+`_native_managed_liveness` takes 85.45 seconds inclusive and `append_zeros`
+40.65 seconds inclusive. Total list.append calls are 346,136,083. These are
+one instrumented worker's costs, not whole-build wall shares. A bounded host
+zero-fill candidate completed three alternating uninstrumented A/B pairs at
+`/private/tmp/pcc-p0-followup/arena-worker-ab`: all objects are byte-identical,
+median wall speedup is 1.083x and instructions decrease about 10.5%, but one
+candidate peak is 13.9% above its paired baseline, so the strict result is
+DENY. A similar peak occurs in a different baseline run. A new predeclared
+three-pair comparison fixes `PYTHONHASHSEED=0` to investigate this variation,
+without relaxing the thresholds; no performance change is accepted yet.
+Its focused host/lowering/PCO controls pass 15 tests. After correcting the
+new probe to compile the actual private class source (ordinary app discovery
+does not bundle compiler internals), native arena execution, record inventory
+and liveness controls pass 132 tests, with one pcc1 variant deselected.
 Stage1, native integration, full fixed point and five-GC qualification remain
 unfinished. The separate fallback-baseline check was stopped when its complete
 compiler-closure work was identified, to avoid competing heavy builds; do not
-count that partial run as a pass. Additional parked unpack shapes, public C lifetime/callback
+count that partial run as a pass. Additional parked unpack shapes, public C
+lifetime/callback
 contracts, CPython Lib/test conformance and runtime/gateway performance
 remain unfinished. The historical pause notes below describe their recorded
 revision; completed follow-up shapes above supersede those failure claims.
