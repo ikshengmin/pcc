@@ -587,11 +587,63 @@ class AssignmentStatementLoweringMixin:
         )
         self.builder.position_at_end(done_bb)
 
+    def _emit_chained_assign(self, stmt: Assign) -> None:
+        """Evaluate the RHS once, then evaluate and store each target in order."""
+        if not stmt.targets:
+            raise L1CodegenError("assignment requires at least one target")
+        value_type = stmt.value.ty
+        raw = (
+            getattr(self, "_freestanding_module", False)
+            or getattr(self, "_runtime_port_module", False)
+            or self._expr_returns_unsafe_raw_pointer(stmt.value)
+            or self._is_valueclass_payload_type(value_type)
+            or isinstance(value_type, IntType) and value_type.name != "int"
+            or self._expr_looks_cpython(stmt.value)
+        )
+        if raw:
+            # Keep explicit machine/payload projections in their existing
+            # assignment producer. Its target tree visits the right child
+            # first, so build it from the last destination back to the first.
+            function = Name(span=stmt.span, ty=DynType(name="dyn"), ident="_walrus")
+            targets = stmt.targets[0]
+            for target in stmt.targets[1:]:
+                targets = Call(span=stmt.span, ty=value_type, func=function,
+                               args=(target, targets), kwargs=())
+            expression = Call(span=stmt.span, ty=value_type, func=function,
+                              args=(targets, stmt.value), kwargs=())
+            self._emit_expr_stmt(ExprStmt(span=stmt.span, expr=expression))
+            return
+        root = self._emit_slot_call_operand(stmt.value, "assignment.chain")
+        ident = self._fresh("pcc.assignment.chain")
+        source = Name(span=stmt.value.span, ty=DynType(name="dyn"), ident=ident)
+        self.env[ident] = (root, _CSTR, source.ty)
+        # This is a read-only alias. The root itself owns the value; every
+        # destination obtains its own reference through ordinary assignment.
+        self._borrowed_gc_rooted_local_names.add(ident)
+        hint = self._class_hint_for_expr(stmt.value)
+        if hint is not None:
+            self.env_class_hint[ident] = hint
+        previous = self._current_try_err_block()
+        error = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((root,), error)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            for target in stmt.targets:
+                self._emit_stmt(Assign(span=stmt.span, targets=(target,), value=source,
+                                       annotation=stmt.annotation))
+            if not self._builder_block_is_terminated():
+                self._release_slot_call_roots((root,))
+        finally:
+            self.env.pop(ident, None)
+            self._borrowed_gc_rooted_local_names.discard(ident)
+            self.env_class_hint.pop(ident, None)
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_assign_unchecked(self, stmt: Assign) -> None:
         if len(stmt.targets) != 1:
-            raise NotImplementedError(
-                "Layer 1 does not handle tuple-unpacking assignment"
-            )
+            return self._emit_chained_assign(stmt)
         target = stmt.targets[0]
 
         if len(self._generator_ctx_stack) > 0:
@@ -1261,12 +1313,20 @@ class AssignmentStatementLoweringMixin:
             and isinstance(value.type, ir.PointerType)
             and value not in getattr(self, "_cpy_values", ())
         )
+        operand_root_name_copy = False
+        if isinstance(stmt.value, Name):
+            source_slot = self.env.get(stmt.value.ident)
+            operand_root_name_copy = (
+                source_slot is not None and self._slot_call_root_is_registered(source_slot[0])
+                or self._slot_call_root_is_registered(alloca)
+            )
         if (
             isinstance(stmt.value, Name)
             and (
                 stmt.value.ident in getattr(self, "_owned_local_names", set())
                 or stmt.value.ident in getattr(self, "_except_binding_names", set())
                 or exact_int_name_copy
+                or operand_root_name_copy
             )
             and isinstance(value.type, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
@@ -1276,6 +1336,9 @@ class AssignmentStatementLoweringMixin:
             # not register `e` as a normal owned local because handler cleanup
             # releases it at block exit. A surviving copy (`saved = e`) must
             # take its own ref and then use the normal owned-local root path.
+            # An operand-root alias also loads a borrowed reference whose
+            # temporary owner will be retired, and assignment into an owning
+            # operand root must itself acquire a reference to a named source.
             value = self._gc_retain(
                 value,
                 name=self._fresh(target.ident + ".local.copy.retain"),
