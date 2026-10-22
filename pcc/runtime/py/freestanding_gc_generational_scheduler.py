@@ -713,7 +713,9 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
     local_drained: i64 = 0
     batch_drained: i64 = 1
     while local_drained < remaining_budget and batch_drained > 0:
-        batch_drained = _backend4_drain_remembered_batch(remaining_budget - local_drained)
+        batch_drained = _backend4_drain_remembered_batch(
+            remaining_budget - local_drained
+        )
         local_drained = local_drained + batch_drained
     promotion_examined: i64 = 0
     if local_drained < remaining_budget:

@@ -234,20 +234,6 @@ def pcc_thread_stop_requested_acquire() -> int:
     )
 
 
-@c_abi_export("pcc_thread_world_stop_epoch_held")
-def pcc_thread_world_stop_epoch_held() -> int:
-    """The epoch of the stopped world when the calling thread holds it, else
-    -1. Two calls answering the same epoch bracket runtime code during which
-    every other mutator stayed parked: only the holder resumes the world, and
-    each outermost stop takes a new epoch. The holder reads its own state, so
-    no lock is needed."""
-    if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
-        return -1
-    if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) != pcc_current_thread_id():
-        return -1
-    return _world_i64(global_addr("pcc_stop_epoch_py"))
-
-
 @c_abi_export("pcc_refcount_strategy")
 def pcc_refcount_strategy() -> int:
     return 1
@@ -716,6 +702,22 @@ def pcc_thread_safepoint() -> None:
         return
     if load_i32(global_addr("pcc_tls_no_park_depth_py"), 0) != 0:
         return
+    # Nothing requested and nothing to undo: this thread is registered
+    # (pcc_current_thread_id admits a newcomer under the world lock), it is
+    # not still marked parked from an earlier stop, and either no stop is
+    # pending or this thread owns it (an owner never parks for its own stop,
+    # and only the owner changes the owner word). A stop requested after this
+    # read waits for this thread's next poll, as it waits for any running
+    # mutator. Taking the world lock on every poll put it on every graph
+    # unlock, allocation gate and, inside a stopped-world collection, every
+    # object the collector frees.
+    if load_i32(global_addr("pcc_tls_thread_parked_py"), 0) == 0:
+        poller: int = _tls_i64(global_addr("pcc_tls_thread_id_py"))
+        if poller != 0:
+            if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+                return
+            if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == poller:
+                return
     if _world_init() != 0:
         pcc_platform_abort()
         return
@@ -783,6 +785,20 @@ def pcc_thread_owns_stopped_world() -> int:
         owns = 1
     pthread_mutex_unlock(lock)
     return owns
+
+
+@c_abi_export("pcc_thread_world_stop_epoch_held")
+def pcc_thread_world_stop_epoch_held() -> int:
+    """The epoch of the stopped world when the calling thread holds it, else
+    -1. Two calls answering the same epoch bracket runtime code during which
+    every other mutator stayed parked: only the holder resumes the world, and
+    each outermost stop takes a new epoch. The holder reads its own state, so
+    no lock is needed."""
+    if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+        return -1
+    if _world_i64(global_addr("pcc_stop_owner_thread_id_py")) != pcc_current_thread_id():
+        return -1
+    return _world_i64(global_addr("pcc_stop_epoch_py"))
 
 
 @c_abi_export("pcc_thread_registration_waiter_count")
