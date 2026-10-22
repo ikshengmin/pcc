@@ -9,12 +9,14 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `af72b15f6`, initially based on
+Source: published through `46d994978`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
 Subsequent completed-run receipts:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/followup-through-af72b15f6/README.md`.
+Unpack execution and the first Stage1 timeout (including partial native objects):
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/unpack-through-46d994978-and-stage1-timeout/README.md`.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -106,6 +108,13 @@ Subsequent published changes and executed evidence:
   All 4,449 tracked snapshot inputs matched that revision; `utils/` was present
   and every child inherited the snapshot's `PYTHONPATH`. Integration variants
   were deselected. This result is not a current-head native compiler gate.
+- Parked unpack assignment destinations now receive values from persistent
+  frame owners before target evaluation (`43ecd4fd1`, test `46d994978`). The
+  exact emitted program proves source values survive both parks, later targets
+  observe earlier stores, and a discarded value is finalized before the next
+  target's side effects. It passes with the matching runtime; 19 related
+  chain/conditional/keyword/unpack/ownership checks also pass (3 native variants
+  deselected). Broader nested/starred unpack shapes still need execution proof.
 - The C build API accepts independent owned object inputs (`143bf762a`, test
   `cc9ed4233`); the public module/console Python commands pass explicit `.o` and
   `.obj` files to the owned linker (`77901d162`, test `f8cd10ffd`). Emitted
@@ -119,15 +128,27 @@ Subsequent published changes and executed evidence:
   separate retirement probe intentionally uses the real pcc-Python runtime,
   initializes and reports GC0/GC4, and checks selected-backend output. The final
   exact-source run passes both tests (`logs/index-retired-v4.stdout`).
+- The received C-lifetime task now has a native runtime control at `af72b15f6`:
+  GC0 acquires token 0 and permits a same-mode reset while a foreign address
+  lease is live; GC4 acquires token 1 and correctly returns BUSY. The owned C
+  build forbids external processes and runtime provisioning. This confirms a
+  mode-reset guard gap, not a native use-after-free; the generic fix is pending.
 
 These are host-pcc/self-backend emitted execution and focused IR/cache checks.
-The next native pcc1 integration build uses a frozen `af72b15f6` snapshot:
-4,457 tracked inputs match, with the runtime hash in `integration-source.json`.
-Its shared-lock/process-tree-guarded Darwin Stage1 run is in
+The first native pcc1 integration build used a frozen `af72b15f6` snapshot:
+4,457 tracked inputs matched, with the runtime hash in `integration-source.json`.
+Its shared-lock/process-tree-guarded Darwin Stage1 run reached its original
+1,800-second limit after producing 323 direct objects, without producing pcc1.
+Peak tree RSS was 3,367,763,968 bytes, below its admitted cap. The run is in
 `/private/tmp/pcc-p0-followup/bootstrap-darwin`; live log:
-`/private/tmp/pcc-p0-followup/logs/bootstrap-darwin.stdout`. Stage1, native
-integration, full fixed point and five-GC qualification are not yet green.
-Parking unpack targets beyond the chained shapes, public C lifetime/callback
+`/private/tmp/pcc-p0-followup/logs/bootstrap-darwin.stdout`. Timeout cleanup
+removed the shared export file and some worker manifests; the partial state
+alone cannot replay the original context. Reconstruct the frozen export/AST
+context and profile one actual codegen worker before another full build.
+Stage1, native integration, full fixed point and five-GC qualification remain
+unfinished. The separate fallback-baseline check was stopped when its complete
+compiler-closure work was identified, to avoid competing heavy builds; do not
+count that partial run as a pass. Additional parked unpack shapes, public C lifetime/callback
 contracts, CPython Lib/test conformance and runtime/gateway performance
 remain unfinished. The historical pause notes below describe their recorded
 revision; completed follow-up shapes above supersede those failure claims.
