@@ -1580,11 +1580,22 @@ def test_graph_lock_outermost_ownership_is_one_no_park_lease():
     strict_lock = strict.split("def pcc_py_gc_minor_graph_lock() -> None:", 1)[
         1
     ].split('@c_abi_export("pcc_py_gc_minor_graph_unlock")', 1)[0]
-    strict_cas = strict_lock.index("atomic_cas_i32(")
-    strict_registration = strict_lock.index("pcc_current_thread_id()")
-    strict_enter = strict_lock.index("pcc_thread_no_park_enter()")
-    strict_depth = strict_lock.index("store_i32(depth_slot, 0, 1)")
-    assert strict_registration < strict_cas < strict_enter < strict_depth
+    # The outermost acquisition is the thread kernel's fused entry, which
+    # registers the thread, takes the word and then raises the no-park depth;
+    # the substrate records its own depth only after that.
+    assert strict_lock.index("pcc_thread_graph_lock_enter(") < strict_lock.index(
+        "store_i32(depth_slot, 0, 1)"
+    )
+    kernel = (
+        RUNTIME_DIR / "py" / "freestanding_thread_kernel_pthread.py"
+    ).read_text(encoding="utf-8")
+    kernel_enter = kernel.split(
+        "def pcc_thread_graph_lock_enter(lock_word) -> None:", 1
+    )[1].split('@c_abi_export("pcc_thread_no_park_exit")', 1)[0]
+    strict_registration = kernel_enter.index("pcc_current_thread_id()")
+    strict_cas = kernel_enter.index("atomic_cas_i32(lock_word")
+    strict_enter = kernel_enter.index("store_i32(depth_slot, 0, depth + 1)")
+    assert strict_registration < strict_cas < strict_enter
     strict_unlock = strict.split(
         "def pcc_py_gc_minor_graph_unlock() -> None:", 1
     )[1]

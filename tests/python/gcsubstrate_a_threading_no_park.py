@@ -124,14 +124,22 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     )[0]
     assert "pcc_platform_abort()" in init_failure
     assert "return 0" in init_failure
+    # The outermost no-park entry registers the thread and fails closed on
+    # an id of zero before it raises the depth; the fused graph-lock entry
+    # registers before it takes the word, and raises the depth after.
     py_enter = py_src.split(
         '@c_abi_export("pcc_thread_no_park_enter")', 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_enter")', 1)[0]
+    registers = py_enter.index("if pcc_current_thread_id() == 0:")
+    assert registers < py_enter.index(
+        "pcc_platform_abort()", registers
+    ) < py_enter.rindex("store_i32(depth_slot, 0, 1)")
+    py_graph_enter = py_src.split(
+        '@c_abi_export("pcc_thread_graph_lock_enter")', 1
     )[1].split('@c_abi_export("pcc_thread_no_park_exit")', 1)[0]
-    assert py_enter.index('pcc_current_thread_id()') < py_enter.index(
-        '_tls_i64(global_addr("pcc_tls_thread_id_py")) == 0'
-    ) < py_enter.rindex(
-        'store_i32(global_addr("pcc_tls_no_park_depth_py"), 0, depth + 1)'
-    )
+    assert py_graph_enter.index("pcc_current_thread_id()") < py_graph_enter.index(
+        "atomic_cas_i32(lock_word"
+    ) < py_graph_enter.rindex("store_i32(depth_slot, 0, depth + 1)")
     py_trampoline = py_src.split("def _thread_trampoline(start):", 1)[1].split(
         '@c_abi_export("pcc_thread_start")', 1
     )[0]
