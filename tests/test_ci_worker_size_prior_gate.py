@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26)
+    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -88,20 +88,20 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 65
-    assert sum(gate.HOST_COUNTS) == 2947 and sum(gate.HOST_COUNTS[:63]) == 2909
-    assert sum(gate.HOST_COUNTS[:62]) == 2900
-    assert sum(gate.HOST_COUNTS[:61]) == 2723
-    assert sum(gate.HOST_COUNTS[:60]) == 2612
-    assert sum(gate.HOST_COUNTS[:59]) == 2601
-    assert sum(gate.HOST_COUNTS[:58]) == 2550
-    assert sum(gate.HOST_COUNTS[:57]) == 2546
-    assert sum(gate.HOST_COUNTS[:53]) == 2433
-    assert sum(gate.HOST_COUNTS[:52]) == 2408
-    assert sum(gate.HOST_COUNTS[:51]) == 2377
-    assert sum(gate.HOST_COUNTS[:50]) == 2335 and sum(gate.HOST_COUNTS[:49]) == 2289
-    assert sum(gate.HOST_COUNTS[:48]) == 2248
-    assert sum(gate.HOST_COUNTS[:47]) == 2205
-    assert sum(gate.HOST_COUNTS[:43]) == 2113
+    assert sum(gate.HOST_COUNTS) == 2968 and sum(gate.HOST_COUNTS[:63]) == 2930
+    assert sum(gate.HOST_COUNTS[:62]) == 2921
+    assert sum(gate.HOST_COUNTS[:61]) == 2744
+    assert sum(gate.HOST_COUNTS[:60]) == 2633
+    assert sum(gate.HOST_COUNTS[:59]) == 2622
+    assert sum(gate.HOST_COUNTS[:58]) == 2571
+    assert sum(gate.HOST_COUNTS[:57]) == 2567
+    assert sum(gate.HOST_COUNTS[:53]) == 2454
+    assert sum(gate.HOST_COUNTS[:52]) == 2429
+    assert sum(gate.HOST_COUNTS[:51]) == 2398
+    assert sum(gate.HOST_COUNTS[:50]) == 2356 and sum(gate.HOST_COUNTS[:49]) == 2310
+    assert sum(gate.HOST_COUNTS[:48]) == 2269
+    assert sum(gate.HOST_COUNTS[:47]) == 2226
+    assert sum(gate.HOST_COUNTS[:43]) == 2134
     assert sum(gate.HOST_COUNTS[:42]) == 2018
     assert sum(gate.HOST_COUNTS[:40]) == 2009
     assert sum(gate.HOST_COUNTS[:38]) == 1999
@@ -150,7 +150,8 @@ def test_default_command_retains_project_xdist(tmp_path):
             assert isinstance(values, (ast.List, ast.Tuple))
             cases *= len(values.elts)
         dirty_count += cases
-    assert dirty_count == 95
+    # 95 existing cases + 21 incoming-only dirty-row regression cases.
+    assert dirty_count == 116
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -1552,7 +1553,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
