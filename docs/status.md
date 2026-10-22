@@ -7,6 +7,118 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## P0 handoff triage and active follow-up (2026-10-23)
+
+Source: published through `af72b15f6`, initially based on
+`8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
+`/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
+Subsequent completed-run receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/followup-through-af72b15f6/README.md`.
+
+The active goal is the full handoff/P0 scope, not this completed test subset.
+The maintainer now explicitly authorizes timely commits and pushes of validated
+work: commit working code, fetch/rebase and integrate `shenming/master`, push
+normally to `shenming`, then commit tests and subsequent fixes separately.
+Use direct Git commands, not the `do_commit` skill. Keep the `ikshengmin`
+worktree identity, English `[skip ci]` messages, no Co-Authored-By, no force
+push and no changes to `origin` or other people's uncommitted work. This
+authorization supersedes the original goal text's wait-for-permission clause.
+Preserve both our unfinished changes and peers' work. Integrate conflicts by
+their required behavior, test the resolved paths, and never replace an entire
+conflicted file with ours/theirs to discard either side.
+
+For future `pcc-gateway` changes, the maintainer specified the Git author name
+`ikshenming` (not `jiamo`) and the only push destination
+`https://github.com/ikshengmin/pcc-gateway`. Apply the same isolated-worktree,
+timely commit, fetch/rebase/integrate, normal-push and no-force-push rules.
+The PCC worktree retains its separately configured `ikshengmin` identity.
+
+Incoming goal task received from chat `01a164c1-e0ec-7c72-996c-939ad5ccf05c`
+("定位 pcc 与 C 的交互"): implement user-facing C interoperability with long-lived
+C ownership and reentrant Python callbacks/GC, preserving object identity and
+shared references. Retain the original P0 scope and priority order. Proposed
+handle/scope/field/weak-handle/address-lease/buffer-lease/gateway API names are
+design suggestions, not individually approved user requirements. First prove
+an independent C object/library plus a user's Python program through the public
+CLI; then address lease mode guards, stable handles, traced fields, buffers and
+callback/thread/cancellation lifetimes through the five-GC slot contract.
+Use the pcc-Python runtime and owned toolchain. The source chat inspected
+`0df9b0b6a`; its IR/model findings and external-library probe are evidence to
+recheck against this newer worktree, not current native qualification.
+
+The maintainer also added integration-test success as an explicit goal
+acceptance task. Run the integration scope in dependency order on frozen
+sources after focused failures are fixed. Unexecuted, skipped or failing
+integration cases remain unfinished; unit/IR-only passes do not replace
+native pcc1 execution, bootstrap or five-GC evidence where those are required.
+
+All 15 failures listed in the handoff reproduce on both `d5ccb2404` and
+`8b35e1e1c`, with `utils/` included and `PYTHONPATH` fixed to each snapshot.
+The final frozen candidate passes 126 focused tests (3 integration cases
+deselected), including all four handoff files:
+
+- Direct, statically recognized `dict.keys()` set operators now materialize
+  their operands through owning slots before generic binary dispatch. The
+  early slot route had bypassed the existing keys-view conversion. The new
+  emitted-program test covers all four operators, both operand positions,
+  two views, evaluation order, RHS exceptions and rejection of ordinary lists.
+  This restores direct-expression lowering; it does not implement live runtime
+  view objects or view aliases.
+- Set method and typed-int IR checks now follow the slot method dispatcher,
+  ownership-transferring root stores, generic arithmetic slow paths, rooted
+  parameter reloads and raw-i64 induction before or after memory promotion.
+  The related collection-input checks validate immediate publication by the
+  loaded-method protocol, which was already present in the base revision.
+- The explicit `PCC_SELF_LINK=cc` oracle no longer asks `main` to publish the
+  table synthesized only by the owned linker. Without publication, mapped
+  frames retain their registered slots. Its original C-extension in-place
+  division/fallback program now links and executes. The publication and table
+  options participate in the frontend IR cache identity. This remains an
+  external-link reference experiment, not native pcc1 ownership evidence;
+  owned native-extension export anchors remain unsupported.
+
+Subsequent published changes and executed evidence:
+
+- Conditional value operands (`and`, `or`, if-expression arms) now spill the
+  selected evaluation path into owning generator-frame roots (`ef98d1069`,
+  test `6cd9611a4`). Chained assignments evaluate the RHS once and store targets
+  in Python order, including parking subscript targets; the parser separates
+  assignment chains from real walrus expressions, and temporary root aliases
+  retain the value before owner cleanup (`0a5c7b4d2`, test `eea5ba690`).
+- Nested keyword operands spill at their actual evaluation boundary; earlier
+  `**` expansion keeps its mutation, duplicate-key and error timing
+  (`fa74d662e`, test `6e88d9f3a`). The corrected generator/async/coroutine/vthread
+  snapshot survey passes 442 distinct nodes across 50 files at `6e88d9f3a`.
+  All 4,449 tracked snapshot inputs matched that revision; `utils/` was present
+  and every child inherited the snapshot's `PYTHONPATH`. Integration variants
+  were deselected. This result is not a current-head native compiler gate.
+- The C build API accepts independent owned object inputs (`143bf762a`, test
+  `cc9ed4233`); the public module/console Python commands pass explicit `.o` and
+  `.obj` files to the owned linker (`77901d162`, test `f8cd10ffd`). Emitted
+  executables call independent C and print 42 with host Python/pcc unavailable.
+  Replacing an object without changing its mtime invalidates the module run
+  cache and produces -4. CLI contract and sensitive checks: 27 passed,
+  3 deselected. Native pcc1 and archive/dynamic-library surfaces remain open.
+- Both GC index tests now use the owned C path (`879dab905`, `af72b15f6`).
+  The standalone concurrency harness links its index object and stubs, with
+  external subprocess builds and full-runtime provisioning forbidden. The
+  separate retirement probe intentionally uses the real pcc-Python runtime,
+  initializes and reports GC0/GC4, and checks selected-backend output. The final
+  exact-source run passes both tests (`logs/index-retired-v4.stdout`).
+
+These are host-pcc/self-backend emitted execution and focused IR/cache checks.
+The next native pcc1 integration build uses a frozen `af72b15f6` snapshot:
+4,457 tracked inputs match, with the runtime hash in `integration-source.json`.
+Its shared-lock/process-tree-guarded Darwin Stage1 run is in
+`/private/tmp/pcc-p0-followup/bootstrap-darwin`; live log:
+`/private/tmp/pcc-p0-followup/logs/bootstrap-darwin.stdout`. Stage1, native
+integration, full fixed point and five-GC qualification are not yet green.
+Parking unpack targets beyond the chained shapes, public C lifetime/callback
+contracts, the reported 0.6% inconsistency and runtime/gateway performance
+remain unfinished. The historical pause notes below describe their recorded
+revision; completed follow-up shapes above supersede those failure claims.
+
 ## P0 follow-up: virtual-thread call semantics and generator frames (2026-10-23, Claude)
 
 Source: `shenming/master` after 00e17faeb (commits named below).
@@ -69,7 +181,8 @@ Open at the 2026-10-23 pause (maintainer asked to pause). Handoff:
   target and a star operand before the park (cda11fcfd); tests 22c578d1d.
   `test_inplace_operator_aliasing` and `test_vthread_parking_operands` pass
   on all five collectors.
-- Not yet triaged against d5ccb2404 (the parent of these commits):
+- Untriaged at that pause; subsequently reproduced on d5ccb2404 and repaired
+  in the published handoff-triage commits above:
   `test_py_set_type::test_dict_keys_view_union_with_set_is_set_operation`
   (a runtime traceback; `keys() | set` is the first suspect),
   `test_native_set_inplace_update::test_inplace_update_uses_native_runtime`
