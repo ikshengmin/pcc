@@ -1,11 +1,61 @@
 # PCC current status
 
-Updated 2026-10-22. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-10-23. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## P0 follow-up: virtual-thread call semantics and generator frames (2026-10-23, Claude)
+
+Source: `shenming/master` after 00e17faeb (commits named below).
+
+- Imported may-park callees (78194474f, test 828f476d7): a call to a live
+  `from m import f` binding took the binding's dynamic call even when `f`
+  may park, so a virtual thread got the callee's partial result (None). The
+  call now reads the binding when it runs; while it is still the provider's
+  function its native body creates the child continuation, any other
+  callable is called deferred, and a continuation is driven through the
+  caller. Rebinding the import, keywords, star arguments and exceptions are
+  covered by `test_cross_module_may_park_import_keeps_call_semantics`.
+- Operands evaluated before a park: in a resumable function a parking call
+  inside a larger expression split the statement, and every SSA value
+  computed before the park was undefined on the resume edge. 8 of 15 shapes
+  failed the IR verifier (`items.append(fetch(1))`, `plain(a, fetch(1))`,
+  `[a, fetch(1)]`, `xs[fetch(0) + 1]`, ...), and `seen.add(fetch(1))` added
+  to an entry-alloca receiver root that the resumed activation found empty,
+  so the set stayed empty. Statements (expression, assignment, `return`,
+  `raise`, `for` iterable, `x op= ...` on a plain local) and `if`/`while`
+  truth tests now evaluate the operands Python evaluates before the park,
+  and the parking operand, into generator frame roots in evaluation order
+  and lower the rest from them (`plan_generator_statement_spills`,
+  faf9982d6). Not covered yet (they still fail the IR verifier):
+  `obj.a op= ...`, `d[k] op= ...` and `global` targets, a park inside a
+  conditional operand (`and`/`or` right side, `x if c else y` arms) or an
+  assignment target, and a star argument before the park. Test:
+  `tests/python/test_vthread_parking_operands.py`.
+- Generator frames kept values after resuming: a resumed body copied its
+  locals and operand roots out of the heap frame, which kept each value
+  saved at the last suspension alive until the next suspension or
+  completion. A local rebound after a `yield` was finalized late (CPython
+  prints `['drop x']` for the probe in
+  `test_resumed_generator_frame_does_not_keep_rebound_locals`, pcc printed
+  `[]` on all collectors). Resume now moves each owner out of the frame
+  (`py_gen_frame_take`, 6c719282f); the frame holds values only while
+  suspended.
+- Found, being fixed next: augmented assignment on builtin mutable types
+  does not mutate in place. `py_obj_inplace_op` falls back to the binary
+  operator for every non-instance, so `lst += [2]` (Dyn locals, attribute
+  and subscript targets), `lst *= 2`, `ba += b"b"`, `d |= {...}` and
+  `holder["s"] |= {...}` build new objects and aliases keep the old value;
+  `|=`, `&=`, `^=`, `<<=`, `>>=`, `**=` and `@=` never reach `__i*__` at
+  all. Only a local set's `|=` (its own path) matches CPython.
+- Ownership-contract tests (890956af1, 00e17faeb) model the two-root
+  cleanup helper, the slot-status reporter and the `_mapped` frame entry
+  points; 39 of their failures were stale models of correct IR.
+- Performance is unchanged since the 2026-10-22 sections below: st_alloc
+  GC4 5.03 s / GC0 0.87 s; the gateway has not been re-measured.
 
 ## P0 packages: what landed, measurements, method operands (2026-10-22, Claude)
 
