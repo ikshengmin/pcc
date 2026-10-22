@@ -669,6 +669,15 @@ class MethodCallExpressionLoweringMixin:
                     binding_owner, attr.name,
                 ):
                     sink_requires_object = False
+                # On an instance receiver the direct method ABI publishes into
+                # the consumer's slot itself (_emit_direct_method_call). A
+                # class-object receiver or a staticmethod takes the static
+                # call, which does not.
+                if (sink_requires_object and class_object is None and kind != "static"
+                        and self._direct_method_result_slot(
+                            binding_owner, attr.name, expr,
+                        ) is not None):
+                    sink_requires_object = False
                 if self._ordinary_call_needs_runtime_binding(
                     expr, binding_fd, bound_receiver, sink_requires_object,
                 ):

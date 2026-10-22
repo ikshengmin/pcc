@@ -572,6 +572,39 @@ class MethodCallLoweringMixin:
         _method_release_arg_provenance(self, arg_provenance)
         return result
 
+    def _direct_method_result_slot(self, info, method_name, expr):
+        """The consumer's output slot for ``expr`` when the direct method ABI
+        publishes its result there at the return instruction, else None.
+
+        An object operand (``v.dot(w) % 7``) registers an empty owning slot
+        before its operands evaluate and needs the result published there
+        before argument cleanup can run a finalizer that moves it. The plain
+        direct path does that through _call_user. A closure method, a call
+        whose omitted definition defaults bind at run time, an async or
+        may-park method and a raw-pointer result do not, so their object
+        consumers keep the runtime-bound call."""
+        sink = self._slot_call_result_sink(expr)
+        if sink is None:
+            return None
+        if self.class_lowering.method_name_is_closure(info, method_name):
+            return None
+        method_fn = info.methods.get(method_name)
+        ast_fd = self.class_lowering._find_method_def(info.name, method_name)
+        if (method_fn is None or ast_fd is None or ast_fd.is_async
+                or isinstance(ast_fd.return_ty, RawPointerType)
+                or method_fn.name in self._manual_pointer_abi_functions):
+            return None
+        if self.class_lowering.has_definition_defaults(info, method_name) and (
+            not _statically_bindable_call(expr.args, expr.kwargs, ast_fd.args, True)
+        ):
+            return None
+        if (id(ast_fd) in getattr(self, "_vthread_may_park_method_ids", set())
+                or info.name + "." + method_name in getattr(
+                    self, "_vthread_may_park_method_keys", set())
+                or method_name in getattr(info, "may_park_methods", set())):
+            return None
+        return sink
+
     def _emit_direct_method_receiver(self, expression, info, method_name):
         method = info.methods[method_name]
         definition = self.class_lowering._find_method_def(info.name, method_name)
@@ -594,6 +627,9 @@ class MethodCallLoweringMixin:
         result_slot=None,
         receiver_expr: Optional[Expr] = None,
     ) -> ir.Value:
+        if result_slot is None and park_expr is not None:
+            # An object operand consumer's slot, when this ABI publishes there.
+            result_slot = self._direct_method_result_slot(info, method_name, park_expr)
         # A receiver the call expression created (``Box(2).method()``) is an
         # owned temporary that this call consumes, as it does its arguments.
         receiver_owned = bool(
