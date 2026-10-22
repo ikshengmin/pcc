@@ -9,7 +9,11 @@ operands Python evaluates before the park, and the parking operand, into
 generator frame roots in evaluation order, then lowers the rest from them.
 
 The spilled roots are released when the statement ends; the token's
-finalizer shows it, on the normal and on the exception path.
+finalizer shows it, on the normal and on the exception path. Augmented
+assignment to an attribute, a subscript or a global reads the target before
+the park, as Python does; a parking subscript in an assignment target, a
+star operand before the park, ``if``/``while`` tests and a ``for`` iterable
+are covered too.
 """
 
 from __future__ import annotations
@@ -65,6 +69,42 @@ def keep(token, value):
     return token.value + value
 
 
+counter = 1
+
+
+class Tally:
+    def __init__(self):
+        self.total = 1
+        self.items = [0, 0]
+
+
+def targets():
+    global counter
+    out = []
+    tally = Tally()
+    tally.total += fetch(2)
+    out.append(tally.total)
+    tally.items[1] += fetch(2)
+    out.append(tally.items)
+    counter += fetch(2)
+    out.append(counter)
+    table = {}
+    table[fetch(1)] = "v"
+    out.append(table)
+    xs = [1, 2]
+    out.append([*xs, fetch(1)])
+    a = 3
+    if plain(a, fetch(1)) > 5:
+        out.append("big")
+    n = 0
+    while plain(1, fetch(n)) < 25:
+        n = n + 1
+    out.append(n)
+    for item in plain([a], [fetch(1)]):
+        out.append(item)
+    return out
+
+
 def shapes():
     out = []
     totals = G
@@ -109,10 +149,12 @@ def finalizers():
 def main():
     first = vt.spawn(shapes)
     second = vt.spawn(finalizers)
+    third = vt.spawn(targets)
     vt.run(1, 256)
     for value in vt.result(first):
         print(value)
     print(vt.result(second))
+    print(vt.result(third))
 
 
 main()
@@ -131,6 +173,7 @@ EXPECTED = (
     "21\n"
     "52\n"
     "[['drop1'], ['drop1', 'drop2']]\n"
+    "[21, [0, 20], 21, {10: 'v'}, [1, 2, 10], 'big', 3, 3, 10]\n"
 )
 
 
