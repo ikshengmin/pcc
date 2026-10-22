@@ -427,6 +427,14 @@ def pcc_current_thread_id() -> int:
     return thread_id
 
 
+@c_abi_export("pcc_thread_registered")
+def pcc_thread_registered() -> int:
+    """Whether the calling thread is in the live set already."""
+    if ptr_to_int(load_ptr(global_addr("pcc_tls_thread_id_py"), 0)) != 0:
+        return 1
+    return 0
+
+
 def _outermost_frame_pointer() -> int:
     frame = frame_address()
     outer: int = ptr_to_int(frame)

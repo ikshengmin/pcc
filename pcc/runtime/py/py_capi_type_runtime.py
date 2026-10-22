@@ -61,6 +61,7 @@ from pcc.unsafe import (
     cstr,
     define_global_cstr,
     define_global_i32,
+    define_thread_local_i32,
     define_global_null_ptr_array,
     define_global_ptr_null,
     define_global_ptr_to_global,
@@ -708,14 +709,41 @@ def PyMutex_Unlock(m) -> None:
     return
 
 
+# PyGILState nesting on this thread, and whether its first Ensure attached it.
+define_thread_local_i32("pcc_tls_gilstate_depth", 0)
+define_thread_local_i32("pcc_tls_gilstate_attached", 0)
+pcc_thread_registered = extern("pcc_thread_registered", (), c_int64)
+pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
+pcc_thread_unregister_current = extern(
+    "pcc_thread_unregister_current", (), c_void
+)
+
+
 @c_abi_typed_export("PyGILState_Ensure", "i64", ())
 def PyGILState_Ensure() -> int:
+    """Attach the calling thread before it touches an object.
+
+    A thread the runtime has not seen joins the live set here; nested calls
+    count."""
+    depth: int = load_i32(global_addr("pcc_tls_gilstate_depth"), 0)
+    if depth == 0 and pcc_thread_registered() == 0:
+        store_i32(global_addr("pcc_tls_gilstate_attached"), 0, 1)
+        pcc_current_thread_id()
+    store_i32(global_addr("pcc_tls_gilstate_depth"), 0, depth + 1)
     return 0
 
 
 @c_abi_typed_export("PyGILState_Release", "void", ("i64",))
 def PyGILState_Release(state: int) -> None:
-    return
+    """The outermost release of a thread Ensure attached leaves the live set,
+    as CPython deletes the thread state that Ensure created."""
+    depth: int = load_i32(global_addr("pcc_tls_gilstate_depth"), 0)
+    if depth <= 0:
+        return
+    store_i32(global_addr("pcc_tls_gilstate_depth"), 0, depth - 1)
+    if depth == 1 and load_i32(global_addr("pcc_tls_gilstate_attached"), 0) != 0:
+        store_i32(global_addr("pcc_tls_gilstate_attached"), 0, 0)
+        pcc_thread_unregister_current()
 
 
 @c_abi_typed_export("PyGILState_Check", "i32", ())

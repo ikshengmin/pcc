@@ -4,17 +4,21 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import PY_TYPE_INT
 
-from pcc.extern import c_abi_typed_export, c_ptr, c_void, extern
+from pcc.extern import c_abi_typed_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i64,
     atomic_store_i64,
     define_global_ptr_null,
+    frame_address,
     global_load_ptr,
     global_store_ptr,
+    int_to_ptr,
     is_tagged_int,
     load_i32,
+    load_ptr,
     null,
     ptr_is_null,
+    ptr_to_int,
 )
 
 
@@ -23,6 +27,12 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_thread_blocking_enter = extern(
+    "pcc_thread_blocking_enter", (c_ptr,), c_int64
+)
+pcc_thread_blocking_leave = extern(
+    "pcc_thread_blocking_leave", (c_int64,), c_void
+)
 
 
 define_global_ptr_null("pcc_capi_builtins")
@@ -91,12 +101,23 @@ def PyTraceMalloc_Untrack(domain: int, ptr: int) -> int:
 
 @c_abi_typed_export("PyEval_SaveThread", "ptr", ())
 def PyEval_SaveThread():
-    return null()
+    """Py_BEGIN_ALLOW_THREADS: detach around a blocking call.
+
+    The thread enters the blocking state from its caller's frame, which
+    stays live until PyEval_RestoreThread, so a stop of the world does not
+    wait for a poll the thread cannot make while it blocks. The caller
+    touches no object until it restores. The returned token goes back to
+    PyEval_RestoreThread."""
+    entered: int = pcc_thread_blocking_enter(load_ptr(frame_address(), 0))
+    return int_to_ptr(entered + 1)
 
 
 @c_abi_typed_export("PyEval_RestoreThread", "void", ("ptr",))
 def PyEval_RestoreThread(ts) -> None:
-    return
+    """Py_END_ALLOW_THREADS: wait out a stopped world, then run again."""
+    if ptr_is_null(ts) != 0:
+        return
+    pcc_thread_blocking_leave(ptr_to_int(ts) - 1)
 
 
 @c_abi_typed_export("Py_IsInitialized", "i32", ())
