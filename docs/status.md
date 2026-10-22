@@ -712,8 +712,30 @@ Open:
   and tracked, instances own their class, classes own their bases, and a
   method call releases a receiver its expression created. Repro:
   `uv run pytest -x -q -n0 tests/python/test_native_class_collection.py`.
-  Open: user type tags are not recycled at class dealloc; pcc1 self-host with
-  mortal classes is not yet run.
+  Class markers live on their own header bits (PY_FLAG_CLASS_SLOTS_ONLY,
+  PY_FLAG_CLASS_DICT_SUBCLASS) since `77b30de47`. Open, in order:
+  - Builtin subclasses: `isinstance(D(), dict)` is False because
+    `emit_builtin_runtime_isinstance_impl` compares exact type tags for every
+    builtin but str/tuple/type; `class D(dict)` called with arguments never
+    reaches `py_dict_subclass_init_slots` (declared, not called), so
+    `D(a=1)` is empty. Repro: a module-level `class G(dict): pass` and
+    `G(a=1)`, on GC0 and GC4.
+  - `tests/python/test_threaded_exception_class_cache.py`: its model lacks
+    `py_class_new_builtin` (10 nodes).
+  - `tests/python/test_py_value_class_unboxed.py`: 5 IR-shape nodes fail
+    (e.g. `value.Point.unbox.typeerror` missing).
+  - `tests/python/test_dict_super_slot_roots.py`: model lacks
+    `_dict_raise_sequence_element` (2 nodes).
+  - About ten IR tests still match only unmapped `pcc_gc_frame_enter_lifo(`
+    (test_slot_call_exception_cleanup, test_numeric_return_owners,
+    test_owned_cleanup_helper_ir, test_imported_constructor_binding,
+    test_lambda_adapter_scope_lifetime, class_method_ir_checks,
+    test_typed_attr_store_fast_path, ...).
+  - DynType native method intercepts (bit_length, is_integer, the
+    dict/list/set/str via-dyn emitters) do not release an owned temporary
+    receiver.
+  - User type tags are not recycled at class dealloc; pcc1 self-host with
+    mortal classes is not yet run (gate needs the maintainer's go-ahead).
 - Local-class `super()` segfaults on GC0-GC4 (repros in the archive).
 - `pcc/stdlib/json.py` differs from CPython json (escapes, key conversion,
   messages, circular check, missing parameters); the module needs CPython's
