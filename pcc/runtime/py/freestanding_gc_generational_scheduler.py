@@ -462,15 +462,13 @@ def pcc_gc_generational_step(
     return local_processed
 
 
-@c_abi_export("pcc_gc_backend4_step_remembered_roots")
-def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
-    """Drain one GC4 remembered batch with callback-capable cleanup unlocked."""
-    if remaining_budget <= 0:
-        return 0
-    # The whole budget: an eight-entry cap fell behind any mutator that
-    # stores young values into old objects, and while entries remain a GC4
-    # step does no other work.
+@c_abi_export("pcc_gc_backend4_drain_remembered_batch")
+def _backend4_drain_remembered_batch(remaining_budget: i64) -> i64:
+    """Drain one bounded GC4 store-buffer batch under the graph lock, then
+    run its callback-capable cleanup unlocked."""
     batch_limit: i64 = remaining_budget
+    if batch_limit > 8:
+        batch_limit = 8
     cleanup = null()
     local_drained: i64 = 0
 
@@ -698,6 +696,25 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
         free(cleanup)
         py_decref(value)
         cleanup = nxt
+    return local_drained
+
+
+@c_abi_export("pcc_gc_backend4_step_remembered_roots")
+def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
+    """Drain GC4 store-buffer batches until the budget or the buffer runs out.
+
+    Each batch holds the graph lock for at most eight entries. One batch per
+    step fell behind any mutator storing young values into old objects, and
+    while entries remain a GC4 step does no other work, so the buffer grew
+    without bound.
+    """
+    if remaining_budget <= 0:
+        return 0
+    local_drained: i64 = 0
+    batch_drained: i64 = 1
+    while local_drained < remaining_budget and batch_drained > 0:
+        batch_drained = _backend4_drain_remembered_batch(remaining_budget - local_drained)
+        local_drained = local_drained + batch_drained
     promotion_examined: i64 = 0
     if local_drained < remaining_budget:
         promotion_examined = pcc_gc_backend3_drain_promotion_worklist(

@@ -152,7 +152,8 @@ def test_program_classes_are_collectable_and_runtime_global_classes_immortal():
     # A class a program creates is a heap type: py_class_new tracks it and
     # never makes it immortal (tests/python/test_native_class_collection.py
     # runs the collection). A class the runtime keeps in a raw global comes
-    # from py_class_new_builtin, immortal and untracked as a static type.
+    # from py_class_new_builtin, immortal and untracked as a static type, but
+    # not pinned: a relocating collector may still move it.
     tree = ast.parse(CLASS_SOURCE.read_text())
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
 
@@ -163,7 +164,10 @@ def test_program_classes_are_collectable_and_runtime_global_classes_immortal():
     constructor = functions['py_class_new']
     assert not any(isinstance(node, ast.Name) and node.id == 'PY_FLAG_IMMORTAL' for node in ast.walk(constructor))
     assert 'py_gc_track' in called(constructor)
-    assert {'py_class_new', 'py_gc_untrack', 'pcc_gc_immortalize'} <= called(functions['py_class_new_builtin'])
+    builtin = functions['py_class_new_builtin']
+    assert {'py_class_new', 'py_gc_untrack', 'atomic_rmw_i32'} <= called(builtin)
+    assert any(isinstance(node, ast.Name) and node.id == 'PY_FLAG_IMMORTAL' for node in ast.walk(builtin))
+    assert not {'pcc_gc_pin', 'pcc_gc_immortalize'} & called(builtin)
 
 
 def test_class_retirement_keeps_relation_owned_across_cache_safepoint():

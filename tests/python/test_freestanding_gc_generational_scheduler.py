@@ -24,6 +24,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend3_scheduler_root_scan_reset_locked",
     "pcc_gc_backend4_step_generation_aging",
     "pcc_gc_backend4_step_remembered_roots",
+    "pcc_gc_backend4_drain_remembered_batch",
     "pcc_gc_generational_promote_frame_roots",
     "pcc_gc_generational_promote_scheduler_roots",
     "pcc_gc_generational_promote_extension_module_state_root",

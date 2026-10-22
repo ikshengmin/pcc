@@ -99,6 +99,7 @@ class _Memory:
             "_backend4_store_buffer_max_owner_fanout", "_backend4_reset_store_buffer_epoch_state",
         })
         _load_functions(SCHEDULER, self.namespace, {
+            "_backend4_drain_remembered_batch",
             "pcc_gc_backend4_step_remembered_roots",
         })
 
@@ -315,7 +316,8 @@ def test_cleanup_reenqueue_preserves_new_membership_after_drained_epoch():
         memory.enqueue(owner)
 
     memory.cleanup_callback = reenqueue
-    assert memory.drain() == 1
+    # A one-entry budget stops after the batch whose cleanup re-enqueued.
+    assert memory.drain(1) == 1
     assert memory.owners() == {owner: 1}
     assert memory.count() == memory.maybe(owner) == 1
     assert memory.read(owner, 12) & 512

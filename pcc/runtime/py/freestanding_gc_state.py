@@ -234,6 +234,13 @@ define_global_ptr_null("pcc_gc_backend4_active_medium_young_page")
 define_global_ptr_null("pcc_gc_backend4_active_medium_old_page")
 define_global_ptr_null("pcc_gc_backend4_remembered_slots_head")
 define_global_ptr_null("pcc_gc_backend4_remembered_page_head")
+# The remembered pages by page address, and whether the pages and that index
+# still cover every remembered slot (an allocation failure ends both).
+define_global_ptr_null("pcc_gc_backend4_remembered_page_index_slots")
+define_global_i64("pcc_gc_backend4_remembered_page_index_cap", 0)
+define_global_i64("pcc_gc_backend4_remembered_page_index_count", 0)
+define_global_i64("pcc_gc_backend4_remembered_page_index_used", 0)
+define_global_i32("pcc_gc_backend4_remembered_page_incomplete", 0)
 define_global_ptr_null("pcc_gc_object_node_free_head")
 define_global_i32("pcc_gc_object_node_free_count", 0)
 define_global_ptr_null("pcc_gc_backend4_zpage_node_free_head")

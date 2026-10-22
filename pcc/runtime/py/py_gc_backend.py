@@ -41,6 +41,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_diff,
     ptr_to_int,
+    int_to_ptr,
     ptr_eq,
     ptr_is_null,
     stack_alloc,
@@ -92,6 +93,15 @@ pcc_gc_store_buffer_owner_entries = extern("pcc_gc_store_buffer_owner_entries", 
 pcc_gc_store_buffer_slot_pending = extern("pcc_gc_store_buffer_slot_pending", (c_ptr,), c_int64)
 pcc_gc_store_buffer_slot_move = extern("pcc_gc_store_buffer_slot_move", (c_ptr, c_ptr), c_void)
 pcc_gc_store_buffer_index_clear = extern("pcc_gc_store_buffer_index_clear", (), c_void)
+pcc_gc_index_py_find_slot = extern("pcc_gc_index_py_find_slot", (c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_index_py_insert = extern(
+    "pcc_gc_index_py_insert",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64, c_int64),
+    c_int64,
+)
+pcc_gc_index_py_remove = extern(
+    "pcc_gc_index_py_remove", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64), c_ptr
+)
 pcc_gc_remembered_member_clear = extern("pcc_gc_remembered_member_clear", (), c_void)
 
 
@@ -1870,6 +1880,12 @@ def _backend4_remembered_set_contains(owner, slot) -> int:
         return 0
     if ptr_is_null(slot) != 0:
         return 0
+    # Every remembered (owner, slot) sets its slot's byte in the remembered
+    # pages (_backend4_remembered_entry_attach), and a slot belongs to one
+    # owner: the page byte answers in constant time unless a page allocation
+    # failed, when the list walk does.
+    if load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+        return _backend4_remembered_page_contains_slot(slot)
     node = _remembered_set_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), owner) != 0:
@@ -1979,12 +1995,59 @@ def _backend4_zpage_note_remembered_card(owner, slot, delta: int) -> None:
 
 
 def _backend4_remembered_page_find(key: int):
+    # The page index answers in constant time; while it is incomplete (an
+    # allocation failed), walk the page list.
+    if key != 0 and load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+        slots = global_load_ptr("pcc_gc_backend4_remembered_page_index_slots")
+        if ptr_is_null(slots) != 0:
+            return null()
+        cap: int = load_i64(global_addr("pcc_gc_backend4_remembered_page_index_cap"), 0)
+        result: int = pcc_gc_index_py_find_slot(slots, cap, int_to_ptr(key))
+        if result < 0:
+            return null()
+        return load_ptr(slots, result * 16 + 8)
     node = global_load_ptr("pcc_gc_backend4_remembered_page_head")
     while ptr_is_null(node) == 0:
         if load_i64(node, 0) == key:
             return node
         node = load_ptr(node, 16)
     return null()
+
+
+def _backend4_remembered_page_unlink(page) -> None:
+    # Only a page whose last slot left is unlinked, so the list walk for its
+    # predecessor is paid once per page, not once per slot.
+    prev = null()
+    node = global_load_ptr("pcc_gc_backend4_remembered_page_head")
+    while ptr_is_null(node) == 0:
+        if ptr_eq(node, page) != 0:
+            nxt = load_ptr(page, 16)
+            if ptr_is_null(prev) != 0:
+                global_store_ptr("pcc_gc_backend4_remembered_page_head", nxt)
+            else:
+                store_ptr(prev, 16, nxt)
+            if load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+                pcc_gc_index_py_remove(
+                    global_addr("pcc_gc_backend4_remembered_page_index_slots"),
+                    global_addr("pcc_gc_backend4_remembered_page_index_cap"),
+                    global_addr("pcc_gc_backend4_remembered_page_index_count"),
+                    global_addr("pcc_gc_backend4_remembered_page_index_used"),
+                    int_to_ptr(load_i64(page, 0)),
+                    1,
+                )
+            free(page)
+            entries: int = load_i32(
+                global_addr("pcc_gc_backend4_remembered_page_entries_count"), 0
+            )
+            if entries > 0:
+                store_i32(
+                    global_addr("pcc_gc_backend4_remembered_page_entries_count"),
+                    0,
+                    entries - 1,
+                )
+            return
+        prev = node
+        node = load_ptr(node, 16)
 
 
 def _backend4_remembered_page_add(slot) -> None:
@@ -1997,6 +2060,8 @@ def _backend4_remembered_page_add(slot) -> None:
     if ptr_is_null(page) != 0:
         page = malloc(536)
         if ptr_is_null(page) != 0:
+            # The page bytes no longer cover every remembered slot.
+            store_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0, 1)
             return
         store_i64(page, 0, key)
         store_i64(page, 8, 0)
@@ -2006,6 +2071,19 @@ def _backend4_remembered_page_add(slot) -> None:
             store_i64(page, 24 + word * 8, 0)
             word = word + 1
         global_store_ptr("pcc_gc_backend4_remembered_page_head", page)
+        if load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+            if pcc_gc_index_py_insert(
+                global_addr("pcc_gc_backend4_remembered_page_index_slots"),
+                global_addr("pcc_gc_backend4_remembered_page_index_cap"),
+                global_addr("pcc_gc_backend4_remembered_page_index_count"),
+                global_addr("pcc_gc_backend4_remembered_page_index_used"),
+                int_to_ptr(key),
+                page,
+                1,
+                1,
+                256,
+            ) != 1:
+                store_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0, 1)
         entries: int = load_i32(
             global_addr("pcc_gc_backend4_remembered_page_entries_count"), 0
         ) + 1
@@ -2040,48 +2118,28 @@ def _backend4_remembered_page_remove_slot(slot) -> None:
     address: int = ptr_to_int(slot)
     key: int = address - (address % 4096)
     byte: int = (address % 4096) // 8
-    prev = null()
-    page = global_load_ptr("pcc_gc_backend4_remembered_page_head")
-    while ptr_is_null(page) == 0:
-        if load_i64(page, 0) == key:
-            if load_i8(page, 24 + byte) == 0:
-                return
-            store_i8(page, 24 + byte, 0)
-            remaining: int = load_i64(page, 8) - 1
-            store_i64(page, 8, remaining)
-            slot_entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_page_slot_entries_count"),
-                0,
-            )
-            if slot_entries > 0:
-                store_i32(
-                    global_addr(
-                        "pcc_gc_backend4_remembered_page_slot_entries_count"
-                    ),
-                    0,
-                    slot_entries - 1,
-                )
-            if remaining <= 0:
-                nxt = load_ptr(page, 16)
-                if ptr_is_null(prev) != 0:
-                    global_store_ptr("pcc_gc_backend4_remembered_page_head", nxt)
-                else:
-                    store_ptr(prev, 16, nxt)
-                free(page)
-                entries: int = load_i32(
-                    global_addr("pcc_gc_backend4_remembered_page_entries_count"), 0
-                )
-                if entries > 0:
-                    store_i32(
-                        global_addr(
-                            "pcc_gc_backend4_remembered_page_entries_count"
-                        ),
-                        0,
-                        entries - 1,
-                    )
-            return
-        prev = page
-        page = load_ptr(page, 16)
+    page = _backend4_remembered_page_find(key)
+    if ptr_is_null(page) != 0:
+        return
+    if load_i8(page, 24 + byte) == 0:
+        return
+    store_i8(page, 24 + byte, 0)
+    remaining: int = load_i64(page, 8) - 1
+    store_i64(page, 8, remaining)
+    slot_entries: int = load_i32(
+        global_addr("pcc_gc_backend4_remembered_page_slot_entries_count"),
+        0,
+    )
+    if slot_entries > 0:
+        store_i32(
+            global_addr(
+                "pcc_gc_backend4_remembered_page_slot_entries_count"
+            ),
+            0,
+            slot_entries - 1,
+        )
+    if remaining <= 0:
+        _backend4_remembered_page_unlink(page)
 
 
 def _backend4_remembered_page_contains_slot(slot) -> int:
@@ -2097,6 +2155,13 @@ def _backend4_remembered_page_contains_slot(slot) -> int:
 def _backend4_remembered_pages_clear() -> None:
     page = global_load_ptr("pcc_gc_backend4_remembered_page_head")
     global_store_ptr("pcc_gc_backend4_remembered_page_head", null())
+    index_slots = global_load_ptr("pcc_gc_backend4_remembered_page_index_slots")
+    global_store_ptr("pcc_gc_backend4_remembered_page_index_slots", null())
+    store_i64(global_addr("pcc_gc_backend4_remembered_page_index_cap"), 0, 0)
+    store_i64(global_addr("pcc_gc_backend4_remembered_page_index_count"), 0, 0)
+    store_i64(global_addr("pcc_gc_backend4_remembered_page_index_used"), 0, 0)
+    store_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0, 0)
+    free(index_slots)
     while ptr_is_null(page) == 0:
         nxt = load_ptr(page, 16)
         free(page)

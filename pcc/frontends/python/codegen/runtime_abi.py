@@ -1656,6 +1656,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
 # extra live LLVM type objects while importing this module.
 FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
     {
+        'pcc_gc_backend4_remembered_page_incomplete',
         'pcc_builtin_function_cache_registered',
         'pcc_gc_backend0_frame_roots_enabled',
         'pcc_gc_backend3_frame_root_scan_phase',
@@ -1826,6 +1827,9 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_finish_claim_epoch',
         'pcc_gc_tracing_finish_commits',
         'pcc_gc_tracing_no_candidate_commit',
+        'pcc_gc_backend4_remembered_page_index_cap',
+        'pcc_gc_backend4_remembered_page_index_count',
+        'pcc_gc_backend4_remembered_page_index_used',
         'pcc_gc_tracing_finish_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
@@ -1864,6 +1868,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_reseed_page_count_cursor',
         'pcc_gc_backend4_reseed_relocation_cursor',
         'pcc_gc_backend4_remembered_page_head',
+        'pcc_gc_backend4_remembered_page_index_slots',
         'pcc_gc_backend4_remembered_slots_head',
         'pcc_gc_backend4_selector_page',
         'pcc_gc_backend4_selector_page_cursor',

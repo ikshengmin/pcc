@@ -31,7 +31,7 @@ def _load_functions(path, namespace, names):
 
 
 class _Memory:
-    def __init__(self):
+    def __init__(self, real_pages=False):
         self.cells = {}
         self.blocks = {}
         self.next_pointer = 0x10000
@@ -50,6 +50,7 @@ class _Memory:
             "ptr_add": lambda base, offset: base + offset,
             "ptr_diff": lambda left, right: left - right,
             "ptr_to_int": int,
+            "int_to_ptr": int,
             "is_tagged_int": lambda value: int(bool(value & 1)),
             "logical_shift_right_i64": lambda value, shift: (value & ((1 << 64) - 1)) >> shift,
             "wrapping_mul_i64": lambda left, right: (left * right) & ((1 << 64) - 1),
@@ -104,6 +105,18 @@ class _Memory:
             "pcc_gc_backend4_retarget_mutator_payload_locked",
             "pcc_gc_note_object_freeing",
         })
+        if real_pages:
+            # The remembered pages answer membership by slot.
+            _load_functions(BACKEND, self.namespace, {
+                "_backend4_remembered_entry_attach", "_backend4_remembered_entry_detach",
+                "_backend4_remembered_page_find", "_backend4_remembered_page_unlink",
+                "_backend4_remembered_page_add", "_backend4_remembered_page_remove_slot",
+                "_backend4_remembered_page_contains_slot", "_backend4_remembered_pages_clear",
+            })
+        else:
+            # Without pages the remembered list is the only authority: these
+            # cases exercise its walks, mutation order and free reentry.
+            self.write("pcc_gc_backend4_remembered_page_incomplete", 0, 1)
         self.owner_node = self.allocate(80)
         self.page = self.allocate(256)
         self.write(self.owner_node, 8, self.page)
@@ -414,7 +427,7 @@ def test_retarget_revalidates_target_after_real_page_free_callback():
     memory = _Memory()
     _load_functions(BACKEND, memory.namespace, {
         "_backend4_remembered_page_find", "_backend4_remembered_page_add",
-        "_backend4_remembered_page_remove_slot",
+        "_backend4_remembered_page_remove_slot", "_backend4_remembered_page_unlink",
         "_backend4_remembered_entry_attach", "_backend4_remembered_entry_detach",
     })
     old, new = memory.owner(), memory.owner()
@@ -459,3 +472,24 @@ def test_last_slot_deletion_keeps_only_a_safe_stale_owner_key(method):
     assert memory.members() == [] and memory.maybe(owner) == 1
     memory.call("pcc_gc_note_object_freeing", owner)
     assert memory.maybe(owner) == 0
+
+
+def test_duplicate_check_reads_the_page_byte_not_the_remembered_list():
+    # Building a 200k-node old list walked the whole remembered list on
+    # every append (quadratic); the page byte answers the duplicate check.
+    memory = _Memory(real_pages=True)
+    owner = memory.owner()
+    slots = memory.allocate(8 * 600)
+    for index in range(600):
+        assert memory.add(owner, slots + 8 * index) == 1
+    memory.head_reads = memory.list_reads = 0
+    for index in range(600):
+        assert memory.add(owner, slots + 8 * index) == 0
+    assert memory.list_reads == 0 and memory.head_reads == 0
+    assert len(memory.members()) == 600
+    # After a page allocation failure the bytes no longer cover every slot:
+    # the exact list walk answers until the set is cleared.
+    memory.write("pcc_gc_backend4_remembered_page_incomplete", 0, 1)
+    memory.list_reads = 0
+    assert memory.add(owner, slots + 8 * 7) == 0
+    assert memory.list_reads > 0

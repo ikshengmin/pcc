@@ -229,7 +229,6 @@ py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
-pcc_gc_immortalize = extern("pcc_gc_immortalize", (c_ptr,), c_void)
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
 )
@@ -6360,7 +6359,9 @@ def py_class_new_builtin(name, bases, n_bases: int, field_names, n_fields: int):
     cls = py_class_new(name, bases, n_bases, field_names, n_fields)
     if ptr_is_null(cls) == 0:
         py_gc_untrack(cls)
-        pcc_gc_immortalize(cls)
+        # Immortal, not pinned: a relocating collector may still move it, as
+        # it moved every class before program classes became collectable.
+        atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed")
     return cls
 
 
