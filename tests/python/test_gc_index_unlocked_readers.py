@@ -31,7 +31,7 @@ from unittest.mock import patch
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.pipeline_targets import host_target_triple
 
-from _gc_substrate_common import _compile_runtime_probe
+from tests.owned_c_execution import compile_owned_c_with_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -239,6 +239,7 @@ static void *worker(void *unused) {
 }
 
 int main(void) {
+    int64_t backend = pcc_gc_backend();
     int64_t cap_before = pcc_py_gc_managed_pointer_cap;
     /* One registered thread: every table the set outgrows is freed at once. */
     for (int i = 0; i < ALONE; i++) {
@@ -277,19 +278,24 @@ int main(void) {
         if (pcc_gc_managed_pointer_index_seen(obj) != 1) return 17;
         if (pcc_gc_pointer_unregister(obj) != 1) return 18;
     }
-    printf("reclaim-ok %lld\n", (long long)kept);
+    printf("reclaim-ok %lld %lld\n", (long long)backend, (long long)kept);
     return 0;
 }
 """
 
 
-def test_retired_tables_are_freed_when_no_thread_can_probe_them(tmp_path: Path):
-    executable = _compile_runtime_probe(
-        tmp_path, kind="pcc_python", threaded=True,
-        stem="index_retired_reclaim", source_text=RECLAIM_PROBE,
+def test_retired_tables_are_freed_when_no_thread_can_probe_them(
+    tmp_path: Path, pcc_runtime_archive,
+):
+    source = tmp_path / "index_retired_reclaim.c"
+    source.write_text(RECLAIM_PROBE, encoding="utf-8")
+    executable = tmp_path / "index_retired_reclaim"
+    compile_owned_c_with_runtime(
+        source, executable, runtime_archive=pcc_runtime_archive,
+        cpp_args=("-I" + str(REPO_ROOT / "pcc/runtime/src"),),
     )
     for backend in (0, 4):
         run = subprocess.run([str(executable)], capture_output=True, text=True,
                              timeout=120, env={**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert run.returncode == 0, f"GC{backend}: {run.returncode} {run.stderr[-2000:]}"
-        assert run.stdout.startswith("reclaim-ok ")
+        assert run.stdout.startswith(f"reclaim-ok {backend} "), run.stdout
