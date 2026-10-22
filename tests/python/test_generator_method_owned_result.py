@@ -323,7 +323,7 @@ def _assert_generator_function_slots(module, function, symbol, mode, mutation=No
         else:
             assert mutation == "premature-result-retirement"
             leave = next(ins for owner in blocks for ins in owner.instructions
-                         if ins.kind == "call" and ins.data[2] == "pcc_gc_frame_leave_lifo")
+                         if RootSlotContract.called(ins, "pcc_gc_frame_leave_lifo"))
             arguments = ((leave.data[4][0][0], published.data[3]),)
             block.instructions.insert(index + 2, SimpleNamespace(
                 kind="call", data=leave.data[:4] + (arguments,) + leave.data[5:]))

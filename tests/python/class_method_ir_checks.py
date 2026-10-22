@@ -40,7 +40,7 @@ def check_method_frames(text):
             stack, dirty = list(incoming), set(dirty_before)
             successors = []
             for line in blocks[block]:
-                entered = re.search(r'@pcc_gc_frame_enter_lifo\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
+                entered = re.search(r'@pcc_gc_frame_enter_lifo(?:_mapped)?\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
                 if entered:
                     root = canonical(entered[1])
                     assert root not in stack, (name, block, 'double registration', root)
@@ -68,7 +68,7 @@ def check_method_frames(text):
                 )
                 if disposed:
                     dirty.discard(canonical(disposed[1]))
-                leaving = re.search(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.$]+)\)', line)
+                leaving = re.search(r'@pcc_gc_frame_leave_lifo(?:_mapped)?\(ptr (%[\w.$]+)\)', line)
                 if leaving:
                     root = canonical(leaving[1])
                     assert stack and stack[-1] == root, (name, block, 'non-LIFO release', root, stack)
