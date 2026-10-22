@@ -494,9 +494,10 @@ Open:
 - Next (my ordering, open to redirection): the builtin-base namespaces
   above, #82 stage 3, then the gateway regression (handoff below) and the
   10-20 queue.
-- Maintainer decisions today, in their words: GC0 class collection, "10
-  不用做。遇到再说。"; the quota-checkpoint rule, "如果是， agents.md 移除。"
-  (removed in `8e4cd818e`); "删删除 bisect-wt worktree。" (removed).
+- Maintainer decisions (2026-10-21): GC0 class collection (item 10) was left
+  until it came up; runtime classes are collected since 2026-10-22. The
+  quota-checkpoint rule was removed from AGENTS.md (`8e4cd818e`), and the
+  bisect-wt worktree was removed.
 
 ### CPython Lib/test conformance and open work (2026-10-21, Claude)
 
@@ -2317,7 +2318,7 @@ eight `test_gc_backend4_production.py` cases,
 
 ## CI (follow each pushed commit)
 
-CI limits changed in `263d12af` (maintainer request: "至少能成功"). The push
+CI limits changed in `263d12af` (maintainer request: at least make it pass). The push
 gate on Linux/Windows is now `bootstrap_platform.py --gc all --stage 1`: Stage1
 and the native canary under all five collectors. The Stage2/Stage3 fixed point
 is unchanged as a definition and runs by manual `workflow_dispatch` with
