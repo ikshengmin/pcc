@@ -56,8 +56,10 @@ from pcc.unsafe import (
     atomic_rmw_i64,
     define_global_i32,
     define_global_i64_array,
+    define_thread_local_ptr_null,
     global_addr,
     global_load_ptr,
+    global_store_ptr,
     cstr,
     float_to_i64,
     is_tagged_int,
@@ -3550,90 +3552,191 @@ def _elem_repr(item):
     return r
 
 
+# A container repr builds its text in one growing byte buffer on its stack:
+#   [0] data   [8] used bytes   [16] capacity
+# Joining each element's repr onto a fresh str copied the text so far for
+# every element, which made a long container's repr quadratic.
+
+
+def _repr_buffer_open(buf) -> None:
+    store_ptr(buf, 0, py_mem_alloc(256))
+    store_i64(buf, 8, 0)
+    store_i64(buf, 16, 256)
+
+
+def _repr_buffer_add(buf, data, n: int) -> None:
+    if n <= 0 or ptr_is_null(load_ptr(buf, 0)) != 0:
+        return
+    used: int = load_i64(buf, 8)
+    capacity: int = load_i64(buf, 16)
+    if used + n > capacity:
+        while capacity < used + n:
+            capacity = capacity * 2
+        grown = py_mem_alloc(capacity)
+        if ptr_is_null(grown) != 0:
+            py_mem_free(load_ptr(buf, 0))
+            store_ptr(buf, 0, null())
+            return
+        memcpy(grown, load_ptr(buf, 0), used)
+        py_mem_free(load_ptr(buf, 0))
+        store_ptr(buf, 0, grown)
+        store_i64(buf, 16, capacity)
+    memcpy(ptr_add(load_ptr(buf, 0), used), data, n)
+    store_i64(buf, 8, used + n)
+
+
+def _repr_buffer_take(buf, piece) -> None:
+    """Append an owned str's text and release it."""
+    if ptr_is_null(piece) == 0:
+        _repr_buffer_add(buf, ptr_add(piece, 40), load_i64(piece, 16))
+        py_decref(piece)
+
+
+def _repr_buffer_close(buf):
+    data = load_ptr(buf, 0)
+    if ptr_is_null(data) != 0:
+        return null()
+    out = py_str_new(data, load_i64(buf, 8))
+    py_mem_free(data)
+    return out
+
+
+# Py_ReprEnter: the containers whose repr is in progress on this thread, as a
+# chain of records on their reprs' stacks:  [0] container   [8] next
+# A container met again inside its own repr renders as "[...]", "(...)",
+# "{...}" or "set(...)", as in CPython, instead of recursing until the stack
+# overflows.
+define_thread_local_ptr_null("pcc_tls_repr_in_progress")
+
+
+def _repr_enter(record, o) -> int:
+    """Push ``record`` for ``o`` and return 1, or return 0 when ``o`` is
+    already being formatted on this thread."""
+    node = global_load_ptr("pcc_tls_repr_in_progress")
+    while ptr_is_null(node) == 0:
+        if ptr_eq(load_ptr(node, 0), o) != 0:
+            return 0
+        node = load_ptr(node, 8)
+    store_ptr(record, 0, o)
+    store_ptr(record, 8, global_load_ptr("pcc_tls_repr_in_progress"))
+    global_store_ptr("pcc_tls_repr_in_progress", record)
+    return 1
+
+
+def _repr_leave(record) -> None:
+    global_store_ptr("pcc_tls_repr_in_progress", load_ptr(record, 8))
+
+
 def _format_list_str(o):
-    acc = _str_lit1(91)  # '['
-    n: int = py_list_len(o)
+    # An element's __repr__ may change the list: its length and items are
+    # read again for every element, and the element is held while formatted.
+    record = stack_alloc(16)
+    if _repr_enter(record, o) == 0:
+        return py_str_new(cstr("[...]"), 5)
+    buf = stack_alloc(24)
+    _repr_buffer_open(buf)
+    _repr_buffer_add(buf, cstr("["), 1)
     i: int = 0
-    while i < n:
-        if i > 0:
-            acc = _cat_take(acc, _str_lit2(44, 32))  # ', '
-        acc = _cat_take(acc, _elem_repr(py_list_get(o, i)))
+    while i < py_list_len(o):
+        item = py_list_get(o, i)
+        if ptr_is_null(item) == 0:
+            if i > 0:
+                _repr_buffer_add(buf, cstr(", "), 2)
+            _repr_buffer_take(buf, _elem_repr(item))
+            py_decref(item)
         i = i + 1
-    acc = _cat_take(acc, _str_lit1(93))  # ']'
-    return acc
+    _repr_buffer_add(buf, cstr("]"), 1)
+    _repr_leave(record)
+    return _repr_buffer_close(buf)
 
 
 def _format_tuple_str(o):
-    acc = _str_lit1(40)  # '('
     n: int = py_tuple_len(o)
+    record = stack_alloc(16)
+    if _repr_enter(record, o) == 0:
+        return py_str_new(cstr("(...)"), 5)
+    buf = stack_alloc(24)
+    _repr_buffer_open(buf)
+    _repr_buffer_add(buf, cstr("("), 1)
     i: int = 0
     while i < n:
         if i > 0:
-            acc = _cat_take(acc, _str_lit2(44, 32))  # ', '
-        acc = _cat_take(acc, _elem_repr(py_tuple_get(o, i)))
+            _repr_buffer_add(buf, cstr(", "), 2)
+        item = py_tuple_get(o, i)
+        _repr_buffer_take(buf, _elem_repr(item))
+        if ptr_is_null(item) == 0:
+            py_decref(item)
         i = i + 1
     if n == 1:
-        acc = _cat_take(acc, _str_lit1(44))  # trailing ','
-    acc = _cat_take(acc, _str_lit1(41))  # ')'
-    return acc
+        _repr_buffer_add(buf, cstr(","), 1)  # trailing ','
+    _repr_buffer_add(buf, cstr(")"), 1)
+    _repr_leave(record)
+    return _repr_buffer_close(buf)
 
 
 def _format_dict_str(o):
     # PyDictObject: entries ptr @40, entries_used @48.  DictEntry (24 bytes):
-    # key @8 (NULL = dead), value @16.  Borrowed key/value via the GC barrier.
-    acc = _str_lit1(123)  # '{'
-    entries = load_ptr(o, 40)
-    entries_used: int = load_i64(o, 48)
+    # key @8 (NULL = dead), value @16.  A key's or value's __repr__ may change
+    # the dict: the entries are read again for every slot, and the key and
+    # value are held while formatted, as CPython's dict repr holds them.
+    record = stack_alloc(16)
+    if _repr_enter(record, o) == 0:
+        return py_str_new(cstr("{...}"), 5)
+    buf = stack_alloc(24)
+    _repr_buffer_open(buf)
+    _repr_buffer_add(buf, cstr("{"), 1)
     emitted: int = 0
     i: int = 0
-    while i < entries_used:
-        entry = ptr_add(entries, i * 24)
+    while i < load_i64(o, 48):
+        entry = ptr_add(load_ptr(o, 40), i * 24)
         if ptr_is_null(load_ptr(entry, 8)) == 0:
+            key = pcc_gc_load_ptr(o, ptr_add(entry, 8))
+            value = pcc_gc_load_ptr(o, ptr_add(entry, 16))
+            py_incref(key)
+            py_incref(value)
             if emitted > 0:
-                acc = _cat_take(acc, _str_lit2(44, 32))  # ', '
-            acc = _cat_take(acc, _elem_repr(pcc_gc_load_ptr(o, ptr_add(entry, 8))))
-            acc = _cat_take(acc, _str_lit2(58, 32))  # ': '
-            acc = _cat_take(acc, _elem_repr(pcc_gc_load_ptr(o, ptr_add(entry, 16))))
+                _repr_buffer_add(buf, cstr(", "), 2)
+            _repr_buffer_take(buf, _elem_repr(key))
+            _repr_buffer_add(buf, cstr(": "), 2)
+            _repr_buffer_take(buf, _elem_repr(value))
+            py_decref(value)
+            py_decref(key)
             emitted = emitted + 1
         i = i + 1
-    acc = _cat_take(acc, _str_lit1(125))  # '}'
-    return acc
+    _repr_buffer_add(buf, cstr("}"), 1)
+    _repr_leave(record)
+    return _repr_buffer_close(buf)
 
 
 def _format_set_str(o):
     # PySetObject: size @16, capacity @24, entries ptr @40.
     # SetEntry (16 bytes): key @8 (NULL empty, py_set_dummy tombstone).
-    size: int = load_i64(o, 16)
-    if size == 0:
-        buf = py_mem_alloc(6)
-        store_i8(buf, 0, 115)  # 's'
-        store_i8(buf, 1, 101)  # 'e'
-        store_i8(buf, 2, 116)  # 't'
-        store_i8(buf, 3, 40)  # '('
-        store_i8(buf, 4, 41)  # ')'
-        store_i8(buf, 5, 0)
-        out = py_str_new(buf, 5)
-        py_mem_free(buf)
-        return out
-    acc = _str_lit1(123)  # '{'
-    entries = load_ptr(o, 40)
+    if load_i64(o, 16) == 0:
+        return py_str_new(cstr("set()"), 5)
+    record = stack_alloc(16)
+    if _repr_enter(record, o) == 0:
+        return py_str_new(cstr("set(...)"), 8)
+    buf = stack_alloc(24)
+    _repr_buffer_open(buf)
+    _repr_buffer_add(buf, cstr("{"), 1)
     dummy = global_load_ptr("py_set_dummy")
-    cap: int = load_i64(o, 24)
     emitted: int = 0
     i: int = 0
-    while i < cap:
-        key = load_ptr(entries, i * 16 + 8)
-        if ptr_is_null(key) == 0:
-            if ptr_eq(key, dummy) == 0:
-                if emitted > 0:
-                    acc = _cat_take(acc, _str_lit2(44, 32))  # ', '
-                acc = _cat_take(
-                    acc, _elem_repr(pcc_gc_load_ptr(o, ptr_add(entries, i * 16 + 8)))
-                )
-                emitted = emitted + 1
+    while i < load_i64(o, 24):
+        slot = ptr_add(load_ptr(o, 40), i * 16 + 8)
+        raw = load_ptr(slot, 0)
+        if ptr_is_null(raw) == 0 and ptr_eq(raw, dummy) == 0:
+            key = pcc_gc_load_ptr(o, slot)
+            py_incref(key)
+            if emitted > 0:
+                _repr_buffer_add(buf, cstr(", "), 2)
+            _repr_buffer_take(buf, _elem_repr(key))
+            py_decref(key)
+            emitted = emitted + 1
         i = i + 1
-    acc = _cat_take(acc, _str_lit1(125))  # '}'
-    return acc
+    _repr_buffer_add(buf, cstr("}"), 1)
+    _repr_leave(record)
+    return _repr_buffer_close(buf)
 
 
 def _format_bytes_str(o):
