@@ -53,6 +53,19 @@ sources after focused failures are fixed. Unexecuted, skipped or failing
 integration cases remain unfinished; unit/IR-only passes do not replace
 native pcc1 execution, bootstrap or five-GC evidence where those are required.
 
+Goal clarification from the maintainer: "0.6%" means the native **pass rate**
+on CPython Lib/test, not a 0.6% mismatch remainder. The only full run is
+`/Users/jiamo/pcc-conformance/runs/2026-10-21-10ab6f7d0/summary.md`, source
+`10ab6f7d0`, identity `4982cd2d7ae59935`: 166 / 29,398 CPython-passing cases
+(0.56%), from 34,270 collected cases across 857 modules. There were 371 modules
+without a baseline, 403 compile failures and 37 incomplete native runs. The
+current full rate is unknown. The later 190-module decorator subsets are not
+comparable denominators. Continue generic conformance fixes using
+`scripts/cpython_conformance/run.py --modules ...`, the pinned source tree
+`/Users/jiamo/pcc-conformance/cpython-v3.15.0`, and a source-matched runtime;
+preserve baseline policy, case plans and exact run identities. This corrects
+the original goal text's ambiguous "0.6% semantic inconsistency" wording.
+
 All 15 failures listed in the handoff reproduce on both `d5ccb2404` and
 `8b35e1e1c`, with `utils/` included and `PYTHONPATH` fixed to each snapshot.
 The final frozen candidate passes 126 focused tests (3 integration cases
@@ -115,7 +128,7 @@ Its shared-lock/process-tree-guarded Darwin Stage1 run is in
 `/private/tmp/pcc-p0-followup/logs/bootstrap-darwin.stdout`. Stage1, native
 integration, full fixed point and five-GC qualification are not yet green.
 Parking unpack targets beyond the chained shapes, public C lifetime/callback
-contracts, the reported 0.6% inconsistency and runtime/gateway performance
+contracts, CPython Lib/test conformance and runtime/gateway performance
 remain unfinished. The historical pause notes below describe their recorded
 revision; completed follow-up shapes above supersede those failure claims.
 
