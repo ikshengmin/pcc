@@ -217,10 +217,33 @@ class CompilerIntArena:
         else:
             if self._closed:
                 raise RuntimeError("compiler int arena is closed")
-            index = 0
-            while index < count:
-                self._values.append(0)
-                index += 1
+            if (type(count) is int and count >= 128
+                    and type(self) is CompilerIntArena
+                    and type(self._values) is list):
+                values = self._values
+                if not values and count <= 9223372036854775807:
+                    # A fresh dense plane needs one final-size allocation.
+                    # In-place repetition keeps existing list aliases valid
+                    # without a full-size temporary or repeated growth.
+                    values.append(0)
+                    values *= count
+                else:
+                    # Nonempty spans retain their prefix with bounded scratch.
+                    block_words = min(count, 4096)
+                    zeros = [0] * block_words
+                    remaining = count
+                    while remaining >= block_words:
+                        values.extend(zeros)
+                        remaining -= block_words
+                    if remaining:
+                        values.extend(zeros[:remaining])
+            else:
+                # Preserve custom scalar/container callbacks and the small
+                # spans for which a separate block would add allocation.
+                index = 0
+                while index < count:
+                    self._values.append(0)
+                    index += 1
         self._length += count
 
     def get(self, index: int) -> int:
