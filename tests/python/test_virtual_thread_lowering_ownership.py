@@ -384,8 +384,10 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
         and slot(following.data[3]) == args_slot for _, _, following in rows))
     list_slot = slot(loads[args(args_tuple)[0]])
     dispatch = by_name["gen.dispatch"]
+    # A resume moves each saved owner out of the frame (take); the copying
+    # read is the older spelling of the same restore.
     restore_calls = {ins.data[0]: args(ins)[1] for ins in dispatch.instructions
-                     if called(ins, "py_gen_frame_get")}
+                     if called(ins, "py_gen_frame_take") or called(ins, "py_gen_frame_get")}
     restored = {slot(ins.data[3]): restore_calls[ins.data[1]]
                 for ins in dispatch.instructions
                 if ins.kind == "store" and ins.data[1] in restore_calls}

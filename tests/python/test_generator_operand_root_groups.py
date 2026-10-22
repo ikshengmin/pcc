@@ -46,6 +46,8 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
         self._entry_inline_edge_anchor_function = None
         self._entry_inline_edge_anchor_record = None
         self._freestanding_module = False
+        # Production initializes this lazily-decided frame-entry mode the same way.
+        self._precise_stack_frames_mapped = None
         self._current_global_names = set()
         self._current_param_names = set()
         self._exact_int_env_flags = {}
@@ -77,6 +79,7 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
             ("pcc_gc_frame_leave_lifo", VOID, [PTR]),
             ("pcc_gc_store_root", VOID, [PTR, PTR]),
             ("py_gen_frame_get", PTR, [PTR, I64]),
+            ("py_gen_frame_take", PTR, [PTR, I64]),
             ("py_gen_frame_set", VOID, [PTR, I64, PTR]),
         ):
             self.runtime[name] = ir.Function(self.module, ir.FunctionType(ret, args), name)
@@ -103,6 +106,8 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
 
     def _generator_frame_helper(self, operation):
         return self.runtime["py_gen_frame_" + operation]
+
+    _generator_frame_take = generator.GeneratorLoweringMixin._generator_frame_take
 
     def _emit_owned_valueclass_cleanup(self, skipped):
         assert skipped is None

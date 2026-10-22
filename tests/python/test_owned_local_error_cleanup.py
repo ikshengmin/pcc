@@ -432,7 +432,22 @@ def test_source_generator_terminal_real_ir_keeps_frame_rooted(tmp_path, monkeypa
     error = re.search(r"^err.exit:\n(.*?)(?=^[A-Za-z0-9_.]+:|\Z)", body, re.M | re.S)
     assert error is not None
     error = error.group(1)
-    assert error.index("@py_gen_set_done") < error.index("@py_gen_frame_set")
+    assert "@py_gen_set_done" in error
+    # The terminal clear loops over the frame's actual length (operands
+    # lowered later can extend the frame), so it runs in blocks the error
+    # exit enters after marking the generator done.
+    blocks = dict(re.findall(r"^([A-Za-z0-9_.]+):\n(.*?)(?=^[A-Za-z0-9_.]+:|\Z)", body, re.M | re.S))
+    successors = {label: re.findall(r"label %([\w.]+)", text) for label, text in blocks.items()}
+    pending, seen, clears = list(successors["err.exit"]), set(), []
+    while pending:
+        label = pending.pop()
+        if label in seen or label not in blocks:
+            continue
+        seen.add(label)
+        if "@py_gen_frame_set" in blocks[label]:
+            clears.append(label)
+        pending.extend(successors[label])
+    assert clears, "the error exit must reach the terminal frame clear"
     assert "@pcc_gc_frame_leave" not in error
     normal_finish = body.index("@py_gen_finish")
     terminal_clear = body.index("@py_gen_frame_set", normal_finish)

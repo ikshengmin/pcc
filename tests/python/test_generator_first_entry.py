@@ -82,12 +82,13 @@ print(next(g))
         resume = re.search(r"define[^\n]*worker__gen_resume[^\n]*\{\n(.*?)\n\}", ir, re.S)
         assert resume, "the test must emit the actual generator resume body"
         entry = resume.group(1).split("\ngen.dispatch:", 1)[0]
-        # ``PCC_KNOWN_OBJECT_REFS`` reads the same frame slot through
-        # ``py_gen_frame_get`` instead of the generic list accessor.  The
+        # ``PCC_KNOWN_OBJECT_REFS`` moves the same frame slot out through
+        # ``py_gen_frame_take`` instead of the generic list accessor.  The
         # property under test is how many slots the first entry restores, not
-        # which accessor carries the read, so count both spellings.
+        # which accessor carries the read, so count every spelling.
         counts.append(len(re.findall(
-            r"call[^\n]*@(?:py_list_get(?:_for_frame)?|py_gen_frame_get)\(", entry)))
+            r"call[^\n]*@(?:py_list_get(?:_for_frame)?|py_gen_frame_get|py_gen_frame_take)\(",
+            entry)))
         if enabled == "1":
             assert "gen.restore.locals:" in resume.group(1)
     assert counts == [3, 1], "only the argument needs restoration on first entry"
