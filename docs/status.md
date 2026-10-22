@@ -57,6 +57,32 @@ Source: `shenming/master` after 00e17faeb (commits named below).
 - Performance is unchanged since the 2026-10-22 sections below: st_alloc
   GC4 5.03 s / GC0 0.87 s; the gateway has not been re-measured.
 
+Open at the 2026-10-23 pause (maintainer asked to pause):
+
+- Uncommitted and unvalidated, saved with a README in
+  `/Users/jiamo/pcc-recovery-archive/2026-10-23/session-77600949-uncommitted/`
+  (base bb4f27eff): the in-place operator fix (all 13 augmented operators
+  through `py_obj_inplace_op` with CPython's in-place slots; codegen routes
+  list, dict, set, dyn and instance targets through it) and the remaining
+  parking-operand spills (`obj.a`, `d[k]` and `global` `op=` targets, a
+  parking assignment target, a star operand before the park), with
+  `test_inplace_operator_aliasing.py`.
+- Blocker for that test: pcc's own parser rejects `@=`
+  (`unexpected token '='` at `acc @= 7`).
+- `tests/python/test_gc_index_unlocked_readers.py` compiles its C harness and
+  the index module's assembly with external `clang`; move it to the owned
+  C path (`tests/owned_c_execution.py`).
+- The bb4f27eff snapshot run (46 generator/async/coroutine/vthread files,
+  all green) did not set `PYTHONPATH=$SNAP`, so a subprocess started outside
+  the snapshot directory may have imported the worktree; rerun with it
+  before relying on that run. Its 4 owned-C probe failures (`header not
+  found: stdint.h`) came from leaving `utils/` out of the snapshot and pass
+  on the worktree.
+- Next performance target: in the earlier gateway C100 profile, runtime
+  ports register 14-16 scheduler-root handles per dict/call operation, each
+  a graph-locked register/unregister pair with a malloc; the 2026-09-26
+  single-thread build measured 65,914 req/s against about 10,000 now.
+
 ## P0 packages: what landed, measurements, method operands (2026-10-22, Claude)
 
 Source: `shenming/master` 92c9daf56. Package state against
