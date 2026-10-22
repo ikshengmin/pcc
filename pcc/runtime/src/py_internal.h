@@ -109,8 +109,13 @@ int64_t pcc_platform_socket_peer_text(
  * GEN_SOURCE keeps those iterator objects as data at virtual_thread.call.
  * Explicit native continuations retain the original MAY_PARK protocol. */
 #define PY_FLAG_GEN_MAY_PARK 0x100000
-/* Native function entry roles. Descriptor-role bits 0x200000/0x400000 are
- * reserved independently. AUTO_PARK is a compiler-created ordinary callable
+/* Type-specific bits 21/22 on a class object: its instances have no
+ * __dict__ (__slots__ without "__dict__"), and it subclasses the builtin
+ * dict. A class is GC-tracked and finalized like any other object, so these
+ * markers cannot share PY_FLAG_GC_TRACKED or PY_FLAG_FINALIZED. */
+#define PY_FLAG_CLASS_SLOTS_ONLY 0x200000
+#define PY_FLAG_CLASS_DICT_SUBCLASS 0x400000
+/* Native function entry roles. AUTO_PARK is a compiler-created ordinary callable
  * whose ABI entry creates a resumable state machine; it is not a Gen role.
  * TRANSPARENT_CALL forwards call context to one actual semantic target. */
 #define PY_FLAG_FUNC_AUTO_PARK 0x800000

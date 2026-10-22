@@ -26,6 +26,8 @@ from pcc.extern import (
 )
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_CLASS_ATTRS_EXPOSED,
+    PY_FLAG_CLASS_DICT_SUBCLASS,
+    PY_FLAG_CLASS_SLOTS_ONLY,
     PY_FLAG_FUNC_BUILTIN,
     PY_TYPE_NONE,
     PYSTROBJECT_BYTE_LEN_OFFSET,
@@ -1295,7 +1297,7 @@ def _attr_res_store_dict_only(cls, name, epoch: int) -> None:
     nothing from the class, so no method, ``__getattr__`` or dict-subclass
     fallback may exist. The class epoch retires the entry when that changes.
     """
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         return
     if ptr_is_null(_class_lookup_in_mro(cls, name)) == 0:
         return
@@ -1476,7 +1478,7 @@ def _dynamic_attr_slot(inst):
         return null()
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (flags & 2) != 0:
+    if (flags & PY_FLAG_CLASS_SLOTS_ONLY) != 0:
         return null()
     return _instance_reserved_owner_slot(inst, cls)
 
@@ -1499,7 +1501,7 @@ def _copy_instance_reserved_owner(obj, dst, cls) -> None:
 def _instance_dict_of(inst, cls):
     """The instance dict of a validated instance of `cls` (borrowed), or NULL:
     `_dynamic_attr_slot` without validating `inst` a second time."""
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_SLOTS_ONLY) != 0:
         return null()
     n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if n_fields < 0:
@@ -3282,11 +3284,11 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         return py_instance_bind_method(method, inst, name)
     # dict-subclass inherited method fallback (get / keys / values / items /
     # pop / setdefault / clear). User methods/attrs above win; this only fires
-    # for names the user class did not define. PY_CLASS_FLAG_DICT_SUBCLASS is
-    # bit 2 (value 4) in the class header flags at offset 12. Returns a bound
-    # native callable, or NULL -> fall through to __getattr__ / AttributeError.
+    # for names the user class did not define (PY_FLAG_CLASS_DICT_SUBCLASS).
+    # Returns a bound native callable, or NULL -> fall through to __getattr__
+    # / AttributeError.
     ds_flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (ds_flags & 4) != 0:
+    if (ds_flags & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         dm = py_dict_subclass_getattr(inst, name)
         if ptr_is_null(dm) == 0:
             return dm
@@ -3313,7 +3315,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
     if py_err_occurred() != 0:
         return null()
     if ptr_is_null(getattr_method) != 0:
-        if (ds_flags & 4) == 0 and idx < 0:
+        if (ds_flags & PY_FLAG_CLASS_DICT_SUBCLASS) == 0 and idx < 0:
             # No class attribute, field or method answered and the instance
             # dict (checked above) did not either.
             _attr_res_store(cls, name, _ATTR_RES_ABSENT, 0, outcome_epoch)
@@ -4123,7 +4125,7 @@ def _object_getstate_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     if _object_call_check(slots, cstr("__getstate__"), 1, 0) == 0:
         receiver = load_ptr(slots, 0)
         cls = _object_receiver_class(receiver)
-        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) != 0:
+        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_SLOTS_ONLY) != 0:
             py_raise_owned(py_exc_new(11, cstr(
                 "object.__getstate__() of a __slots__ instance is not implemented natively")))
         else:
@@ -4415,7 +4417,7 @@ def _mro_builtin_defines(cls, name) -> int:
     """Whether a builtin base of ``cls`` (dict included) defines ``name`` in CPython."""
     if not _ptr_is_class(cls):
         return 0
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         if _names_contain(_builtin_type_names(PY_TYPE_DICT), name) != 0:
             return 1
     n_mro: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
@@ -4810,7 +4812,7 @@ def _dict_member_storage(receiver, kind: int, name):
         return receiver
     if _ptr_is_instance(receiver):
         cls = _object_receiver_class(receiver)
-        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
             return py_dict_subclass_storage(receiver, 1)
     if py_err_occurred() == 0:
         _member_receiver_error(kind, cstr("dict"), name, receiver)
@@ -4824,7 +4826,7 @@ def _dict_like_storage(value):
         return value
     if _ptr_is_instance(value):
         cls = _object_receiver_class(value)
-        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
             return py_dict_subclass_storage(value, 1)
     return null()
 
@@ -5475,7 +5477,7 @@ def _builtin_mro_member(cls, name, include_type: int):
     if include_type != 0 and ptr_eq(cls, global_load_ptr("pcc_type_cls_dict")) != 0:
         return _builtin_namespace_get(2, name)
     flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (flags & 4) != 0:
+    if (flags & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         return _builtin_namespace_get(2, name)
     if ((flags & 16777216) == 0 and include_type == 0) or _names_contain(_builtin_namespace_names(0), name) == 0:
         return null()
@@ -5633,7 +5635,7 @@ def py_super_getattr(start_cls, from_cls, receiver, name):
     blocked = null()
     blocked_name = null()
     root = global_load_ptr("py_object_root_cache")
-    dict_base: int = load_i32(start_cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4
+    dict_base: int = load_i32(start_cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS
     j: int = start + 1
     while ptr_is_null(found) != 0 and ptr_is_null(blocked) != 0 and j < n_mro:
         m = pcc_gc_load_ptr(start_cls, ptr_add(mro, j * C_POINTER_SIZE))
@@ -6489,10 +6491,11 @@ def py_class_new_from_objects(name_obj, bases_obj, namespace):
 
 @c_abi_export("py_class_mark_slots_only")
 def py_class_mark_slots_only(cls) -> None:
+    # A tracked class's header flags are shared with the collectors, so the
+    # marker is set atomically, on its own class-specific bit.
     if ptr_is_null(cls) != 0:
         return
-    flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET, flags | 2)
+    atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_CLASS_SLOTS_ONLY, "relaxed")
 
 
 # Set once at class creation on a class whose ancestors include a builtin
@@ -6511,13 +6514,12 @@ def py_class_mark_exception_subclass(cls) -> None:
 
 @c_abi_export("py_class_mark_dict_subclass")
 def py_class_mark_dict_subclass(cls) -> None:
-    # Set PY_CLASS_FLAG_DICT_SUBCLASS (bit 2, value 4): this class subclasses
-    # the builtin ``dict``, so dict-inherited item storage / methods are routed
-    # to a backing dict in the instance's __dict__ slot (see py_protocol.c).
+    # PY_FLAG_CLASS_DICT_SUBCLASS: this class subclasses the builtin
+    # ``dict``, so dict-inherited item storage / methods are routed to a
+    # backing dict in the instance's __dict__ slot (py_protocol_runtime.py).
     if ptr_is_null(cls) != 0:
         return
-    flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET, flags | 4)
+    atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_CLASS_DICT_SUBCLASS, "relaxed")
 
 
 @c_abi_export("py_instance_method_call_direct")
@@ -9751,7 +9753,7 @@ def py_class_mark_structseq(cls) -> None:
     if not _ptr_is_class(cls) or py_class_is_tuple_subclass(cls) == 0:
         py_raise_owned(py_exc_new(3, cstr("struct sequence requires a tuple subtype")))
         return
-    if load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) == 0:
+    if load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_SLOTS_ONLY) == 0:
         py_raise_owned(py_exc_new(3, cstr("struct sequence requires an empty slots-only layout")))
         return
     atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, _STRUCTSEQ_CLASS_FLAG, "relaxed")

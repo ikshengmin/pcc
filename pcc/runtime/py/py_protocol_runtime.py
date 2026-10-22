@@ -16,6 +16,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYINSTANCEOBJECT_CLS_OFFSET,
     PYINSTANCEOBJECT_FIELDS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_CLASS_DICT_SUBCLASS,
     PYCOMPLEXOBJECT_IMAG_OFFSET,
     PYCOMPLEXOBJECT_REAL_OFFSET,
     PY_TYPE_BOOL,
@@ -566,7 +567,7 @@ def _class_is_dict_subclass(obj) -> int:
     cls = _instance_class(obj)
     if ptr_is_null(cls) != 0:
         return 0
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         return 1
     return 0
 
@@ -1521,7 +1522,8 @@ def _builtin_init_dict(slots, tokens) -> int:
     if nargs > 1:
         py_raise_owned(py_exc_new(3, cstr("dict expected at most 1 argument")))
         return -1
-    if (load_i32(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
+    if (load_i32(load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE), PYOBJECTHEADER_FLAGS_OFFSET)
+            & PY_FLAG_CLASS_DICT_SUBCLASS) == 0:
         py_raise_owned(py_exc_new(3, cstr("dict.__init__ requires a dict instance")))
         return -1
     if _builtin_init_dict_storage(slots, tokens) != 0:
@@ -1678,7 +1680,7 @@ def py_dict_storage_slots(receiver_slot, result_slot) -> int:
                     ptr_add(load_ptr(slots, _BUILTIN_INIT_RECEIVER_SLOT * C_POINTER_SIZE), PYINSTANCEOBJECT_CLS_OFFSET), 1)
                 if status == 0:
                     cls = load_ptr(slots, _BUILTIN_INIT_CLASS_SLOT * C_POINTER_SIZE)
-                    if ptr_is_null(cls) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) == 0:
+                    if ptr_is_null(cls) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) == 0:
                         status = 1
                     else:
                         status = _builtin_init_dict_storage(slots, tokens)

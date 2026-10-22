@@ -166,6 +166,8 @@ PORT_ABI_NATIVE_EXPORTS = {
         "PY_FLAG_FINALIZED": {"kind": "constant", "value_kind": "int", "value": 4},
         "PY_FLAG_GC_PINNED": {"kind": "constant", "value_kind": "int", "value": 64},
         "PY_FLAG_GC_MALLOC_ALLOC": {"kind": "constant", "value_kind": "int", "value": 262144},
+        "PY_FLAG_CLASS_SLOTS_ONLY": {"kind": "constant", "value_kind": "int", "value": 2097152},
+        "PY_FLAG_CLASS_DICT_SUBCLASS": {"kind": "constant", "value_kind": "int", "value": 4194304},
         "PY_FLAG_FUNC_AUTO_PARK": {"kind": "constant", "value_kind": "int", "value": 8388608},
         "PY_FLAG_FUNC_TRANSPARENT_CALL": {"kind": "constant", "value_kind": "int", "value": 16777216},
         "PY_FLAG_GEN_SOURCE": {"kind": "constant", "value_kind": "int", "value": 33554432},
