@@ -5534,9 +5534,9 @@ class ClassLowering:
                 parent.runtime["pcc_gc_store_root"],
                 [parent._as_gc_ptr(current), ir.Constant(_PTR, None)],
             )
-            moved = builder.call(
-                parent.runtime["pcc_gc_root_move"],
-                [parent._as_gc_ptr(current), parent._as_gc_ptr(result)],
+            moved = parent._emit_root_slot_move(
+                current,
+                result,
                 name=self._fresh("class.decorator.move"),
             )
             parent._slot_call_check_status(moved, "class decorator result move", cd.span)

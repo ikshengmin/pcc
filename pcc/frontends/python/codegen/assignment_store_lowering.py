@@ -200,10 +200,10 @@ class AssignmentStoreLoweringMixin:
                 # An unowned prior binding is borrowed: empty the destination
                 # without consuming its source owner's reference.
                 self.builder.store(ir.Constant(_CSTR, None), alloca)
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(alloca), self._as_gc_ptr(root)],
-                    name=self._fresh("unpack.literal.move"),
+                moved = self._emit_root_slot_move(
+                    alloca,
+                    root,
+                    label="unpack.literal.move",
                 )
                 self._slot_call_check_status(moved, "literal assignment move", lhs.span)
                 self._cpy_env_flags.pop(lhs.ident, None)

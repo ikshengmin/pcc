@@ -2572,9 +2572,9 @@ class UserFunctionLoweringMixin:
                     value = self._emit_slot_call_operand(expr, label + ".outer")
                     self._try_err_block = self._slot_call_cleanup_block((value,), output_cleanup)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    status = self.builder.call(
-                        self.runtime["pcc_gc_root_move"],
-                        [self._as_gc_ptr(output), self._as_gc_ptr(value)],
+                    status = self._emit_root_slot_move(
+                        output,
+                        value,
                     )
                     self._slot_call_check_status(status, "class name fallback move", expr.span)
                     self._release_slot_call_roots((value,))

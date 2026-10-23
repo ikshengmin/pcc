@@ -1035,7 +1035,10 @@ class ForLoopLoweringMixin:
             self._cpy_operand_cleanup_block = self._try_err_block
             self._slot_call_runtime_call("py_dict_keys", (incoming,), result_slot=keys)
             incoming = keys
-        status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(source), self._as_gc_ptr(incoming)])
+        status = self._emit_root_slot_move(
+            source,
+            incoming,
+        )
         self._slot_call_check_status(status, "valueclass iterable move", iterable.span)
         self._slot_call_note_published(source)
         self._release_slot_call_roots(tuple(input_roots))
@@ -1082,7 +1085,10 @@ class ForLoopLoweringMixin:
                                      suffix_args=(index,), span=iterable.span)
         if object_target:
             self._emit_release_owned_local_if_flagged(target.ident, target_slot)
-            status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(target_slot), self._as_gc_ptr(element)])
+            status = self._emit_root_slot_move(
+                target_slot,
+                element,
+            )
             self._slot_call_check_status(status, "valueclass object loop target move", iterable.span)
             flag = self._ensure_owned_local_flag(target.ident, target_slot)
             self.builder.store(ir.Constant(_I1, 1), flag)

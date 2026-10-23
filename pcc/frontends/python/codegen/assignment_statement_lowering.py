@@ -627,7 +627,10 @@ class AssignmentStatementLoweringMixin:
                     field_cleanup = self._cpy_operand_cleanup_block
                     self._try_err_block = self._slot_call_cleanup_block((source,), field_error)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(destination), self._as_gc_ptr(source)])
+                    status = self._emit_root_slot_move(
+                        destination,
+                        source,
+                    )
                     self._slot_call_check_status(status, "valueclass constructor field move", arg_expr.span)
                     self._slot_call_note_published(destination)
                     self._release_slot_call_roots((source,))
@@ -1400,10 +1403,10 @@ class AssignmentStatementLoweringMixin:
                     # A prior borrowed binding owns no reference to release.
                     # Clear that alias before the owning root move.
                     self.builder.store(ir.Constant(_CSTR, None), alloca)
-                    status = self.builder.call(
-                        self.runtime["pcc_gc_root_move"],
-                        [self._as_gc_ptr(alloca), self._as_gc_ptr(output)],
-                        name=self._fresh(target.ident + ".scalar.move"),
+                    status = self._emit_root_slot_move(
+                        alloca,
+                        output,
+                        label=target.ident + ".scalar.move",
                     )
                     self._owned_local_names.add(target.ident)
                     self._owned_local_has_value.add(target.ident)

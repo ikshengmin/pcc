@@ -218,6 +218,73 @@ class CallObjectLoweringMixin:
                 return record
         raise L1CodegenError("slot-call root was not registered by this emitter")
 
+    def _emit_root_slot_move(
+        self,
+        destination,
+        source,
+        *,
+        label: str = "",
+        name: str = "",
+        private_destination: bool = False,
+    ):
+        """Transfer roots, specializing only exclusively owned scalar cells.
+
+        Lexical operand roots are fresh stack cells whose addresses are not
+        exposed to program writers. Persistent/generator slots and arbitrary
+        locals/output parameters do not gain that proof from registration.
+        ``private_destination`` is reserved for the fresh, hidden return
+        cleanup alloca created by _emit_owned_return_through_finally.
+        """
+        arguments = [self._as_gc_ptr(destination), self._as_gc_ptr(source)]
+        if label:
+            name = self._fresh(label)
+        source_private = False
+        if self._slot_call_root_is_registered(source):
+            source_private = self._slot_call_root_record(source)[2]
+        destination_private = private_destination
+        if not destination_private and self._slot_call_root_is_registered(destination):
+            destination_private = self._slot_call_root_record(destination)[2]
+        runtime_move = self.runtime["pcc_gc_root_move"]
+        if not source_private or not destination_private or destination is source:
+            return self.builder.call(runtime_move, arguments, name=name)
+
+        # This peek never dereferences an object. A heap pointer may become
+        # stale while the fallback parks: only the authoritative slot addresses
+        # go to that path. NULL/tagged words cannot be rewritten by a collector.
+        value = self.builder.load(source, name=self._fresh("root.move.word"))
+        bits = self.builder.ptrtoint(value, _I64, name=self._fresh("root.move.bits"))
+        tagged = self.builder.icmp_unsigned(
+            "!=", self.builder.and_(bits, ir.Constant(_I64, 1)), ir.Constant(_I64, 0),
+        )
+        empty_source = self.builder.icmp_unsigned("==", value, ir.Constant(value.type, None))
+        scalar = self.builder.or_(tagged, empty_source, name=self._fresh("root.move.scalar"))
+        function = self.current_function
+        scalar_block = function.append_basic_block(self._fresh("root.move.scalar"))
+        heap_block = function.append_basic_block(self._fresh("root.move.heap"))
+        publish_block = function.append_basic_block(self._fresh("root.move.publish"))
+        occupied_block = function.append_basic_block(self._fresh("root.move.occupied"))
+        done_block = function.append_basic_block(self._fresh("root.move.done"))
+        self.builder.cbranch(scalar, scalar_block, heap_block)
+        self.builder.position_at_end(scalar_block)
+        prior = self.builder.load(destination, name=self._fresh("root.move.destination"))
+        empty_destination = self.builder.icmp_unsigned("==", prior, ir.Constant(prior.type, None))
+        self.builder.cbranch(empty_destination, publish_block, occupied_block)
+        self.builder.position_at_end(publish_block)
+        self.builder.store(value, destination)
+        self.builder.store(ir.Constant(value.type, None), source)
+        self.builder.branch(done_block)
+        self.builder.position_at_end(occupied_block)
+        self.builder.branch(done_block)
+        self.builder.position_at_end(heap_block)
+        moved = self.builder.call(runtime_move, arguments, name=name)
+        self.builder.branch(done_block)
+        self.builder.position_at_end(done_block)
+        status = self.builder.phi(_I64, name=self._fresh("root.move.status"))
+        status.add_incoming(ir.Constant(_I64, 0), publish_block)
+        status.add_incoming(ir.Constant(_I64, -4), occupied_block)
+        status.add_incoming(moved, heap_block)
+        return status
+
     def _slot_call_result_sink(self, expr):
         for candidate, slot, _published in reversed(getattr(self, "_slot_call_result_sinks", ())):
             if candidate is expr:
@@ -1063,10 +1130,10 @@ class CallObjectLoweringMixin:
                 value = self._emit_slot_call_operand(branch, label + ".branch")
                 self._try_err_block = self._slot_call_cleanup_block((output, value), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(output), self._as_gc_ptr(value)],
-                    name=self._fresh("call.slot.if.move"),
+                moved = self._emit_root_slot_move(
+                    output,
+                    value,
+                    label="call.slot.if.move",
                 )
                 self._slot_call_check_status(moved, "conditional result move", expr.span)
                 self._release_slot_call_roots((value,))
@@ -1118,10 +1185,10 @@ class CallObjectLoweringMixin:
             else:
                 self.builder.cbranch(condition, short, rhs)
             self.builder.position_at_end(short)
-            moved = self.builder.call(
-                self.runtime["pcc_gc_root_move"],
-                [self._as_gc_ptr(output), self._as_gc_ptr(left)],
-                name=self._fresh("call.slot.bool.move"),
+            moved = self._emit_root_slot_move(
+                output,
+                left,
+                label="call.slot.bool.move",
             )
             self._slot_call_check_status(moved, "boolean left owner move", expr.span)
             self._release_slot_call_roots((left,))
@@ -1143,10 +1210,10 @@ class CallObjectLoweringMixin:
             if need_truth and right_truth is None:
                 truth = self._slot_call_runtime_call("py_obj_truthy", (right,), span=expr.right.span)
                 right_truth = self.builder.icmp_signed("!=", truth, ir.Constant(_I64, 0))
-            moved = self.builder.call(
-                self.runtime["pcc_gc_root_move"],
-                [self._as_gc_ptr(output), self._as_gc_ptr(right)],
-                name=self._fresh("call.slot.bool.move"),
+            moved = self._emit_root_slot_move(
+                output,
+                right,
+                label="call.slot.bool.move",
             )
             self._slot_call_check_status(moved, "boolean right owner move", expr.span)
             self._release_slot_call_roots((right,))
@@ -1493,8 +1560,10 @@ class CallObjectLoweringMixin:
             self._slot_call_runtime_call("py_tuple_from_list", (sequence,), result_slot=output, span=span)
             self.builder.call(self.runtime["pcc_gc_store_root"],
                               [self._as_gc_ptr(args_root), ir.Constant(_CSTR, None)])
-            moved = self.builder.call(self.runtime["pcc_gc_root_move"],
-                                      [self._as_gc_ptr(args_root), self._as_gc_ptr(output)])
+            moved = self._emit_root_slot_move(
+                args_root,
+                output,
+            )
             self._slot_call_check_status(moved, "deferred positional tuple move", span)
             self._release_slot_call_roots((sequence, output))
         finally:
@@ -2075,8 +2144,10 @@ class CallObjectLoweringMixin:
                 # back into the oldest root before retiring either temporary.
                 self.builder.call(self.runtime["pcc_gc_store_root"],
                                   [self._as_gc_ptr(output), ir.Constant(_CSTR, None)])
-                moved = self.builder.call(self.runtime["pcc_gc_root_move"],
-                                          [self._as_gc_ptr(output), self._as_gc_ptr(merged)])
+                moved = self._emit_root_slot_move(
+                    output,
+                    merged,
+                )
                 self._slot_call_check_status(moved, "keyword merge move", span)
                 self._release_slot_call_roots((source, merged))
         finally:

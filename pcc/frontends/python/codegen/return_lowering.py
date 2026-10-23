@@ -455,10 +455,13 @@ class ReturnLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block((source_slot,), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             try:
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(slot), self._as_gc_ptr(source_slot)],
-                    name=self._fresh("return.cleanup.move"),
+                # This reserved synthetic owner is a fresh alloca in this
+                # non-resumable activation, never a user-visible local cell.
+                moved = self._emit_root_slot_move(
+                    slot,
+                    source_slot,
+                    label="return.cleanup.move",
+                    private_destination=True,
                 )
                 self._slot_call_check_status(moved, "return result transfer", stmt.span)
                 self._release_slot_call_roots((source_slot,))

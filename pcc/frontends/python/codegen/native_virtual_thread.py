@@ -517,10 +517,10 @@ class NativeVirtualThreadLoweringMixin:
             self.runtime["pcc_gc_store_root"],
             [child_root_ptr, ir.Constant(_CSTR, None)],
         )
-        moved = self.builder.call(
-            self.runtime["pcc_gc_root_move"],
-            [child_root_ptr, self._as_gc_ptr(result_root)],
-            name=self._fresh("vthread.call.child.move"),
+        moved = self._emit_root_slot_move(
+            child_root_ptr,
+            result_root,
+            label="vthread.call.child.move",
         )
         self._slot_call_check_status(moved, "continuation frame move", span)
 

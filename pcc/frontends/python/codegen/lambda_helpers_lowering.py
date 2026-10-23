@@ -567,10 +567,10 @@ class LambdaHelperLoweringMixin:
                 roots.append(result_root)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error_target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(return_slot), self._as_gc_ptr(result_root)],
-                    name=self._fresh("lambda.return.move"),
+                moved = self._emit_root_slot_move(
+                    return_slot,
+                    result_root,
+                    label="lambda.return.move",
                 )
                 self._slot_call_check_status(moved, "lambda return owner move", expr.span)
                 self._lambda_adapter_root_scope = saved_adapter_scope
