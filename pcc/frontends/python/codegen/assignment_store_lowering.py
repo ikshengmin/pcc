@@ -187,7 +187,11 @@ class AssignmentStoreLoweringMixin:
                         and self._owned_local_flag_for(lhs.ident, alloca) is None):
                     alloca = self._alloca_in_entry(_CSTR, name=lhs.ident + ".unpack.addr", init_null=True)
                     self.env[lhs.ident] = (alloca, _CSTR, declared_ty)
-                self._ensure_local_gc_frame_root(lhs.ident, alloca, _CSTR)
+                # Unpacked comprehension bindings are function-local even in
+                # module initializers and native lambdas, which have no def.
+                self._ensure_local_gc_frame_root(
+                    lhs.ident, alloca, _CSTR, allow_module=True,
+                )
                 self._emit_release_owned_local_if_flagged(lhs.ident, alloca)
                 # An unowned prior binding is borrowed: empty the destination
                 # without consuming its source owner's reference.

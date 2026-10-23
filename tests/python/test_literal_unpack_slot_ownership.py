@@ -95,7 +95,7 @@ class MovingModel(AssignmentStatementLoweringMixin, AssignmentStoreLoweringMixin
     def _ir_type_matches(self,a,b):return str(a)==str(b)
     def _alloca_in_entry(self,ty,*,name,init_null):
         slot=self._fresh(name);self.values[slot]=None;return slot
-    def _ensure_local_gc_frame_root(self,name,slot,ty):self.registry.add(slot);self.collect()
+    def _ensure_local_gc_frame_root(self,name,slot,ty,*,allow_module=False):self.registry.add(slot);self.collect()
     def _owned_local_flag_for(self,name,slot):return name if name in self.flags else None
     def _ensure_owned_local_flag(self,name,slot):self.flags.setdefault(name,False);return ('flag',name)
     def _emit_release_owned_local_if_flagged(self,name,slot):
