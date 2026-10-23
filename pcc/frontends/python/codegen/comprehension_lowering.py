@@ -1082,7 +1082,11 @@ class ComprehensionLoweringMixin:
         iter_slot = self._alloca_in_entry(_CSTR, name=self._fresh("comp.iter.root"))
         self._store_entry_initializer(iter_slot, ir.Constant(_CSTR, None))
         self.env[owned_iter_name] = (iter_slot, _CSTR, DynType(name="dyn"))
-        self._ensure_owned_local_gc_root(owned_iter_name, iter_slot, _CSTR)
+        # This private iterator is an owned local even in a module initializer
+        # or native lambda, where there is no enclosing Python def.
+        self._ensure_local_gc_frame_root(
+            owned_iter_name, iter_slot, _CSTR, allow_module=True,
+        )
         self.builder.call(self.runtime["pcc_gc_store_root_take"], [iter_slot, iterator])
         self._owned_local_names.add(owned_iter_name)
         self._owned_local_has_value.add(owned_iter_name)

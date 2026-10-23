@@ -1617,10 +1617,13 @@ class ForLoopLoweringMixin:
                 _CSTR,
                 DynType(name="dyn"),
             )
-            self._ensure_owned_local_gc_root(
+            # A module-level loop still needs this private iterator rooted;
+            # its target may be global, but this slot never is.
+            self._ensure_local_gc_frame_root(
                 owned_iter_name,
                 iter_slot,
                 _CSTR,
+                allow_module=True,
             )
             self.builder.call(
                 self.runtime["pcc_gc_store_root_take"],
