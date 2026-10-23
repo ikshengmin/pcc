@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `27d8da7be`, initially based on
+Source: published through `c74ed2ca8`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -37,6 +37,10 @@ Unpack arity, ordinary nested boundaries and exact iterator/exception ownership:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/unpack-through-6aa05f1af/README.md`.
 Current threaded gateway baseline, measured binary, backend IR and caller profile:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/performance-baseline-60396e192/README.md`.
+Successful updated Stage1 and matching runtime:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/native-stage1-8c53ef3c7/README.md`.
+Accepted threaded lease improvement, native concurrency tests and current profiles:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/atomic-lease-1d43db0ac/README.md`.
 
 The maintainer has now directed work back to the performance priority. The
 latest unpack code and regression tests are published; continue measured
@@ -297,6 +301,20 @@ peak tree RSS 4,314,382,336 bytes. The 769,243,768-byte pcc1 SHA256 is
 All 30,732 tracked inputs match the published commit; source and runtime hashes
 are in `enumerate-published-source.json`. This is Stage1, not a fixed point.
 
+Updated Stage1 at `8c53ef3c7` also passes: 4,476 scoped tracked inputs;
+compile 1,754.307 seconds, native publication smoke compilation/execution and
+refcount audit 68.785 seconds, both return codes zero. The compiler retains
+its original 1,800-second limit, and the outer 1,980-second watchdog also
+covers publication. Lowering the admission ceiling to 5,000,000,000 bytes
+allowed the run while preserving the 8 GiB host reserve; observed outer peak
+RSS is 2,929,623,040 bytes. The preceding admission refusal launched no compiler.
+The 839,638,296-byte pcc1 SHA256 is
+`1ef48c0d2652413cfa4db5935008947457b0d06f0ba69382a174f262c0a342a1`;
+its only dynamic dependency is libSystem. This includes the unpack and lexical
+call-root changes, but not the subsequent atomic-lease runtime change. It is
+Stage1 and its publication gate, not a new-source fixed point or replay of the
+14-case integration packet below. Source/compiler/runtime receipts are archived.
+
 The scoped integration packet completed at `732b7a9b0`: 14 passed, 77
 deselected in 948.10 seconds. Thirteen cases explicitly use that native pcc1
 and one is a host collection-input control; every emitted program executes.
@@ -377,15 +395,48 @@ structural reduction does not close the roughly 9x gap. Source/runtime/binary
 identities, both timing packets and exact execution logs are preserved in:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/lexical-call-3b01d4f5c/README.md`.
 
+Threaded nonmoving address leases now reserve an atomic mode guard before
+reading their object, recheck the mode after reservation, and retain LIVE
+allocation provenance checks (`1d43db0ac`, tests `c74ed2ca8`). Backend transitions
+reserve zero -> -1 atomically; exact-table/malloc owners and tracked object-node
+counts retain their graph-lock protocol. The executed two runtime files match
+the published change after preserving peer commits `2a15c9d1e` and `6774b7488`.
+Validation passes 184 model/IR checks, 120,000 real threaded lease cycles per
+build, independent owned-C mode guards and call/finalizer programs on all five
+GCs, plus threaded GC3/GC4 movement/overlap. The permanent native integration
+test passes another 120,000 cycles.
+
+Seven rotating full-workload repetitions (21 runs) use the same frozen
+`8c53ef3c7` baseline, candidate runtime patch, gateway source, C100/zero wait,
+one carrier/event loop, 20,000 measured requests and 200 warmups each.
+Baseline median is 9,729.311 req/s, candidate 10,816.734 (+11.18%), and asyncio
+91,767.184. Every paired native improvement is positive (1.0864-1.1223).
+Process instructions fall 9.31%, cycles 10.19%, user CPU 2.07 -> 1.86 seconds;
+RSS medians are 10,207,232 -> 10,240,000 bytes. The same-packet gap is still
+about 8.48x (baseline 9.43x); the older 9.1x packet is a separate measurement.
+This is a qualified handler improvement, not the required asyncio win, HTTP
+throughput, or native-pcc1/fixed-point qualification of the new runtime.
+
+Diagnostic ablations complete 35 runs on the candidate: no JSON with direct
+payload validation reaches 26,010 req/s versus asyncio 108,272; no child tasks,
+but retaining result construction/JSON and outer batch tasks, reaches 15,434
+versus 258,715. These change validation and continuation shapes and are not
+additive phase timings or replacement acceptance results. A new five-second
+sample completes 200,000 verified requests (3,828 working samples): root stores
+18.18% inclusive, lease paths 10.61%, graph-lock self time 9.07%, TLS self time
+3.74%, JSON object encoding 34.04% inclusive. Inclusive shares overlap. Continue
+into generic string/container/ownership costs while retaining the scheduler gap.
+
 The included C1 event census (one versus eleven rounds, two warmups each)
 observes about 96 allocations/frees, 357 retains, 453 releases and 1,968
 root/field stores per request. Instrumented counts are not C100 timing evidence.
-Three small candidates have produced limited gains: reassess complete runtime
-call/ownership boundaries and continuation traffic before more local tuning.
-New-source native compiler qualification is still required after these changes.
+The earlier three small candidates produced limited gains; the subsequent
+atomic lease change above addresses a measured shared ownership cost. Further
+runtime/call and continuation work remains necessary for the end-to-end goal.
 
-New-source native qualification after the unpack fixes, full fixed point and
-five-GC bootstrap remain unfinished. The separate fallback-baseline check was stopped when its complete
+Direct integration replay of newer unpack and synchronous-root programs with
+the new pcc1, compiler qualification of the later atomic-lease runtime change,
+full fixed point and five-GC bootstrap remain unfinished. The separate fallback-baseline check was stopped when its complete
 compiler-closure work was identified, to avoid competing heavy builds; do not
 count that partial run as a pass. Additional parked unpack shapes, public C
 lifetime/callback
