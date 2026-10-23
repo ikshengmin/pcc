@@ -1133,12 +1133,16 @@ class AssignmentStatementLoweringMixin:
             target_ty,
         ):
             return
-        forced_exact_int_target = isinstance(target_ty, IntType) and bool(
+        forced_exact_int_target = (
+            isinstance(target_ty, IntType) and target_ty.name == "int"
+        ) and bool(
             getattr(self, "_exact_int_env_flags", {}).get(target.ident, False)
             or target.ident
             in getattr(self, "_planned_exact_int_local_names", set())
         )
-        boxed_int_target = isinstance(target_ty, IntType) and (
+        boxed_int_target = (
+            isinstance(target_ty, IntType) and target_ty.name == "int"
+        ) and (
             self._int_exprs_are_boxed() or forced_exact_int_target
         )
         exact_int_value = None
