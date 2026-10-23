@@ -1427,7 +1427,7 @@ def _spill_root_owner_name(host, root):
     raise L1CodegenError("spilled operand root has no frame binding")
 
 
-def emit_generator_unpack_assignment(host, stmt, target) -> bool:
+def emit_generator_unpack_assignment(host, stmt, target, source_root=None) -> bool:
     """Unpack into frame owners before evaluating any suspending target.
 
     The unpack itself precedes all target stores. Each destination then uses
@@ -1438,7 +1438,7 @@ def emit_generator_unpack_assignment(host, stmt, target) -> bool:
     if function is None:
         return False
     fd, owner = function
-    if not generator_expr_suspends(host, target, fd, owner):
+    if source_root is None and not generator_expr_suspends(host, target, fd, owner):
         return False
     roots = []
     values = []
@@ -1465,11 +1465,24 @@ def emit_generator_unpack_assignment(host, stmt, target) -> bool:
     host._cpy_operand_cleanup_block = host._try_err_block
     try:
         host._emit_stmt(Assign(span=stmt.span, targets=(temporary,), value=stmt.value))
+        if source_root is not None:
+            # This is the parent's private unpack owner, not a user binding.
+            # Once the nested elements have independent owners, consuming
+            # their temporary container lets each discarded item finalize
+            # before the next target is evaluated, as UNPACK_SEQUENCE does.
+            host._release_slot_call_roots((source_root,))
         for index, destination in enumerate(target.elems):
             if host._is_starred_unpack_expr(destination):
                 destination = destination.args[0]
-            host._emit_stmt(Assign(span=stmt.span, targets=(destination,), value=values[index]))
-            if not host._builder_block_is_terminated():
+            assignment = Assign(span=stmt.span, targets=(destination,), value=values[index])
+            nested = False
+            if isinstance(destination, (TupleExpr, ListExpr)):
+                nested = emit_generator_unpack_assignment(
+                    host, assignment, destination, source_root=roots[index],
+                )
+            if not nested:
+                host._emit_stmt(assignment)
+            if not nested and not host._builder_block_is_terminated():
                 # A consumed item dies before the next target's side effects,
                 # even if a setter discards it instead of retaining it.
                 host._release_slot_call_roots((roots[index],))
