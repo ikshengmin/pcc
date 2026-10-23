@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `931933512`, initially based on
+Source: published through `732b7a9b0`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -25,6 +25,8 @@ Successful Stage1 and the first native integration memory failure:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/stage1-da4626652-native-memory/README.md`.
 Generic augmented-assignment repair and integrated native execution:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/augassign-931933512/README.md`.
+Generated enumerate-counter repair and exact bootstrap-worker replay:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/enumerate-732b7a9b0/README.md`.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -165,6 +167,12 @@ Subsequent published changes and executed evidence:
   pass 14 cases (4 pcc1 variants deselected), plus the existing five-collector
   inplace-alias integration. The integrated peer/runtime snapshot repeats the
   new exact regression. Native-pcc1 compiler variants still await qualification.
+- Generated enumerate counters now use normal assignment ownership
+  (`a967618af`, tests `732b7a9b0`). The prior alloca/store did not register a
+  boxed counter; strict root-based augmented assignment exposed that omission
+  during bootstrap. Seven focused checks pass (3 pcc1 variants deselected),
+  including both scaffold modes and all five collectors for continue, loop
+  re-entry, nested/whole-pair targets and suspended generator resumes.
 
 These are host-pcc/self-backend emitted execution and focused IR/cache checks.
 The first native pcc1 integration build used a frozen `af72b15f6` snapshot:
@@ -228,14 +236,23 @@ transcoder source produces all 951,588 bytes and 6,472 address offsets exactly
 like the host reference, at about 32 MB native RSS. The same proof passes with
 collaborator `65b810d32` included and a freshly matching runtime.
 
-A new frozen `931933512` Stage1 is active in
-`/private/tmp/pcc-p0-followup/bootstrap-augassign`; live output:
-`/private/tmp/pcc-p0-followup/logs/bootstrap-augassign.stdout`. It uses the
+The frozen `931933512` Stage1 stopped at 64.729 seconds: codegen of
+`self_backend_parse` rejected an unregistered generated `enum_i` root. No pcc1
+was produced. The minimal string/list loop reproduced it with scaffold on
+and off. After the counter repair above, the actual current bootstrap AST and
+export context was captured and that exact module replayed through the host
+process split. It now emits a valid owned PCO, SHA256
+`e85b6fa155d691a8e4e4f80e8a39789583567e029cc9660a591646ac0e49948a`.
+
+A fresh `732b7a9b0` Stage1 is active in
+`/private/tmp/pcc-p0-followup/bootstrap-enumerate`; live output:
+`/private/tmp/pcc-p0-followup/logs/bootstrap-enumerate.stdout`. It uses the
 proved host process split, original 1,800-second stage limit and
 6,059,958,272-byte cap. An outer 1,980-second watchdog additionally bounds the
 publication smoke, which bootstrap's inner stage guard does not cover.
-The 30,731 tracked snapshot inputs are recorded in `augassign-integrated-source.json`.
-Re-run the original current-pcc1 integration packet after successful publication.
+All 30,732 tracked inputs match the published commit; source and runtime hashes
+are in `enumerate-published-source.json`. Re-run the original current-pcc1
+integration packet plus the two new regressions after successful publication.
 
 Gateway work is isolated at `/private/tmp/pcc-p0-gateway-task/pcc-gateway`.
 Code `13cd35b`, tests/fixture `f260a0c` and documentation `ca9a012` use
