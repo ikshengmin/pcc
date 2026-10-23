@@ -186,16 +186,6 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
 def pcc_gc_foreign_lease_acquire(slot) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
-    # GC0/1/2 never move an object, and their sweeps take liveness from
-    # owners and pins, never from a counted lease (status 2 only counted a
-    # global for backend transitions). The no-op token is the whole
-    # contract there: no lock and no shared write, so threads do not
-    # serialize on every rooted runtime call. Transitions into a moving
-    # collector are refused while another thread runs (pcc_gc_set_backend).
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0:
-        selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        if selected >= 0 and selected <= 2:
-            return 0
     # py_incref's gate (backend 0, no provenance probe, one thread): nothing
     # moves, the forwarding and object indexes are empty, and no other thread
     # can take the transition sentinel. For an ordinary non-immortal managed

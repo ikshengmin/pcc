@@ -23,8 +23,11 @@ def _functions(path, names, namespace):
 
 
 class Model:
-    def __init__(self, backend=3):
-        self.memory = {("pcc_gc_backend_selected", 0): backend}
+    def __init__(self, backend=3, *, initialized=True):
+        self.memory = {
+            ("pcc_gc_backend_selected", 0): backend,
+            ("pcc_gc_config_initialized", 0): int(initialized),
+        }
         self.nodes = {}
         self.proven = set()
         self.depth = 0
@@ -37,7 +40,7 @@ class Model:
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
             global_load_ptr=lambda p:self.load(p,0), global_store_ptr=lambda p,v:self.store(p,0,v),
-            pcc_gc_config_ensure=lambda:self.load("pcc_gc_backend_selected",0),
+            pcc_gc_config_ensure=self.ensure_config,
             pcc_gc_resolve_root_slot_unlocked=self.resolve,
             pcc_gc_object_index_find=lambda p:self.nodes.get(p,0),
             pcc_gc_granule_is_object_start=lambda p:int(p in self.proven),
@@ -53,6 +56,10 @@ class Model:
 
     def store(self, base, offset, value):
         self.memory[base,offset] = value
+
+    def ensure_config(self):
+        self.store("pcc_gc_config_initialized", 0, 1)
+        return self.load("pcc_gc_backend_selected", 0)
 
     def resolve(self, slot, offset):
         assert self.depth > 0
@@ -156,12 +163,28 @@ def test_unknown_or_potentially_moving_no_node_fails_closed(flags,tag,proven):
     assert m.acquire(slot) == -1 and m.active() == 0
 
 
-def test_noop_token_never_decrements_a_later_node():
-    m=Model(); slot=m.object(node=False,flags=1,proven=False)
+@pytest.mark.parametrize("backend", range(5))
+def test_noop_token_never_decrements_a_later_node(backend):
+    m=Model(backend); slot=m.object(node=False,flags=1,proven=False)
     assert m.acquire(slot) == 0
     m.object(flags=0); assert m.acquire(slot) == 1
     assert m.release(slot,0) == 0 and m.count() == 1 and m.active() == 1
     assert m.release(slot,1) == 0
+
+
+@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("value", ["null", "tagged", "static_immortal"])
+def test_intrinsic_values_keep_noop_token_without_mode_guard(backend, value):
+    m = Model(backend)
+    slot = m.object(node=False, flags=1, proven=False)
+    if value != "static_immortal":
+        m.store(slot, 0, 0 if value == "null" else 7)
+    assert m.acquire(slot) == 0
+    assert m.active() == 0
+    assert _mode_setter(m)((backend + 1) % 5) == 0
+    before = dict(m.memory)
+    assert m.release(slot, 0) == 0
+    assert m.memory == before
 
 
 @pytest.mark.parametrize("counter",["node","active"])
@@ -192,7 +215,7 @@ def test_legacy_pin_is_independent_of_count():
 def _mode_setter(model):
     ns=model.ns
     # One live mutator: switching into GC3/GC4 is refused only when others run.
-    ns.update(_init_config=lambda:model.load("pcc_gc_backend_selected",0),
+    ns.update(_init_config=model.ensure_config,
         pcc_threads_enabled=lambda:0, pcc_thread_live_count=lambda:1,
         _object_graph_lock=model.lock, _object_graph_unlock=model.unlock,
         _forwarding_head=lambda:0, _object_head=lambda:0,
@@ -215,29 +238,72 @@ def _mode_setter(model):
 
 @pytest.mark.parametrize("before",range(5))
 @pytest.mark.parametrize("after",range(5))
-def test_mode_change_and_same_mode_reset_refuse_live_leases(before,after):
-    m=Model(before); slot=m.object(node=before != 0,flags=262144)
+@pytest.mark.parametrize("initialized", [False, True])
+def test_mode_change_and_same_mode_reset_refuse_live_leases(before,after,initialized):
+    m=Model(before, initialized=initialized); slot=m.object(node=before != 0,flags=262144)
+    assert m.load("pcc_gc_config_initialized", 0) == int(initialized)
     token=m.acquire(slot)
-    assert token > 0
+    assert token == (2 if before == 0 else 1)
+    assert m.load("pcc_gc_config_initialized", 0) == 1
+    # First-use initialization must not turn later leases into uncounted
+    # no-ops, even though GC0/1/2 do not currently move objects.
+    second=m.acquire(slot)
+    assert second == token and m.active() == 2
     setter=_mode_setter(m)
     m.ns["pending_exception"]=object(); error=m.ns["pending_exception"]
     assert setter(after) == -1
     assert m.load("pcc_gc_backend_selected",0) == before
     assert m.ns["pending_exception"] is error
-    assert m.active() == 1
+    assert m.active() == 2
     assert m.release(slot,token) == 0
+    assert m.active() == 1
+    assert setter(after) == -1
+    assert m.load("pcc_gc_backend_selected",0) == before
+    assert m.release(slot,second) == 0
+    assert m.active() == 0
     assert setter(after) == 0
     assert m.load("pcc_gc_backend_selected",0) == after
 
 
-def test_backend_teardown_gap_rejects_new_acquisition():
+@pytest.mark.parametrize("after", range(5))
+def test_backend_teardown_gap_rejects_new_acquisition(after):
     m=Model(4); slot=m.object(node=False,flags=262144)
     setter=_mode_setter(m); observed=[]
-    m.on_unlock=lambda:observed.append(m.acquire(slot))
-    assert setter(0) == 0
-    assert observed == [-1]
-    assert ("clear_nodes",-1) in m.events
+    m.on_unlock=lambda:observed.append((
+        m.load("pcc_gc_backend_selected",0), m.active(), m.acquire(slot)))
+    assert setter(after) == 0
+    assert observed == [(after, -1, -1)]
+    if after == 0:
+        assert ("clear_nodes",-1) in m.events
     assert m.active() == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_lease_free_same_mode_reset_keeps_collector_in_no_park_scope(backend):
+    m = Model(backend)
+    setter = _mode_setter(m)
+    lifecycle = []
+
+    def unexpected_pause():
+        raise AssertionError("same-mode GC1/2 reset must not pause the collector")
+
+    m.ns.update(
+        pcc_threads_enabled=lambda: 1,
+        pcc_py_gc_minor_graph_lock_depth=lambda: 0,
+        pcc_thread_no_park_depth=lambda: 1,
+        pcc_thread_owns_stopped_world=lambda: 0,
+        _stop_cms_worker=unexpected_pause,
+        _release_cms_worker_pause=unexpected_pause,
+        _maybe_start_cms_worker=lambda: lifecycle.append("ensure_started"),
+    )
+    assert setter(backend) == 0
+    assert m.load("pcc_gc_backend_selected", 0) == backend
+    assert m.load("pcc_gc_cycle_requested", 0) == 1 and m.active() == 0
+    assert lifecycle == ["ensure_started"]
+    # A different collector still requires a legal lifecycle pause.
+    before = dict(m.memory)
+    assert setter(3 - backend) == -1
+    assert m.memory == before and lifecycle == ["ensure_started"]
 
 
 def _node_functions(model):
