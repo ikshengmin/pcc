@@ -27,6 +27,8 @@ Generic augmented-assignment repair and integrated native execution:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/augassign-931933512/README.md`.
 Generated enumerate-counter repair and exact bootstrap-worker replay:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/enumerate-732b7a9b0/README.md`.
+Successful native Stage1, matching runtime and publication audit:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/native-stage1-732b7a9b0/README.md`.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -244,15 +246,23 @@ export context was captured and that exact module replayed through the host
 process split. It now emits a valid owned PCO, SHA256
 `e85b6fa155d691a8e4e4f80e8a39789583567e029cc9660a591646ac0e49948a`.
 
-A fresh `732b7a9b0` Stage1 is active in
-`/private/tmp/pcc-p0-followup/bootstrap-enumerate`; live output:
-`/private/tmp/pcc-p0-followup/logs/bootstrap-enumerate.stdout`. It uses the
-proved host process split, original 1,800-second stage limit and
-6,059,958,272-byte cap. An outer 1,980-second watchdog additionally bounds the
-publication smoke, which bootstrap's inner stage guard does not cover.
+The fresh `732b7a9b0` Stage1 completed successfully in
+`/private/tmp/pcc-p0-followup/bootstrap-enumerate`: compile 1,471.704 seconds;
+native publication smoke compilation/execution and refcount audit 64.342
+seconds; total 1,536.046 seconds. It retained the 1,800-second stage limit and
+6,059,958,272-byte cap; the outer watchdog also covered publication and observed
+peak tree RSS 4,314,382,336 bytes. The 769,243,768-byte pcc1 SHA256 is
+`3bf2ae625fac980e0d92769b25fa50bf4b1d429c527008c8ea28dcda750d5140`.
 All 30,732 tracked inputs match the published commit; source and runtime hashes
-are in `enumerate-published-source.json`. Re-run the original current-pcc1
-integration packet plus the two new regressions after successful publication.
+are in `enumerate-published-source.json`. This is Stage1, not a fixed point.
+
+The current native integration packet is active with that explicit pcc1 and
+matching runtime; host fallback/provisioning is disabled. It selects 14 cases
+and deselects 77. The original keys-view memory failure now passes, as do the
+collection-input host/native controls, conditional parking and chain evaluation
+order. Remaining cases are not yet certified. Live nodes and failures:
+`/private/tmp/pcc-p0-followup/logs/enumerate-native-integrations.stdout` and
+`/private/tmp/pcc-p0-followup/logs/enumerate-native-integrations.nodes.jsonl`.
 
 Gateway work is isolated at `/private/tmp/pcc-p0-gateway-task/pcc-gateway`.
 Code `13cd35b`, tests/fixture `f260a0c` and documentation `ca9a012` use
@@ -267,8 +277,8 @@ native binary validates 500,000 requests. Its only dynamic dependency is
 libSystem. Refcount/root/graph-lock/TLS costs are spread across runtime calls;
 the encoding helper is only about 3.6% inclusive, so it cannot explain the
 whole gap. No gateway throughput win is claimed.
-Fresh Stage1, native integration, full fixed point and five-GC qualification
-remain unfinished. The separate fallback-baseline check was stopped when its complete
+The complete native integration packet, full fixed point and five-GC bootstrap
+qualification remain unfinished. The separate fallback-baseline check was stopped when its complete
 compiler-closure work was identified, to avoid competing heavy builds; do not
 count that partial run as a pass. Additional parked unpack shapes, public C
 lifetime/callback
