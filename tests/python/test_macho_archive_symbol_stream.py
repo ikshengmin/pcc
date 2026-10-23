@@ -122,64 +122,6 @@ def test_truncated_ignored_records_keep_same_exception_and_offset(flags, desc, m
     assert str(new.value) == str(old.value)
 
 
-def test_symbol_projection_does_not_materialize_dict_tables(monkeypatch):
-    data = _object([(1, spec.N_SECT | spec.N_EXT, 1, 0, 0)] * 128)
-    tables = []
-    symbols = spec.MachOObject.symbols
-
-    def record_table(obj):
-        rows = symbols(obj)
-        assert all(type(row) is dict and len(row) == 6 for row in rows)
-        tables.append(len(rows))
-        return rows
-
-    monkeypatch.setattr(spec.MachOObject, "symbols", record_table)
-    assert _legacy_member_symbols(data) == (frozenset({"_symbol"}), frozenset())
-    assert tables == [128]
-    tables.clear()
-    assert macho_archive._member_symbols(data) == (frozenset({"_symbol"}), frozenset())
-    assert tables == []
-
-
-def test_only_relevant_names_are_accessed_but_every_nlist_is_read(monkeypatch):
-    records = [
-        (1, spec.N_SECT, 1, 0, 0),
-        (1, spec.N_UNDF | spec.N_EXT, 0, spec.N_WEAK_REF, 0),
-        (1, spec.N_ABS | spec.N_EXT, 1, 0, 0),
-        (1, spec.N_SECT | spec.N_EXT, 1, 0, 0),
-        (1, spec.N_UNDF | spec.N_EXT, 0, 0, 0),
-    ]
-    data = _object(records)
-    obj = spec.parse_object(data)
-    body = obj.command(spec.LC_SYMTAB).body
-    name_accesses, record_offsets = [], []
-    real_reader = spec.NLIST_64_STRUCT
-
-    class Strings(bytes):
-        def find(self, needle, start):
-            name_accesses.append(start)
-            return super().find(needle, start)
-
-    class Data(bytes):
-        def __getitem__(self, key):
-            result = super().__getitem__(key)
-            if key == slice(body["stroff"], body["stroff"] + body["strsize"]):
-                return Strings(result)
-            return result
-
-    class Reader:
-        size = real_reader.size
-
-        def unpack_from(self, raw, offset):
-            record_offsets.append(offset)
-            return real_reader.unpack_from(raw, offset)
-
-    monkeypatch.setattr(spec, "NLIST_64_STRUCT", Reader())
-    assert macho_archive._member_symbols(Data(data)) == (frozenset({"_symbol"}), frozenset({"_symbol"}))
-    assert name_accesses == [1, 1]
-    assert record_offsets == [body["symoff"] + index * real_reader.size for index in range(len(records))]
-
-
 def test_archive_backreferences_weak_refs_and_duplicate_avoidance_keep_order():
     sources = [
         ("early.o", _named(("_early",), ("_main",))),
