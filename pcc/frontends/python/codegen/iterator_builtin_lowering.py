@@ -98,7 +98,7 @@ class IteratorBuiltinLoweringMixin:
 
     def _emit_next_owned_step(
         self, iterator, output, pending, stop_class, default, span, found, exhausted,
-        *, allow_exhaustion=False,
+        allow_exhaustion,
     ):
         """Publish the result and park the exact exception before retiring leases."""
         self._slot_call_runtime_call(
@@ -120,12 +120,12 @@ class IteratorBuiltinLoweringMixin:
         self.builder.position_at_end(failed)
         self._emit_next_pending_or_default(
             output, pending, stop_class, default, span, exhausted,
-            allow_exhaustion=allow_exhaustion,
+            allow_exhaustion,
         )
 
     def _emit_next_pending_or_default(
         self, output, pending, stop_class, default, span, exhausted,
-        *, allow_exhaustion=False,
+        allow_exhaustion,
     ):
         """Handle the exception of the complete next protocol invocation."""
         if default is not None or allow_exhaustion:
@@ -305,7 +305,7 @@ class IteratorBuiltinLoweringMixin:
             self.builder.branch(step)
             self.builder.position_at_end(step)
             self._emit_next_owned_step(
-                iterator, output, pending, stop_class, default, expr.span, found, done,
+                iterator, output, pending, stop_class, default, expr.span, found, done, False,
             )
             self.builder.position_at_end(found)
             if filtered:
@@ -338,7 +338,7 @@ class IteratorBuiltinLoweringMixin:
                     self.module.globals["py_tls_exc_swap_slot"], [self._as_gc_ptr(pending)],
                 )
                 self._emit_next_pending_or_default(
-                    output, pending, stop_class, default, expr.span, done,
+                    output, pending, stop_class, default, expr.span, done, False,
                 )
             else:
                 self.builder.branch(done)

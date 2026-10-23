@@ -700,8 +700,8 @@ def _part_59(out):
     _append_method(out, '_iterator_builtin_is_shadowed', (('self', 'pos', False), ('name', 'pos', False)))
     _append_method(out, '_emit_iterator_callable_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_iterator_install_cleanup', (('self', 'pos', False), ('roots', 'pos', False), ('target', 'pos', False)))
-    _append_method(out, '_emit_next_owned_step', (('self', 'pos', False), ('iterator', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('found', 'pos', False), ('exhausted', 'pos', False)))
-    _append_method(out, '_emit_next_pending_or_default', (('self', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('exhausted', 'pos', False)))
+    _append_method(out, '_emit_next_owned_step', (('self', 'pos', False), ('iterator', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('found', 'pos', False), ('exhausted', 'pos', False), ('allow_exhaustion', 'pos', False)))
+    _append_method(out, '_emit_next_pending_or_default', (('self', 'pos', False), ('output', 'pos', False), ('pending', 'pos', False), ('stop_class', 'pos', False), ('default', 'pos', False), ('span', 'pos', False), ('exhausted', 'pos', False), ('allow_exhaustion', 'pos', False)))
 
 
 def _part_60(out):

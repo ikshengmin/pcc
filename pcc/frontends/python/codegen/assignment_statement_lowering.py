@@ -377,7 +377,7 @@ def _emit_live_import_sequence_unpack(host, stmt, target):
             short = fn.append_basic_block(host._fresh("unpack.short"))
             host._emit_next_owned_step(
                 iterator, item, pending, stop_class, None, stmt.span, found, short,
-                allow_exhaustion=True,
+                True,
             )
             host.builder.position_at_end(short)
             host._emit_builtin_exception_and_branch(
@@ -388,7 +388,7 @@ def _emit_live_import_sequence_unpack(host, stmt, target):
         too_many = fn.append_basic_block(host._fresh("unpack.too.many"))
         host._emit_next_owned_step(
             iterator, extra, pending, stop_class, None, stmt.span, too_many, ready,
-            allow_exhaustion=True,
+            True,
         )
         host.builder.position_at_end(too_many)
         host.builder.call(host.runtime["pcc_gc_store_root"], [host._as_gc_ptr(extra), ir.Constant(_CSTR, None)])
