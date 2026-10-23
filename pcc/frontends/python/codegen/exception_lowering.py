@@ -752,6 +752,7 @@ class ExceptionLoweringMixin:
             name=self._fresh(f"exc.{exc_name}"),
         )
         self.builder.call(self.runtime["py_raise"], [exc])
+        self._gc_release(exc)  # TLS retained the NEW constructor result.
         frame_exc = self.builder.call(
             self.runtime["py_current_exception"],
             [],

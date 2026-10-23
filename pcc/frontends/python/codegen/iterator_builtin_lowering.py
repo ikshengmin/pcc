@@ -98,6 +98,7 @@ class IteratorBuiltinLoweringMixin:
 
     def _emit_next_owned_step(
         self, iterator, output, pending, stop_class, default, span, found, exhausted,
+        *, allow_exhaustion=False,
     ):
         """Publish the result and park the exact exception before retiring leases."""
         self._slot_call_runtime_call(
@@ -117,11 +118,17 @@ class IteratorBuiltinLoweringMixin:
         self.builder.branch(found)
 
         self.builder.position_at_end(failed)
-        self._emit_next_pending_or_default(output, pending, stop_class, default, span, exhausted)
+        self._emit_next_pending_or_default(
+            output, pending, stop_class, default, span, exhausted,
+            allow_exhaustion=allow_exhaustion,
+        )
 
-    def _emit_next_pending_or_default(self, output, pending, stop_class, default, span, exhausted):
+    def _emit_next_pending_or_default(
+        self, output, pending, stop_class, default, span, exhausted,
+        *, allow_exhaustion=False,
+    ):
         """Handle the exception of the complete next protocol invocation."""
-        if default is not None:
+        if default is not None or allow_exhaustion:
             matched = self._slot_call_runtime_call(
                 "py_exc_matches", (pending, stop_class), span=span,
             )
@@ -136,7 +143,8 @@ class IteratorBuiltinLoweringMixin:
                 self.runtime["pcc_gc_store_root"],
                 [self._as_gc_ptr(output), ir.Constant(_CSTR, None)],
             )
-            self._slot_call_copy_source(output, default, span=span)
+            if default is not None:
+                self._slot_call_copy_source(output, default, span=span)
             self.builder.call(
                 self.runtime["pcc_gc_store_root"],
                 [self._as_gc_ptr(pending), ir.Constant(_CSTR, None)],

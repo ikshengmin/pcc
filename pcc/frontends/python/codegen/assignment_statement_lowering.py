@@ -6,7 +6,11 @@ from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_expr_binding,
     live_import_name_slot,
 )
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_SET
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_LIST,
+    PY_TYPE_SET,
+    PY_TYPE_TUPLE,
+)
 
 import sys
 import os
@@ -252,48 +256,154 @@ def _emit_rooted_name_augassign(host, stmt, op, declared):
         host._cpy_operand_cleanup_block = saved_cpy
 
 
+def _assign_uses_owned_unpack(host, rhs):
+    if (getattr(host, "_freestanding_module", False)
+            or getattr(host, "_runtime_port_module", False)
+            or host._expr_looks_cpython(rhs)
+            or host._expr_returns_unsafe_raw_pointer(rhs)):
+        return False
+    function = host.current_function
+    return function is None or not (
+        function.name in getattr(host, "_manual_pointer_abi_functions", ())
+        or function.name in getattr(host, "_c_abi_export_symbols", ())
+    )
+
+
+def _emit_unpack_sequence_size_error(host, expected, actual, span):
+    previous = host._current_try_err_block()
+    saved_cpy = host._cpy_operand_cleanup_block
+    roots = []
+    try:
+        message = StrLit(
+            span=span, ty=StrType(name="str"),
+            value="too many values to unpack (expected " + str(expected) + ", got %d)",
+        )
+        template = host._emit_slot_call_operand(message, "unpack.error.format")
+        roots.append(template)
+        host._iterator_install_cleanup(roots, previous)
+        count = host._new_slot_call_root("unpack.error.count")
+        text = host._new_slot_call_root("unpack.error.text")
+        exception = host._new_slot_call_root("unpack.error.exception")
+        roots.extend((count, text, exception))
+        host._iterator_install_cleanup(roots, previous)
+        host._slot_call_runtime_call(
+            "py_int_from_i64", (), result_slot=count, suffix_args=(actual,), span=span,
+        )
+        host._slot_call_runtime_call(
+            "py_str_mod", (template, count), result_slot=text, span=span,
+        )
+        host._slot_call_runtime_call(
+            "py_exc_new_with_value", (text,), result_slot=exception,
+            suffix_args=(ir.Constant(_I64, 2),), argument_order=(1, 0), span=span,
+        )
+        host._slot_call_runtime_call("py_raise", (exception,), span=span)
+        host.builder.branch(host._current_try_err_block())
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+
+
 def _emit_live_import_sequence_unpack(host, stmt, target):
-    """Own sequence elements before target evaluation can replace bindings."""
-    source = host._emit_slot_call_operand(stmt.value, "import.unpack.source")
-    roots = [source]
+    """Validate one unpack boundary before publishing any of its targets.
+
+    Exact builtin lists/tuples use checked indexed loads. Other iterables
+    consume at most N+1 items through the ordinary next/exception protocol.
+    """
+    from pcc.frontends.python.codegen.iterator_builtin_lowering import _STOP_ITERATION_TAG
+
     previous = host._current_try_err_block()
     error = previous if previous is not None else host._ensure_fn_err_exit()
     saved_cpy = host._cpy_operand_cleanup_block
+    roots = []
+    items = []
+    count = len(target.elems)
     try:
-        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
-        host._cpy_operand_cleanup_block = host._try_err_block
-        if isinstance(stmt.value.ty, SetType):
-            count = host._slot_call_runtime_call("py_obj_len", (source,), span=stmt.span)
-            valid = host.builder.icmp_signed("==", count, ir.Constant(_I64, len(target.elems)))
-            ready = host.current_function.append_basic_block(host._fresh("import.unpack.set.ready"))
-            bad = host.current_function.append_basic_block(host._fresh("import.unpack.set.bad"))
-            host.builder.cbranch(valid, ready, bad)
-            host.builder.position_at_end(bad)
-            host._emit_builtin_exception_and_branch("ValueError", "cannot unpack set: arity mismatch", stmt.span)
-            host.builder.position_at_end(ready)
-            sequence = host._new_slot_call_root("import.unpack.set.items")
-            roots.append(sequence)
-            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
-            host._cpy_operand_cleanup_block = host._try_err_block
-            host._slot_call_runtime_call("py_list_new", (), result_slot=sequence,
-                                        suffix_args=(ir.Constant(_I64, 0),), span=stmt.span)
-            host._slot_call_runtime_call("py_list_extend", (sequence, source), span=stmt.span)
-            source = sequence
-        item_start = len(roots)
-        for index in range(len(target.elems)):
-            item = host._new_slot_call_root("import.unpack.item")
+        # Item frames outlive the source/iterator frames. Clear an item's
+        # owner after its store, then leave lexical frames in reverse order.
+        for _index in range(count):
+            item = host._new_slot_call_root("unpack.item")
+            items.append(item)
             roots.append(item)
-            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
-            host._cpy_operand_cleanup_block = host._try_err_block
+            host._iterator_install_cleanup(roots, error)
+        source = host._emit_slot_call_operand(stmt.value, "unpack.source")
+        roots.append(source)
+        host._iterator_install_cleanup(roots, error)
+        iterator = host._new_slot_call_root("unpack.iterator")
+        pending = host._new_slot_call_root("unpack.pending")
+        stop_class = host._new_slot_call_root("unpack.stop.class")
+        extra = host._new_slot_call_root("unpack.extra")
+        controls = (source, iterator, pending, stop_class, extra)
+        roots.extend(controls[1:])
+        host._iterator_install_cleanup(roots, error)
+        fn = host.current_function
+        sequence = fn.append_basic_block(host._fresh("unpack.sequence"))
+        indexed = fn.append_basic_block(host._fresh("unpack.indexed"))
+        iterate = fn.append_basic_block(host._fresh("unpack.iterate"))
+        ready = fn.append_basic_block(host._fresh("unpack.ready"))
+        tag = host._slot_call_runtime_call("py_obj_type_tag", (source,), span=stmt.span)
+        exact = host.builder.or_(
+            host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST)),
+            host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_TUPLE)),
+        )
+        host.builder.cbranch(exact, sequence, iterate)
+        host.builder.position_at_end(sequence)
+        size = host._slot_call_runtime_call("py_obj_len", (source,), span=stmt.span)
+        oversized = fn.append_basic_block(host._fresh("unpack.sequence.too.many"))
+        fits = fn.append_basic_block(host._fresh("unpack.sequence.fits"))
+        host.builder.cbranch(
+            host.builder.icmp_signed(">", size, ir.Constant(_I64, count)), oversized, fits,
+        )
+        host.builder.position_at_end(oversized)
+        _emit_unpack_sequence_size_error(host, count, size, stmt.span)
+        host.builder.position_at_end(fits)
+        host.builder.cbranch(
+            host.builder.icmp_signed("==", size, ir.Constant(_I64, count)), indexed, iterate,
+        )
+        host.builder.position_at_end(indexed)
+        for index, item in enumerate(items):
             host._slot_call_runtime_call(
                 "py_obj_getitem_i64", (source,), result_slot=item,
                 suffix_args=(ir.Constant(_I64, index),), span=stmt.span,
             )
+        host.builder.branch(ready)
+        host.builder.position_at_end(iterate)
+        host._slot_call_runtime_call("py_obj_iter", (source,), result_slot=iterator, span=stmt.span)
+        host.builder.call(host.runtime["py_exc_builtin_class"], [ir.Constant(_I64, _STOP_ITERATION_TAG)])
+        host._emit_post_call_err_check(stmt.span)
+        cache = host.builder.call(host.runtime["py_subs_exc_cache_slot"], [ir.Constant(_I64, _STOP_ITERATION_TAG)])
+        host._slot_call_copy_source(stop_class, cache, span=stmt.span)
+        for index, item in enumerate(items):
+            found = fn.append_basic_block(host._fresh("unpack.found"))
+            short = fn.append_basic_block(host._fresh("unpack.short"))
+            host._emit_next_owned_step(
+                iterator, item, pending, stop_class, None, stmt.span, found, short,
+                allow_exhaustion=True,
+            )
+            host.builder.position_at_end(short)
+            host._emit_builtin_exception_and_branch(
+                "ValueError", "not enough values to unpack (expected " + str(count)
+                + ", got " + str(index) + ")", stmt.span,
+            )
+            host.builder.position_at_end(found)
+        too_many = fn.append_basic_block(host._fresh("unpack.too.many"))
+        host._emit_next_owned_step(
+            iterator, extra, pending, stop_class, None, stmt.span, too_many, ready,
+            allow_exhaustion=True,
+        )
+        host.builder.position_at_end(too_many)
+        host.builder.call(host.runtime["pcc_gc_store_root"], [host._as_gc_ptr(extra), ir.Constant(_CSTR, None)])
+        host._emit_builtin_exception_and_branch(
+            "ValueError", "too many values to unpack (expected " + str(count) + ")", stmt.span,
+        )
+        host.builder.position_at_end(ready)
+        host._release_slot_call_roots(controls)
+        host._iterator_install_cleanup(items, error)
         element_types = _assign_tuple_elems(stmt.value.ty)
         for index, lhs in enumerate(target.elems):
-            element_type = element_types[index] if len(element_types) == len(target.elems) else DynType(name="dyn")
-            host._store_unpack_root_target(lhs, roots[item_start + index], element_type)
-        host._release_slot_call_roots(tuple(roots))
+            element_type = element_types[index] if len(element_types) == count else DynType(name="dyn")
+            host._store_unpack_root_target(lhs, items[index], element_type)
+            host.builder.call(host.runtime["pcc_gc_store_root"], [host._as_gc_ptr(items[index]), ir.Constant(_CSTR, None)])
+        host._release_slot_call_roots(tuple(items))
     finally:
         host._try_err_block = previous
         host._cpy_operand_cleanup_block = saved_cpy
@@ -1643,6 +1753,9 @@ class AssignmentStatementLoweringMixin:
         if _assign_is_tuple_expr(rhs) and any(
             self._is_starred_unpack_expr(e) for e in rhs.elems
         ):
+            if _assign_uses_owned_unpack(self, rhs):
+                _emit_live_import_sequence_unpack(self, stmt, target)
+                return
             tup_val = self._emit_expr(rhs)
             elem_ty = DynType(name="dyn")
             for i, lhs in enumerate(target.elems):
@@ -1661,6 +1774,9 @@ class AssignmentStatementLoweringMixin:
             return
         if _assign_is_tuple_expr(rhs):
             if len(rhs.elems) != len(target.elems):
+                if _assign_uses_owned_unpack(self, rhs):
+                    _emit_live_import_sequence_unpack(self, stmt, target)
+                    return
                 raise L1CodegenError(
                     f"tuple unpack arity mismatch: {len(target.elems)} "
                     f"targets, {len(rhs.elems)} values"
@@ -1719,6 +1835,9 @@ class AssignmentStatementLoweringMixin:
                 self._cpy_operand_cleanup_block = saved_cpy
             return
 
+        if _assign_uses_owned_unpack(self, rhs):
+            _emit_live_import_sequence_unpack(self, stmt, target)
+            return
         rhs_ty = rhs.ty
         rhs_elems = _assign_tuple_elems(rhs_ty)
         if _assign_is_tuple_type(rhs_ty) and len(rhs_elems) == len(target.elems):
