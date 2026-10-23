@@ -7,8 +7,19 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
-    Attr, DynType, Expr, IntType, Name, NoneLit, NoneType, Slice,
-    Subscript, TupleExpr, Type,
+    Assign,
+    Attr,
+    DynType,
+    Expr,
+    IntType,
+    ListExpr,
+    Name,
+    NoneLit,
+    NoneType,
+    Slice,
+    Subscript,
+    TupleExpr,
+    Type,
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.local_bound_lowering import mark_local_bound
@@ -104,27 +115,15 @@ class AssignmentStoreLoweringMixin:
     def _store_unpack_root_target(self, lhs: Expr, root, value_ty: Type) -> None:
         """Publish a retained literal element without exposing a stale SSA value."""
         lhs = self._coerce_unpack_name_like(lhs)
-        if isinstance(lhs, TupleExpr):
-            previous = self._current_try_err_block()
-            error = previous if previous is not None else self._ensure_fn_err_exit()
-            saved_cpy = self._cpy_operand_cleanup_block
-            items = []
-            try:
-                for index in range(len(lhs.elems)):
-                    item = self._new_slot_call_root("unpack.nested.item")
-                    items.append(item)
-                    self._try_err_block = self._slot_call_cleanup_block(tuple(items), error)
-                    self._cpy_operand_cleanup_block = self._try_err_block
-                    self._slot_call_runtime_call(
-                        "py_obj_getitem_i64", (root,), result_slot=item,
-                        suffix_args=(ir.Constant(_I64, index),), span=lhs.span,
-                    )
-                for index, target in enumerate(lhs.elems):
-                    self._store_unpack_root_target(target, items[index], DynType(name="dyn"))
-                self._release_slot_call_roots(tuple(items))
-            finally:
-                self._try_err_block = previous
-                self._cpy_operand_cleanup_block = saved_cpy
+        if isinstance(lhs, (TupleExpr, ListExpr)):
+            from pcc.frontends.python.codegen.assignment_statement_lowering import (
+                _emit_live_import_sequence_unpack,
+            )
+            # The source is already owned; its synthetic expression supplies
+            # only type/span information and is never evaluated or rebound.
+            source = Name(span=lhs.span, ty=value_ty, ident=self._fresh("unpack.source"))
+            assignment = Assign(span=lhs.span, targets=(lhs,), value=source)
+            _emit_live_import_sequence_unpack(self, assignment, lhs, root)
             return
         if isinstance(lhs, Attr) and live_import_attribute_store(self, lhs):
             emit_live_import_attribute_store(self, lhs, root)

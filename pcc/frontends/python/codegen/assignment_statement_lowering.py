@@ -303,7 +303,7 @@ def _emit_unpack_sequence_size_error(host, expected, actual, span):
         host._cpy_operand_cleanup_block = saved_cpy
 
 
-def _emit_live_import_sequence_unpack(host, stmt, target):
+def _emit_live_import_sequence_unpack(host, stmt, target, source_root=None):
     """Validate one unpack boundary before publishing any of its targets.
 
     Exact builtin lists/tuples use checked indexed loads. Other iterables
@@ -325,9 +325,14 @@ def _emit_live_import_sequence_unpack(host, stmt, target):
             items.append(item)
             roots.append(item)
             host._iterator_install_cleanup(roots, error)
-        source = host._emit_slot_call_operand(stmt.value, "unpack.source")
+        if source_root is None:
+            source = host._emit_slot_call_operand(stmt.value, "unpack.source")
+        else:
+            source = host._new_slot_call_root("unpack.source")
         roots.append(source)
         host._iterator_install_cleanup(roots, error)
+        if source_root is not None:
+            host._slot_call_copy_source(source, source_root, span=stmt.span)
         iterator = host._new_slot_call_root("unpack.iterator")
         pending = host._new_slot_call_root("unpack.pending")
         stop_class = host._new_slot_call_root("unpack.stop.class")
@@ -396,6 +401,13 @@ def _emit_live_import_sequence_unpack(host, stmt, target):
             "ValueError", "too many values to unpack (expected " + str(count) + ")", stmt.span,
         )
         host.builder.position_at_end(ready)
+        if source_root is not None:
+            # The parent retains the lexical frame until its own boundary
+            # exits, but its private container owner is consumed here.
+            host.builder.call(
+                host.runtime["pcc_gc_store_root"],
+                [host._as_gc_ptr(source_root), ir.Constant(_CSTR, None)],
+            )
         host._release_slot_call_roots(controls)
         host._iterator_install_cleanup(items, error)
         element_types = _assign_tuple_elems(stmt.value.ty)
