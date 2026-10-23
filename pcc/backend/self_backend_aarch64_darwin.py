@@ -2780,6 +2780,14 @@ def _emit_dense_indexed_function_blocks(
     layout_count = len(kernel.block_layout_ids)
     block_position = 0
     block_count = layout_count if layout_count else len(kernel.block_names)
+    # The native owner consumes labels, not assembly formatting. Keep their
+    # existing typed path instead of rendering and reparsing a label line at
+    # every block; inter-block blank lines have no native representation.
+    # Custom sinks/builders retain their append callbacks and exact text.
+    native_block_labels = (
+        type(native_sink) is _NativeAArch64Emission
+        and type(native_sink.builder) is AArch64ModuleBuilder
+    )
     direct_targets = _direct_branch_targets_in_range(kernel)
     while block_position < block_count:
         block_id = (
@@ -2788,7 +2796,9 @@ def _emit_dense_indexed_function_blocks(
             else block_position
         )
         block_name = kernel.block_names[block_id]
-        if block_position == 0:
+        if native_block_labels:
+            native_sink.builder.append_label(_block_label(func.name, block_name))
+        elif block_position == 0:
             if native_sink is None:
                 lines.append(_block_label(func.name, block_name) + ":")
             else:
