@@ -14,9 +14,9 @@ def _kill_process_group(proc: subprocess.Popen[str], sig: int) -> None:
     except ProcessLookupError:
         pass
     except PermissionError:
-        # A signal handler can reap the group leader before the outer cleanup
-        # path repeats killpg().  Treat EPERM as benign only after the owned
-        # parent is observably gone; a live process must still surface it.
+        # The group leader can be reaped before a later cleanup signal.
+        # Treat EPERM as benign only after the owned parent is observably gone;
+        # a live process must still surface it.
         if proc.poll() is None:
             raise
 
@@ -115,34 +115,48 @@ def _run_process_group(
     old_handlers: dict[int, object] = {}
 
     def _interrupt_handler(signum: int, _frame) -> None:
-        _kill_process_group(proc, signal.SIGTERM)
+        # The outer exception path owns cleanup. Signaling here can fail
+        # before the interruption is raised, replacing it with a cleanup error.
         if signum == signal.SIGINT:
             raise KeyboardInterrupt
         raise SystemExit(128 + signum)
 
-    if threading_is_main_thread():
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            old_handlers[signum] = signal.getsignal(signum)
-            signal.signal(signum, _interrupt_handler)
     try:
+        if threading_is_main_thread():
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                old_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, _interrupt_handler)
         stdout, stderr = proc.communicate(timeout=timeout)
         return subprocess.CompletedProcess(
             list(cmd), proc.returncode, stdout=stdout, stderr=stderr
         )
-    except subprocess.TimeoutExpired:
-        return _finish_after_process_group_kill(
-            proc,
-            cmd=cmd,
-            timeout=timeout,
-            reason="TIMEOUT",
-        )
-    except BaseException:
-        result = _finish_after_process_group_kill(
-            proc,
-            cmd=cmd,
-            timeout=timeout,
-            reason="INTERRUPT",
-        )
+    except BaseException as error:
+        timed_out = isinstance(error, subprocess.TimeoutExpired)
+        try:
+            result = _finish_after_process_group_kill(
+                proc,
+                cmd=cmd,
+                timeout=timeout,
+                reason="TIMEOUT" if timed_out else "INTERRUPT",
+            )
+        except BaseException as cleanup_error:
+            # Never claim a completed cleanup when signaling or draining fails.
+            # Keep both failures, with the command's original reason primary.
+            warning = (
+                "Process-group cleanup failed; owned children may still be running: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+            error.add_note(warning)
+            # Integer SystemExit codes suppress traceback/notes. Surface the
+            # cleanup warning even when the original failure is that exit.
+            try:
+                sys.stderr.write(warning + "\n")
+                sys.stderr.flush()
+            except BaseException:
+                pass  # A broken capture sink must not replace either failure.
+            raise error from cleanup_error
+        if timed_out:
+            return result
         # The caller never receives this result. Preserve the drained evidence
         # in its captured streams before propagating the original exception.
         for stream, output in ((sys.stdout, result.stdout), (sys.stderr, result.stderr)):

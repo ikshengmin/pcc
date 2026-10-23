@@ -39,6 +39,8 @@ def _fake_process(monkeypatch, outcomes):
         def communicate(self, timeout=None):
             self.timeouts.append(timeout)
             outcome = next(self.outcomes)
+            if callable(outcome):
+                outcome = outcome()
             if isinstance(outcome, BaseException):
                 raise outcome
             return outcome
@@ -169,6 +171,174 @@ def test_interruption_keeps_evidence_after_sigkill_escalation(monkeypatch, capsy
     assert raised.value is error
     assert proc.timeouts == [9, 2.0, None]
     assert proc.signals == [signal.SIGTERM, signal.SIGKILL]
+    assert _handlers() == before
+    captured = capsys.readouterr()
+    assert captured.out == _STDOUT
+    assert captured.err == _STDERR + (
+        "\n[INTERRUPT] killed process group for owned-child after 9.0s\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.TimeoutExpired(["owned-child"], 9, output=b"partial stdout"),
+        KeyboardInterrupt(),
+        SystemExit(143),
+        RuntimeError("communicate failed"),
+    ],
+    ids=["timeout", "keyboard-interrupt", "system-exit", "ordinary-error"],
+)
+@pytest.mark.parametrize("stage", ["term", "kill", "drain", "drain-after-kill"])
+def test_cleanup_failure_preserves_original_exception(monkeypatch, capsys, error, stage):
+    before = _handlers()
+    cleanup_error = PermissionError(1, "Operation not permitted")
+    outcomes = [error]
+    if stage in ("kill", "drain-after-kill"):
+        outcomes.append(subprocess.TimeoutExpired(["owned-child"], 2))
+    if stage in ("drain", "drain-after-kill"):
+        cleanup_error = OSError("capture failed")
+        outcomes.append(cleanup_error)
+    proc = _fake_process(monkeypatch, outcomes)
+
+    def kill_group(proc, sig):
+        proc.signals.append(sig)
+        if stage == "term" or (stage == "kill" and sig == signal.SIGKILL):
+            raise cleanup_error
+
+    monkeypatch.setattr(process_timeout, "_kill_process_group", kill_group)
+    with pytest.raises(type(error)) as raised:
+        process_timeout.run_process_group_timeout(["owned-child"], timeout=9)
+
+    assert raised.value is error
+    assert error.__cause__ is cleanup_error
+    warning = (
+        "Process-group cleanup failed; owned children may still be running: "
+        f"{type(cleanup_error).__name__}: {cleanup_error}"
+    )
+    assert error.__notes__[-1] == warning
+    assert proc.signals == (
+        [signal.SIGTERM, signal.SIGKILL]
+        if stage in ("kill", "drain-after-kill") else [signal.SIGTERM]
+    )
+    expected_timeouts = [9] if stage == "term" else [9, 2.0]
+    if stage == "drain-after-kill":
+        expected_timeouts.append(None)
+    assert proc.timeouts == expected_timeouts
+    if isinstance(error, subprocess.TimeoutExpired):
+        assert error.output == b"partial stdout"
+        assert error.timeout == 9
+    assert _handlers() == before
+    assert capsys.readouterr() == ("", warning + "\n")
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["cleaned", "denied"])
+def test_signal_handler_preserves_interruption_and_has_one_cleanup_owner(
+    monkeypatch, capsys, signum, cleanup_fails
+):
+    before = _handlers()
+
+    def interrupt():
+        # Invoke the installed handler directly, without sending an OS signal.
+        signal.getsignal(signum)(signum, None)
+
+    proc = _fake_process(monkeypatch, [interrupt, (_STDOUT, _STDERR)])
+    cleanup_error = PermissionError(1, "Operation not permitted")
+
+    def kill_group(proc, sig):
+        proc.signals.append(sig)
+        if cleanup_fails:
+            raise cleanup_error
+
+    monkeypatch.setattr(process_timeout, "_kill_process_group", kill_group)
+    expected = KeyboardInterrupt if signum == signal.SIGINT else SystemExit
+    with pytest.raises(expected) as raised:
+        process_timeout.run_process_group_timeout(["owned-child"], timeout=9)
+
+    if signum == signal.SIGTERM:
+        assert raised.value.code == 128 + signum
+    assert proc.signals == [signal.SIGTERM]
+    assert _handlers() == before
+    captured = capsys.readouterr()
+    if cleanup_fails:
+        assert raised.value.__cause__ is cleanup_error
+        assert "owned children may still be running" in raised.value.__notes__[-1]
+        assert proc.timeouts == [9]
+        assert captured == ("", raised.value.__notes__[-1] + "\n")
+    else:
+        assert proc.timeouts == [9, 2.0]
+        assert captured.out == _STDOUT
+        assert captured.err == _STDERR + (
+            "\n[INTERRUPT] killed process group for owned-child after 9.0s\n"
+        )
+
+
+@pytest.mark.parametrize("operation", ["write", "flush"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.TimeoutExpired(["owned-child"], 9),
+        KeyboardInterrupt(),
+        SystemExit(143),
+        RuntimeError("communicate failed"),
+    ],
+    ids=["timeout", "keyboard-interrupt", "system-exit", "ordinary-error"],
+)
+def test_cleanup_warning_failure_preserves_original_exception(monkeypatch, error, operation):
+    class BrokenStream(io.StringIO):
+        def write(self, text):
+            if operation == "write":
+                raise BrokenPipeError("capture closed")
+            return super().write(text)
+
+        def flush(self):
+            if operation == "flush":
+                raise KeyboardInterrupt()
+            return super().flush()
+
+    before = _handlers()
+    proc = _fake_process(monkeypatch, [error])
+    cleanup_error = PermissionError(1, "Operation not permitted")
+
+    def kill_group(proc, sig):
+        proc.signals.append(sig)
+        raise cleanup_error
+
+    monkeypatch.setattr(process_timeout, "_kill_process_group", kill_group)
+    with monkeypatch.context() as capture_patch:
+        capture_patch.setattr(sys, "stderr", BrokenStream())
+        with pytest.raises(type(error)) as raised:
+            process_timeout.run_process_group_timeout(["owned-child"], timeout=9)
+
+    assert raised.value is error
+    assert error.__cause__ is cleanup_error
+    assert "owned children may still be running" in error.__notes__[-1]
+    assert proc.signals == [signal.SIGTERM]
+    assert proc.timeouts == [9]
+    assert _handlers() == before
+
+
+def test_interruption_during_handler_installation_still_cleans_up(monkeypatch, capsys):
+    before = _handlers()
+    proc = _fake_process(monkeypatch, [(_STDOUT, _STDERR)])
+    install = signal.signal
+    interrupted = False
+
+    def install_and_interrupt(signum, handler):
+        nonlocal interrupted
+        result = install(signum, handler)
+        if signum == signal.SIGINT and not interrupted:
+            interrupted = True
+            handler(signum, None)
+        return result
+
+    monkeypatch.setattr(process_timeout.signal, "signal", install_and_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        process_timeout.run_process_group_timeout(["owned-child"], timeout=9)
+
+    assert proc.signals == [signal.SIGTERM]
+    assert proc.timeouts == [2.0]
     assert _handlers() == before
     captured = capsys.readouterr()
     assert captured.out == _STDOUT
