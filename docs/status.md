@@ -630,14 +630,55 @@ All 48 affected checks pass on the unchanged general root_move, including
 native GC3/4 handoff. The failed preimages and full prototype are retained:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/scalar-root-move-v1-rejected/README.md`.
 
-Continue at compiler-proven exclusive synthetic roots. Lexical LIFO operand
-roots and hidden non-resumable return-cleanup slots have concrete allocation
-provenance; user locals, output parameters, global/shared roots and persistent
-generator slots require their own proof. Route repeated codegen transfers
-through one proof-aware emitter: inline scalar transfer only for proven cells;
-heap values and unproved cells use the original atomic runtime entry. Preserve
-invalid/nonempty checks, source ownership, root registration and exceptional
-cleanup. No such compiler optimization is implemented or qualified yet.
+Compiler-private scalar transfers are now implemented in `8321df970`, with
+independent tests `370fea2d7`, both pushed to shenming/master. Twenty emitter
+sites share the proof check: lexical LIFO operand cells and hidden
+non-resumable return owners may transfer NULL/tagged words directly; heap
+values, locals/output parameters, global/shared and persistent generator roots
+keep the atomic runtime path. Public root_move is unchanged. 111 focused host
+checks pass; three native integration programs run on GC0–4. Post-push shared
+destination atomicity plus owned-IR/native GC3/4 movement checks pass (3 nodes).
+The return-cleanup checker now follows all CFG predecessors and rejects four
+missing/cleared/unknown/late-flag counterexamples.
+
+Frozen base 2ca5106a2, host pcc0/owned self/native atomic threaded GC0: five
+rotating fixed-work pairs improve 2/4/8-thread medians by 1.133x/1.447x/1.568x.
+The first single-thread wall packet is noisy; a retained seven-pair longer
+confirmation measures 2.8293 -> 2.4709 s (1.145x), user CPU 2.72 -> 2.35 s.
+Scalar-return instruction cost falls 2567.675 -> 2213.819 (-13.78%); heap-return
+control is 21359.426 -> 21376.997 (+0.082%), with 1140 -> 1160 ns wall medians.
+Early cold-start N/2N wall outliers remain in the evidence. An earlier unpinned
+script accidentally imported the shared editable install; only corrected
+source-pinned IR/tests/builds support the published claim.
+
+Original full-handler integration passes GC0–4 (1,000 requests plus 200
+warmups each). Seven rotating 20,000-request comparisons measure median
+9241.649 -> 9651.811 requests/s versus asyncio 70488.536: about 7.30x behind,
+with substantial timing dispersion. Native instructions remain 33.139/33.143
+billion. This is not an established material full-handler gain, nor proof that
+the previous native-pcc1 8.5x gap improved by this amount. Current-source pcc1,
+fixed point and full performance acceptance remain unfinished.
+
+New exact-artifact profiles are completed and output-validated. A synchronous
+list-concatenation/return loop still costs about 16.2x CPython's instructions;
+list concat accounts for 60.31% inclusive samples, its fill for 40.45% (these
+overlap). Actual runtime IR already has pointer/i64 lanes and PHIs. It still
+re-enters public get/append and pin/root protocols despite outer rooted cells.
+The full-handler profile puts JSON dumps at 36.06% inclusive, list append at
+10.39%, its rooted core at 9.61%; graph acquire/release leaf shares sum to
+9.11%. Scheduler outer frames contain user execution, not scheduler self time.
+Next inspect shared rooted container operations, retaining capacity/growth,
+post-parking reloads, write barriers, callbacks, exceptions and all five GCs;
+the overall sevenfold cause is not yet quantitatively closed.
+
+Modular reference: current Mojo compiler source is available. Saved ArgPromotion,
+LowerArgConventions and SROA blobs are verified against upstream Git blob IDs.
+Their ownership/effect proofs, register argument projection and scalar
+replacement are relevant concepts; wrapping native-width Int and default value
+semantics must not replace PCC Python semantics. No Mojo timing claim is made.
+All commands, failures/corrections, source/runtime/binary identities, measurements,
+native outputs, raw profiles and reference sources are read-back verified at:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/private-root-8321df970/README.md`.
 
 The independent owned-root list-construction v3 candidate is retained, not
 committed. Correcting its native lease declarations removes an accidental
