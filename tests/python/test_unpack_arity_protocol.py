@@ -124,10 +124,56 @@ def main():
 main()
 '''
 
+NESTED_PROGRAM = '''events = []
+
+
+def index(number):
+    events.append(number)
+    return number
+
+
+def nested(source):
+    events.clear()
+    target = [0, 0, 0]
+    try:
+        target[index(0)], (target[index(1)], target[index(2)]) = source
+    except ValueError as error:
+        print('ValueError', str(error))
+    except Exception as error:
+        print('other', str(error))
+    print(target, events)
+
+
+def literal():
+    events.clear()
+    target = [0, 0, 0]
+    try:
+        target[index(0)], (target[index(1)], target[index(2)]) = 7, (8,)
+    except ValueError as error:
+        print('ValueError', str(error))
+    except Exception as error:
+        print('other', str(error))
+    print(target, events)
+
+
+def main():
+    nested((7, (8,)))
+    nested((7, (8, 9, 10)))
+    nested((7, [8]))
+    nested((7, [8, 9, 10]))
+    nested((7, (8, 9)))
+    literal()
+
+
+main()
+'''
+
+
 @pytest.mark.parametrize('name,program', (
     ('sequence-and-parking', ARITY_PROGRAM),
     ('iterator-protocol', PROTOCOL_PROGRAM),
-), ids=('sequence-and-parking', 'iterator-protocol'))
+    ('ordinary-nested-boundaries', NESTED_PROGRAM),
+), ids=('sequence-and-parking', 'iterator-protocol', 'ordinary-nested-boundaries'))
 def test_unpack_checks_boundary_before_target_stores(
     tmp_path, python_program_compiler, pcc_runtime_archive, name, program,
 ):
