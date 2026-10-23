@@ -843,12 +843,24 @@ def _empty_state() -> dict:
 def _load_state(root: Path) -> dict:
     try:
         state = json.loads(_state_path(root).read_text(encoding="utf-8"))
-        if state.get("schema") != STATE_SCHEMA:
+        if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA:
             return _empty_state()
         if not isinstance(state.get("entries"), dict):
             return _empty_state()
+        # These values are consumed outside the per-entry recovery path.
+        # Reject a malformed persisted index before resuming its cursor;
+        # rebuilding metadata from disk preserves the cache artifacts and
+        # their live lease/publication protections.
+        for name in ("scan_cycle", "last_auto_ns"):
+            int(state.get(name, 0) or 0)
+        for row in state["entries"].values():
+            if not isinstance(row, dict):
+                return _empty_state()
+            int(row.get("seen_cycle", -1))
+            int(row.get("size_bytes", 0))
+            int(row.get("last_used_ns", 0))
         return state
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    except (OSError, TypeError, ValueError, OverflowError, json.JSONDecodeError):
         return _empty_state()
 
 
