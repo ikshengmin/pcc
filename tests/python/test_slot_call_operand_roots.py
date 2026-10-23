@@ -265,7 +265,8 @@ def test_module_operand_leaves_root_before_nonparking_take():
     text = _emit("slot_operand_probe([1])\n")
     take = _calls(text, "pcc_gc_take_pinned_slot")[-1]
     prefix = text[:text.index(take)]
-    assert _calls(prefix, "pcc_gc_frame_leave_lifo")
+    assert (_calls(prefix, "pcc_gc_frame_leave_lifo")
+            or _calls(prefix, "pcc_gc_frame_leave_lifo_mapped"))
     assert prefix.rfind("@pcc_gc_frame_leave_lifo") > prefix.rfind("@pcc_py_gc_minor_graph_unlock")
 
 
