@@ -478,8 +478,42 @@ These integer checks used frozen ec1a76a3e plus the named patches, host pcc and
 the owned self backend; emitted programs ran natively without libpython.
 Conflict-free peer backend changes were preserved during rebase, not claimed
 as re-tested by those snapshots. New-source pcc1 parameters remain deselected.
-No end-to-end gateway speedup is claimed for either fix. The rooted bulk frame
-constructor is still an isolated candidate; its production default is unchanged.
+No end-to-end gateway speedup is claimed for either integer fix alone. The
+rooted bulk frame candidate subsequently passes 48 failure/ownership models,
+43 coroutine/frame/lifetime checks (1 pcc1 parameter deselected), and both full
+handler artifacts execute correctly on GC0–4. Seven rotating C100/zero-wait
+pairs improve median 10,014.571 -> 10,735.338 req/s (+7.20%); instructions fall
+6.32% and cycles 6.28%. All seven pairs improve. Same-packet asyncio is
+83,392.693 req/s: gap 8.33x -> 7.77x, not a direct comparison with the earlier
+8.48x packet. This is host-pcc/owned-backend native emitted execution. The
+candidate used the explicit bulk-init flag; production default remains unchanged.
+Default activation was prepared only in the isolated experiment and has not run.
+Evidence:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/bulk-frame-ec1-v4/README.md`.
+
+The maintainer then prioritized ordinary synchronous primitives before further
+combined-workload optimization. Keep the frame candidate and original P0 scope;
+continue from object return and tuple construction/unpack, with per-operation
+allocation/ownership counts, actual caller/IR inspection and one proved change
+at a time. The first PCC_LOG census reuses the exact previously measured native
+operation binaries, GC0, N=100/110. Per extra iteration, object-return logs one
+managed allocation/free, 14 root/field stores and 3/4 heap incref/decref events;
+tuple construction/unpack logs one allocation/free, 19 stores and 2/3 refcount
+events. The integer-loop control logs two stores and no managed allocation.
+Loop/control work is included; raw buffer allocations and all lease/pin/provenance
+calls are not comprehensively covered. These are event counts, not CPU shares
+or timing evidence. Trace the repeated maintenance around each object before
+assuming excessive object allocation or building an escape-analysis framework.
+Evidence:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/ordinary-ownership-census/README.md`.
+
+Historical wins require their recorded configuration: the gateway's September
+10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
+LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
+remains behind at C100 (pcc1 66,778.9 vs asyncio 86,504.3); its compiler receipt
+explicitly records PCC_WITH_THREADS=0. These differences do not quantify the
+entire later regression. Current threaded ownership cost and emission quality
+still need direct, source/artifact-bound comparisons rather than date ratios.
 
 Direct integration replay of newer unpack and synchronous-root programs with
 the new pcc1, compiler qualification of the later atomic-lease runtime change,
