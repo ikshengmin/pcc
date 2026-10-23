@@ -507,6 +507,48 @@ assuming excessive object allocation or building an escape-analysis framework.
 Evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/ordinary-ownership-census/README.md`.
 
+Boxing/unboxing is now an independent ordinary-program performance item.
+Code `a56892162` preserves an already-emitted i64 argument even when its AST
+still says Dyn; previously `i64(value)` could box a machine integer only to
+immediately unbox it. Small values paid tagged conversion calls; wide i64
+values also allocated an unreleased bigint temporary. Object/CPython pointers
+retain their checked conversions. Tests `bf16b4241` exercise signed/unsigned
+extremes, object conversion, bigint overflow and user exceptions on GC0–4.
+Three context IR checks pass. The existing mapped-root assertions were updated
+separately in `f50ac3682`; 40 distinct sensitive checks pass across the recorded
+packets, including five boxed-argument native programs across GC0–4.
+
+Independent frozen A/B at cbb95dc0a, host pcc0/owned self/native emitted execution,
+threaded atomic GC0, three rotating warmed N/2N pairs: small roundtrip instruction
+cost falls 605.216 -> 565.251 per iteration (-6.60%); wide-i64 roundtrip falls
+2009.884 -> 564.937 (-71.89%). Direct-call controls stay at about 565 instructions.
+Wide baseline peak RSS grows 56.2 -> 105.8 MB between 500,000 and 1,000,000 calls;
+the fixed program remains about 6.6 MB. The actual emitter IR removes both
+integer helpers. No list-construction patch is present in these arms. There
+are no virtual-thread spawn/join/await operations: GC safepoints and roots must
+not be conflated with virtual-thread task scheduling. These are conversion-loop
+results, not a new gateway speedup or new-source pcc1/fixed-point qualification.
+
+The sensitive sweeps are not fully green. Baseline and candidate both reproduce
+an invalid `__int__` result being accepted (strict xfail in the new test),
+`test_cast_of_dynamic_tuple_element_preserves_container_owners[pcc0-cast-False]`
+failing `freed == 2`, `test_typing_cast_preserves_raw_pointer_domain[False]`
+failing the return boundary, and a scaffold constant test failing its old
+`call.slot.take.current` assertion. Preserve these local actionable failures;
+no upstream issue/comment was posted. Complete commands, source/runtime/binary
+identities, all successful and failed checks, and read-back-verified receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/boxing-a56892162/README.md`.
+Continue measuring required boxing and object-to-machine conversion separately,
+then ordinary container ownership, before the full-request acceptance rerun.
+
+The independent owned-root list-construction v3 candidate is retained, not
+committed. Correcting its native lease declarations removes an accidental
+Python int conversion introduced by v2. Native ownership/exception scenarios
+pass GC0–4; the separate list-return loop measures 11532.934 -> 9078.550
+instructions (-21.28%), still 7.18x CPython's instructions. It is not part of
+the boxing A/B or a claimed complete solution. Evidence and rejected predecessors:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/ordinary-list-construction-v3/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
