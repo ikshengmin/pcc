@@ -195,10 +195,9 @@ def _assign_list_elem(ty):
         return DynType(name="dyn")
 
 
-def _emit_live_import_augassign(host, stmt, op):
-    """Keep the loaded binding alive across RHS callbacks and replacement."""
+def _emit_rooted_name_augassign(host, stmt, op, declared):
+    """Own both operands and replace the binding through the root protocol."""
     code = _INPLACE_OP_CODES.get(op)
-    declared = host._module_globals[stmt.target.ident][1]
     set_update = (isinstance(declared, SetType)
                   and isinstance(stmt.value.ty, (SetType, DynType))
                   and op in ("|", "&", "-", "^"))
@@ -208,10 +207,10 @@ def _emit_live_import_augassign(host, stmt, op):
     if code is None and not set_update:
         combined = BinOp(span=stmt.span, ty=DynType(name="dyn"), op=op,
                          lhs=stmt.target, rhs=stmt.value)
-        result = host._emit_slot_call_operand(combined, "import.augassign.result")
+        result = host._emit_slot_call_operand(combined, "augassign.result")
         roots = [result]
     else:
-        result = host._new_slot_call_root("import.augassign.result")
+        result = host._new_slot_call_root("augassign.result")
         roots = [result]
     previous = host._current_try_err_block()
     target = previous if previous is not None else host._ensure_fn_err_exit()
@@ -221,7 +220,7 @@ def _emit_live_import_augassign(host, stmt, op):
         host._cpy_operand_cleanup_block = host._try_err_block
         if code is not None or set_update:
             for expr in (stmt.target, stmt.value):
-                roots.append(host._emit_slot_call_operand(expr, "import.augassign.input"))
+                roots.append(host._emit_slot_call_operand(expr, "augassign.input"))
                 host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
                 host._cpy_operand_cleanup_block = host._try_err_block
             if set_update:
@@ -231,8 +230,8 @@ def _emit_live_import_augassign(host, stmt, op):
                     host.builder.icmp_signed("==", tags[0], ir.Constant(_I64, PY_TYPE_SET)),
                     host.builder.icmp_signed("==", tags[1], ir.Constant(_I64, PY_TYPE_SET)),
                 )
-                ready = host.current_function.append_basic_block(host._fresh("import.set.ready"))
-                bad = host.current_function.append_basic_block(host._fresh("import.set.bad"))
+                ready = host.current_function.append_basic_block(host._fresh("augassign.set.ready"))
+                bad = host.current_function.append_basic_block(host._fresh("augassign.set.bad"))
                 host.builder.cbranch(valid, ready, bad)
                 host.builder.position_at_end(bad)
                 host._emit_builtin_exception_and_branch("TypeError", "set binary operator requires set operands", stmt.span)
@@ -2113,7 +2112,9 @@ class AssignmentStatementLoweringMixin:
         op_bare = stmt.op.rstrip("=")
         if isinstance(stmt.target, Name):
             if live_import_name_slot(self, stmt.target.ident) is not None:
-                _emit_live_import_augassign(self, stmt, op_bare)
+                _emit_rooted_name_augassign(
+                    self, stmt, op_bare, self._module_globals[stmt.target.ident][1],
+                )
                 return
             if (
                 isinstance(stmt.target.ty, IntType)
@@ -2157,10 +2158,29 @@ class AssignmentStatementLoweringMixin:
                     f"augassign to undefined name {stmt.target.ident!r}"
                 )
             if module_global_target:
-                cur = self._emit_name(stmt.target)
                 _gv, declared_ty = self._module_globals[stmt.target.ident]
+                storage_ty = _gv.value_type
             else:
-                alloca, _ir_ty, declared_ty = slot
+                alloca, storage_ty, declared_ty = slot
+            combined = BinOp(
+                span=stmt.span, ty=declared_ty, op=op_bare,
+                lhs=stmt.target, rhs=stmt.value,
+            )
+            if (
+                isinstance(storage_ty, ir.PointerType)
+                and self._ir_type_matches(storage_ty, _CSTR)
+                and self._slot_call_binary_runtime(combined, object_boundary=True) is not None
+            ):
+                # Later statements may infer Dyn even when this slot began
+                # as bytes/bytearray. A raw pointer store then loses the old
+                # owner. Root inputs before RHS callbacks, publish the NEW
+                # in-place result, and transfer it through ordinary binding
+                # replacement, including borrowed parameters and aliases.
+                _emit_rooted_name_augassign(self, stmt, op_bare, declared_ty)
+                return
+            if module_global_target:
+                cur = self._emit_name(stmt.target)
+            else:
                 cur = self.builder.load(
                     alloca,
                     name=self._fresh(stmt.target.ident),

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Assign, BoolLit, BytesLit, Call, DictExpr, DictType, Expr, FloatLit, For, FuncType, IntLit, Lambda, ListExpr, Name, NoneLit, StrLit, TupleExpr
+from pcc.frontends.python.py_ast import (
+    Assign, AugAssign, BoolLit, BytesLit, Call, DictExpr, DictType, Expr,
+    FloatLit, For, FuncType, IntLit, Lambda, ListExpr, Name, NoneLit,
+    StrLit, TupleExpr,
+)
 
 # The audited AST-bearing field table.  Shared rather than re-listed so a new
 # structural field in py_ast cannot be added to one walker and missed by the
@@ -84,8 +88,8 @@ def _expr_cannot_raise(expr) -> bool:
 def _name_is_stored_in(node, ident: str) -> bool:
     """True when ``ident`` appears as a bare-``Name`` store in the subtree.
 
-    Only ``Assign`` targets and ``For`` targets introduce one, so only those
-    are inspected; every other node is walked structurally.  Written in the
+    Assignment, augmented-assignment and loop targets can rebind a name;
+    every other node is walked structurally. Written in the
     bootstrap-safe dialect (no generators, no genexprs, no reflection).
     """
     if node is None:
@@ -113,6 +117,10 @@ def _name_is_stored_in(node, ident: str) -> bool:
                     j += 1
                     if isinstance(element, Name) and element.ident == ident:
                         return True
+        return _name_is_stored_in(node.value, ident)
+    if isinstance(node, AugAssign):
+        if isinstance(node.target, Name) and node.target.ident == ident:
+            return True
         return _name_is_stored_in(node.value, ident)
     if isinstance(node, For):
         if isinstance(node.target, Name) and node.target.ident == ident:
