@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `da4626652`, initially based on
+Source: published through `931933512`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -21,6 +21,10 @@ Large-integer unpacking and the byte-matched worker profile:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/bigint-through-b772b28be-and-worker-profile/README.md`.
 Accepted arena work, both earlier denials, current Stage1 diagnostics and gateway evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/arena-da4626652-gateway-f260a0c/README.md`.
+Successful Stage1 and the first native integration memory failure:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/stage1-da4626652-native-memory/README.md`.
+Generic augmented-assignment repair and integrated native execution:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/augassign-931933512/README.md`.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -143,8 +147,24 @@ Subsequent published changes and executed evidence:
 - The received C-lifetime task now has a native runtime control at `af72b15f6`:
   GC0 acquires token 0 and permits a same-mode reset while a foreign address
   lease is live; GC4 acquires token 1 and correctly returns BUSY. The owned C
-  build forbids external processes and runtime provisioning. This confirms a
-  mode-reset guard gap, not a native use-after-free; the generic fix is pending.
+  build forbids external processes and runtime provisioning. This confirmed a
+  mode-reset guard gap, not a native use-after-free. Collaborator `65b810d32`
+  now counts initialized nonmoving leases; it was integrated intact before
+  our publication. Replaying the independent owned-C probe at `931933512`
+  gives GC0 token 2 and GC4 token 1, both BUSY during the lease and successful
+  reset after release. This closes that reset probe; broader C lifetimes,
+  callbacks and the performance of the changed protocol remain open.
+- Generic name augmented assignment retains both operands and publishes the
+  replacement through owning roots (`4c16d3cb1`, test `931933512`). Later
+  inferred-Dyn `bytearray +=` operations previously overwrote the pointer
+  without releasing the old buffer. Entry parameter analysis now also sees
+  AugAssign, so a conditional update cannot leave the non-updating edge with
+  an empty local. The new regression checks replacements, aliases, RHS result
+  identity, exceptions, finalizers, both parameter branches and bounded GC0
+  live memory; its emitted program runs on all five collectors. Focused checks
+  pass 14 cases (4 pcc1 variants deselected), plus the existing five-collector
+  inplace-alias integration. The integrated peer/runtime snapshot repeats the
+  new exact regression. Native-pcc1 compiler variants still await qualification.
 
 These are host-pcc/self-backend emitted execution and focused IR/cache checks.
 The first native pcc1 integration build used a frozen `af72b15f6` snapshot:
@@ -191,8 +211,31 @@ indexed-process split reproduces one heavy and five smaller modules with
 byte-identical PCOs under no larger budget. A new Stage1 uses that explicitly
 selected process topology, with the same source/runtime and 1,800-second limit:
 `/private/tmp/pcc-p0-followup/bootstrap-host-split`, live log
-`/private/tmp/pcc-p0-followup/logs/bootstrap-host-split.stdout`. It is still running;
-neither a compiler nor its native integration gate is claimed from partial objects.
+`/private/tmp/pcc-p0-followup/logs/bootstrap-host-split.stdout`. It completed:
+compile 1,350.455 s; total including native smoke execution/refcount audit
+1,411.759 s. The `pcc1` SHA256 is
+`27e2e0472732949c31b43392920761aefe51a8a75869560842db8af2e891d287`.
+This proves Stage1 at `da4626652`, not a fixed point.
+
+The resulting native integration packet failed on its first keys-view set
+operator compile at the 8-GiB memory cap; no case passed. Sampling a lower-cap
+replay located growth in `transcode_runtime_table`'s output concatenation.
+The real 2,868,008-byte table reproduced independently: the unchanged native
+transcoder crossed 2 GiB in 3.072 s. Live-byte measurements and emitted IR
+isolated the generic augmented-assignment ownership omission above, rather
+than a blanket allocator or bytearray-growth leak. With the fix, the original
+transcoder source produces all 951,588 bytes and 6,472 address offsets exactly
+like the host reference, at about 32 MB native RSS. The same proof passes with
+collaborator `65b810d32` included and a freshly matching runtime.
+
+A new frozen `931933512` Stage1 is active in
+`/private/tmp/pcc-p0-followup/bootstrap-augassign`; live output:
+`/private/tmp/pcc-p0-followup/logs/bootstrap-augassign.stdout`. It uses the
+proved host process split, original 1,800-second stage limit and
+6,059,958,272-byte cap. An outer 1,980-second watchdog additionally bounds the
+publication smoke, which bootstrap's inner stage guard does not cover.
+The 30,731 tracked snapshot inputs are recorded in `augassign-integrated-source.json`.
+Re-run the original current-pcc1 integration packet after successful publication.
 
 Gateway work is isolated at `/private/tmp/pcc-p0-gateway-task/pcc-gateway`.
 Code `13cd35b`, tests/fixture `f260a0c` and documentation `ca9a012` use
@@ -207,8 +250,8 @@ native binary validates 500,000 requests. Its only dynamic dependency is
 libSystem. Refcount/root/graph-lock/TLS costs are spread across runtime calls;
 the encoding helper is only about 3.6% inclusive, so it cannot explain the
 whole gap. No gateway throughput win is claimed.
-Stage1, native integration, full fixed point and five-GC qualification remain
-unfinished. The separate fallback-baseline check was stopped when its complete
+Fresh Stage1, native integration, full fixed point and five-GC qualification
+remain unfinished. The separate fallback-baseline check was stopped when its complete
 compiler-closure work was identified, to avoid competing heavy builds; do not
 count that partial run as a pass. Additional parked unpack shapes, public C
 lifetime/callback
