@@ -414,8 +414,26 @@ Baseline median is 9,729.311 req/s, candidate 10,816.734 (+11.18%), and asyncio
 Process instructions fall 9.31%, cycles 10.19%, user CPU 2.07 -> 1.86 seconds;
 RSS medians are 10,207,232 -> 10,240,000 bytes. The same-packet gap is still
 about 8.48x (baseline 9.43x); the older 9.1x packet is a separate measurement.
-This is a qualified handler improvement, not the required asyncio win, HTTP
-throughput, or native-pcc1/fixed-point qualification of the new runtime.
+This is a qualified handler improvement, not the required asyncio win or HTTP
+throughput. A subsequent actual native pcc1 run (compiler built from `8c53ef3c7`,
+SHA256 `1ef48c0d2652413cfa4db5935008947457b0d06f0ba69382a174f262c0a342a1`)
+compiles this full gateway workload against the matching optimized runtime in
+212.250 seconds with host fallback and external PATH tools disabled. Its output
+executes 1,000 verified requests plus 200 warmups and is byte-identical to the
+measured candidate: `d1286296a8ecc0d794e3dbfd64c516f2cff37b4bd513a6654ac237158c29b568`.
+Only libSystem is dynamically linked. This establishes native-compiler production
+of the measured binary; it does not establish a new-source compiler fixed point.
+
+Ordinary programs reproduce the overhead without async: two warmed N=1,000,000
+operation packets show instruction ratios versus CPython of 9.13–9.14x for
+object-return, 8.82–8.87x for tuple construction/unpack and 5.54–5.55x for list
+append/pop. Integer addition uses 0.54–0.55x CPython's instructions. Outputs
+match for all eight operation shapes. The initial N=100,000 wall deltas include
+first-execution effects and are explicitly rejected as timing evidence. A
+50,000,000-iteration object-return profile completes its checksum: construction
+20.40%, append 20.84%, root stores 39.59% inclusive (30.74% through release and
+deallocation); these shares overlap. Native-pcc1 and ordinary-operation receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/atomic-lease-1d43db0ac/operation-costs/README.md`.
 
 Diagnostic ablations complete 35 runs on the candidate: no JSON with direct
 payload validation reaches 26,010 req/s versus asyncio 108,272; no child tasks,
@@ -433,6 +451,35 @@ root/field stores per request. Instrumented counts are not C100 timing evidence.
 The earlier three small candidates produced limited gains; the subsequent
 atomic lease change above addresses a measured shared ownership cost. Further
 runtime/call and continuation work remains necessary for the end-to-end goal.
+
+Two generic machine-integer lowering defects found while preparing the frame
+constructor are now fixed. `8c8e16818` restricts exact-int local planning and
+assignment boxing to ordinary Python int; tests `63acfc429` cover raw augmented
+parameters, local loops, destructuring and signed/unsigned wrap boundaries.
+The prior binary raised OverflowError at explicit i64 max + 1 on GC0–4; the
+fixed emitted program passes all five. Three module-context IR checks plus the
+native node pass, followed by 67 related integer/ownership checks and the two
+original native literal/arithmetic cases on GC0–4. Ordinary bignum values retain
+their exact results. Evidence:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/machine-locals-8c8e16818/README.md`.
+
+`bc095095a` prevents ordinary-module boxed comparison dispatch from consuming
+explicit i64/u64 operands before the existing primitive comparison path. The
+baseline natively miscompares u64(0) < u64(2**63). Tests `cc801fef6` cover all six
+operators over 25 signed and 16 unsigned boundary pairs, raw loops and ordinary
+bignum controls on GC0–4; all 246 boundary comparisons pass. The three context
+IR tests contain direct signed/unsigned comparisons and no integer helper calls;
+11 sensitive comparison checks pass. The test fixture now uses the central
+provenance-checked owned runtime and models the existing NotImplemented global.
+Evidence:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/machine-comparisons-bc095095a/README.md`.
+
+These integer checks used frozen ec1a76a3e plus the named patches, host pcc and
+the owned self backend; emitted programs ran natively without libpython.
+Conflict-free peer backend changes were preserved during rebase, not claimed
+as re-tested by those snapshots. New-source pcc1 parameters remain deselected.
+No end-to-end gateway speedup is claimed for either fix. The rooted bulk frame
+constructor is still an isolated candidate; its production default is unchanged.
 
 Direct integration replay of newer unpack and synchronous-root programs with
 the new pcc1, compiler qualification of the later atomic-lease runtime change,
