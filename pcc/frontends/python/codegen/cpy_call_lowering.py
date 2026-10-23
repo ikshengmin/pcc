@@ -85,6 +85,19 @@ def _expr_cannot_raise(expr) -> bool:
         return True
     return False
 
+def _target_stores_name(target, ident: str) -> bool:
+    """Find a bare-name binding without treating receiver/index reads as stores."""
+    if isinstance(target, Name):
+        return target.ident == ident
+    if isinstance(target, (TupleExpr, ListExpr)):
+        i = 0
+        while i < len(target.elems):
+            if _target_stores_name(target.elems[i], ident):
+                return True
+            i += 1
+    return False
+
+
 def _name_is_stored_in(node, ident: str) -> bool:
     """True when ``ident`` appears as a bare-``Name`` store in the subtree.
 
@@ -108,30 +121,16 @@ def _name_is_stored_in(node, ident: str) -> bool:
         while i < len(node.targets):
             target = node.targets[i]
             i += 1
-            if isinstance(target, Name) and target.ident == ident:
+            if _target_stores_name(target, ident):
                 return True
-            if isinstance(target, TupleExpr):
-                j = 0
-                while j < len(target.elems):
-                    element = target.elems[j]
-                    j += 1
-                    if isinstance(element, Name) and element.ident == ident:
-                        return True
         return _name_is_stored_in(node.value, ident)
     if isinstance(node, AugAssign):
-        if isinstance(node.target, Name) and node.target.ident == ident:
+        if _target_stores_name(node.target, ident):
             return True
         return _name_is_stored_in(node.value, ident)
     if isinstance(node, For):
-        if isinstance(node.target, Name) and node.target.ident == ident:
+        if _target_stores_name(node.target, ident):
             return True
-        if isinstance(node.target, TupleExpr):
-            j = 0
-            while j < len(node.target.elems):
-                element = node.target.elems[j]
-                j += 1
-                if isinstance(element, Name) and element.ident == ident:
-                    return True
         if _name_is_stored_in(node.iter, ident):
             return True
         if _name_is_stored_in(node.body, ident):
