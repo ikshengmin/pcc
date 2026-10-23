@@ -3316,6 +3316,40 @@ def _emit_indexed_instruction_parts(
     )
 
 
+def _emit_exact_indexed_instruction_parts(
+    func: ParsedFunction,
+    block: ParsedBlock,
+    kernel: IndexedFunctionKernel,
+    block_id: int,
+    instruction_index: int,
+    instruction_id: int,
+    kind_id: int,
+    data: int | tuple,
+    is_volatile: bool,
+) -> list[str]:
+    # _emit_function selects this adapter only after its exact-kernel guard.
+    # Keep the compatibility adapter above for block-local/custom callers;
+    # the production instruction loop needs no repeated type dispatch.
+    # The shared loop supplies packed IDs for its fixed-payload vocabulary and
+    # already-decoded tuples for other kinds, including atomic/cold records.
+    # Let the authoritative decoder distinguish packed and negative cold IDs.
+    if isinstance(data, int):
+        data = kernel.instruction_data_by_id(
+            instruction_id, block_id, instruction_index,
+        )
+    # Preserve the legacy projection's metadata check and operand interning.
+    # x86 selection itself consumes only kind/data; the kernel retains flags.
+    kernel.instruction_arithmetic_flags_by_id(instruction_id)
+    return emit_instruction_dispatch_parts(
+        func,
+        block,
+        PARSED_INSTRUCTION_KINDS[kind_id],
+        _interned_operands(data),
+        emit_memory=_emit_memory_instruction,
+        emit_compute=_emit_compute_instruction,
+    )
+
+
 def _emit_function(
     func: ParsedFunction,
     stack_map_plan: FunctionStackMapPlan,
@@ -3348,7 +3382,7 @@ def _emit_function(
             and type(original_block_map) is dict
         ):
             _materialize_indexed_control_flow(func, kernel)
-            indexed_instruction_emitter = _emit_indexed_instruction_parts
+            indexed_instruction_emitter = _emit_exact_indexed_instruction_parts
         else:
             kernel.materialize_legacy_blocks(func)
             # Supplied compatibility blocks may have released scalar PHIs.

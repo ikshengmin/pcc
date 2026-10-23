@@ -260,8 +260,12 @@ def test_negative_payload_uses_authoritative_cold_decoder(released_arenas):
     assert next(item for item in captured if item[2] == absolute)[4] is sentinel
 
 
-@pytest.mark.parametrize("custom", [False, True])
-def test_adapter_preserves_missing_flag_error_before_dispatch(monkeypatch, custom):
+@pytest.mark.parametrize("adapter,custom", [
+    ("_emit_indexed_instruction_parts", False),
+    ("_emit_indexed_instruction_parts", True),
+    ("_emit_exact_indexed_instruction_parts", False),
+])
+def test_adapter_preserves_missing_flag_error_before_dispatch(monkeypatch, adapter, custom):
     func = _module().functions[0]
     kernel = get_indexed_function_kernel(func)
     block_id, local, absolute = next(
@@ -274,7 +278,7 @@ def test_adapter_preserves_missing_flag_error_before_dispatch(monkeypatch, custo
     owner = BlockLocalKernel(kernel) if custom else kernel
     monkeypatch.setattr(x86, "emit_instruction_dispatch_parts", lambda *_args, **_kwargs: pytest.fail("invalid flags reached dispatch"))
     with pytest.raises(KeyError) as failure:
-        x86._emit_indexed_instruction_parts(
+        getattr(x86, adapter)(
             func, SimpleNamespace(name="entry"), owner,
             block_id, local, absolute, kind, data, False,
         )
@@ -301,6 +305,9 @@ def test_linux_windows_emission_is_byte_identical_to_block_local_route(monkeypat
         owner = BlockLocalKernel(kwargs["indexed_kernel"])
         custom_owners.append(owner)
         kwargs["indexed_kernel"] = owner
+        # This oracle deliberately replaces the already-validated exact owner.
+        # Use its compatibility adapter as well as its block-local getters.
+        kwargs["emit_indexed_instruction"] = x86._emit_indexed_instruction_parts
         return old_loop(func, **kwargs)
 
     monkeypatch.setattr(x86, "emit_function_blocks", block_local_loop)
@@ -311,3 +318,75 @@ def test_linux_windows_emission_is_byte_identical_to_block_local_route(monkeypat
     assert {item[0] for owner in custom_owners for item in owner.reads} == {
         "kind", "record", "data", "volatile", "flags",
     }
+
+
+@pytest.mark.parametrize("triple", ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"])
+@pytest.mark.parametrize("streamed", [False, True], ids=["assembly", "object-bytes"])
+def test_exact_function_selects_adapter_without_instruction_type_dispatch(monkeypatch, triple, streamed):
+    def compatibility(*_args, **_kwargs):
+        pytest.fail("exact function entered per-instruction compatibility dispatch")
+
+    monkeypatch.setattr(x86, "_emit_indexed_instruction_parts", compatibility)
+    module = _module(triple, direct=True)
+    timer = ModulePhaseTiming("exact-adapter-selection")
+    if streamed:
+        actual = emit_x86_64_streamed_module(module, phase_timing=timer).encode_object(timer)
+    else:
+        actual = emit_indexed_assembly(module, phase_timing=timer).encode("utf-8")
+    assert actual
+    assert all(not func.blocks and not func.block_map for func in module.functions)
+
+
+@pytest.mark.parametrize("packed", [False, True], ids=["decoded", "packed"])
+@pytest.mark.parametrize("failure_at", ["decode", "flags", "intern", None])
+def test_exact_adapter_preserves_decode_flag_and_dispatch_order(monkeypatch, packed, failure_at):
+    func = _module().functions[0]
+    kernel = get_indexed_function_kernel(func)
+    block_id, local, absolute = next(_coordinates(kernel))
+    events = []
+    decoded = ("payload",)
+
+    def event(name):
+        events.append(name)
+        if name == failure_at:
+            raise ValueError(name + " failure")
+
+    def decode(_owner, instruction_id, owner_block, owner_local):
+        event("decode")
+        assert (instruction_id, owner_block, owner_local) == (absolute, block_id, local)
+        return decoded
+
+    def flags(_owner, instruction_id):
+        event("flags")
+        assert instruction_id == absolute
+        return ()
+
+    def intern(data):
+        event("intern")
+        assert data is decoded
+        return data
+
+    def dispatch(_func, _block, _kind, data, **_kwargs):
+        event("dispatch")
+        assert data is decoded
+        return ["selected"]
+
+    monkeypatch.setattr(IndexedFunctionKernel, "instruction_data_by_id", decode)
+    monkeypatch.setattr(IndexedFunctionKernel, "instruction_arithmetic_flags_by_id", flags)
+    monkeypatch.setattr(x86, "_interned_operands", intern)
+    monkeypatch.setattr(x86, "emit_instruction_dispatch_parts", dispatch)
+    order = (["decode"] if packed else []) + ["flags", "intern", "dispatch"]
+
+    def run():
+        return x86._emit_exact_indexed_instruction_parts(
+            func, SimpleNamespace(name="entry"), kernel, block_id, local,
+            absolute, 0, 77 if packed else decoded, False,
+        )
+
+    if failure_at in order:
+        with pytest.raises(ValueError, match=failure_at + " failure"):
+            run()
+        assert events == order[:order.index(failure_at) + 1]
+    else:
+        assert run() == ["selected"]
+        assert events == order
