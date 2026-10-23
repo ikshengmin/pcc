@@ -3302,7 +3302,10 @@ def _emit_indexed_instruction_parts(
         )
     # Preserve the legacy projection's metadata check and operand interning.
     # x86 selection itself consumes only kind/data; the kernel retains flags.
-    kernel.instruction_arithmetic_flags(block_id, instruction_index)
+    if type(kernel) is IndexedFunctionKernel:
+        kernel.instruction_arithmetic_flags_by_id(instruction_id)
+    else:
+        kernel.instruction_arithmetic_flags(block_id, instruction_index)
     return emit_instruction_dispatch_parts(
         func,
         block,

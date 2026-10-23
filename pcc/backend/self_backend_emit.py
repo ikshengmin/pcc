@@ -133,6 +133,9 @@ def emit_function_blocks(
         emitted_blocks = indexed_kernel.materialize_legacy_blocks(func)
     else:
         emitted_blocks = func.blocks if blocks is None else blocks
+    # The exact kernel owns a stable absolute instruction ID in this loop.
+    # Keep block-local callbacks for custom kernels and their existing behavior.
+    absolute_instruction_ids = type(indexed_kernel) is IndexedFunctionKernel
     for index, block in enumerate(emitted_blocks):
         if index == 0:
             lines.append(block_label(func.name, block.name) + ":")
@@ -186,18 +189,40 @@ def emit_function_blocks(
             instr = None
             instruction_start = len(lines)
             if block_id >= 0 and emit_indexed_instruction is not None:
-                kind_id = indexed_kernel.instruction_kind_id(
-                    block_id, instruction_index
-                )
-                if kind_id in _INDEXED_FIXED_PAYLOAD_KIND_IDS:
-                    instruction_data = indexed_kernel.instruction_record_id(
+                if absolute_instruction_ids:
+                    instruction_id = block_instruction_start + instruction_index
+                    kind_id = indexed_kernel.instruction_kind_id_by_id(
+                        instruction_id
+                    )
+                    if kind_id in _INDEXED_FIXED_PAYLOAD_KIND_IDS:
+                        instruction_data = indexed_kernel.instruction_record_id_by_id(
+                            instruction_id
+                        )
+                    else:
+                        instruction_data = indexed_kernel.instruction_data_by_id(
+                            instruction_id, block_id, instruction_index,
+                        )
+                    is_volatile = indexed_kernel.instruction_is_volatile_by_id(
+                        instruction_id
+                    )
+                else:
+                    kind_id = indexed_kernel.instruction_kind_id(
                         block_id,
                         instruction_index,
                     )
-                else:
-                    instruction_data = indexed_kernel.instruction_data(
-                        block_id,
-                        instruction_index,
+                    if kind_id in _INDEXED_FIXED_PAYLOAD_KIND_IDS:
+                        instruction_data = indexed_kernel.instruction_record_id(
+                            block_id,
+                            instruction_index,
+                        )
+                    else:
+                        instruction_data = indexed_kernel.instruction_data(
+                            block_id,
+                            instruction_index,
+                        )
+                    instruction_id = block_instruction_start + instruction_index
+                    is_volatile = indexed_kernel.instruction_is_volatile(
+                        block_id, instruction_index,
                     )
                 lines.extend(emit_indexed_instruction(
                     func,
@@ -205,12 +230,10 @@ def emit_function_blocks(
                     indexed_kernel,
                     block_id,
                     instruction_index,
-                    block_instruction_start + instruction_index,
+                    instruction_id,
                     kind_id,
                     instruction_data,
-                    indexed_kernel.instruction_is_volatile(
-                        block_id, instruction_index
-                    ),
+                    is_volatile,
                 ))
             else:
                 instr = block.instructions[instruction_index]

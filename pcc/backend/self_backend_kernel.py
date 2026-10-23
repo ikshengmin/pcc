@@ -3037,6 +3037,10 @@ class IndexedFunctionKernel:
             (instruction_start + instruction_index) * 4 + 1
         )
 
+    def instruction_record_id_by_id(self, instruction_id: int) -> int:
+        """Read the same payload when the caller already owns its absolute ID."""
+        return self.instruction_metadata.get_unchecked(instruction_id * 4 + 1)
+
     def instruction_is_volatile(
         self, block_id: int, instruction_index: int
     ) -> bool:
@@ -3055,6 +3059,13 @@ class IndexedFunctionKernel:
     ) -> tuple[str, ...]:
         instruction_start = self.block_facts.get_unchecked(block_id * 4)
         instruction_id = instruction_start + instruction_index
+        if not self.instruction_metadata.get_unchecked(instruction_id * 4 + 3):
+            return ()
+        return self.instruction_arithmetic_flag_values[instruction_id]
+
+    def instruction_arithmetic_flags_by_id(
+        self, instruction_id: int
+    ) -> tuple[str, ...]:
         if not self.instruction_metadata.get_unchecked(instruction_id * 4 + 3):
             return ()
         return self.instruction_arithmetic_flag_values[instruction_id]
