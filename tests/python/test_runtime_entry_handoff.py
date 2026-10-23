@@ -706,6 +706,7 @@ def test_default_only_sync_recursion_restores_context_without_metaclass_lookup(p
     )
     _functions(ROOT / "pcc/runtime/py/py_obj_ops_dispatch.py", {
         "py_obj_call", "py_obj_call_default", "_py_obj_call_body",
+        "_constructor_tag",
     }, ns)
     _functions(ROOT / "pcc/runtime/py/py_func.py", {"py_obj_call_default_sync"}, ns)
     assert ns["py_obj_call_default"](1000, 0, 0) == (0 if failure else 17)
@@ -732,6 +733,7 @@ def test_public_raw_call_retains_existing_metaclass_semantics():
     )
     _functions(ROOT / "pcc/runtime/py/py_obj_ops_dispatch.py", {
         "py_obj_call", "_py_obj_call_body",
+        "_constructor_tag",
     }, ns)
     assert ns["py_obj_call"](1000, 2000, 3000) == 23
     assert seen == [(1000, 2000, 3000)]
@@ -856,3 +858,38 @@ def test_selected_metaclass_call_consumes_and_restores_deferred_context(failure)
     assert model.load(output) == (0 if failure else 63)
     assert model.load("pcc_native_callable_sync_context") == 0
     assert not model.registered and model.active() == 0
+
+
+def test_shared_destination_moves_serialize_without_losing_a_source():
+    model = HandoffModel()
+    first = model.empty(90008)
+    second = model.empty(90016)
+    destination = model.empty(90000)
+    model.store(first, 0, 7)
+    model.store(second, 0, 13)
+    load = model.load
+    pending = model.pending_exception
+    armed = [True]
+    second_status = []
+
+    def competing_move():
+        second_status.append(model.move(destination, second))
+
+    def observe_read(base, offset=0):
+        value = load(base, offset)
+        if base == destination and offset == 0 and armed[0]:
+            armed[0] = False
+            # A competitor arrives after the empty read. The public entry's
+            # graph transaction must delay it until the first move commits.
+            if model.depth:
+                model.on_unlock = competing_move
+            else:
+                competing_move()
+        return value
+
+    model.ns['load_ptr'] = observe_read
+    assert model.move(destination, first) == 0
+    assert second_status == [-4]
+    assert model.load(destination) == 7
+    assert model.load(first) == 0 and model.load(second) == 13
+    assert model.pending_exception is pending

@@ -393,7 +393,7 @@ main()
     output = source.with_suffix("")
     compile_python(str(source), str(output), backend="self", libpython_mode="off",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
-                   link_args=(str(helper),))
+                   object_inputs=(str(helper),))
     for backend in (3, 4):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend),
                            PCC_GC_MINOR_ALLOC_MAX="4096", PATH="",
