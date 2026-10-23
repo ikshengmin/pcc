@@ -109,7 +109,7 @@ def check_frames(body):
         stack = list(stack)
         successors = []
         for line in blocks[block]:
-            entered = re.search(r'@pcc_gc_frame_enter_lifo\(ptr [^,]+, ptr (%[-\w.]+)\)', line)
+            entered = re.search(r'@pcc_gc_frame_enter_lifo(?:_mapped)?\(ptr [^,]+, ptr (%[-\w.]+)\)', line)
             if entered:
                 slot = physical(entered.group(1))
                 assert slot not in stack, (block, slot, stack)
@@ -117,7 +117,7 @@ def check_frames(body):
             copied = re.search(r'@pcc_gc_root_(?:copy_lease|move)\(ptr (%[-\w.]+), ptr (%[-\w.]+)\)', line)
             if copied:
                 assert all(physical(slot) in stack for slot in copied.groups()), (block, line, stack)
-            left = re.search(r'@pcc_gc_frame_leave_lifo\(ptr (%[-\w.]+)\)', line)
+            left = re.search(r'@pcc_gc_frame_leave_lifo(?:_mapped)?\(ptr (%[-\w.]+)\)', line)
             if left:
                 slot = physical(left.group(1))
                 assert stack and stack[-1] == slot, (block, slot, stack)
@@ -141,3 +141,22 @@ def test_actual_adapter_gets_publish_before_calls_and_frames_balance_on_every_ex
     for body in adapters:
         assert immediate_store(body, 'py_tuple_get') >= 1
         check_frames(body)
+
+
+def test_frame_checker_rejects_missing_mapped_leave():
+    body = """define ptr @mapped_frame_probe() {
+entry:
+  %slot = alloca ptr
+  call void (ptr, ptr) @pcc_gc_frame_enter_lifo_mapped(ptr @map, ptr %slot)
+  br i1 true, label %good, label %error
+good:
+  call void (ptr) @pcc_gc_frame_leave_lifo_mapped(ptr %slot)
+  ret ptr null
+error:
+  call void (ptr) @pcc_gc_frame_leave_lifo_mapped(ptr %slot)
+  ret ptr null
+}"""
+    assert check_frames(body) == 2
+    broken = body.replace('@pcc_gc_frame_leave_lifo_mapped(', '@missing_leave(', 1)
+    with pytest.raises(AssertionError):
+        check_frames(broken)

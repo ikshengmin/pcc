@@ -74,12 +74,12 @@ def check_return_cfg(body):
         successors = []
         lines = blocks[block]
         for index, line in enumerate(lines):
-            enter = re.search(r'@pcc_gc_frame_enter_lifo\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
+            enter = re.search(r'@pcc_gc_frame_enter_lifo(?:_mapped)?\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
             if enter:
                 root = canonical(enter[1])
                 assert root not in stack, ('double registration', block, root)
                 stack.append(root)
-            leave = re.search(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.$]+)\)', line)
+            leave = re.search(r'@pcc_gc_frame_leave_lifo(?:_mapped)?\(ptr (%[\w.$]+)\)', line)
             if leave:
                 root = canonical(leave[1])
                 assert stack and stack[-1] == root, ('non-LIFO return cleanup', block, root, stack)
