@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `6aa05f1af`, initially based on
+Source: published through `117f59596`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -346,6 +346,17 @@ asyncio runs. Candidate median throughput is only 1.50% higher and process
 instructions fall 0.064%; median user CPU is unchanged. Keep production pass
 selection unchanged. Receipts:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/owned-tier-experiment-60396e192/README.md`.
+
+The immediate-value lease experiment uses the same `117f59596` baseline on
+both sides, including peer cache fixes `daa2dd2b3` and `8f62fb3e3`. It skips
+lease locking for NULL/tagged words while preserving the heap path. Correctness
+passes 123 focused checks, native immediate execution on five GCs, threaded
+GC3/GC4 overlapping leases/movement, and independent owned-C heap mode guards
+on GC0/GC4. Seven paired gateway repetitions show no meaningful throughput
+benefit (median paired ratio 1.00235; instructions -0.325%; user CPU unchanged).
+The experiment is fully recoverable in the local archive and is not landed as
+a performance repair. Continue with heap-object call/ownership boundaries:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/immediate-lease-experiment-117f59596/README.md`.
 
 New-source native qualification after the unpack fixes, full fixed point and
 five-GC bootstrap remain unfinished. The separate fallback-baseline check was stopped when its complete
