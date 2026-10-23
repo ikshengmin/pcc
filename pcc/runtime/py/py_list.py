@@ -528,6 +528,23 @@ def _append_rooted(lst, item, fresh: int) -> int:
     if _prepare_moving_root(item_slot, item_handle_slot) != 0:
         _finish_moving_root(list_handle_slot)
         return -1
+    result: int = _append_rooted_slots(
+        list_slot, item_slot, list_handle_slot, item_handle_slot, fresh
+    )
+    _finish_moving_root(item_handle_slot)
+    _finish_moving_root(list_handle_slot)
+    return result
+
+
+def _append_rooted_slots(
+    list_slot, item_slot, list_handle_slot, item_handle_slot, fresh: int
+) -> int:
+    """Append through existing authoritative roots without taking them over.
+
+    Registration and teardown belong to the caller. The list retains the
+    caller's address protection across the raw growth entry, just as at the
+    public append boundary; item addresses are reloaded under the graph lock.
+    """
     use_store_plan: int = 1
     if fresh != 0 and pcc_threads_enabled() == 0:
         use_store_plan = 0
@@ -576,8 +593,6 @@ def _append_rooted(lst, item, fresh: int) -> int:
         if ptr_is_null(grown) != 0:
             break
         store_ptr(list_slot, 0, grown)
-    _finish_moving_root(item_handle_slot)
-    _finish_moving_root(list_handle_slot)
     return result
 
 
@@ -991,11 +1006,13 @@ def _list_concat_release_slot(slot) -> None:
     py_decref(pcc_gc_take_pinned_slot(slot, prior_pin))
 
 
-def _list_concat_fill(slots) -> int:
+def _list_concat_fill(slots, handles) -> int:
     left_slot = ptr_add(slots, _LIST_CONCAT_LEFT * C_POINTER_SIZE)
     right_slot = ptr_add(slots, _LIST_CONCAT_RIGHT * C_POINTER_SIZE)
     result_slot = ptr_add(slots, _LIST_CONCAT_RESULT * C_POINTER_SIZE)
     item_slot = ptr_add(slots, _LIST_CONCAT_ITEM * C_POINTER_SIZE)
+    result_handle_slot = ptr_add(handles, _LIST_CONCAT_RESULT * C_POINTER_SIZE)
+    item_handle_slot = ptr_add(handles, _LIST_CONCAT_ITEM * C_POINTER_SIZE)
     left_length: int = load_i64(pcc_gc_load_ptr(null(), left_slot), PYLISTOBJECT_LENGTH_OFFSET)
     right_length: int = load_i64(pcc_gc_load_ptr(null(), right_slot), PYLISTOBJECT_LENGTH_OFFSET)
     store_ptr(result_slot, 0, py_list_new(left_length + right_length))
@@ -1020,10 +1037,15 @@ def _list_concat_fill(slots) -> int:
                 py_raise_owned(py_exc_new(7, cstr("list changed during concatenation")))
             return 0
         result_pin: int = _list_concat_pin_slot(result_slot)
-        item_pin: int = _list_concat_pin_slot(item_slot)
-        py_list_append(load_ptr(result_slot, 0), load_ptr(item_slot, 0))
+        # The item is already owned by this registered root. Pass that root
+        # to the shared append transaction, which reloads after lock waits,
+        # instead of pinning a raw item and constructing another root pair.
+        appended: int = _append_rooted_slots(
+            result_slot, item_slot, result_handle_slot, item_handle_slot, 0
+        )
+        if appended == -1:
+            py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
         _list_concat_restore_slot(result_slot, result_pin)
-        _list_concat_restore_slot(item_slot, item_pin)
         if py_err_occurred() != 0:
             return 0
         _list_concat_release_slot(item_slot)
@@ -1067,7 +1089,7 @@ def py_list_concat(a, b):
         count = count + 1
     _list_concat_restore_slot(left_slot, left_pin)
     _list_concat_restore_slot(right_slot, right_pin)
-    success: int = _list_concat_fill(slots)
+    success: int = _list_concat_fill(slots, handles)
     if success == 0:
         store_ptr(error_slot, 0, py_current_exception())
         error_pin: int = _list_concat_pin_slot(error_slot)
