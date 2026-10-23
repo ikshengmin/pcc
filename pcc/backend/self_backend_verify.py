@@ -84,6 +84,15 @@ def _stable_text_key(text: str) -> int:
     mask = 1099511627775
     value = 0
     index = 0
+    if type(text) is str:
+        # Exact strings are immutable: do not call the runtime length helper
+        # again for every character. Custom strings keep the original reads,
+        # callbacks and exception order in the fallback loop below.
+        length = len(text)
+        while index < length:
+            value = (value * 131 + ord(text[index])) & mask
+            index += 1
+        return value
     while index < len(text):
         value = (value * 131 + ord(text[index])) & mask
         index += 1
