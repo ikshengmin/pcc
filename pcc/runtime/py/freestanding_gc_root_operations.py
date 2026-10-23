@@ -189,6 +189,14 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
 def pcc_gc_foreign_lease_acquire(slot) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
+    # The caller keeps its owning slot stable while leased. Collectors can
+    # rewrite only object pointers: NULL/tagged words carry no address and
+    # need neither relocation protection nor a backend-mode reservation.
+    # Do not inspect a heap header here: heap values still take the guarded
+    # path and are reloaded after any parking lock acquisition below.
+    immediate = load_ptr(slot, 0)
+    if ptr_is_null(immediate) != 0 or is_tagged_int(immediate) != 0:
+        return 0
     # Reserve a mode guard BEFORE reading the source or its header. The same
     # backend-0/no-probe gate as atomic refcounting has no moving object index.
     # A completed transition can invalidate the first gate read, so check it
