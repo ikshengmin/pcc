@@ -42,7 +42,7 @@ def _direct_owned_pass_names(module_name: str) -> list[str]:
     return names
 
 
-def _release_direct_frontend_state(codegen) -> None:
+def _release_direct_frontend_state(codegen, collect: bool = True) -> None:
     """Release frontend-only graphs after the direct module is frozen."""
     frontend_module = codegen.module
     frontend_module._functions.clear()
@@ -60,9 +60,10 @@ def _release_direct_frontend_state(codegen) -> None:
     # Function <-> Block and codegen <-> ClassLowering are intentional host
     # object cycles.  The direct backend owns only compact seed/kernel data;
     # collect the now-unreachable frontend graph before it competes for cache.
-    import gc
+    if collect:
+        import gc
 
-    gc.collect()
+        gc.collect()
 
 
 def _freeze_worker_survivors() -> None:
@@ -871,7 +872,9 @@ def run_codegen_worker(
                                 # for the ordinary IR/result protocol, but AST,
                                 # frontend owners and their cycles can die now.
                                 phase_started = phase_timing.start() if phase_timing is not None else 0
-                                _release_direct_frontend_state(codegen)
+                                # Collect once below, after the final local
+                                # owners are gone, rather than before and after.
+                                _release_direct_frontend_state(codegen, collect=False)
                                 parsed_modules[index] = None
                                 del ast_module
                                 del typed_module
