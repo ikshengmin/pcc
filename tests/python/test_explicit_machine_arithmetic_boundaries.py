@@ -228,17 +228,34 @@ def test_explicit_machine_unary_routes_owned_ir(tmp_path, monkeypatch):
 
 def test_ordinary_large_integer_routes_keep_exact_fallbacks(tmp_path, monkeypatch):
     text = _pipeline_ir(tmp_path, monkeypatch, MACHINE_FUNCTIONS + ORDINARY_FUNCTIONS + NATIVE_CHECKS)
-    for suffix, helper in (("add", "py_int_add"), ("mul", "py_int_mul"),
-                           ("shift", "py_int_shl"), ("neg", "py_int_neg"),
-                           ("invert", "py_int_xor")):
+    # Rooted operands can use the generic slot-call route, whose numeric
+    # fallback invokes the same arbitrary-precision kernels. Require an exact
+    # route without prescribing whether operand ownership needs that wrapper.
+    for suffix, helpers in (
+        ("add", ("py_int_add", "py_obj_add")),
+        ("mul", ("py_int_mul", "py_obj_mul_slots")),
+        ("shift", ("py_int_shl", "py_obj_lshift")),
+        ("neg", ("py_int_neg",)),
+        ("invert", ("py_int_xor",)),
+    ):
         body = _function(text, "exact_" + suffix)
         assert re.match(r"define (?:external |internal )?ptr @", body.splitlines()[0])
-        assert re.search(r"\bcall\b[^\n]*@" + helper + r"\(", body), body
+        assert any(
+            re.search(r"\bcall\b[^\n]*@" + helper + r"\(", body)
+            for helper in helpers
+        ), body
         if suffix != "shift":
             assert not re.search(r"\bcall\b[^\n]*@py_int_to_i64_lane\(", body), body
         # The shift-count check may use its checked scalar projection; the
-        # shifted value itself still reaches the exact py_int_shl kernel.
-    assert re.search(r"\bcall\b[^\n]*@py_int_from_cstr\(", text)
+        # shifted value itself still reaches the exact py_int_shl kernel,
+        # directly or through py_obj_lshift.
+    # 2**100 is emitted as a module-static bigint with four base-2**32
+    # digits, rather than reparsing its decimal spelling at each evaluation.
+    assert re.search(
+        r"(?m)^@\.pyint\.obj\.\d+ = internal global .*"
+        r"i32 1, i32 4, \[4 x i32\] \[i32 0, i32 0, i32 0, i32 16\] \}$",
+        text,
+    )
 
 
 def test_contextualized_raw_integer_literals_owned_ir(tmp_path, monkeypatch):
@@ -250,9 +267,11 @@ def test_contextualized_raw_integer_literals_owned_ir(tmp_path, monkeypatch):
     mask = _function(text, "unsigned_high_mask")
     assert re.search(r"\band i64 [^\n]*, (9223372036854775808|-9223372036854775808)\b", mask)
     maximum = _function(text, "unsigned_max_literal")
-    assert re.search(r"\bret i64 (18446744073709551615|-1)\b", maximum)
+    # Shared return cleanup may store the primitive constant before returning
+    # it; the native literal test checks the value delivered to the caller.
+    assert re.search(r"\b(?:ret|store) i64 (18446744073709551615|-1)\b", maximum)
     minimum = _function(text, "signed_min_literal")
-    assert re.search(r"\bret i64 -9223372036854775808\b", minimum)
+    assert re.search(r"\b(?:ret|store) i64 -9223372036854775808\b", minimum)
 
 
 def test_direct_raw_unsigned_literal_argument_owned_ir(tmp_path, monkeypatch):
