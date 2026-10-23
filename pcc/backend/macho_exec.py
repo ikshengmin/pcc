@@ -641,7 +641,13 @@ def prepare_executable_object(
                 list(pulled),
                 start_index=len(resolved_objects),
             ))
-            already_defined, pending = _external_symbol_state(resolved_objects)
+            # Only the next archive consumes this rebuilt state. For exact
+            # built-in sequences, avoid materialising all symbol tables once
+            # more after the final archive. Keep the original iteration and
+            # error order for custom/unsized collections, without lookahead.
+            if ((type(archives) is not list and type(archives) is not tuple)
+                    or archive_index + 1 < len(archives)):
+                already_defined, pending = _external_symbol_state(resolved_objects)
         # Archive members are inputs too.  Validate the selected set before the
         # relocatable core consumes it; unselected members were already parsed
         # by read_archive and a malformed member failed above.
