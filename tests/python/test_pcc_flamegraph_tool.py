@@ -432,3 +432,28 @@ def test_exact_pid_rejects_non_native_or_missing_target(monkeypatch, argv):
     with pytest.raises(SystemExit) as error:
         tool.main()
     assert error.value.code == 2
+
+
+def test_native_call_tree_multiple_threads_and_recursive_children():
+    tool = _load_tool()
+    report = """Call graph:
+    18 Thread_A
+    + 18 root  (in other)
+    +   10 recurse  (in other)
+    +     4 recurse  (in other)
+    +     3 leaf  (in other)
+    +   5 sibling  (in other)
+
+    7 Thread_B
+    + 7 root  (in other)
+    +   7 __psynch_cvwait  (in libsystem_kernel.dylib)
+"""
+    folded = tool._fold(report, "pcc1", [], 0)
+    assert folded == collections.Counter({
+        "Thread_A;root [other]": 3,
+        "Thread_A;root [other];recurse [other]": 3,
+        "Thread_A;root [other];recurse [other];recurse [other]": 4,
+        "Thread_A;root [other];recurse [other];leaf [other]": 3,
+        "Thread_A;root [other];sibling [other]": 5,
+    })
+    assert tool._attribution(folded)["total_weight"] == 18
