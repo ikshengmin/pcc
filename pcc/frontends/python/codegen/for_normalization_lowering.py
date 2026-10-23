@@ -1,13 +1,12 @@
 """For-loop AST normalization helpers for Layer-1 Python codegen."""
 from __future__ import annotations
 
-from pcc.ir.compat import ir
-
-from pcc.frontends.python.py_ast import Assign, AugAssign, Call, DictType, DynType, Expr, For, IntLit, IntType, ListType, Name, Subscript, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    Assign, AugAssign, Call, DictType, DynType, Expr, For, IntLit, IntType,
+    ListType, Name, Subscript, TupleExpr, TupleType, Type,
+)
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
-
-_I64 = ir.IntType(64)
 
 
 def _same_type_kind(a: Type, b: Type) -> bool:
@@ -233,9 +232,8 @@ class ForNormalizationLoweringMixin:
                 <orig body>
                 __enum_i__<k> = __enum_i__<k> + 1
 
-        The synthetic counter is an annotated int so inference keeps
-        it on the native path; tuple-target unpacking picks up the
-        rest via the existing ``_normalise_for_tuple_target`` helper.
+        The synthetic counter follows ordinary local assignment ownership;
+        tuple-target unpacking uses ``_normalise_for_tuple_target``.
         """
         it = stmt.iter
         assert isinstance(it, Call)
@@ -266,29 +264,8 @@ class ForNormalizationLoweringMixin:
         one_lit = IntLit(span=span, ty=int_ty, value=1)
         cnt_ref = Name(span=span, ty=cnt_ty, ident=cnt_name)
 
-        # Insert the counter init *before* the for-loop itself by
-        # synthesising an Assign statement and prepending it to the
-        # caller's scope. Since we can't rewrite the surrounding
-        # body here, fold the init into the pre-loop region by
-        # stashing it on the codegen — the emitter will see it on
-        # the next ``_emit_stmt`` entry. That infra is intrusive;
-        # instead, emit the init *inline* here via a direct alloca
-        # + store, side-stepping the need to touch the parent list.
-        # The tuple-normaliser runs after us, so pre-loop allocation
-        # inside the body avoids re-running inside each iteration.
-        # We use a dedicated "pre-loop bootstrap" list on ``self``.
-        # Simplest: add the init as the first statement of the new
-        # stmt's body. This re-inits the counter every iteration —
-        # wrong. Instead, emit the init via a small runtime routine
-        # using an explicit @_pcc_py_* helper. Since that's overkill
-        # for a desugar, we register a per-loop alloca outside the
-        # body using an auxiliary stash consumed by _emit_stmts.
-        #
-        # Pragmatic approach: leave the alloca/store emission to
-        # ``_emit_for`` itself, and only rewrite the AST to handle
-        # the bookkeeping. Hand the ``_emit_for`` a counter name
-        # plus target binding via a side-channel on ``stmt``.
-        # Synthesize a target Name for the "value" slot.
+        # Bind the counter once before emitting the normalized loop; the
+        # synthetic value target then uses the ordinary unpacking protocol.
         if _for_is_tuple_expr(stmt.target) and len(stmt.target.elems) == 2:
             idx_target, val_target = stmt.target.elems
             if not _for_is_name(idx_target):
@@ -358,45 +335,20 @@ class ForNormalizationLoweringMixin:
         # counter stops matching the iteration number.
         new_body = prelude + (incr_stmt,) + tuple(stmt.body)
 
-        # Emit the counter alloca + zero-store *now* so the rewritten
-        # for-loop body sees ``__enum_i__`` already bound in ``self.env``.
-        # Requires an active IRBuilder; _emit_for is called during
-        # body lowering so the builder is positioned on the enclosing
-        # block.
-        if start_expr is None:
-            start_i64 = ir.Constant(_I64, 0)
-        else:
-            start_i64 = self._emit_expr_as_i64(start_expr)
-        if in_generator:
-            # The frame slot for cnt_name was already created by the resume
-            # function (cnt_name is a frame_name); initialise it in place with
-            # a boxed int.  This init runs once on first entry; on resume the
-            # dispatch jumps to the post-yield block and reloads the spilled
-            # (incremented) value from the heap frame, skipping this store.
-            slot_entry = self.env.get(cnt_name)
-            if slot_entry is None:
-                raise L1CodegenError(
-                    "generator enumerate counter missing frame slot "
-                    f"{cnt_name!r}"
-                )
-            start_box = self.builder.call(
-                self.runtime["py_int_from_i64"],
-                [start_i64],
-                name=self._fresh("enum.start.box"),
+        if in_generator and self.env.get(cnt_name) is None:
+            raise L1CodegenError(
+                "generator enumerate counter missing frame slot " + repr(cnt_name)
             )
-            self.builder.store(start_box, slot_entry[0])
-        else:
-            ir_ty = self._storage_ir_type(int_ty)
-            alloca = self._alloca_in_entry(ir_ty, name=f"{cnt_name}.addr")
-            start_val = start_i64
-            if isinstance(ir_ty, ir.PointerType):
-                start_val = self.builder.call(
-                    self.runtime["py_int_from_i64"],
-                    [start_val],
-                    name=self._fresh("enum.start.box"),
-                )
-            self.builder.store(start_val, alloca)
-            self.env[cnt_name] = (alloca, ir_ty, int_ty)
+        # A direct alloca/store omitted the owner/root protocol for boxed
+        # counters. Normal assignment initializes the owning flag from entry,
+        # releases a previous value on loop re-entry, and uses the existing
+        # persistent generator slot when the loop can suspend.
+        initial = start_expr
+        if initial is None:
+            initial = IntLit(span=span, ty=int_ty, value=0)
+        self._emit_assign(Assign(
+            span=span, targets=(cnt_ref,), value=initial, annotation=cnt_ty,
+        ))
 
         return For(
             span=stmt.span,
