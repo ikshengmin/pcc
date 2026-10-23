@@ -541,6 +541,44 @@ identities, all successful and failed checks, and read-back-verified receipts:
 Continue measuring required boxing and object-to-machine conversion separately,
 then ordinary container ownership, before the full-request acceptance rerun.
 
+The maintainer explicitly added virtual-thread scheduling performance and
+multi-thread scaling as separate performance items. Ordinary primitive and
+boxing work remains active. Current gateway ca9a012's run_until_complete calls
+`virtual_thread.run(1, 4096)`: C100 means request concurrency, not 100 native
+carrier threads. Core `py_virtual_thread_run_carrier_pool` selects the idle
+driver at count<=1; larger counts start/join native carriers, while a separate
+persistent-pool API exists. Future scheduler comparisons must separate pool
+startup from steady execution and use equal actual OS-thread counts, covering
+spawn/join, yield/resume, park/wake, queue contention and cancellation/errors.
+
+A first ordinary-thread packet reuses the existing `mt_fib.py` and the frozen
+boxing candidate's exact binary/runtime. Small 1/2/4-thread output checks pass.
+Three rotating, warmed fixed-work repetitions (48 fib(24) jobs), GC0, host pcc0/
+owned-self/native emitted execution, measure 0.8689 / 1.0504 / 1.5833 / 2.4204 s
+at 1/2/4/8 native threads. User CPU increases 0.85 -> 16.30 s and instructions
+16.05 -> 49.66 billion from 1 to 8 threads. Every result matches the GIL-enabled
+CPython 3.15 reference. This demonstrates degradation for this corpus; it is
+not a virtual-thread benchmark, a whole-gateway result or new-source pcc1 proof.
+
+Five-second samples of the same binary attribute 12.67% / 54.68% self samples
+to object-graph lock acquisition at 1/8 threads; inclusive shares are 16.76% /
+74.44%. The 8-thread lock subtree includes safepoint spinning, and its major
+caller is foreign-lease acquisition (63.91% of all working samples). Source
+uses CAS retry plus safepoints on contention. Classify actual lease operands
+and hot IR next, preserving moving-GC/mode-transition and ownership contracts.
+The earlier immediate-value lease experiment had no gateway benefit; that
+historical result is unchanged by this different multi-thread workload.
+
+Eight-thread raw capture succeeded and printed a complete workload checksum,
+but profiler postprocessing timed out; its original receipt remains unvalidated
+and the sampled run's final exit code was not retained. Existing uninstrumented
+measurement exits/checksums all passed. Tool `df66a6636` removes quadratic
+call-tree suffix copying, with tests `96a974cf1` (27 pass); offline recovery
+validates binary/image identity and exactly reproduces the earlier single-thread
+folded counts. The 8-thread raw tree folds in 0.413 s. Durable source/artifact
+identities, raw capture, recovery limitations, all runs and the expanded tasks:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/threading-scaling-boxing/README.md`.
+
 The independent owned-root list-construction v3 candidate is retained, not
 committed. Correcting its native lease declarations removes an accidental
 Python int conversion introduced by v2. Native ownership/exception scenarios
