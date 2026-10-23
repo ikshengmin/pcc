@@ -21,6 +21,7 @@ LIST_FUNCTIONS = {
     '_list_is_sane', '_normalize_index', '_prepare_moving_root',
     '_reload_moving_root', '_finish_moving_root', '_grow_if_needed',
     '_list_factory_finish', 'py_list_new', '_append_rooted', 'py_list_append',
+    '_append_rooted_slots',
     '_list_get_owned_rooted', '_list_get_finish', 'py_list_get',
     '_list_set_item_transaction', 'py_list_set', 'py_list_setitem', 'py_list_len',
 }
@@ -371,7 +372,7 @@ def test_finalizer_state_initialization_in_actual_runtime_ir(tmp_path, monkeypat
     from pcc.ir.optimization.driver import optimize_ir
     from tests.owned_ir_validation import verify_ir_text
 
-    monkeypatch.setenv('PCC_WITH_THREADS', '0')
+    monkeypatch.setenv('PCC_WITH_THREADS', '1')
     monkeypatch.setenv('PCC_REFCOUNT_KIND', 'atomic')
     source = ROOT / 'pcc/runtime/py/py_tempfile.py'
     output = tmp_path / 'py_tempfile.ll'

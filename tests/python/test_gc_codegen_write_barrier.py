@@ -403,18 +403,25 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     ):
         assert forbidden not in strict_append_fast
     assert "_append_rooted(lst, item, 0)" in strict_append
-    strict_append = strict_src.split("def _append_rooted(lst, item, fresh: int) -> int:", 1)[1].split(
-        '@c_abi_export("py_list_append")', 1
+    strict_wrapper = strict_src.split("def _append_rooted(lst, item, fresh: int) -> int:", 1)[1].split(
+        "def _append_rooted_slots(", 1
     )[0]
-    strict_list_prepare = strict_append.index(
+    strict_list_prepare = strict_wrapper.index(
         "_prepare_moving_root(list_slot, list_handle_slot)"
     )
-    strict_item_prepare = strict_append.index(
+    strict_item_prepare = strict_wrapper.index(
         "_prepare_moving_root(item_slot, item_handle_slot)"
     )
-    strict_grow_call = strict_append.index(
-        "_grow_if_needed(", strict_item_prepare
-    )
+    delegated = strict_wrapper.index("result: int = _append_rooted_slots(")
+    assert strict_list_prepare < strict_item_prepare < delegated
+    assert delegated < strict_wrapper.rindex("_finish_moving_root(item_handle_slot)")
+    assert delegated < strict_wrapper.rindex("_finish_moving_root(list_handle_slot)")
+    strict_append = strict_src.split("def _append_rooted_slots(", 1)[1].split(
+        '@c_abi_export("py_list_append")', 1
+    )[0]
+    assert "_prepare_moving_root(" not in strict_append
+    assert "_finish_moving_root(" not in strict_append
+    strict_grow_call = strict_append.index("_grow_if_needed(")
     strict_lock = strict_append.index("pcc_py_gc_minor_graph_lock()")
     strict_reload = strict_append.index(
         "item = _reload_moving_root(item_slot, item_handle_slot)", strict_lock
@@ -425,11 +432,10 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     strict_unlock = strict_append.index(
         "pcc_py_gc_minor_graph_unlock()", strict_store
     )
-    assert strict_list_prepare < strict_item_prepare < strict_lock < (
-        strict_reload
-    ) < strict_store < strict_unlock < strict_append.index(
+    assert strict_lock < strict_reload < strict_store < strict_unlock
+    assert strict_unlock < strict_append.index(
         "pcc_gc_store_ptr_plan_finish(store_plan)", strict_unlock
-    ) < strict_append.rindex("_finish_moving_root(")
+    )
     assert strict_grow_call > strict_append.rindex(
         "pcc_py_gc_minor_graph_unlock()", 0, strict_grow_call
     )
@@ -559,20 +565,24 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
             f'@c_abi_export("{next_export}")', 1
         )[0]
         assert "_append_snapshot_items(" in body
-    # concat fills a rooted result from both rooted operands, one item at a
-    # time through the same get-then-append pair.
+    # Concat retains each fetched element in its existing root and delegates
+    # to the same append transaction, preserving the caller-owned handles.
     strict_concat = strict_src.split("def py_list_concat(", 1)[1].split(
         '@c_abi_export("py_list_copy")', 1
     )[0]
-    assert "success: int = _list_concat_fill(slots)" in strict_concat
-    strict_fill = strict_src.split("def _list_concat_fill(slots) -> int:", 1)[1].split(
+    assert "success: int = _list_concat_fill(slots, handles)" in strict_concat
+    strict_fill = strict_src.split("def _list_concat_fill(slots, handles) -> int:", 1)[1].split(
         "\ndef ", 1
     )[0]
     assert strict_fill.index(
         "py_list_get(load_ptr(source_slot, 0), source_index)"
-    ) < strict_fill.index(
-        "py_list_append(load_ptr(result_slot, 0), load_ptr(item_slot, 0))"
-    )
+    ) < strict_fill.index("appended: int = _append_rooted_slots(")
+    assert "result_slot, item_slot, result_handle_slot, item_handle_slot, 0" in strict_fill
+    assert "item_pin: int" not in strict_fill
+    assert strict_fill.index("result_pin: int = _list_concat_pin_slot(result_slot)") < (
+        strict_fill.index("appended: int = _append_rooted_slots(")
+    ) < strict_fill.index("_list_concat_restore_slot(result_slot, result_pin)")
+    assert 'py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))' in strict_fill
 
 
 def test_list_equality_callbacks_run_unlocked_and_remove_reloads_current_index():
