@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `732b7a9b0`, initially based on
+Source: published through `6aa05f1af`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -29,6 +29,19 @@ Generated enumerate-counter repair and exact bootstrap-worker replay:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/enumerate-732b7a9b0/README.md`.
 Successful native Stage1, matching runtime and publication audit:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/native-stage1-732b7a9b0/README.md`.
+Completed scoped native compiler integration:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/native-integrations-732b7a9b0/README.md`.
+Nested unpack lifetime repair:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/nested-unpack-33a9f6823/README.md`.
+Unpack arity, ordinary nested boundaries and exact iterator/exception ownership:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/unpack-through-6aa05f1af/README.md`.
+Current threaded gateway baseline, measured binary, backend IR and caller profile:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/performance-baseline-60396e192/README.md`.
+
+The maintainer has now directed work back to the performance priority. The
+latest unpack code and regression tests are published; continue measured
+runtime/codegen optimization while retaining the unfinished qualification,
+C lifetime and conformance tasks below.
 
 The active goal is the full handoff/P0 scope, not this completed test subset.
 The maintainer now explicitly authorizes timely commits and pushes of validated
@@ -38,6 +51,10 @@ Use direct Git commands, not the `do_commit` skill. Keep the `ikshengmin`
 worktree identity, English `[skip ci]` messages, no Co-Authored-By, no force
 push and no changes to `origin` or other people's uncommitted work. This
 authorization supersedes the original goal text's wait-for-permission clause.
+The maintainer explicitly requires local issue records only: do not write to
+allstoalls repositories, including issues or comments. The attempted issue
+creation was rejected before publication; no issue was created. That request
+is resolved and must not be asked again.
 Preserve both our unfinished changes and peers' work. Integrate conflicts by
 their required behavior, test the resolved paths, and never replace an entire
 conflicted file with ours/theirs to discard either side.
@@ -176,6 +193,30 @@ Subsequent published changes and executed evidence:
   including both scaffold modes and all five collectors for continue, loop
   re-entry, nested/whole-pair targets and suspended generator resumes.
 
+- Nested private unpack containers are consumed before their targets run
+  (`fa074fe61`, tests `33a9f6823`), preserving finalizer order when inner or
+  outer destinations park. User-held aliases and later target failures remain
+  correct. The scoped packet passes 8 tests (7 native compiler variants
+  deselected), including five-GC execution of the two lifetime programs.
+- Managed sequence unpack now checks arity before any target in that boundary
+  (`f546f38e6`, tests `2110127e2`), using exact list/tuple loads or the ordinary
+  iterator protocol with at most N+1 values. Error text matches CPython 3.15;
+  custom iterator exceptions keep identity. Static helper signatures were
+  synchronized in `6a47cdf0b` after the existing ABI check found the omission.
+  Ordinary nonparking nested boundaries also use the checked helper
+  (`60396e192`, tests `6aa05f1af`). The final packet passes 5 tests, each
+  executing all five selected collectors (5 native compiler cases deselected).
+- Adjacent checks passed 69 cases before an older lifetime test's fixed TLS
+  raise-count assertion failed. The same failure reproduces before this repair.
+  `71b8cc5f8` checks each of 50 complete allocation/raise/clear/free histories
+  instead, allowing balanced internal TLS restoration: all 3 tests pass.
+  Four iterator integration programs also pass all five collectors through
+  host pcc (4 native compiler variants deselected). These checks cover exact
+  errors, default evaluation, aliases, finalizers, filter and generator paths.
+  A separate repeated-error probe has zero live-byte growth on GC0-3 and
+  +21,408 bytes on GC4 after its first large batch. Bounded collector capacity
+  versus a leak is still unclassified; its failed observation is retained.
+
 These are host-pcc/self-backend emitted execution and focused IR/cache checks.
 The first native pcc1 integration build used a frozen `af72b15f6` snapshot:
 4,457 tracked inputs matched, with the runtime hash in `integration-source.json`.
@@ -256,20 +297,22 @@ peak tree RSS 4,314,382,336 bytes. The 769,243,768-byte pcc1 SHA256 is
 All 30,732 tracked inputs match the published commit; source and runtime hashes
 are in `enumerate-published-source.json`. This is Stage1, not a fixed point.
 
-The current native integration packet is active with that explicit pcc1 and
-matching runtime; host fallback/provisioning is disabled. It selects 14 cases
-and deselects 77. The original keys-view memory failure now passes, as do the
-collection-input host/native controls, conditional parking and chain evaluation
-order. Remaining cases are not yet certified. Live nodes and failures:
-`/private/tmp/pcc-p0-followup/logs/enumerate-native-integrations.stdout` and
-`/private/tmp/pcc-p0-followup/logs/enumerate-native-integrations.nodes.jsonl`.
+The scoped integration packet completed at `732b7a9b0`: 14 passed, 77
+deselected in 948.10 seconds. Thirteen cases explicitly use that native pcc1
+and one is a host collection-input control; every emitted program executes.
+Host fallback/provisioning is disabled for native cases. It covers the original
+keys-view memory failure, collection inputs, conditional/chain/keyword parking,
+small and big integer unpack, compiler arena, augmented assignment, enumerate,
+and public CLI linking of an independent owned-C object. This does not certify
+native C compilation itself, newer unpack fixes, Stage2/Stage3, or all integration
+cases. Durable source/compiler/runtime receipts are linked above.
 
 Gateway work is isolated at `/private/tmp/pcc-p0-gateway-task/pcc-gateway`.
 Code `13cd35b`, tests/fixture `f260a0c` and documentation `ca9a012` use
 `ikshenming <shenming2020@gmail.com>` and the authorized `shenming/main` fork.
 Active handler/layer/lifetime runners and the default test fixture select the
 threaded atomic runtime. Host controls pass 34 and 55 tests, and real archive
-admission succeeds. A one-repeat C100/zero-wait smoke validates 1,000 requests
+admission succeeds. The earlier one-repeat C100/zero-wait smoke validates 1,000 requests
 per arm: host-pcc 11,932.6 req/s versus CPython 3.15 asyncio 94,803.6 req/s.
 The pcc1 arm is explicitly omitted; these are handler counts, not HTTP QPS or
 a qualified multi-repeat comparison. Caller-attribution sampling of the same
@@ -277,8 +320,35 @@ native binary validates 500,000 requests. Its only dynamic dependency is
 libSystem. Refcount/root/graph-lock/TLS costs are spread across runtime calls;
 the encoding helper is only about 3.6% inclusive, so it cannot explain the
 whole gap. No gateway throughput win is claimed.
-The complete native integration packet, full fixed point and five-GC bootstrap
-qualification remain unfinished. The separate fallback-baseline check was stopped when its complete
+The new performance baseline uses core `60396e192` (test-only head
+`6aa05f1af`), gateway `ca9a012`, the source-matched threaded atomic runtime and
+CPython 3.15.0. Five rotating repetitions each validate 20,000 requests plus
+200 warmups at C100/zero wait, one carrier/event loop: host-pcc median
+8,776.873 req/s (8,668.982-8,926.499), asyncio 79,708.930
+(74,987.639-85,852.263), a roughly 9.1x gap. This is handler throughput,
+without HTTP/socket I/O, not a native-pcc1 compiler or fixed-point result.
+The measured binary SHA256 is
+`0c8be1aaddb18277636f52340a11fd1d75256bb58741b66aa1d4f7eb95131022`.
+Recompiling with actual backend IR capture produces that identical binary and
+runs another 1,000 verified requests. The selected pipeline is owned
+mem2reg+sroa, owned object emission, and in-process owned Mach-O linking.
+
+A five-second sample of that binary completes 200,000 requests: 4,187 samples;
+graph-lock acquire/release self time 13.93%, TLS lookup self time 5.16%, JSON
+dumps 37.38% inclusive. Foreign lease paths cover 16.93%, root stores 16.34%,
+and scheduler root registry paths only 3.30%. Inclusive shares overlap.
+Current registry nodes are pooled, so the historical malloc-per-registration
+explanation is not current evidence. Continue with the measured generic
+ownership/call costs and controlled pass effects; no performance win is claimed.
+The explicit six-pass owned application experiment (adding instsimplify,
+instcombine, dce and inline-defined) completed 21 rotating baseline/candidate/
+asyncio runs. Candidate median throughput is only 1.50% higher and process
+instructions fall 0.064%; median user CPU is unchanged. Keep production pass
+selection unchanged. Receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/owned-tier-experiment-60396e192/README.md`.
+
+New-source native qualification after the unpack fixes, full fixed point and
+five-GC bootstrap remain unfinished. The separate fallback-baseline check was stopped when its complete
 compiler-closure work was identified, to avoid competing heavy builds; do not
 count that partial run as a pass. Additional parked unpack shapes, public C
 lifetime/callback
