@@ -173,7 +173,7 @@ def _plan_enabled(worker_items: list[tuple[str, str, str]], target_id: str,
                     status = "hit"
                 else:
                     os.unlink(object_path)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             status = "miss"
         finally:
             if lease:
