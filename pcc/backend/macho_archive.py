@@ -51,14 +51,34 @@ class _PendingMember:
 def _member_symbols(data: bytes) -> tuple[frozenset[str], frozenset[str]]:
     obj = spec.parse_object(data)
     defines, undefined = set(), set()
-    for sym in obj.symbols():
-        kind = sym["n_type"] & spec.N_TYPE
-        if not sym["n_type"] & spec.N_EXT:
+    symtab = obj.command(spec.LC_SYMTAB)
+    if symtab is None:
+        return frozenset(defines), frozenset(undefined)
+    body = symtab.body
+    stroff = body["stroff"]
+    strsize = body["strsize"]
+    strtab = obj.data[stroff:stroff + strsize]
+    data = obj.data
+    stride = spec.NLIST_64_STRUCT.size
+    base = body["symoff"]
+    for index in range(body["nsyms"]):
+        # Read the entire record even when its name is irrelevant: an ignored
+        # local or weak symbol must not hide a truncated nlist. Archive state
+        # needs only names, not the full Mach-O-shaped dict table.
+        n_strx, n_type, _n_sect, n_desc, _n_value = spec.NLIST_64_STRUCT.unpack_from(
+            data, base + index * stride,
+        )
+        kind = n_type & spec.N_TYPE
+        if not n_type & spec.N_EXT:
             continue
+        if kind != spec.N_SECT and (kind != spec.N_UNDF or n_desc & spec.N_WEAK_REF):
+            continue
+        name_end = strtab.find(b"\0", n_strx)
+        name = strtab[n_strx:name_end].decode("utf-8", "surrogateescape")
         if kind == spec.N_SECT:
-            defines.add(sym["name"])
-        elif kind == spec.N_UNDF and not (sym["n_desc"] & spec.N_WEAK_REF):
-            undefined.add(sym["name"])
+            defines.add(name)
+        else:
+            undefined.add(name)
     return frozenset(defines), frozenset(undefined)
 
 
