@@ -32,8 +32,8 @@ from pcc.frontends.python.codegen.cpy_import_state import (
     retire_live_import_staging,
 )
 from pcc.frontends.python.codegen.attr_store_lowering import (
-    emit_live_import_attribute_store,
-    live_import_attribute_store,
+    emit_rooted_attribute_store,
+    rooted_attribute_store,
 )
 
 _I8 = ir.IntType(8)
@@ -129,8 +129,8 @@ class AssignmentStoreLoweringMixin:
             assignment = Assign(span=lhs.span, targets=(lhs,), value=source)
             _emit_live_import_sequence_unpack(self, assignment, lhs, root)
             return
-        if isinstance(lhs, Attr) and live_import_attribute_store(self, lhs):
-            emit_live_import_attribute_store(self, lhs, root)
+        if isinstance(lhs, Attr) and rooted_attribute_store(self, lhs):
+            emit_rooted_attribute_store(self, lhs, root)
             return
         if isinstance(lhs, Subscript) and live_import_expr_binding(self, lhs.obj):
             receiver = self._emit_slot_call_operand(lhs.obj, "import.item.receiver")

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.codegen.attr_store_lowering import (
+    rooted_attribute_store,
+)
 from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_expr_binding,
     live_import_name_slot,
@@ -1841,7 +1844,8 @@ class AssignmentStatementLoweringMixin:
                     )
                     managed = (
                         (self._is_object(elem.ty) or self._is_valueclass_payload_type(elem.ty) or planned_exact_int
-                         or isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj))
+                         or isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj)
+                         or isinstance(lhs, Attr) and rooted_attribute_store(self, lhs))
                         and not getattr(self, "_freestanding_module", False)
                         and not self._expr_returns_unsafe_raw_pointer(elem)
                         and not self._expr_looks_cpython(elem)
