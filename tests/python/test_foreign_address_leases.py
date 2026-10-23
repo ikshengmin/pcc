@@ -33,11 +33,15 @@ class Model:
         self.depth = 0
         self.on_lock = None
         self.on_unlock = None
+        self.on_compare_exchange = None
         self.events = []
         self.ns = dict(i64=int, PYOBJECTHEADER_FLAGS_OFFSET=12, PY_FLAG_GC_PINNED=64,
             ptr_is_null=lambda p: int(p == 0), is_tagged_int=lambda p: int(isinstance(p, int) and p & 1),
             null=lambda: 0, ptr_eq=lambda a,b: int(a == b), global_addr=lambda p:p,
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
+            atomic_load_i64=lambda base,offset,order:self.load(base,offset),
+            atomic_store_i64=lambda base,offset,value,order:self.store(base,offset,value),
+            atomic_cas_i64=self.compare_exchange,
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
             global_load_ptr=lambda p:self.load(p,0), global_store_ptr=lambda p,v:self.store(p,0,v),
             pcc_gc_config_ensure=self.ensure_config,
@@ -60,6 +64,16 @@ class Model:
     def ensure_config(self):
         self.store("pcc_gc_config_initialized", 0, 1)
         return self.load("pcc_gc_backend_selected", 0)
+
+    def compare_exchange(self, base, offset, expected, desired, success, failure):
+        if self.on_compare_exchange:
+            hook, self.on_compare_exchange = self.on_compare_exchange, None
+            hook(base, offset, expected, desired)
+        observed = self.load(base, offset)
+        if observed == expected:
+            self.store(base, offset, desired)
+        self.events.append(("cas", base, expected, desired, observed))
+        return observed
 
     def resolve(self, slot, offset):
         assert self.depth > 0
@@ -689,3 +703,138 @@ def test_allocated_immortal_no_node_needs_mode_guard():
     assert m.active() == 1
     assert _mode_setter(m)(4) == -1
     assert m.release(slot,2) == 0
+
+
+def _atomic_mode_model():
+    model = Model(0)
+    model.store('pcc_gc_refcount_atomic', 0, 1)
+    return model
+
+
+def test_threaded_nonmoving_leases_keep_independent_mode_guards_without_graph_lock():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    tokens = [model.acquire(slot), model.acquire(slot)]
+    assert tokens == [2, 2] and model.active() == 2
+    assert not any(event[0] == 'lock' for event in model.events)
+    assert _mode_setter(model)(4) == -1
+    assert model.release(slot, tokens[0]) == 0
+    assert model.active() == 1 and _mode_setter(model)(0) == -1
+    assert model.release(slot, tokens[1]) == 0
+    assert model.active() == 0 and _mode_setter(model)(4) == 0
+
+
+def test_completed_transition_between_gate_and_reservation_reloads_new_owner():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    setter = _mode_setter(model)
+
+    def switch_and_replace(base, offset, expected, desired):
+        assert (base, expected, desired) == ('pcc_gc_foreign_lease_active', 0, 1)
+        assert setter(4) == 0
+        model.object(obj=2000)
+        model.store(slot, 0, 2000)
+
+    model.on_compare_exchange = switch_and_replace
+    assert model.acquire(slot) == 1
+    assert model.active() == 1 and model.count(2000) == 1
+    assert ('reload', slot) in model.events
+    assert model.release(slot, 1) == 0 and model.active() == 0
+
+
+def test_lease_entering_after_mode_check_prevents_transition_publication():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    setter = _mode_setter(model)
+
+    def enter(base, offset, expected, desired):
+        assert (base, expected, desired) == ('pcc_gc_foreign_lease_active', 0, -1)
+        assert model.acquire(slot) == 2
+
+    model.on_compare_exchange = enter
+    assert setter(4) == -1
+    assert model.load('pcc_gc_backend_selected') == 0 and model.active() == 1
+    assert model.release(slot, 2) == 0
+    assert setter(4) == 0 and model.active() == 0
+
+
+def test_mode_lease_release_preserves_a_concurrent_acquisition():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    assert model.acquire(slot) == 2
+
+    def enter(base, offset, expected, desired):
+        assert (expected, desired) == (1, 0)
+        assert model.acquire(slot) == 2
+
+    model.on_compare_exchange = enter
+    assert model.release(slot, 2) == 0 and model.active() == 1
+    assert _mode_setter(model)(4) == -1
+    assert model.release(slot, 2) == 0 and model.active() == 0
+
+
+def test_indexed_lease_count_preserves_a_concurrent_mode_only_lease():
+    model = Model(3)
+    indexed = model.object()
+    leaf = model.object(obj=2000, node=False, flags=262144)
+
+    def enter(base, offset, expected, desired):
+        assert (expected, desired) == (0, 1)
+        assert model.acquire(leaf) == 2
+
+    model.on_compare_exchange = enter
+    assert model.acquire(indexed) == 1
+    assert model.active() == 2 and model.count() == 1
+    assert model.release(leaf, 2) == 0 and model.active() == 1
+    assert model.release(indexed, 1) == 0 and model.active() == 0
+
+
+def test_atomic_mode_reservation_retries_overflow_without_wrapping():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    model.store('pcc_gc_foreign_lease_active', 0, 2**63 - 2)
+
+    def fill(base, offset, expected, desired):
+        model.store(base, offset, 2**63 - 1)
+
+    model.on_compare_exchange = fill
+    assert model.acquire(slot) == -2 and model.active() == 2**63 - 1
+
+
+def test_failed_epoch_advance_releases_transition_reservation():
+    model = _atomic_mode_model()
+    setter = _mode_setter(model)
+    model.ns['_tracing_cycle_epoch_advance_unlocked'] = lambda: 0
+    assert setter(4) == -1
+    assert model.active() == 0 and model.load('pcc_gc_backend_selected') == 0
+    slot = model.object(node=False, flags=262144)
+    assert model.acquire(slot) == 2
+    assert model.release(slot, 2) == 0 and model.active() == 0
+
+
+def test_atomic_nonmoving_path_preserves_unknown_pointer_rejection():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144, proven=False)
+    assert model.acquire(slot) == -1 and model.active() == 0
+
+
+@pytest.mark.parametrize('flags', (1, 524288))
+def test_atomic_nonmoving_path_preserves_special_header_validation(flags):
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=flags, proven=False)
+    expected = 0 if flags == 1 else -1
+    assert model.acquire(slot) == expected and model.active() == 0
+
+
+def test_non_granule_mode_lease_keeps_exact_index_read_under_graph_lock():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144, proven=False)
+
+    def contains(value):
+        assert model.depth > 0
+        return int(value == 1000)
+
+    model.ns['pcc_gc_managed_pointer_index_contains'] = contains
+    assert model.acquire(slot) == 2 and model.active() == 1
+    assert any(event[0] == 'lock' for event in model.events)
+    assert model.release(slot, 2) == 0 and model.active() == 0
