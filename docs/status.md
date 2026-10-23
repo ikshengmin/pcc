@@ -680,6 +680,43 @@ All commands, failures/corrections, source/runtime/binary identities, measuremen
 native outputs, raw profiles and reference sources are read-back verified at:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/private-root-8321df970/README.md`.
 
+Follow-up native semantic tests found an existing leak before accepting the
+list optimization: `joined[0].value = 11` retained the computed receiver even
+after its enclosing function returned. Four neighboring minimal concat/identity
+controls matched CPython; only the attribute-write variant leaked. The first
+repair fixed direct writes, then the native test exposed the scalar-literal
+unpack route. `4b36e60d9` now uses owning roots for computed native attribute
+receivers/RHS on success and error, including unpack targets; independent tests
+are `44d85dd0e`. No failed assertion was dropped. Fourteen host checks and three
+native programs across GC0–4 pass on an isolated semantic-fix snapshot that
+excludes the performance candidate. Native-pcc1 qualification remains pending.
+
+`20e295460` reuses the existing rooted append transaction for concatenation;
+tests are `a5135ebe5`. The transaction borrows caller root/handle cells, reloads
+after lock waits, keeps capacity/growth revalidation and the same barrier
+commit/finish, and leaves root teardown to its caller. Concat avoids redundant
+item pin/restoration and root-pair setup; result address protection remains.
+123 focused checks pass. A stale threads-off IR fixture was reproduced on the
+unchanged baseline and updated to the current threads-only configuration with
+its assertions intact. Three native programs pass GC0–4, including concurrent
+concat/collection, four-thread append/growth/finalizers and attribute error
+cleanup. Original full-handler response integration then passes 1,000 requests
+plus 200 warmups on each GC0–4.
+
+Both new performance arms include the semantic fix and differ in only one pcc
+source, py_list.py. Five rotating warmed N/2N repetitions (90 validated timed
+processes), host pcc0/owned self/native threaded atomic GC0: concat/return falls
+21365.601 -> 20469.008 instructions/iteration (-4.20%), 1060 -> 1020 ns; scalar
+return stays about 2215 instructions/110 ns. Public append/pop increases
+4497.669 -> 4528.800 instructions (+0.69%) with a 200 ns wall median in both.
+The heap loop still costs about 15.56x CPython's instructions. This modest
+local result does not explain the full sevenfold request gap. Reassess broader
+ownership/call/allocation costs and their measured ceilings before another
+small protocol change. Full-handler QPS and new-source pcc1 have not been
+remeasured after these two commits. All failed preimages, corrected runs,
+source/runtime/binary identities and successful checks are read-back verified:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/rooted-append-20e295460/README.md`.
+
 The independent owned-root list-construction v3 candidate is retained, not
 committed. Correcting its native lease declarations removes an accidental
 Python int conversion introduced by v2. Native ownership/exception scenarios
