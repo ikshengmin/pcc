@@ -579,6 +579,38 @@ folded counts. The 8-thread raw tree folds in 0.413 s. Durable source/artifact
 identities, raw capture, recovery limitations, all runs and the expanded tasks:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/threading-scaling-boxing/README.md`.
 
+`5d47d3bed` now bypasses address leases for NULL/tagged root words; tests are
+`d4eaa406c`. A byte-identical replay of the measured mt_fib binary establishes
+the actual hot IR: each non-leaf call leases its two tagged recursive results.
+The old entry reserved/released the atomic mode counter and then took the
+object-graph lock just to return token 0. The new entry checks only the scalar
+representation; heap provenance, mode guards and post-parking reloads remain.
+This change is accepted for measured ordinary-thread benefit. The historical
+no-gain gateway result for the earlier immediate-lease experiment is unchanged.
+
+209 models pass. Three native tests cover 60,000 immediate acquire/release
+pairs per run on two threads across GC0–4, real GC3/4 movement/overlap and GC0
+heap leases racing mode resets. The full original request integration also
+executes 1,000 requests plus 200 warmups correctly on each GC0–4. Frozen host
+pcc0/self-produced native artifacts were used; current-source pcc1 and fixed
+point remain outstanding. No new gateway QPS result is claimed.
+
+Five rotating repetitions at 1/2/4/8 threads, fixed 48 fib(24) jobs, all outputs
+checked: baseline medians 0.8613/1.0374/1.4441/2.0567 s become
+0.6579/0.4352/0.4709/0.7203 s (1.309x/2.384x/3.067x/2.855x). Instruction counts
+fall 21.31%/27.82%/43.25%/57.93%; all 20 native pairs improve. Same-packet
+CPython medians are 0.1476/0.1457/0.1447/0.1437 s. Application hot IR is
+identical across native arms, whose runtime differs at this one entry only.
+Native execution remains slower and scaling still regresses past two threads.
+
+Both post-change profile executions finish with correct checksums. The lease
+lock hotspot disappears; remaining 8-thread graph-lock time is 68.78% inclusive,
+called by generated return cleanup (36.16% of working samples) and root_move
+(32.62%). Inspect/prove scalar root transfers and return cleanup independently
+next; do not conflate a similar profile percentage with unchanged absolute work.
+Full provenance, A/B data, checks, actual IR and before/after attribution:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/tagged-lease-5d47d3bed/README.md`.
+
 The independent owned-root list-construction v3 candidate is retained, not
 committed. Correcting its native lease declarations removes an accidental
 Python int conversion introduced by v2. Native ownership/exception scenarios

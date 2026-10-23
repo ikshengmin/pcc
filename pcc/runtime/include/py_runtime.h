@@ -370,8 +370,10 @@ int64_t   pcc_gc_collect(int32_t reason);
 void      pcc_gc_pin(PyObject *o);
 void      pcc_gc_unpin(PyObject *o);
 /* Foreign-address leases require an already traced, owning slot containing a
- * compiler-proven initialized managed value. Acquire locks before reloading;
- * tokens: 0 intrinsic no-op, 1 counted node, 2 proven nonmoving/mode guard.
+ * compiler-proven initialized managed value; the caller keeps the slot stable
+ * during raw-pointer use. NULL/tagged words return 0 without an address guard.
+ * Heap values retain provenance/mode guards and reload after any parking lock.
+ * Tokens: 0 intrinsic no-op, 1 counted node, 2 proven nonmoving/mode guard.
  * Negative acquire: -1 invalid provenance/transition, -2 counter overflow.
  * Release exactly once with its token, after all raw-pointer uses, before
  * dropping the root. Token 0 is always a no-op. Return 0 on success, -1 bad
