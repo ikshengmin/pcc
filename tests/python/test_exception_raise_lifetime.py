@@ -61,6 +61,40 @@ def _compile_and_collect_events(tmp_path: Path, source: str):
     ]
 
 
+def _assert_exception_lifetimes(events, tag):
+    # Cleanup/handler selection may temporarily clear and restore TLS. Match
+    # each allocation through its actual raises, clears, free and deallocation,
+    # rather than equating internal TLS transitions with source-level raises.
+    active = {}
+    completed = 0
+    for event in events:
+        category = event["category"]
+        name = event["event"]
+        if category == "refcount":
+            if name != "free" or event["value1"] != 12:
+                continue
+        elif category != "exception":
+            continue
+        pointer = event["ptr"]
+        if name == "alloc":
+            assert pointer not in active, event
+            active[pointer] = []
+        assert pointer in active, event
+        active[pointer].append(name)
+        if name == "new":
+            assert event["value0"] == tag
+        if name == "dealloc":
+            history = active.pop(pointer)
+            assert history[:2] == ["alloc", "new"], history
+            assert history[-2:] == ["free", "dealloc"], history
+            transitions = history[2:-2]
+            assert transitions, history
+            assert transitions == ["raise", "clear"] * (len(transitions) // 2), history
+            completed += 1
+    assert not active, active
+    assert completed == 50
+
+
 def test_builtin_exception_raise_releases_temporary_after_clear(tmp_path: Path):
     events = _compile_and_collect_events(
         tmp_path,
@@ -77,26 +111,7 @@ def test_builtin_exception_raise_releases_temporary_after_clear(tmp_path: Path):
         main()
         """,
     )
-    exception_events = [
-        event["event"] for event in events if event["category"] == "exception"
-    ]
-    refcount_events = [
-        event for event in events if event["category"] == "refcount"
-    ]
-
-    assert exception_events.count("alloc") == 50
-    assert exception_events.count("new") == 50
-    assert exception_events.count("raise") == 50
-    assert exception_events.count("clear") == 50
-    assert exception_events.count("dealloc") == 50
-    assert (
-        sum(
-            1
-            for event in refcount_events
-            if event["event"] == "free" and event["value1"] == 12
-        )
-        == 50
-    )
+    _assert_exception_lifetimes(events, 6)
 
 
 def test_runtime_stopiteration_helper_releases_temporary_after_clear(
@@ -118,33 +133,7 @@ def test_runtime_stopiteration_helper_releases_temporary_after_clear(
         main()
         """,
     )
-    exception_events = [
-        event for event in events if event["category"] == "exception"
-    ]
-    refcount_events = [
-        event for event in events if event["category"] == "refcount"
-    ]
-
-    assert sum(
-        1
-        for event in exception_events
-        if event["event"] == "new" and event["value0"] == 8
-    ) == 50
-    assert sum(
-        1
-        for event in exception_events
-        if event["event"] == "raise" and event["value0"] == 12
-    ) == 50
-    assert sum(1 for event in exception_events if event["event"] == "clear") == 50
-    assert sum(1 for event in exception_events if event["event"] == "dealloc") == 50
-    assert (
-        sum(
-            1
-            for event in refcount_events
-            if event["event"] == "free" and event["value1"] == 12
-        )
-        == 50
-    )
+    _assert_exception_lifetimes(events, 8)
 
 
 def test_runtime_attribute_error_helper_releases_temporary_after_clear(
@@ -169,30 +158,4 @@ def test_runtime_attribute_error_helper_releases_temporary_after_clear(
         main()
         """,
     )
-    exception_events = [
-        event for event in events if event["category"] == "exception"
-    ]
-    refcount_events = [
-        event for event in events if event["category"] == "refcount"
-    ]
-
-    assert sum(
-        1
-        for event in exception_events
-        if event["event"] == "new" and event["value0"] == 6
-    ) == 50
-    assert sum(
-        1
-        for event in exception_events
-        if event["event"] == "raise" and event["value0"] == 12
-    ) == 50
-    assert sum(1 for event in exception_events if event["event"] == "clear") == 50
-    assert sum(1 for event in exception_events if event["event"] == "dealloc") == 50
-    assert (
-        sum(
-            1
-            for event in refcount_events
-            if event["event"] == "free" and event["value1"] == 12
-        )
-        == 50
-    )
+    _assert_exception_lifetimes(events, 6)
