@@ -17,7 +17,9 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     atomic_cas_i32,
+    atomic_cas_i64,
     atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i32,
     atomic_store_i32,
     define_thread_local_ptr_null,
@@ -51,8 +53,9 @@ pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void
 pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
 pcc_gc_managed_pointer_index_contains = extern("pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64)
 
-# Includes counted nodes and validated no-node mode guards. Access only under
-# the graph lock; backend transitions refuse while a foreign pointer is live.
+# Includes counted nodes and validated no-node mode guards. The atomic count
+# reserves mode stability independently of the graph lock; -1 reserves a
+# backend transition. Per-object node counts still require the graph lock.
 define_global_i64("pcc_gc_foreign_lease_active", 0)
 
 
@@ -186,23 +189,42 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
 def pcc_gc_foreign_lease_acquire(slot) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
-    # py_incref's gate (backend 0, no provenance probe, one thread): nothing
-    # moves, the forwarding and object indexes are empty, and no other thread
-    # can take the transition sentinel. For an ordinary non-immortal managed
-    # object the path below only adds one counted lease; immortal and
-    # specially flagged objects still take it.
-    if load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0:
-        fast = load_ptr(slot, 0)
-        if ptr_is_null(fast) != 0 or is_tagged_int(fast) != 0:
-            return 0
-        if (load_i32(fast, PYOBJECTHEADER_FLAGS_OFFSET) & (1 | 524288)) == 0:
-            fast_active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
-            if fast_active >= 0 and fast_active < 9223372036854775807:
-                store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, fast_active + 1)
-                return 2
+    # Reserve a mode guard BEFORE reading the source or its header. The same
+    # backend-0/no-probe gate as atomic refcounting has no moving object index.
+    # A completed transition can invalidate the first gate read, so check it
+    # again after the acquire CAS. The positive count then prevents another
+    # transition until this token is released, including on threaded builds.
+    if load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0:
+        counter = global_addr("pcc_gc_foreign_lease_active")
+        fast_active: i64 = atomic_load_i64(counter, 0, "acquire")
+        while True:
+            if fast_active < 0:
+                return -1
+            if fast_active == 9223372036854775807:
+                return -2
+            observed: i64 = atomic_cas_i64(
+                counter, 0, fast_active, fast_active + 1, "acq_rel", "acquire"
+            )
+            if observed == fast_active:
+                break
+            fast_active = observed
+        if load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0:
+            fast = load_ptr(slot, 0)
+            if ptr_is_null(fast) == 0 and is_tagged_int(fast) == 0:
+                if (load_i32(fast, PYOBJECTHEADER_FLAGS_OFFSET) & (1 | 524288)) == 0:
+                    # Keep lease provenance validation even when refcount
+                    # probes are disabled. The LIVE granule reader is safe
+                    # outside the graph lock; malloc/exact-index owners keep
+                    # the locked path below, including its table lifetime.
+                    if pcc_gc_granule_is_object_start(fast) == 1:
+                        return 2
+        # Intrinsic/special values and a mode that changed before reservation
+        # retain the existing validation path. No raw value survives it.
+        if pcc_gc_foreign_lease_release(slot, 2) != 0:
+            return -3
     pcc_gc_config_ensure()
     pcc_py_gc_minor_graph_lock()
-    if load_i64(global_addr("pcc_gc_foreign_lease_active"), 0) < 0:
+    if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0:
         pcc_py_gc_minor_graph_unlock()
         return -1
     obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
@@ -257,13 +279,20 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
                 ):
                     status = 2
     if status > 0:
-        active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
-        if active < 0 or active == 9223372036854775807:
-            status = -2
-        else:
-            if status == 1:
-                store_i64(node, 80, load_i64(node, 80) + 1)
-            store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, active + 1)
+        counter = global_addr("pcc_gc_foreign_lease_active")
+        active: i64 = atomic_load_i64(counter, 0, "acquire")
+        while True:
+            if active < 0 or active == 9223372036854775807:
+                status = -2
+                break
+            observed: i64 = atomic_cas_i64(
+                counter, 0, active, active + 1, "acq_rel", "acquire"
+            )
+            if observed == active:
+                if status == 1:
+                    store_i64(node, 80, load_i64(node, 80) + 1)
+                break
+            active = observed
     pcc_py_gc_minor_graph_unlock()
     return status
 
@@ -275,28 +304,38 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
         return 0
     if ptr_is_null(slot) != 0 or (acquired != 1 and acquired != 2):
         return -1
-    # As in acquisition, one thread on backend 0 only counts leases.
-    if acquired == 2 and load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0:
-        fast_active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
-        if fast_active > 0:
-            store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, fast_active - 1)
-            return 0
+    # A mode-only token has no object-index entry to inspect or mutate. Its
+    # final decrement releases the mode guard, independently of other tokens.
+    if acquired == 2:
+        counter = global_addr("pcc_gc_foreign_lease_active")
+        active: i64 = atomic_load_i64(counter, 0, "acquire")
+        while active > 0:
+            observed: i64 = atomic_cas_i64(
+                counter, 0, active, active - 1, "acq_rel", "acquire"
+            )
+            if observed == active:
+                return 0
+            active = observed
+        return -3
     pcc_py_gc_minor_graph_lock()
     status: i64 = -3
-    active: i64 = load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
+    active: i64 = atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire")
     if active > 0:
-        if acquired == 2:
-            store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, active - 1)
-            status = 0
-        else:
-            obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
-            node = pcc_gc_object_index_find(obj)
-            if ptr_is_null(node) == 0 and load_i64(node, 32) == 0:
-                count: i64 = load_i64(node, 80)
-                if count > 0:
-                    store_i64(node, 80, count - 1)
-                    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, active - 1)
-                    status = 0
+        obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
+        node = pcc_gc_object_index_find(obj)
+        if ptr_is_null(node) == 0 and load_i64(node, 32) == 0:
+            count: i64 = load_i64(node, 80)
+            if count > 0:
+                counter = global_addr("pcc_gc_foreign_lease_active")
+                while active > 0:
+                    observed: i64 = atomic_cas_i64(
+                        counter, 0, active, active - 1, "acq_rel", "acquire"
+                    )
+                    if observed == active:
+                        store_i64(node, 80, count - 1)
+                        status = 0
+                        break
+                    active = observed
     pcc_py_gc_minor_graph_unlock()
     return status
 

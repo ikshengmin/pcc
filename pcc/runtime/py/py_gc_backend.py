@@ -2817,7 +2817,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         # A concurrent switch won; this was a reset of the backend it left.
         _object_graph_unlock()
         return -1
-    if load_i64(global_addr("pcc_gc_foreign_lease_active"), 0) != 0:
+    if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") != 0:
         _object_graph_unlock()
         _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
@@ -2860,7 +2860,17 @@ def pcc_gc_set_backend(backend: int) -> int:
                     _release_cms_worker_pause_unless_kept(keeps_collector)
                     return -1
             migration_node = _object_node_next(migration_node)
+    # The graph lock excludes indexed leases, while backend-0 mode-only
+    # leases reserve this atomic counter without that lock. Reserve the
+    # transition before the first mutation, and refuse a concurrent lease.
+    if atomic_cas_i64(
+        global_addr("pcc_gc_foreign_lease_active"), 0, 0, -1, "acq_rel", "acquire"
+    ) != 0:
+        _object_graph_unlock()
+        _release_cms_worker_pause_unless_kept(keeps_collector)
+        return -1
     if _tracing_cycle_epoch_advance_unlocked() == 0:
+        atomic_store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0, "release")
         _object_graph_unlock()
         _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
@@ -2874,9 +2884,8 @@ def pcc_gc_set_backend(backend: int) -> int:
     store_i64(global_addr("pcc_gc_trace_extension_roots_backend"), 0, -1)
     global_store_ptr("pcc_gc_trace_cursor", null())
     _set_gray_count(0)
-    # Reserve the transition across unlocked worker/teardown operations.
-    # Acquisition refuses this sentinel; no raw pointer can race list reset.
-    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, -1)
+    # Keep the reserved transition across unlocked worker/teardown operations.
+    # Acquisition refuses the sentinel; no raw pointer can race list reset.
     _object_graph_unlock()
     if backend == 3 or backend == 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
@@ -2917,7 +2926,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         pcc_gc_reset_relocation_set()
         _backend4_store_buffer_clear()
     _object_graph_lock()
-    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0)
+    atomic_store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0, "release")
     _object_graph_unlock()
     if keeps_collector != 0:
         # The kept thread still runs; start one only if none does.
