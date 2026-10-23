@@ -75,6 +75,7 @@ from pcc.frontends.python.codegen.class_override_index import (
     build_export_subclassed_classes,
 )
 from pcc.frontends.python.codegen.ownership_lowering import prepare_rebound_object_parameters
+from pcc.frontends.python.codegen.local_bound_lowering import prepare_local_boundness
 from pcc.frontends.python.codegen.str_default_cells import str_default_cell_expr
 from pcc.frontends.python.py_ast import (
     Arg,
@@ -4627,6 +4628,7 @@ class ClassLowering:
             parent._lambda_lexical_shadow_names = set(parent._current_param_names)
             if auto_root_borrowed_params:
                 prepare_rebound_object_parameters(parent, fd, boxed_param_names)
+            prepare_local_boundness(parent, fd)
             parent._emit_application_safepoint()
 
             # Emit statements via the parent's normal emitter. In debug mode,

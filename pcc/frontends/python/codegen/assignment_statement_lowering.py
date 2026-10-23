@@ -53,6 +53,7 @@ from pcc.frontends.python.py_ast import (
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.local_bound_lowering import is_preplanned_owned_local
 from pcc.frontends.python.py_ast import assignment_storage_annotation
 
 _I1 = ir.IntType(1)
@@ -1489,6 +1490,25 @@ class AssignmentStatementLoweringMixin:
             or self._expr_returns_owned_object(stmt.value)
             or exact_int_result_is_owned
         )
+        if (
+            not rhs_returns_owned_object
+            and is_preplanned_owned_local(self, target.ident, alloca)
+            and isinstance(value.type, ir.PointerType)
+            and self._ir_type_matches(ir_ty, _CSTR)
+            and value not in getattr(self, "_cpy_values", ())
+            and not self._expr_returns_unsafe_raw_pointer(stmt.value)
+            and not getattr(self, "_suppress_implicit_gc_roots", False)
+        ):
+            # Entry-planned object locals have an owning frame map on every
+            # edge. A borrowed initial value needs its own reference there,
+            # even when a later conditional unpack is never executed.
+            if not self._value_is_never_gc_object(value):
+                value = self._gc_retain(
+                    value, name=self._fresh(target.ident + ".local.borrowed.retain"),
+                )
+            rhs_local_copy_is_owned = True
+            rhs_is_safe_owned_in_raw = True
+            rhs_returns_owned_object = True
         in_raw_scaffold = self._module_uses_raw_int_scaffold
         # In raw-scaffold mode, only enable owned-local management when the
         # local was already tracked (e.g. previously bound to a tracked

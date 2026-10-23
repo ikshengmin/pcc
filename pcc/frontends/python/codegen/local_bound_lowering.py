@@ -45,6 +45,13 @@ def mark_bound_target(host, target, bound=True) -> None:
                 mark_bound_target(host, child, bound)
 
 
+def is_preplanned_owned_local(host, name, slot) -> bool:
+    """Match only storage registered with an owning map before body emission."""
+    return slot is not None and getattr(host, "_owned_local_flag_allocas", {}).get(
+        ".planned.owner." + name,
+    ) is slot
+
+
 def prepare_local_boundness(host, fd) -> None:
     if host._freestanding_module or host._runtime_port_module or host._module_has_c_abi_export:
         return
@@ -107,6 +114,9 @@ def prepare_local_boundness(host, fd) -> None:
                 and host._ir_type_matches(ir_ty, ir.IntType(8).as_pointer())):
             host._ensure_owned_local_gc_root(name, slot, ir_ty)
             host._ensure_owned_local_flag(name, slot)
+            # This per-scope ledger is already saved/restored with the flags.
+            # A flag alone does not prove that the physical map is owning.
+            host._owned_local_flag_allocas[".planned.owner." + name] = slot
 
 
 def check_local_bound(host, expr) -> None:

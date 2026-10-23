@@ -16,13 +16,17 @@ from pcc.frontends.python.py_ast import (
     Name,
     NoneLit,
     NoneType,
+    RawPointerType,
     Slice,
     Subscript,
     TupleExpr,
     Type,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.local_bound_lowering import mark_local_bound
+from pcc.frontends.python.codegen.local_bound_lowering import (
+    is_preplanned_owned_local,
+    mark_local_bound,
+)
 from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_expr_binding,
     retire_live_import_staging,
@@ -317,7 +321,9 @@ class AssignmentStoreLoweringMixin:
                             lhs.ident, alloca, ir_ty, allow_module=True,
                         )
                         slot = self.env[lhs.ident]
-            if planned_exact_int:
+            if planned_exact_int or (
+                slot is not None and is_preplanned_owned_local(self, lhs.ident, slot[0])
+            ):
                 self._store_value_at_name(
                     lhs,
                     value,
@@ -554,6 +560,7 @@ class AssignmentStoreLoweringMixin:
             self.builder.store(ir.Constant(_I1, 1), flag)
             mark_local_bound(self, target.ident)
             return
+        incoming_was_pointer = isinstance(value.type, ir.PointerType)
         if (
             target.ident in getattr(self, "_planned_object_local_names", set())
             and isinstance(_ir_ty, ir.PointerType)
@@ -572,6 +579,31 @@ class AssignmentStoreLoweringMixin:
                 )
         else:
             value = self._coerce(value, value_ty, declared_ty)
+        if (
+            is_preplanned_owned_local(self, target.ident, alloca)
+            and isinstance(value.type, ir.PointerType)
+            and value not in getattr(self, "_cpy_values", ())
+            and not isinstance(value_ty, RawPointerType)
+            and not getattr(self, "_suppress_implicit_gc_roots", False)
+        ):
+            # Precomputed stores (including borrowed walrus values) must obey
+            # the same owning-slot contract as ordinary assignment. Acquire
+            # the incoming owner before replacement can release an alias.
+            if not value_is_owned and incoming_was_pointer:
+                if not self._value_is_never_gc_object(value):
+                    value = self._gc_retain(
+                        value, name=self._fresh(target.ident + ".local.borrowed.retain"),
+                    )
+            self.builder.call(
+                self.runtime["pcc_gc_store_root_take"],
+                [self._as_gc_ptr(alloca), value],
+            )
+            self._owned_local_names.add(target.ident)
+            self._owned_local_has_value.add(target.ident)
+            flag = self._ensure_owned_local_flag(target.ident, alloca)
+            self.builder.store(ir.Constant(_I1, 1), flag)
+            mark_local_bound(self, target.ident)
+            return
         if self._is_valueclass_payload_type(declared_ty) and isinstance(_ir_ty, ir.LiteralStructType):
             self._ensure_valueclass_payload_gc_roots(target.ident, alloca, declared_ty, borrowed=False)
             self._copy_valueclass_payload(alloca, value, declared_ty)
