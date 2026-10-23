@@ -155,10 +155,23 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer,
         # counted through index_bytes until the copying frame releases them.
         admit(extra, label=label)
 
-    def output_bound(size, count):
-        # A future single output, and therefore disk storage, must itself fit
-        # the unchanged allowance. This never credits currently live inputs.
-        budget.check_peak(size + _FIXED_BYTES, entries=base_entries + 5 * count,
+    def output_bound(function_size, function_count, locations, vectors):
+        # Admit the emitted backing, not a merged v2 heap copy that the
+        # runtime route never creates. Intermediate files and cumulative IO
+        # remain independently bounded by _SpoolWork's unchanged limits.
+        if runtime_table:
+            records = (function_size - function_count * wire.FUNCTION_SIZE) // wire.RECORD_SIZE
+            # Packed v3 rows have no alignment gaps. Each record can need
+            # one rare row; each unique vector needs one live-set row, plus
+            # at most one empty-set row. Sentinels occupy existing fields.
+            size = (wire.RUNTIME_HEADER_SIZE
+                    + function_count * wire.RUNTIME_FUNCTION_SIZE
+                    + records * (wire.RUNTIME_RECORD_SIZE + wire.RUNTIME_RARE_SIZE)
+                    + (vectors + 1) * wire.RUNTIME_LIVE_SET_SIZE
+                    + locations * wire.RUNTIME_LOCATION_SIZE)
+        else:
+            size = wire.HEADER_SIZE + function_size + locations * wire.LOCATION_SIZE
+        budget.check_peak(size + _FIXED_BYTES, entries=base_entries + 5 * function_count,
                           label="spool output bound")
 
     try:
@@ -201,9 +214,8 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer,
                                 f"duplicate stack-map function id {function_id}")
                         admit(pending_functions=1, label="spool merge function")
                         size = fn_end - fn_start
-                        output_bound(wire.HEADER_SIZE + function_bytes + size
-                                     + table_locations * wire.LOCATION_SIZE,
-                                     len(functions) + 1)
+                        output_bound(function_bytes + size, len(functions) + 1,
+                                     table_locations, unique_vectors)
                         seen_ids.add(function_id)
                         functions.append((function_id, function_bytes, size))
                         function_bytes += size
@@ -248,9 +260,8 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer,
                                             destination = table_locations
                                             if count > wire.MAX_LOCATIONS - table_locations:
                                                 raise wire.PreciseStackMapError("too many stack-map locations")
-                                            output_bound(wire.HEADER_SIZE + function_bytes
-                                                         + (table_locations + count) * wire.LOCATION_SIZE,
-                                                         len(functions))
+                                            output_bound(function_bytes, len(functions),
+                                                         table_locations + count, unique_vectors + 1)
                                             roots.seek(table_locations * wire.LOCATION_SIZE)
                                             work.write_all(roots, candidate)
                                             root_index.append(digest, count, destination, root_slot)
