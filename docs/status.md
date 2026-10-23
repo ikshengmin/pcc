@@ -9,7 +9,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## P0 handoff triage and active follow-up (2026-10-23)
 
-Source: published through `117f59596`, initially based on
+Source: published through `27d8da7be`, initially based on
 `8b35e1e1c667dedfcbdcd385b2810f537ab29f8f`. Active worktree:
 `/Users/jiamo/.codex/worktrees/p0-handoff-triage/pcc`. Pre-publication evidence:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/README.md`.
@@ -357,6 +357,32 @@ benefit (median paired ratio 1.00235; instructions -0.325%; user CPU unchanged).
 The experiment is fully recoverable in the local archive and is not landed as
 a performance repair. Continue with heap-object call/ownership boundaries:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/immediate-lease-experiment-117f59596/README.md`.
+
+Synchronous call scratch roots now stay lexical inside generator regions proven
+not to suspend (`3b01d4f5c`, tests `27d8da7be`). Existing caller result sinks and
+values crossing parks remain persistent, and an unexpected emitted resume edge
+fails compilation. The new program passes five GC executions; nine adjacent
+parking/ownership cases pass, followed by a 32-case focused packet (two native
+compiler variants deselected). Two independently reproduced stale IR assertions
+were corrected without dropping their ownership/order or adapter checks.
+
+The gateway request's actual backend IR has 166 -> 116 frame-set sites,
+269 -> 217 allocas and 1118 -> 745 stores; static counts include error paths.
+Two measurements reduce instructions about 2.5-2.6% and cycles about 2.2-3.9%,
+with no observed RSS regression. Wall throughput is provisional: the first
+seven-run packet is highly variable and has a lower candidate median; a short
+repeat has positive pairs but its first baseline overlaps a short independent
+IR-only check. Do not call this a qualified throughput win. This accepted
+structural reduction does not close the roughly 9x gap. Source/runtime/binary
+identities, both timing packets and exact execution logs are preserved in:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/lexical-call-3b01d4f5c/README.md`.
+
+The included C1 event census (one versus eleven rounds, two warmups each)
+observes about 96 allocations/frees, 357 retains, 453 releases and 1,968
+root/field stores per request. Instrumented counts are not C100 timing evidence.
+Three small candidates have produced limited gains: reassess complete runtime
+call/ownership boundaries and continuation traffic before more local tuning.
+New-source native compiler qualification is still required after these changes.
 
 New-source native qualification after the unpack fixes, full fixed point and
 five-GC bootstrap remain unfinished. The separate fallback-baseline check was stopped when its complete
