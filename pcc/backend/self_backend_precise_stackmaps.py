@@ -3652,6 +3652,10 @@ def _planned_managed_reloads(
             -(1 << 31) <= origin.derived_offset < (1 << 31)
         ):
             _fail(func, f"derived managed SSA value {name!r} exceeds x86 imm32")
+        # The root slot already holds this exact pointer. Keep all validation
+        # above, but avoid allocating a reload record that would be discarded.
+        if destination == origin.root_offset and origin.derived_offset == 0:
+            continue
         # Positional in declaration order: same reason as the PlannedSafepoint
         # construction below — this is on the per-call-site reload path.
         reload = PlannedManagedReload(
@@ -3659,8 +3663,6 @@ def _planned_managed_reloads(
             destination,
             origin.derived_offset,
         )
-        if destination == origin.root_offset and origin.derived_offset == 0:
-            continue
         previous = destinations.get(destination)
         if previous is not None and previous != reload:
             _fail(func, f"live managed SSA values share spill offset {destination}")
