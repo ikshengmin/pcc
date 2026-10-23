@@ -717,6 +717,41 @@ remeasured after these two commits. All failed preimages, corrected runs,
 source/runtime/binary identities and successful checks are read-back verified:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/rooted-append-20e295460/README.md`.
 
+A subsequent exact-input emission audit separates another substantial cost:
+19 runtime modules cover 90.20%/87.20% of synchronous heap/full-handler sampled
+leaf work. LLVM 20.1.8 emission of their identical post-PCC IR reduces measured
+instructions by 40.32%/38.94%, with fixed application objects and remaining
+runtime. Both codegen-only reference programs pass focused GC0–4 execution.
+This external reference is not a production route or a pcc1 ownership claim.
+LLVM retains/signs every frame; owned ordinary leaves may be frameless, so
+frame policies are not identical. Wall dispersion prevents a certified QPS
+gain. The reference still costs far more than CPython; emission overhead is
+one quantified contributor, not a complete explanation of the request gap.
+
+Additional LLVM O2 IR optimization fails concurrent GC root scanning; the
+exact lifetime cause is unresolved. Disabling tail calls still fails GC1–4.
+Do not use those failed arms as performance evidence. A guarded owned inline
+budget increase from 32 to 96 passes focused execution but saves only about
+1.2% of instructions while expanding py_list IR about 30%; it is rejected.
+An extra owned memory-cleanup pass leaves major modules unchanged. Full TLS
+materialization has only a 6.63%/4.69% sampled ceiling, so a speculative TLS
+save/restore optimization is not pursued. These experiments reassess the
+pipeline and owner costs without weakening the runtime contract.
+
+The audit found a separate correctness defect: Darwin TLS lowering inserts a
+hidden resolver call into IR-classified leaves. `56bdfa6c4` gives protected TLS
+functions the existing signed frame; `b29981229` adds defined/external TLS,
+text/indexed IR, actual emitted instructions and owned-C threaded execution
+regressions. 21 focused and 31 stable-source context checks pass. Frozen
+b29981229 then passes four native integration nodes (leases GC0–4, root handoff
+GC3/4 and two owned-C TLS drivers), plus the original handler's 1,000 requests
+and 200 warmups on each GC0–4. Runtime SHA256:
+`3ed320441f513af24de4f5344db3b7a41a5c4db9285d1e5f0dbe487964956509`.
+This remains host-pcc0/owned-self/native evidence. New-source pcc1 and fixed
+point are pending. All failed arms, commands, profiles, source snapshots,
+machine-code comparisons and successful receipts are read-back verified at:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/pipeline-owner-audit-c4f9f8850/README.md`.
+
 The independent owned-root list-construction v3 candidate is retained, not
 committed. Correcting its native lease declarations removes an accidental
 Python int conversion introduced by v2. Native ownership/exception scenarios
