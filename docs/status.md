@@ -611,6 +611,34 @@ next; do not conflate a similar profile percentage with unchanged absolute work.
 Full provenance, A/B data, checks, actual IR and before/after attribution:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/tagged-lease-5d47d3bed/README.md`.
 
+The first scalar root_move prototype is rejected and was never published.
+It bypasses the public graph transaction based only on NULL/tagged source bits.
+Although 84 models, private-slot native GC0–4 stress and heap movement/handoff
+checks pass, a new deterministic shared-destination interleaving loses a value:
+baseline returns [0,-4], preserving the second source; prototype returns [0,0]
+and clears both sources while the destination contains only one result. The
+public registered-root contract does not prove exclusive destination access.
+Production root_move therefore keeps its existing atomic transaction.
+
+The prototype's five-repeat 1/2/4/8-thread medians (0.6552/0.4499/0.5128/0.8171 s
+baseline versus 0.5761/0.3833/0.4011/0.5143 s candidate) are diagnostic evidence,
+not shipped performance. They identify useful work to remove only with a valid
+slot-ownership proof. The shared-root regression and two pre-existing test
+harness repairs are published in `3e85204eb`: include the real constructor-tag
+helper in the model, and pass the owned native object through object_inputs.
+All 48 affected checks pass on the unchanged general root_move, including
+native GC3/4 handoff. The failed preimages and full prototype are retained:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/scalar-root-move-v1-rejected/README.md`.
+
+Continue at compiler-proven exclusive synthetic roots. Lexical LIFO operand
+roots and hidden non-resumable return-cleanup slots have concrete allocation
+provenance; user locals, output parameters, global/shared roots and persistent
+generator slots require their own proof. Route repeated codegen transfers
+through one proof-aware emitter: inline scalar transfer only for proven cells;
+heap values and unproved cells use the original atomic runtime entry. Preserve
+invalid/nonempty checks, source ownership, root registration and exceptional
+cleanup. No such compiler optimization is implemented or qualified yet.
+
 The independent owned-root list-construction v3 candidate is retained, not
 committed. Correcting its native lease declarations removes an accidental
 Python int conversion introduced by v2. Native ownership/exception scenarios
