@@ -315,9 +315,14 @@ class ExprHelperLoweringMixin:
                 [value],
                 name=self._fresh("cpy.to_i64"),
             )
+        # Lowering can resolve a Dyn-typed expression (for example an
+        # explicit i64(...) projection) to a machine integer. Its physical
+        # ABI already proves the required representation: boxing it here
+        # would allocate for wide values only to immediately unbox them.
+        # Object and CPython pointers still use their checked conversions.
+        if self._ir_type_matches(value.type, _I64):
+            return value
         if isinstance(expr.ty, IntType):
-            if self._ir_type_matches(value.type, _I64):
-                return value
             if isinstance(value.type, ir.PointerType):
                 return marshal.marshal_from_object(
                     self.builder, self.module, self.runtime, value, expr.ty
