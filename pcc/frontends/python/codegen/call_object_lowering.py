@@ -156,7 +156,8 @@ class CallObjectLoweringMixin:
         # suspension or continuation entry between activation and retirement.
         # Runtime calls may still collect or reenter; the lexical frame stays
         # registered until the existing release/take/error protocol leaves it.
-        lifo = not generator_resume or synchronous_lexical
+        lexical_scope = generator_resume and generator_contexts[-1].get("lexical_slot_operands", False)
+        lifo = not generator_resume or synchronous_lexical or lexical_scope
         if lifo:
             slot = self._alloca_in_entry(_CSTR, name=name, init_null=True)
         else:
@@ -1595,7 +1596,25 @@ class CallObjectLoweringMixin:
         if output is None:
             output = self._new_slot_call_root(label + ".result")
             roots.append(output)
+        lexical_context = None
+        previous_lexical = False
+        lexical_state = 0
         try:
+            from pcc.frontends.python.codegen.generator_lowering import (
+                _spill_function,
+                generator_expr_suspends,
+            )
+            function = _spill_function(self)
+            if function is not None:
+                fd, owner = function
+                if not generator_expr_suspends(self, expr, fd, owner):
+                    # Every root created below is retired before this call
+                    # returns. Proven synchronous operands need lexical roots,
+                    # not cells copied to/from every continuation checkpoint.
+                    lexical_context = self._generator_ctx_stack[-1]
+                    previous_lexical = lexical_context.get("lexical_slot_operands", False)
+                    lexical_state = lexical_context["next_state"]
+                    lexical_context["lexical_slot_operands"] = True
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             if module_name is None:
@@ -1635,6 +1654,10 @@ class CallObjectLoweringMixin:
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
+            if lexical_context is not None:
+                lexical_context["lexical_slot_operands"] = previous_lexical
+                if lexical_context["next_state"] != lexical_state:
+                    raise L1CodegenError("synchronous call operands introduced a resume edge")
         if sink is not None:
             return self.builder.load(output, name=self._fresh(label + ".output"))
         return self._take_slot_call_root(output)
