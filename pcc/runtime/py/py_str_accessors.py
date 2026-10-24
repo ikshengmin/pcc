@@ -14,6 +14,7 @@ PyStrObject layout (from py_internal.h):
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
     PYBYTESOBJECT_BYTE_LEN_OFFSET,
@@ -407,34 +408,44 @@ def py_str_ord(s) -> int:
 
 
 def _utf8_ord_at_byte(s, byte_off: int) -> int:
-    byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
-    if byte_off < 0:
+    # This byte decoder assembles at most 21 payload bits. Explicit machine
+    # intermediates keep cold multibyte expressions from creating boxed
+    # integer roots on the ASCII path. Its public int-shaped ABI, bounds,
+    # truncation and continuation-byte masking remain unchanged.
+    offset: i64 = i64(byte_off)
+    byte_len: i64 = i64(load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET))
+    if offset < 0:
         return -1
-    if byte_off >= byte_len:
+    if offset >= byte_len:
         return -1
-    remaining: int = byte_len - byte_off
-    data = ptr_add(ptr_add(s, PYSTROBJECT_DATA_OFFSET), byte_off)
-    b0: int = load_i8(data, 0) & 255
+    remaining: i64 = byte_len - offset
+    data = ptr_add(ptr_add(s, PYSTROBJECT_DATA_OFFSET), offset)
+    b0: i64 = i64(load_i8(data, 0))
+    b0 = b0 & 255
     if b0 < 128:
-        return b0
+        return int(b0)
     if (b0 & 224) == 192:
         if remaining < 2:
             return -1
-        return ((b0 & 31) << 6) | (load_i8(data, 1) & 63)
+        b1_two: i64 = i64(load_i8(data, 1))
+        return int(((b0 & 31) << 6) | (b1_two & 63))
     if (b0 & 240) == 224:
         if remaining < 3:
             return -1
-        return (
-            ((b0 & 15) << 12) | ((load_i8(data, 1) & 63) << 6) | (load_i8(data, 2) & 63)
-        )
+        b1_three: i64 = i64(load_i8(data, 1))
+        b2_three: i64 = i64(load_i8(data, 2))
+        return int(((b0 & 15) << 12) | ((b1_three & 63) << 6) | (b2_three & 63))
     if (b0 & 248) == 240:
         if remaining < 4:
             return -1
-        return (
+        b1_four: i64 = i64(load_i8(data, 1))
+        b2_four: i64 = i64(load_i8(data, 2))
+        b3_four: i64 = i64(load_i8(data, 3))
+        return int(
             ((b0 & 7) << 18)
-            | ((load_i8(data, 1) & 63) << 12)
-            | ((load_i8(data, 2) & 63) << 6)
-            | (load_i8(data, 3) & 63)
+            | ((b1_four & 63) << 12)
+            | ((b2_four & 63) << 6)
+            | (b3_four & 63)
         )
     return -1
 
