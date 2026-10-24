@@ -2421,9 +2421,11 @@ define_global_i32("pcc_dict_materialize_borrowed_map", -1)
 define_global_i32("pcc_dict_materialize_result_map", 2)
 
 
-def _dict_materialize_entry(slots, tokens, index: int, key_plan, value_plan) -> int:
-    # Select a key/value pair from the actual current owning table under one
-    # graph transaction. No table address or borrowed child crosses unlock.
+def _dict_materialize_entry(slots, tokens, index: int, kind: int, key_plan, value_plan) -> int:
+    # Select only the required children from the actual current owning table
+    # under one graph transaction. Keys/values do not need an extra owner for
+    # the unused sibling; items still snapshots both sides before unlock.
+    # No table address or borrowed child crosses unlock.
     key_slot = ptr_add(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE)
     value_slot = ptr_add(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE)
     prepared: int = 0
@@ -2436,19 +2438,21 @@ def _dict_materialize_entry(slots, tokens, index: int, key_plan, value_plan) -> 
         offset: int = index * DICTENTRY_SIZE
         key_source = ptr_add(entries, offset + DICTENTRY_KEY_OFFSET)
         if ptr_is_null(load_ptr(key_source, 0)) == 0:
-            key_token = pcc_gc_root_copy_lease_prepare_locked(key_slot, key_source, 0, key_plan)
-            prepared = 1
-            if key_token >= 0:
-                store_i64(tokens, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE, key_token)
+            if kind != _DICT_MATERIALIZE_VALUES:
+                key_token = pcc_gc_root_copy_lease_prepare_locked(key_slot, key_source, 0, key_plan)
+                prepared = 1
+                if key_token >= 0:
+                    store_i64(tokens, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE, key_token)
+            if key_token >= 0 and kind != _DICT_MATERIALIZE_KEYS:
                 value_token = pcc_gc_root_copy_lease_prepare_locked(
                     value_slot, ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), 0, value_plan)
-                prepared = 2
+                prepared = prepared | 2
                 if value_token >= 0:
                     store_i64(tokens, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE, value_token)
     pcc_py_gc_minor_graph_unlock()
-    if prepared > 0:
+    if prepared & 1:
         pcc_gc_root_copy_lease_finish(key_plan)
-    if prepared > 1:
+    if prepared & 2:
         pcc_gc_root_copy_lease_finish(value_plan)
     if key_token < 0 or value_token < 0:
         return _dict_slot_error(cstr("dictionary materialization item transfer failed"))
@@ -2473,7 +2477,7 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
     value_plan = stack_alloc(256)
     index: int = 0
     while index < limit:
-        selected: int = _dict_materialize_entry(slots, tokens, index, key_plan, value_plan)
+        selected: int = _dict_materialize_entry(slots, tokens, index, kind, key_plan, value_plan)
         if selected < 0:
             return -1
         if selected != 0:
@@ -2497,9 +2501,12 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
                 load_ptr(slots, item * C_POINTER_SIZE))
             if py_err_occurred() != 0:
                 return -1
-            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_PAIR)
-            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_VALUE)
-            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_KEY)
+            if kind == _DICT_MATERIALIZE_ITEMS:
+                _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_PAIR)
+            if kind != _DICT_MATERIALIZE_KEYS:
+                _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_VALUE)
+            if kind != _DICT_MATERIALIZE_VALUES:
+                _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_KEY)
         index = index + 1
     return 0
 
