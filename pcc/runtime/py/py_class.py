@@ -6721,18 +6721,28 @@ pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
+pcc_gc_register_continuation_root_node = extern(
+    "pcc_gc_register_continuation_root_node", (c_ptr, c_ptr), c_ptr
+)
+pcc_gc_unregister_continuation_root_node = extern(
+    "pcc_gc_unregister_continuation_root_node", (c_ptr,), c_void
+)
+
+
 def _special_open(slots, tokens, handles) -> int:
+    # Root-group state in handles: an owning map in word 0, the checked node
+    # in word 1. Both live until close; registration always sees empty roots.
+    # The existing mapped-root visitor covers all collectors, including GC0
+    # with optional compiler-frame registration disabled.
     memset(slots, 0, 14 * C_POINTER_SIZE)
     memset(tokens, 0, 14 * C_POINTER_SIZE)
-    memset(handles, 0, 14 * C_POINTER_SIZE)
-    count: int = 0
-    while count < 14:
-        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
-        if ptr_is_null(handle) != 0:
-            return count
-        store_ptr(handles, count * C_POINTER_SIZE, handle)
-        count = count + 1
-    return count
+    memset(handles, 0, 2 * C_POINTER_SIZE)
+    store_i32(handles, 0, 14)
+    node = pcc_gc_register_continuation_root_node(handles, slots)
+    if ptr_is_null(node) != 0:
+        return 0
+    store_ptr(handles, C_POINTER_SIZE, node)
+    return 14
 
 
 def _special_error(message) -> int:
@@ -6799,10 +6809,10 @@ def _special_close(slots, tokens, handles, count: int, suspended: int) -> None:
             py_tls_exc_swap_slot(ptr_add(slots, 13 * C_POINTER_SIZE))
         else:
             py_tls_exc_swap_slot(slots)
-    index = 0
-    while index < count:
-        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
-        index = index + 1
+    if count != 0:
+        node = load_ptr(handles, C_POINTER_SIZE)
+        store_ptr(handles, C_POINTER_SIZE, null())
+        pcc_gc_unregister_continuation_root_node(node)
 
 
 def _special_name_equal(key, name, length: int) -> int:
