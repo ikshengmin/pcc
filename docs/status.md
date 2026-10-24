@@ -996,6 +996,60 @@ reserve, 1800-second bound and an isolated checkpoint/output. Historical
 request and do not qualify the current source. Continue independent runtime
 work while that approval is pending; do not infer approval from elapsed time.
 
+A fresh sample of the lease-optimized artifacts finds append at 10.46% of
+synchronous / 11.95% of handler samples, but its GC0 callee does not register
+moving roots. The proposed duplicate-registration explanation was therefore
+not supported. Root store/release remains 20.30% / 21.85% inclusive; individual
+removable store-plan pieces are small. No speculative append-plan edit landed.
+
+Preparing a generic call-construction change exposed a baseline semantics
+mismatch: failed argument evaluation, list destruction and tuple destruction
+retired children forward, while the actual CPython controls retire them in
+reverse. `dfd4b5dc5` fixes the general deallocators and reorders small dict
+snapshot roots to match heap-tuple retirement. `f174f1eba` adds regression
+coverage. 83 model/reference checks, sequence/snapshot native programs across
+GC0–4 and four further native concat/append/construction nodes pass, including
+finalizer collection, weakrefs and resurrection. A later pcc1 parameter cannot
+run without a current compiler and is not counted as a pass.
+
+`ebb34e1f7` removes the internal list from calls with up to eight ordinary
+positional arguments: evaluate once left-to-right into owning roots, allocate
+the tuple after all user evaluation, fill it and then release captured roots.
+Wide calls and splats keep streaming construction, avoiding unbounded growth
+of prefix cleanup IR. Exception cleanup retains one scope across all completed
+arguments. Tests `8858f2be2` and `53c556e9b` cover actual dynamic functions,
+callable objects, module calls, aliases, big integers and parking on GC0–4.
+The parking resume IR contains the changed tuple factory and py_obj_call_slots.
+A precise owned-IR injection at that factory proves GC0–4 MemoryError cleanup
+after both arguments execute, with reverse release and no target invocation.
+37 initial IR/reference checks, 185 related host checks and five sensitive
+native nodes pass. Test corrections preserve exact error/cleanup checks: the
+owner is now a direct argument root; a baseline fixture had only two of three
+intended dynamic calls, and now forces the third through a callable parameter;
+mapped LIFO entry/leave names must form a consistent ordered pair. All five
+code/test commits in this follow-up are published on shenming/master.
+
+Five rotating N/2N repeats (150 timed processes), both arms carrying the same
+retirement fix: two positional args 40252.960 -> 27560.622 instructions
+(-31.53%), 2100 -> 1400 ns; eight args -48.28%; nine-arg streaming control
+-0.03%; keyword calls -6.84%. Synchronous payload improves only 1.47%
+instructions. Untimed logging confirms one fewer list per optimized call:
+positional/eight-arg managed allocations 2 -> 1, keyword 5 -> 4, synchronous
+31 -> 30; nine-arg control is unchanged. Tuples and all semantic owners remain.
+
+Both original handler arms pass GC0–4. Seven comparisons give median 12572.346
+-> 12906.956 requests/s (+2.66%), 28.4618 -> 27.6844 billion instructions
+(-2.73%) and user CPU 1.60 -> 1.56 seconds. All paired native runs favor the
+candidate, although ranges overlap. Same-packet asyncio is 88906.308 requests/s:
+gap 7.07x -> 6.89x. This is host-pcc0/owned-self emitted-native evidence, not
+HTTP throughput, a comparison with an older denominator, or current native
+pcc1 qualification. The whole-handler target remains unmet. The earlier
+bootstrap proposal is still unexecuted/pending approval and targeted 665ef8337;
+this newer compiler lowering is not covered by that proposal. Full P0 scope,
+latest-source pcc1, fixed point and conformance remain open. Read-back verified
+source, failed preimages, native outputs, profiles, allocation and timing receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/fixed-call-tuples-ebb34e1f7/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
