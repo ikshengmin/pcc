@@ -489,6 +489,9 @@ class CallObjectLoweringMixin:
             # py_runtime_error_if_unset uses py_raise_owned and adds its own
             # runtime traceback frame, so it is not an equivalent substitute.
             self.builder.call(self.runtime["py_raise"], [exception])
+            # TLS retained the NEW constructor result, just as in the inline
+            # error path. Retire the helper's owner before reading TLS again.
+            self.builder.call(self.runtime["pcc_gc_release"], [exception])
             current = self.builder.call(self.runtime["py_current_exception"], [])
             self.builder.cbranch(has_frame, frame, done)
             self.builder.position_at_end(frame)
