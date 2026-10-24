@@ -9,6 +9,7 @@ The native and ordinary shared mergers do not use this implementation.
 
 import hashlib
 import io
+import struct
 import sys
 import tempfile
 
@@ -19,6 +20,11 @@ from .macho_host_stackmap_inputs import _StagedStackMapInputs
 
 _BLOCK_BYTES = 64 * 1024
 _FIXED_BYTES = 2 * _BLOCK_BYTES + 16384
+# Only the root range is needed while replaying fixed-width v2 records.
+# The structural scan has already bounded every complete record. Keep the
+# skipped fields byte-for-byte and patch its index without a bytes temporary.
+_RECORD_ROOT_RANGE = struct.Struct("<20xH6xI")
+_LOCATION_INDEX = struct.Struct("<I")
 
 
 class _SpoolWork:
@@ -230,9 +236,7 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer,
                             with source[start:min(fn_end, start + _BLOCK_BYTES)] as block:
                                 blob = bytearray(block)
                             for cursor in range(0, len(blob), wire.RECORD_SIZE):
-                                count = blob[cursor + 20] | (blob[cursor + 21] << 8)
-                                index = (blob[cursor + 28] | (blob[cursor + 29] << 8)
-                                         | (blob[cursor + 30] << 16) | (blob[cursor + 31] << 24))
+                                count, index = _RECORD_ROOT_RANGE.unpack_from(blob, cursor)
                                 if index + count > table_count:
                                     raise wire.PreciseStackMapError(
                                         "stack-map record names locations outside its table")
@@ -269,7 +273,7 @@ def merge_owned_stack_map_payloads(payloads, *, compact_budget, single_buffer,
                                             unique_vectors += 1
                                         digest = None
                                     source_index_cache.append(source_key, destination, source_slot)
-                                blob[cursor + 28:cursor + 32] = destination.to_bytes(4, "little")
+                                _LOCATION_INDEX.pack_into(blob, cursor + 28, destination)
                             work.write_all(records, blob)
                             blob = None
                 # No view, chunk or cache owns input bytes past this point.
