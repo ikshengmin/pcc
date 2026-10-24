@@ -2187,12 +2187,12 @@ def _dict_slot_update_protocol(slots, tokens) -> int:
 
 # Exact update uses the same sixteen-cell operation frame as the mapping
 # protocol. Between the input owners and the error cell are twelve spare
-# owning roots. Store pairs backwards so close's reverse walk retires key,
-# value, key, value in the original snapshot tuple's element order.
+# owning roots. Store pairs in tuple element order so close's reverse walk
+# retires the same owners in the same order as the heap snapshot tuple.
 _DICT_SLOT_UPDATE_COUNT = 16
 _DICT_SLOT_UPDATE_DESTINATION = 1
 _DICT_SLOT_UPDATE_SOURCE = 2
-_DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY = 14
+_DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY = 3
 _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE = 2
 _DICT_SLOT_UPDATE_SNAPSHOT_PAIRS = 6
 
@@ -2205,8 +2205,8 @@ def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
     index: int = 0
     output: int = 0
     while status == 0 and output < count:
-        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY - output * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
-        value_index: int = key_index - 1
+        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY + output * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
+        value_index: int = key_index + 1
         prepared: int = 0
         key_token: int = 0
         value_token: int = 0
@@ -2243,7 +2243,7 @@ def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
             # children across the destination's callbacks. Later readers
             # copy from these authoritative cells after any relocation.
             release_index: int = value_index
-            while release_index <= key_index:
+            while release_index >= key_index:
                 if pcc_gc_foreign_lease_release(
                     ptr_add(slots, release_index * C_POINTER_SIZE),
                     load_i64(tokens, release_index * C_POINTER_SIZE),
@@ -2251,15 +2251,15 @@ def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
                     pcc_platform_abort()
                     return -1
                 store_i64(tokens, release_index * C_POINTER_SIZE, 0)
-                release_index = release_index + 1
+                release_index = release_index - 1
         index = index + 1
     index = 0
     while status == 0 and index < output:
-        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY - index * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
+        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY + index * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
         status = _dict_slot_set_bound(
             ptr_add(slots, _DICT_SLOT_UPDATE_DESTINATION * C_POINTER_SIZE),
             ptr_add(slots, key_index * C_POINTER_SIZE),
-            ptr_add(slots, (key_index - 1) * C_POINTER_SIZE),
+            ptr_add(slots, (key_index + 1) * C_POINTER_SIZE),
             1, load_i64(hashes, index * C_POINTER_SIZE), 0, null())
         index = index + 1
     # The enclosing close owns retirement, preserving its pending-exception

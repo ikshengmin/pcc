@@ -514,12 +514,14 @@ def py_dealloc_list(o) -> None:
         store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
         store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
         store_ptr(o, PYLISTOBJECT_ITEMS_OFFSET, null())
-    i: int = 0
-    while ptr_is_null(items) == 0 and i < length:
+    # Match list stack-unwind order: release the last element first.
+    # Reload each child after earlier finalizers may have collected/moved it.
+    i: int = length
+    while ptr_is_null(items) == 0 and i > 0:
+        i = i - 1
         item = pcc_gc_load_ptr(o, ptr_add(items, i * 8))
         if ptr_is_null(item) == 0:
             py_decref(item)
-        i = i + 1
     if pcc_gc_backend() != 4:
         store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
         store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
@@ -531,12 +533,13 @@ def py_dealloc_list(o) -> None:
 @c_abi_export("py_dealloc_tuple")
 def py_dealloc_tuple(o) -> None:
     length: int = load_i64(o, PYTUPLEOBJECT_LEN_OFFSET)
-    i: int = 0
-    while i < length:
+    # A tuple retires its element owners in reverse order, like CPython.
+    i: int = length
+    while i > 0:
+        i = i - 1
         item = pcc_gc_load_ptr(o, ptr_add(o, PYTUPLEOBJECT_ITEMS_OFFSET + i * 8))
         if ptr_is_null(item) == 0:
             py_decref(item)
-        i = i + 1
     pcc_gc_free_object_memory(o)
 
 
