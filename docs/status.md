@@ -752,13 +752,55 @@ point are pending. All failed arms, commands, profiles, source snapshots,
 machine-code comparisons and successful receipts are read-back verified at:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/pipeline-owner-audit-c4f9f8850/README.md`.
 
-The independent owned-root list-construction v3 candidate is retained, not
-committed. Correcting its native lease declarations removes an accidental
-Python int conversion introduced by v2. Native ownership/exception scenarios
-pass GC0–4; the separate list-return loop measures 11532.934 -> 9078.550
-instructions (-21.28%), still 7.18x CPython's instructions. It is not part of
-the boxing A/B or a claimed complete solution. Evidence and rejected predecessors:
+The earlier v3 list-construction experiment is superseded by the published
+implementation below. Its old 21.28% instruction reduction remains historical
+evidence, with rejected predecessors retained at:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/ordinary-list-construction-v3/README.md`.
+
+Current-source concurrency qualification exposed a GC0 correctness defect in
+both the unchanged baseline and the first list candidate. A last decref can
+park after reaching zero but before untrack. GC0 subtracted that tracked
+parent's fields, excluded the zero-count parent from garbage, and failed to
+retain its still-owned children. `5b46ff560` marks the pending owner's graph
+reachable; tests are `5e7c7ec5e`. A deterministic production-body model and
+owned-C native boundary probe fail before and pass after the fix. The native
+probe also confirms the child cycle is collected after the parent releases it.
+The repair is verified independently of the list optimization. Both fixed
+arms pass the same four-thread program on GC0–4, then 20 default and 20 strict
+provenance repetitions each (80 successful processes total). Earlier SIGBUS,
+owned-result lease and BAD_INCREF failures are preserved as failed evidence.
+
+`8b26131a9` transfers distinct owning operand roots into a fresh unpublished
+list, preserving source order, lock/reload/barrier semantics and allocation
+failure cleanup. The completed list is published after every input owner has
+moved. Tests `f85254b7a` cover large-int/object identity, callable/float elements,
+later-operand global mutation, exceptions/finally, finalizers, weakrefs,
+resurrection, public list() and concurrent collection. Default and disabled
+IR-pass modes both execute the semantic program on GC0–4. 54 focused
+post-push context checks pass; the separate native receipts cover execution.
+These commits were rebased without conflict over peer 6c35c6326 and pushed
+normally to shenming/master.
+
+Frozen 70676fd2a plus explicit overlays, host pcc0/owned-self/native atomic
+threaded GC0: five rotating warmed N/2N repetitions reduce the two-element
+list-return loop 11611.444 -> 9091.126 instructions (-21.71%), 620 -> 480 ns.
+The public factory control is +0.37% instructions with both wall medians
+460 ns. Concat is +0.18% instructions; a seven-pair longer confirmation gives
+1050 -> 1040 ns, so its initial 1060 -> 1100 ns packet does not establish a
+material timing regression. The improved literal loop still costs about
+7.24x CPython's instructions and 8x its wall median.
+
+Both arms pass the original handler's 1,000 requests plus 200 warmups on each
+GC0–4. Seven rotating 20,000-request comparisons give 10520.103 -> 10617.678
+requests/s versus asyncio 89927.064: still about 8.47x behind, with substantial
+candidate/asyncio wall outliers. Native instructions are 33.178 -> 33.201
+billion (+0.07%); there is no established material full-handler gain. Both
+retain the recorded PCC_DISABLE_BULK_GENERATOR_FRAME_INIT=1 comparison setting.
+Continue at ordinary runtime costs shared with the handler. New-source pcc1,
+fixed point and the full performance target remain unfinished. Failed and
+successful runs, source/runtime identities, patches and native outputs are
+read-back verified at:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/ordinary-list-construction-8b26131a9/README.md`.
 
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
