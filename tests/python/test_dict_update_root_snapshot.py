@@ -64,6 +64,44 @@ def test_partial_snapshot_copy_failure_preserves_error_and_releases_leases(failu
     assert all(obj.leases == 0 for obj in memory.objects if obj.alive and obj is not memory.none)
 
 
+@pytest.mark.parametrize("size", (2, 6, 7))
+@pytest.mark.parametrize("fail", (False, True))
+def test_snapshot_keeps_source_values_when_equality_clears_source(size, fail):
+    from pcc.runtime.py import py_abi_constants as abi
+    from tests.python.test_set_call_slot_roots import Object
+
+    memory = DictMemory("callback")
+    expected = {"key" + str(index): "value" + str(index) for index in range(size)}
+    original = {key: None for key in expected}
+    caller = memory.input_roots((memory.wrap(original), memory.wrap(expected)))
+    def clear_source():
+        source = memory.read(caller, 8)
+        entries = memory.read(source, abi.PYDICTOBJECT_ENTRIES_OFFSET)
+        used = memory.read(source, abi.PYDICTOBJECT_ENTRIES_USED_OFFSET)
+        for index in range(used):
+            for offset in (abi.DICTENTRY_KEY_OFFSET, abi.DICTENTRY_VALUE_OFFSET):
+                address = index * abi.DICTENTRY_SIZE + offset
+                child = memory.read(entries, address)
+                if isinstance(child, Object):
+                    child.refs -= 1
+                memory.write(entries, address, None)
+        indices = memory.read(source, abi.PYDICTOBJECT_INDICES_OFFSET)
+        for index in range(memory.read(source, abi.PYDICTOBJECT_CAPACITY_OFFSET)):
+            memory.write(indices, index * 8, -1)
+        memory.write(source, abi.PYDICTOBJECT_ITEM_COUNT_OFFSET, 0)
+        memory.write(source, abi.PYDICTOBJECT_ENTRIES_USED_OFFSET, 0)
+        memory.collect("callback")
+        if fail:
+            memory.error = (2, "comparison failed")
+    memory.on_equal = clear_source
+    status = memory.ns["py_dict_update_slots"](caller, memory.add(caller, 8))
+    assert status == (-1 if fail else 0)
+    assert memory.error == ((2, "comparison failed") if fail else None)
+    assert memory.unwrap(memory.read(caller, 0)) == (original if fail else expected)
+    assert memory.unwrap(memory.read(caller, 8)) == {}
+    assert all(obj.leases == 0 for obj in memory.objects if obj.alive and obj is not memory.none)
+
+
 PROGRAM = '''import gc
 import threading
 active_source = None
