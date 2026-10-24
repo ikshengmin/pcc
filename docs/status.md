@@ -1144,6 +1144,74 @@ unfinished. All 949 frozen production files match the published code. The
 runtime identities, was read back and hash-verified:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/borrowed-input-roots-12763ef8b/README.md`.
 
+`d2459e106` disposes a discarded expression's final owning root directly,
+without a raw result handoff followed by another retirement. Nested arguments,
+used results and producers without an explicit final-root contract keep their
+existing paths. `2095ad8b5` also declares the borrowed-operand metadata in the
+native codegen host layout; `36ef4a85a` adds regression coverage. Follow-up
+`0f51790fb` corrects three older format/f-string IR expectations: both preimage
+and candidate call `py_builtin_format`, while immediate-root-publication and
+callback model assertions remain unchanged. The expanded context run passes
+419 model/IR nodes (47 integration variants deselected). Three selected native
+nodes execute and pass on each GC0–4, including disposal, retained/nested results,
+weakrefs, finalizers, resurrection, descriptor error order and parking. Original
+full-handler output checks also pass on GC0–4. Existing unrelated semantic
+failures above remain open; this is not a claim that the whole suite passes.
+
+The discarded-call control now has an executed CPython comparison: CPython
+3.15.0 with its GIL enabled warms to `LOAD_FAST_BORROW` / `CALL_PY_EXACT_ARGS`,
+which moves stack references into the new interpreter frame without an argument
+tuple for this shape. PCC still constructs an argument tuple, copies callable/
+args/kwargs into a 14-slot generic-call frame, and retains them again in the
+11-slot function-call frame before binding/dispatch and layered cleanup. Exact
+positional binding can reuse the argument tuple; it does not always copy it.
+Both 28439.383 PCC and 884.455 CPython instructions/iteration are hardware-count
+N/2N differences, not machine instructions compared with bytecode counts.
+
+Fresh exact-PID profiles separate wrapper cost from callee work. In the micro
+control, generic-copy plus close accounts for 24.41% of samples; function-call
+wrapper work excluding its body is about 11.19%. In the real synchronous
+request, however, `py_obj_call_slots` is 85.27% inclusive but its direct dispatch
+body is 83.48%: only 1.80% belongs to the outer wrapper and its other children.
+The function-call wrapper excluding its body is another 0.45%; keyword binding
+is 7.54%. Parent/child shares overlap and must not be added indiscriminately.
+Disjoint assignment to the deepest JSON user frame identifies sorted 8.77%,
+dict materialization 8.27%, object-encoder root store/retirement 6.43%, and
+string/object-encoder list append 5.22%/2.86%. These are operation costs, not
+proved removable fractions. Source confirms that sorted snapshots to a private
+values list, sorts indices, then allocates and fills a second result list and
+retires the first. Eliminating this duplicate generic construction is the next
+candidate; no implementation or gain is claimed yet. It must preserve stable
+ordering, callbacks, exceptions, identity and all five GC slot protocols.
+
+The last published disposal change remains a small local gain. Longer seven-
+repetition append controls give 5503.185 -> 5160.491 instructions (-6.23%) and
+260 -> 240 ns; the shorter, contradictory wall observation is preserved.
+Synchronous payload instructions fall 673281.429 -> 661841.818 (-1.70%), with
+39 -> 38 microsecond wall differences. Seven original full-handler pairs give
+13319.792 -> 13271.867 QPS (-0.36%), only two pairs favoring the candidate and
+overlapping ranges; instructions fall 0.85%. There is no established handler
+throughput improvement. Same-packet asyncio is 86666.738 QPS, a remaining 6.53x
+gap; changing denominators must not be presented as progress from 6.59x.
+These results belong to frozen 36ef4a85a production code, before later peer
+linker commits integrated by rebase, and use host-pcc0/owned-self/no-libpython,
+atomic threaded GC0. They do not qualify current native pcc1.
+
+Mojo ArgPromotion/LowerArgConventions/SROA, Go escape analysis, HotSpot escape/
+scalar-replacement eligibility and Rust Arc borrow-versus-clone implementation
+were read as source-bound references. No benchmark of those languages was run.
+Their relevance is effect/provenance proof and avoiding unnecessary ownership
+materialization, without changing PCC bigint, object identity or moving-GC
+contracts. The user authorized one self stage1 build with a 5 GB tree cap and
+1800 s limit; later performance-priority steering defers it until an effective
+version stabilizes. Its old 665ef8337 label must be replaced with the actual
+frozen source identity when executed. Full P0, integration, conformance,
+concurrent collectors, throughput and fixed-point goals remain unfinished.
+The 290-file archive was read back and SHA256-verified, including negative
+results, exact sources/runtime/binaries, reference excerpts, profiles and
+reproduction scripts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/discarded-results-d2459e106/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
