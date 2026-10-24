@@ -1856,7 +1856,7 @@ class ListMethodLoweringMixin:
             name=self._fresh("sortkey.item"),
         )
 
-    def _emit_sorted_with_key_lambda(self, expr, key_lambda, reverse_const):
+    def _emit_sorted_with_key_lambda(self, expr, key_lambda, reverse_const, reverse_expr=None):
         """Evaluate the iterable before the key and use the rooted sort ABI."""
         elem_hint = None
         if isinstance(key_lambda, NoneLit):
@@ -1865,10 +1865,12 @@ class ListMethodLoweringMixin:
                 elem_hint = self.env_list_elem_class_hint.get(expr.args[0].ident)
         return self._emit_sorted_with_lifetimes(
             expr, None, key_lambda, reverse_const, elem_hint,
+            reverse_expr=reverse_expr,
         )
 
     def _emit_sorted_with_lifetimes(
         self, expr, key_spec, key_expr, reverse_const, elem_hint=None,
+        reverse_expr=None,
     ):
         """Keep source, optional callables, and output authoritative throughout."""
         previous = self._current_try_err_block()
@@ -1888,11 +1890,19 @@ class ListMethodLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             key = None
-            if key_expr is not None:
-                key = self._emit_slot_call_operand(key_expr, "sorted.key")
-                roots.append(key)
-                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-                self._cpy_operand_cleanup_block = self._try_err_block
+            reverse = None
+            for keyword, value in expr.kwargs or ():
+                operand = None
+                if keyword == "key" and key_expr is not None:
+                    key = self._emit_slot_call_operand(value, "sorted.key")
+                    operand = key
+                elif keyword == "reverse" and reverse_expr is not None:
+                    reverse = self._emit_slot_call_operand(value, "sorted.reverse")
+                    operand = reverse
+                if operand is not None:
+                    roots.append(operand)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
             compare = None
             if elem_hint is not None and (key_expr is None or isinstance(key_expr, NoneLit)):
                 # Preserve the valueclass wrapper lane: its boxes do not use
@@ -1916,12 +1926,17 @@ class ListMethodLoweringMixin:
                     roots.pop()
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
+            runtime_name = "py_obj_sorted_slots"
+            reverse_argument = ir.Constant(_I64, 1 if reverse_const else 0)
+            if reverse is not None:
+                runtime_name = "py_obj_sorted_reverse_slots"
+                reverse_argument = self._as_gc_ptr(reverse)
             status = self.builder.call(
-                self.runtime["py_obj_sorted_slots"],
+                self.runtime[runtime_name],
                 [self._as_gc_ptr(source),
                  self._as_gc_ptr(key) if key is not None else ir.Constant(_CSTR, None),
                  self._as_gc_ptr(compare) if compare is not None else ir.Constant(_CSTR, None),
-                 ir.Constant(_I64, 1 if reverse_const else 0), self._as_gc_ptr(output)],
+                 reverse_argument, self._as_gc_ptr(output)],
                 name=self._fresh("sorted.status"),
             )
             self._slot_call_note_published(output)

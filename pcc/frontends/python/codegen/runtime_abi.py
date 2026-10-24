@@ -886,6 +886,7 @@ def _runtime_signatures_part_19():
     "py_obj_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_sorted": (_PYOBJ, [_PYOBJ], False),
     "py_obj_sorted_slots": (_I64, [_PTR, _PTR, _PTR, _I64, _PTR], False),
+    "py_obj_sorted_reverse_slots": (_I64, [_PTR, _PTR, _PTR, _PTR, _PTR], False),
     # In-place list.sort with a key callable over leased slots; 0 or -1.
     "py_list_sort_keyed": (_I64, [_PYOBJ, _PYOBJ, _I64], False),
     }

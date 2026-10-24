@@ -1356,6 +1356,10 @@ PyObject *py_obj_sorted(PyObject *x);
 int64_t py_obj_sorted_slots(PyObject **source_slot, PyObject **key_slot,
                             PyObject **compare_slot, int64_t reverse,
                             PyObject **result_slot);
+/* Truth-convert reverse after iterable snapshot, before key callbacks. */
+int64_t py_obj_sorted_reverse_slots(PyObject **source_slot, PyObject **key_slot,
+                                    PyObject **compare_slot, PyObject **reverse_slot,
+                                    PyObject **result_slot);
 /* Registered owning inputs; distinct empty output. Returns 0 or -1. */
 int64_t py_obj_mul_slots(PyObject **left_owner, PyObject **right_owner,
                          PyObject **output_owner);

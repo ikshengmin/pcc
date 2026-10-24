@@ -1731,29 +1731,28 @@ class CallExpressionLoweringMixin:
         if name == "property" and 1 <= len(expr.args) <= 3 and not expr.kwargs:
             return self._emit_owned_descriptor_constructor(expr, "py_property_new", 3)
         if name == "sorted" and len(expr.args) == 1:
-            # sorted(x) or sorted(x, reverse=<bool const>). A constant
-            # reverse=True reverses the result list in place after sorting.
-            # key= (first-class function) and a non-constant reverse fall
-            # through to the libpython path.
+            # Root all keyword values in source order. The runtime converts
+            # a dynamic reverse only after taking the iterable snapshot,
+            # matching sorted() -> list.sort() callback/exception ordering.
             reverse_const = None
+            reverse_expr = None
             key_expr = None
             other_kwarg = False
             for kw_name, kw_val in expr.kwargs or ():
                 if kw_name == "reverse" and isinstance(kw_val, BoolLit):
                     reverse_const = bool(kw_val.value)
+                elif kw_name == "reverse":
+                    reverse_expr = kw_val
                 elif kw_name == "key":
                     key_expr = kw_val
                 else:
                     other_kwarg = True
-            # sorted(xs, key=<supported inline callable>): inline the key
-            # extraction (no first-class-function boxing). An unsupported key
-            # (or any other kwarg) yields None / falls through to the libpython
-            # path — we must NOT run plain py_obj_sorted below, which would
-            # silently ignore the key.
+            # The key remains a first-class callable; do not drop unsupported
+            # keywords or silently fall back to unkeyed sorting.
             if key_expr is not None:
                 if not other_kwarg:
                     keyed = self._emit_sorted_with_key_lambda(
-                        expr, key_expr, reverse_const
+                        expr, key_expr, reverse_const, reverse_expr
                     )
                     if keyed is not None:
                         self._note_owned_object_value(keyed)
@@ -1776,10 +1775,12 @@ class CallExpressionLoweringMixin:
                 ):
                     result = self._emit_sorted_with_lifetimes(
                         expr, None, None, reverse_const, elem_hint,
+                        reverse_expr=reverse_expr,
                     )
                 else:
                     result = self._emit_sorted_with_lifetimes(
                         expr, None, None, reverse_const,
+                        reverse_expr=reverse_expr,
                     )
                 self._note_owned_object_value(result)
                 return result

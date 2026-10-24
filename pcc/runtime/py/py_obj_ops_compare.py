@@ -1443,11 +1443,12 @@ _SORT_ARGS = 5
 _SORT_ITEM = 6
 _SORT_LEFT = 7
 _SORT_RIGHT = 8
-_SORT_ERROR = 9
-_SORT_COUNT = 10
+_SORT_REVERSE = 9
+_SORT_ERROR = 10
+_SORT_COUNT = 11
 _SORT_BYTES = 8
 
-define_global_i32("pcc_sorted_owned_map", 10)
+define_global_i32("pcc_sorted_owned_map", 11)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
@@ -1698,6 +1699,15 @@ def _sorted_reorder_values(values, pairs, scratch, count: int, capacity: int) ->
 
 @c_abi_export("py_obj_sorted_slots")
 def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, result_slot) -> int:
+    return _sorted_slots_body(source_slot, key_slot, compare_slot, reverse, null(), result_slot)
+
+
+@c_abi_export("py_obj_sorted_reverse_slots")
+def py_obj_sorted_reverse_slots(source_slot, key_slot, compare_slot, reverse_slot, result_slot) -> int:
+    return _sorted_slots_body(source_slot, key_slot, compare_slot, 0, reverse_slot, result_slot)
+
+
+def _sorted_slots_body(source_slot, key_slot, compare_slot, reverse: int, reverse_slot, result_slot) -> int:
     if ptr_is_null(source_slot) != 0 or ptr_is_null(result_slot) != 0:
         return _sorted_error(cstr("sorted: missing source or result root"))
     if ptr_is_null(load_ptr(result_slot, 0)) == 0:
@@ -1715,6 +1725,8 @@ def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, resul
         status = _sorted_copy(slots, tokens, _SORT_KEY, key_slot)
     if status == 0:
         status = _sorted_copy(slots, tokens, _SORT_COMPARE, compare_slot)
+    if status == 0:
+        status = _sorted_copy(slots, tokens, _SORT_REVERSE, reverse_slot)
     source = ptr_add(slots, _SORT_SOURCE * _SORT_BYTES)
     values = ptr_add(slots, _SORT_VALUES * _SORT_BYTES)
     error = ptr_add(slots, _SORT_ERROR * _SORT_BYTES)
@@ -1723,6 +1735,13 @@ def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, resul
         status = _sorted_adopt(slots, tokens, _SORT_VALUES)
     if status == 0:
         py_list_extend(load_ptr(values, 0), load_ptr(source, 0))
+        if py_err_occurred() != 0:
+            status = -1
+    if status == 0 and ptr_is_null(reverse_slot) == 0:
+        # CPython sorted constructs its new list before list.sort parses and
+        # truth-tests reverse. Iterator failures therefore take precedence,
+        # and a truth callback sees the input snapshot already completed.
+        reverse = py_obj_truthy(load_ptr(slots, _SORT_REVERSE * _SORT_BYTES))
         if py_err_occurred() != 0:
             status = -1
     if status == 0:
