@@ -31,7 +31,7 @@ class SortModel(_ExtensionModel):
             '_SORT_SOURCE': 0, '_SORT_KEY': 1, '_SORT_COMPARE': 2,
             '_SORT_VALUES': 3, '_SORT_KEYS': 4,
             '_SORT_ARGS': 5, '_SORT_ITEM': 6, '_SORT_LEFT': 7,
-            '_SORT_RIGHT': 8, '_SORT_ERROR': 9, '_SORT_COUNT': 10, '_SORT_BYTES': 8,
+            '_SORT_RIGHT': 8, '_SORT_REVERSE': 9, '_SORT_ERROR': 10, '_SORT_COUNT': 11, '_SORT_BYTES': 8,
             'PYLISTOBJECT_LENGTH_OFFSET': 16,
             'PYLISTOBJECT_CAPACITY_OFFSET': 24,
             'PYLISTOBJECT_ITEMS_OFFSET': 32,
@@ -56,7 +56,7 @@ class SortModel(_ExtensionModel):
                    {'_sorted_error', '_sorted_drop', '_sorted_adopt', '_sorted_copy',
                     '_sorted_arguments', '_sorted_prepare_keys', '_sorted_less',
                     '_sorted_merge_indices', '_sorted_reorder_values',
-                    'py_obj_sorted_slots'}, self.ns)
+                    '_sorted_slots_body', 'py_obj_sorted_slots'}, self.ns)
 
     def alloc(self, size):
         # Frames, payloads and index buffers must never overlap.
