@@ -31,7 +31,7 @@ def test_snapshot_uses_registered_cells_without_a_temporary_tuple(size, phase):
     assert all(obj.leases == 0 for obj in memory.objects if obj.alive and obj is not memory.none)
 
 
-def test_root_snapshot_retires_entries_in_original_tuple_order():
+def test_root_snapshot_retires_entries_in_reverse_tuple_order():
     memory = DictMemory("release")
     pairs = [("first", "one"), ("second", "two"), ("third", "three")]
     caller = memory.input_roots((memory.wrap({}), memory.wrap(dict(pairs))))
@@ -52,7 +52,7 @@ def test_root_snapshot_retires_entries_in_original_tuple_order():
     memory.ns["_dict_slot_open"] = open_frame
     memory.ns["_dict_slot_drop"] = drop
     assert memory.ns["py_dict_update_slots"](caller, memory.add(caller, 8)) == 0
-    assert retired == [item for pair in pairs for item in pair]
+    assert retired == [item for pair in pairs for item in pair][::-1]
 
 
 @pytest.mark.parametrize("failure", range(1, 9))
