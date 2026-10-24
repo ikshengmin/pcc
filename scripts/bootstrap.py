@@ -732,6 +732,8 @@ def _posix_guard_command(
             "--darwin-preflight-reserve-bytes",
             str(options.host_memory_reserve_bytes),
         ]
+    if options.keep_process_samples:
+        command.append("--process-rss-history")
     command += ["--", *target]
     return command
 

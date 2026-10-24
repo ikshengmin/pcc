@@ -32,6 +32,348 @@ def _load_tool_module():
     return module
 
 
+class _HistorySink:
+    def __init__(self, failure=""):
+        self.data = bytearray()
+        self.failure = failure
+        self.calls = []
+
+    def write(self, data):
+        self.calls.append("write")
+        if self.failure == "write":
+            raise OSError("synthetic write failure")
+        if self.failure == "short_write":
+            self.data.extend(data[:3])
+            return 3
+        self.data.extend(data)
+        return len(data)
+
+    def flush(self):
+        self.calls.append("flush")
+        if self.failure == "flush":
+            raise OSError("synthetic flush failure")
+
+    def close(self):
+        self.calls.append("close")
+        if self.failure == "close":
+            raise OSError("synthetic close failure")
+
+
+def _history_inputs(tool, *, birth=(11, 0)):
+    tree = {10: (1, 100, "do not retain argv"), 11: (10, 200, "secret source")}
+    identities = {10: tool._ProcessIdentity(10, 1, (10, 0)),
+                  11: tool._ProcessIdentity(10, 10, birth)}
+    return {"elapsed_s": 1.25, "tree_rss_bytes": 300, "process_count": 2}, tree, identities
+
+
+def test_process_rss_history_preserves_supplied_values_and_births_without_reads(tmp_path, monkeypatch):
+    tool = _load_tool_module()
+    sink = _HistorySink()
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: sink)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("history must use supplied values, not query a process")
+
+    for name in ("_process_identity", "_process_table", "_timed_process_table", "_process_command"):
+        monkeypatch.setattr(tool, name, forbidden)
+    history = tool._ProcessRssHistory(tmp_path / "history.jsonl")
+    sample, tree, identities = _history_inputs(tool)
+    history.record(100.5, sample, tree, identities)
+    identities[11] = tool._ProcessIdentity(20, 10, (21, 7))
+    tree[11] = (10, 50, "new process")
+    history.record(101.5, {**sample, "tree_rss_bytes": 150}, tree, identities)
+    history.record(102.5, {**sample, "tree_rss_bytes": 0, "process_count": 0}, {}, {})
+    history.close()
+    history.close()
+    rows = [json.loads(line) for line in sink.data.splitlines()]
+    assert [row["sample_index"] for row in rows] == [0, 1, 2]
+    assert [row["sampled_at_monotonic_s"] for row in rows] == [100.5, 101.5, 102.5]
+    assert all(row["schema"] == "pcc.process-rss-history.v1" for row in rows)
+    assert rows[0]["processes"][1] == {
+        "pid": 11, "ppid": 10, "rss_bytes": 200, "session_id": 10,
+        "identity_parent_pid": 10, "process_start_time": [11, 0],
+    }
+    assert rows[1]["processes"][1]["process_start_time"] == [21, 7]
+    assert rows[2]["processes"] == []
+    assert b"secret" not in sink.data and b"argv" not in sink.data
+    assert not any(isinstance(value, (dict, list)) for value in vars(history).values())
+    receipt = history.receipt()
+    assert receipt["status"] == "complete" and receipt["samples_seen"] == receipt["samples_written"] == 3
+    assert receipt["complete_bytes"] == len(sink.data)
+    assert sink.calls.count("close") == 1
+
+
+@pytest.mark.parametrize("bound", ["bytes", "samples"])
+def test_process_rss_history_stops_at_whole_frame_bounds(tmp_path, monkeypatch, capsys, bound):
+    tool = _load_tool_module()
+    sink = _HistorySink()
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: sink)
+    history = tool._ProcessRssHistory(tmp_path / "history.jsonl")
+    args = _history_inputs(tool)
+    history.record(100.5, *args)
+    size = len(sink.data)
+    if bound == "bytes":
+        monkeypatch.setattr(tool, "_PROCESS_RSS_HISTORY_MAX_BYTES", size * 2)
+    else:
+        monkeypatch.setattr(tool, "_PROCESS_RSS_HISTORY_MAX_SAMPLES", 2)
+    history.record(100.5, *args)  # The exact limit is admitted, not exceeded.
+    history.record(100.5, *args)
+    history.record(100.5, *args)
+    history.close()
+    receipt = history.receipt()
+    assert receipt["status"] == "truncated"
+    assert receipt["reason"] == ("byte_limit" if bound == "bytes" else "sample_limit")
+    assert receipt["samples_written"] == 2 and receipt["samples_seen"] == 4
+    assert len(sink.data) == receipt["complete_bytes"] == size * 2
+    assert len(sink.data.splitlines()) == 2
+    assert capsys.readouterr().err.count("process RSS history truncated") == 1
+
+
+def test_process_rss_history_existing_file_is_not_replaced(tmp_path, capsys):
+    tool = _load_tool_module()
+    path = tmp_path / "history.jsonl"
+    path.write_bytes(b"existing evidence")
+    history = tool._ProcessRssHistory(path)
+    history.record(100.5, *_history_inputs(tool))
+    history.close()
+    assert path.read_bytes() == b"existing evidence"
+    assert history.receipt()["status"] == "write_failed"
+    assert history.receipt()["reason"] == "open"
+    assert "FileExistsError" in capsys.readouterr().err
+
+
+def _run_history_synthetic_guard(
+    tmp_path, monkeypatch, outcome, retention, *, failure_after=0,
+):
+    from types import SimpleNamespace
+
+    tool = _load_tool_module()
+    trace = []
+    clock = SimpleNamespace(now=100.0)
+    clock.monotonic = lambda: clock.now
+    clock.sleep = lambda seconds: setattr(clock, "now", clock.now + seconds)
+    monkeypatch.setattr(tool, "time", clock)
+    original_open = Path.open
+    sink = _HistorySink(retention)
+
+    class SamplesStream:
+        def __init__(self, stream):
+            self.stream = stream
+            self.flush_count = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def write(self, data):
+            return self.stream.write(data)
+
+        def flush(self):
+            self.flush_count += 1
+            # Header flush, then one flush per aggregate sample.
+            if self.flush_count == failure_after + 2:
+                raise OSError("synthetic aggregate flush failure")
+            return self.stream.flush()
+
+    def open_file(path, *args, **kwargs):
+        if str(path).endswith(".process-rss.jsonl"):
+            assert args == ("xb",) and not kwargs
+            if retention == "open":
+                raise PermissionError("synthetic open failure")
+            return sink
+        if str(path).endswith("samples.tsv") and args == ("w",) and outcome == "aggregate_flush":
+            return SamplesStream(original_open(path, *args, **kwargs))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_file)
+    if outcome == "progress_print":
+        progress_count = 0
+
+        def progress_print(*args, **kwargs):
+            nonlocal progress_count
+            if "file" not in kwargs:
+                progress_count += 1
+                if progress_count == failure_after + 1:
+                    raise BrokenPipeError("synthetic progress output failure")
+            return print(*args, **kwargs)
+
+        monkeypatch.setattr(tool, "print", progress_print, raising=False)
+    if retention == "byte_limit":
+        monkeypatch.setattr(tool, "_PROCESS_RSS_HISTORY_MAX_BYTES", 1)
+    if retention == "sample_limit":
+        monkeypatch.setattr(tool, "_PROCESS_RSS_HISTORY_MAX_SAMPLES", 0)
+    identities = {123: tool._ProcessIdentity(123, 1, (10, 0)),
+                  124: tool._ProcessIdentity(123, 123, (20, 7))}
+    tables = iter([{123: (1, 100, "driver"), 124: (123, 200, "worker")}, {}])
+
+    def timed_table(**kwargs):
+        trace.append(("sample", kwargs))
+        if outcome == "sampler_error" and len([row for row in trace if row[0] == "sample"]) == 2:
+            raise tool.ProcessTreeSampleError("synthetic sampling failure")
+        stamp = clock.now
+        clock.now += 0.1
+        return next(tables), 0, stamp
+
+    process = SimpleNamespace(pid=123, returncode=None)
+    polls = iter([None, 7 if outcome == "target_failure" else 0])
+
+    def poll():
+        trace.append(("poll",))
+        process.returncode = next(polls)
+        return process.returncode
+
+    process.poll = poll
+
+    def launch(command, **kwargs):
+        trace.append(("launch", command, kwargs["start_new_session"]))
+        return process
+
+    def process_identity(pid):
+        trace.append(("identity", pid))
+        return identities.get(pid)
+
+    def process_table(**kwargs):
+        trace.append(("post_exit_sample", kwargs))
+        return {}, 0
+
+    def terminate(process, observed):
+        trace.append(("terminate",))
+        process.returncode = -9
+        # Cleanup may refresh the ownership cache. History must retain the
+        # identity associated with its original sample, not this later one.
+        observed[124] = tool._ProcessIdentity(999, 999, (999, 0))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("unexpected process/argv/manifest/host-memory query")
+
+    monkeypatch.setattr(tool, "_timed_process_table", timed_table)
+    monkeypatch.setattr(tool, "_process_table", process_table)
+    monkeypatch.setattr(tool, "_process_identity", process_identity)
+    monkeypatch.setattr(tool, "_process_command", forbidden)
+    monkeypatch.setattr(tool, "_host_memory_observation", forbidden)
+    monkeypatch.setattr(tool, "_capture_terminal_argv", lambda *args: ({"status": "synthetic"}, {}))
+    monkeypatch.setattr(tool, "_capture_worker_manifests", lambda *args, **kwargs: {"status": "synthetic"})
+    monkeypatch.setattr(tool, "_terminate_owned_processes", terminate)
+    monkeypatch.setattr(tool.subprocess, "Popen", launch)
+    monkeypatch.setattr(tool.subprocess, "run", forbidden)
+    args = tool._parser().parse_args([
+        "--result", str(tmp_path / "result.json"), "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "stdout"), "--stderr", str(tmp_path / "stderr"),
+        "--cwd", str(tmp_path), "--timeout", "0.05" if outcome == "timeout" else "5",
+        "--max-tree-rss-bytes", "250" if outcome == "memory_limit" else "1024",
+        "--no-performance-lock", *(["--process-rss-history"] if retention != "off" else []),
+        *(["--progress-interval", "0.01"] if outcome == "progress_print" else []),
+        "--", "synthetic-worker",
+    ])
+    caught = None
+    try:
+        tool.run(args)
+    except tool.ProcessTreeSampleError as exc:
+        caught = str(exc)
+    report = json.loads((tmp_path / "result.json").read_text())
+    samples = (tmp_path / "samples.tsv").read_bytes()
+    state = (tmp_path / "result.json.worker-rss.tsv").read_bytes()
+    return report, samples, state, trace, sink, caught
+
+
+@pytest.mark.parametrize("outcome", ["complete", "target_failure", "memory_limit", "timeout", "sampler_error"])
+@pytest.mark.parametrize("retention", ["ok", "open", "write", "short_write", "flush", "close", "byte_limit", "sample_limit"])
+def test_process_rss_history_keeps_guard_results_schemas_and_queries_unchanged(
+    tmp_path, monkeypatch, capsys, outcome, retention,
+):
+    baseline_path, history_path = tmp_path / "baseline", tmp_path / "history"
+    with monkeypatch.context() as patch:
+        baseline, base_samples, base_state, base_trace, _sink, base_error = _run_history_synthetic_guard(
+            baseline_path, patch, outcome, "off",
+        )
+    with monkeypatch.context() as patch:
+        report, samples, state, trace, sink, error = _run_history_synthetic_guard(
+            history_path, patch, outcome, retention,
+        )
+    assert samples == base_samples and state == base_state
+    assert trace == base_trace and error == base_error
+    assert "process_rss_history" not in baseline
+    assert "process_rss_history" not in baseline["artifacts"]
+    history = report.pop("process_rss_history")
+    artifact = report["artifacts"].pop("process_rss_history", None)
+    assert artifact is not None if retention not in ("open", "byte_limit", "sample_limit") else artifact is None
+    expected = "complete" if retention == "ok" else "truncated" if retention.endswith("_limit") else "write_failed"
+    assert history["status"] == expected
+    assert history["samples_seen"] == report["sample_count"]
+    assert history["samples_produced"] == report["sample_count"]
+    assert history["samples_missed"] == 0
+    assert history["complete_bytes"] <= history["max_bytes"]
+    assert history["samples_written"] <= history["max_samples"]
+    for receipt in (baseline, report):
+        receipt.pop("started_at_utc")
+        receipt.pop("completed_at_utc")
+    assert json.dumps(report, sort_keys=True).replace(str(history_path), "ROOT") == json.dumps(
+        baseline, sort_keys=True,
+    ).replace(str(baseline_path), "ROOT")
+    if retention == "ok":
+        frames = [json.loads(line) for line in sink.data.splitlines()]
+        assert frames[0]["processes"][1]["process_start_time"] == [20, 7]
+        if outcome in ("complete", "target_failure"):
+            assert frames[-1]["processes"] == []
+            assert state.splitlines() == [b"pcc.worker-tree-rss.v1", b"100.35", b"1024"]
+    else:
+        assert "process RSS history " + expected in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("outcome", ["aggregate_flush", "progress_print"])
+@pytest.mark.parametrize("failure_after", [0, 1])
+def test_process_rss_history_marks_unrecorded_produced_samples_incomplete(
+    tmp_path, monkeypatch, capsys, outcome, failure_after,
+):
+    baseline_path, history_path = tmp_path / "baseline", tmp_path / "history"
+    with monkeypatch.context() as patch:
+        baseline, base_samples, base_state, base_trace, _sink, base_error = _run_history_synthetic_guard(
+            baseline_path, patch, outcome, "off", failure_after=failure_after,
+        )
+    with monkeypatch.context() as patch:
+        report, samples, state, trace, sink, error = _run_history_synthetic_guard(
+            history_path, patch, outcome, "ok", failure_after=failure_after,
+        )
+    assert samples == base_samples and state == base_state
+    assert trace == base_trace and error == base_error
+    assert report["status"] == "SAMPLER_ERROR"
+    history = report.pop("process_rss_history")
+    artifact = report["artifacts"].pop("process_rss_history", None)
+    assert (artifact is not None) == bool(failure_after)
+    assert history["status"] == "incomplete"
+    assert history["reason"] == "unrecorded_produced_samples"
+    assert history["samples_produced"] == report["sample_count"] == failure_after + 1
+    assert history["samples_seen"] == history["samples_written"] == failure_after
+    assert history["samples_missed"] == 1
+    assert history["complete_bytes"] == len(sink.data)
+    assert len(sink.data.splitlines()) == failure_after
+    assert "process RSS history incomplete: unrecorded_produced_samples" in capsys.readouterr().err
+    for receipt in (baseline, report):
+        receipt.pop("started_at_utc")
+        receipt.pop("completed_at_utc")
+    assert json.dumps(report, sort_keys=True).replace(str(history_path), "ROOT") == json.dumps(
+        baseline, sort_keys=True,
+    ).replace(str(baseline_path), "ROOT")
+
+
+@pytest.mark.parametrize("retention", ["write", "close", "byte_limit"])
+def test_process_rss_history_gap_preserves_existing_failure_status(
+    tmp_path, monkeypatch, capsys, retention,
+):
+    report, _samples, _state, _trace, _sink, _error = _run_history_synthetic_guard(
+        tmp_path, monkeypatch, "aggregate_flush", retention, failure_after=1,
+    )
+    history = report["process_rss_history"]
+    assert report["status"] == "SAMPLER_ERROR"
+    assert history["status"] == ("truncated" if retention == "byte_limit" else "write_failed")
+    assert history["reason"] == retention
+    assert history["samples_produced"] == report["sample_count"] == 2
+    assert history["samples_seen"] == history["samples_missed"] == 1
+    assert "process RSS history " + history["status"] in capsys.readouterr().err
+
+
 def test_nested_session_cleanup_excludes_reused_pids_and_unrelated_sessions(monkeypatch):
     tool = _load_tool_module()
     identity = tool._ProcessIdentity

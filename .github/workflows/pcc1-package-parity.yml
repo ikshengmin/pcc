@@ -1160,6 +1160,7 @@ jobs:
             build/bootstrap/stage*.process.*/target.stdout
             build/bootstrap/stage*.process.*/target.stderr
             build/bootstrap/stage*.process.*/result.json.worker-rss.tsv
+            build/bootstrap/stage*.process.*/result.json.process-rss.jsonl
             build/bootstrap/stage*.json
             build/worker-prior-gate/**/*.json
             build/worker-prior-gate/**/*.jsonl
