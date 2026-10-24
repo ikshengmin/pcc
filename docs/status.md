@@ -7,6 +7,16 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Bounded synchronous tuple operands (2026-10-24)
+
+Against `206553ae8732c91b35ed9d022a0708863cad41fe`, 1–8 element synchronous
+tuple operands reuse the existing fixed call-tuple constructor instead of a
+temporary list. Empty/wide/splat/generator paths and the runtime ABI are
+unchanged. [Mechanism, guarded scope, tests and remaining qualification](research/fixed-tuple-literal-materialization.md)
+are recorded together: 189 host checks pass on CPython 3.15.0rc1, with a
+failing old-code negative control. This is host/model/IR evidence, not final
+3.15.0 host, native-performance, five-GC or bootstrap qualification.
+
 ## P0 handoff triage and active follow-up (2026-10-23)
 
 Source: published through `c74ed2ca8`, initially based on

@@ -767,6 +767,12 @@ class CallObjectLoweringMixin:
                 )
             # An explicit machine lane retains its pre-existing lowering and
             # ownership boundary; it never enters the exact-int producer.
+        if (isinstance(expr, TupleExpr) and 1 <= len(expr.elems) <= 8
+                and not getattr(self, "_generator_ctx_stack", ())):
+            # Fixed synchronous literals share the call-argument retaining
+            # protocol. The helper keeps splats on the streaming list path;
+            # empty/wide tuples and suspension keep their existing lowering.
+            return self._emit_slot_call_args_tuple(expr.elems, label)
         if isinstance(expr, (TupleExpr, ListExpr)):
             return self._emit_slot_call_sequence(expr.elems, label, isinstance(expr, TupleExpr))
         if isinstance(expr, DictExpr):
