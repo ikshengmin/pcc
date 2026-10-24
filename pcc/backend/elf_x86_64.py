@@ -21,7 +21,12 @@ this contract.
 from __future__ import annotations
 
 import struct
+import sys
 from dataclasses import dataclass, field
+
+from pcc.unsafe import (
+    abi_constant, null, ptr_is_null, store_i32, store_i64,
+)
 
 from .precise_stackmap import (
     ARCH_X86_64,
@@ -113,6 +118,16 @@ _AR_MAGIC = b"!<arch>\n"
 _AR_HEADER_SIZE = 60
 _MAX_SECTIONS = 1_000_000
 _MAX_SYMBOLS = 4_000_000
+
+
+def _native_patch_words_available() -> bool:
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+
+
+_NATIVE_PATCH_WORDS = _native_patch_words_available()
 
 
 def _align(value: int, alignment: int) -> int:
@@ -1003,6 +1018,25 @@ def _write_int(image: bytearray, offset: int, value: int, bits: int, signed: boo
     if value < minimum or value > maximum:
         kind = "signed" if signed else "unsigned"
         raise ElfError(f"relocation result {value} does not fit {kind} i{bits}")
+    # Keep the original validation and fallback behavior, including slicing
+    # outside the image and callbacks on non-exact operands. Native relocation
+    # sites can write the scalar without allocating an intermediate bytes value.
+    if (
+        _NATIVE_PATCH_WORDS and sys.byteorder == "little"
+        and type(image) is bytearray and type(offset) is int
+        and type(value) is int and type(bits) is int and type(signed) is bool
+        and bits in (32, 64) and 0 <= offset <= len(image) - bits // 8
+    ):
+        # Pass the rooted object itself, not a retained derived payload pointer.
+        # store_i32 truncates its signed-i64 operand to the low 32 bits; an
+        # unsigned high-bit u64 must first use its signed two's-complement form.
+        if bits == 32:
+            store_i32(image, abi_constant("object.bytearray.data_offset") + offset, value)
+        else:
+            if value >= (1 << 63):
+                value -= 1 << 64
+            store_i64(image, abi_constant("object.bytearray.data_offset") + offset, value)
+        return
     image[offset:offset + bits // 8] = int(value).to_bytes(
         bits // 8, "little", signed=signed
     )
