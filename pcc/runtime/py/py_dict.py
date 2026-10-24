@@ -2178,6 +2178,90 @@ def _dict_slot_update_protocol(slots, tokens) -> int:
     return 0
 
 
+# Exact update uses the same sixteen-cell operation frame as the mapping
+# protocol. Between the input owners and the error cell are twelve spare
+# owning roots. Store pairs backwards so close's reverse walk retires key,
+# value, key, value in the original snapshot tuple's element order.
+_DICT_SLOT_UPDATE_COUNT = 16
+_DICT_SLOT_UPDATE_DESTINATION = 1
+_DICT_SLOT_UPDATE_SOURCE = 2
+_DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY = 14
+_DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE = 2
+_DICT_SLOT_UPDATE_SNAPSHOT_PAIRS = 6
+
+
+def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
+    hashes = stack_alloc(_DICT_SLOT_UPDATE_SNAPSHOT_PAIRS * C_POINTER_SIZE)
+    key_plan = stack_alloc(256)
+    value_plan = stack_alloc(256)
+    status: int = 0
+    index: int = 0
+    output: int = 0
+    while status == 0 and output < count:
+        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY - output * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
+        value_index: int = key_index - 1
+        prepared: int = 0
+        key_token: int = 0
+        value_token: int = 0
+        pcc_py_gc_minor_graph_lock()
+        source = load_ptr(slots, _DICT_SLOT_UPDATE_SOURCE * C_POINTER_SIZE)
+        used: int = load_i64(source, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+        if index >= used:
+            status = -1
+        else:
+            entries = load_ptr(source, PYDICTOBJECT_ENTRIES_OFFSET)
+            offset: int = index * DICTENTRY_SIZE
+            if ptr_is_null(load_ptr(entries, offset + DICTENTRY_KEY_OFFSET)) == 0:
+                key_token = pcc_gc_root_copy_lease_prepare_locked(
+                    ptr_add(slots, key_index * C_POINTER_SIZE),
+                    ptr_add(entries, offset + DICTENTRY_KEY_OFFSET), 0, key_plan)
+                value_token = pcc_gc_root_copy_lease_prepare_locked(
+                    ptr_add(slots, value_index * C_POINTER_SIZE),
+                    ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), 0, value_plan)
+                prepared = 1
+                if key_token >= 0:
+                    store_i64(tokens, key_index * C_POINTER_SIZE, key_token)
+                if value_token >= 0:
+                    store_i64(tokens, value_index * C_POINTER_SIZE, value_token)
+                store_i64(hashes, output * C_POINTER_SIZE, load_i64(entries, offset + DICTENTRY_HASH_OFFSET))
+        pcc_py_gc_minor_graph_unlock()
+        if prepared != 0:
+            pcc_gc_root_copy_lease_finish(key_plan)
+            pcc_gc_root_copy_lease_finish(value_plan)
+            if key_token < 0 or value_token < 0:
+                status = -1
+            else:
+                output = output + 1
+            # Keep the owners in registered roots, but do not pin all
+            # children across the destination's callbacks. Later readers
+            # copy from these authoritative cells after any relocation.
+            release_index: int = value_index
+            while release_index <= key_index:
+                if pcc_gc_foreign_lease_release(
+                    ptr_add(slots, release_index * C_POINTER_SIZE),
+                    load_i64(tokens, release_index * C_POINTER_SIZE),
+                ) != 0:
+                    pcc_platform_abort()
+                    return -1
+                store_i64(tokens, release_index * C_POINTER_SIZE, 0)
+                release_index = release_index + 1
+        index = index + 1
+    index = 0
+    while status == 0 and index < output:
+        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY - index * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
+        status = _dict_slot_set_bound(
+            ptr_add(slots, _DICT_SLOT_UPDATE_DESTINATION * C_POINTER_SIZE),
+            ptr_add(slots, key_index * C_POINTER_SIZE),
+            ptr_add(slots, (key_index - 1) * C_POINTER_SIZE),
+            1, load_i64(hashes, index * C_POINTER_SIZE), 0, null())
+        index = index + 1
+    # The enclosing close owns retirement, preserving its pending-exception
+    # protocol and keeping every snapshot value alive through all callbacks.
+    if status != 0:
+        return _dict_slot_error(cstr("dictionary changed during snapshot or snapshot transfer failed"))
+    return 0
+
+
 def _dict_slot_update_exact(slots, tokens) -> int:
     # Snapshot owning entries and their cached hashes before any destination
     # equality callbacks. This also handles updating a dictionary from itself.
@@ -2188,6 +2272,8 @@ def _dict_slot_update_exact(slots, tokens) -> int:
     pcc_py_gc_minor_graph_unlock()
     if count == 0:
         return 0
+    if count > 0 and count <= _DICT_SLOT_UPDATE_SNAPSHOT_PAIRS:
+        return _dict_slot_update_root_snapshot(slots, tokens, count)
     hashes = malloc(count * 8)
     if ptr_is_null(hashes) != 0:
         py_raise_owned(py_exc_new(19, cstr("dictionary update snapshot allocation failed")))
@@ -2263,13 +2349,13 @@ def _dict_slot_update_exact(slots, tokens) -> int:
 
 
 def _dict_slot_update_bound(dict_slot, source_slot, borrowed: int) -> int:
-    slots = stack_alloc(16 * C_POINTER_SIZE)
-    tokens = stack_alloc(16 * C_POINTER_SIZE)
-    handles = stack_alloc(16 * C_POINTER_SIZE)
-    count: int = _dict_slot_open(slots, tokens, handles, 16)
+    slots = stack_alloc(_DICT_SLOT_UPDATE_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_DICT_SLOT_UPDATE_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_DICT_SLOT_UPDATE_COUNT * C_POINTER_SIZE)
+    count: int = _dict_slot_open(slots, tokens, handles, _DICT_SLOT_UPDATE_COUNT)
     suspended: int = 0
     status: int = -1
-    if count == 16:
+    if count == _DICT_SLOT_UPDATE_COUNT:
         py_tls_exc_swap_slot(slots)
         suspended = 1
         if borrowed != 0:
@@ -2294,7 +2380,7 @@ def _dict_slot_update_bound(dict_slot, source_slot, borrowed: int) -> int:
                 status = _dict_slot_update_protocol(slots, tokens)
     if status != 0:
         _dict_slot_error(cstr("dictionary update failed without an exception"))
-    _dict_slot_close(slots, tokens, handles, count, suspended, 16)
+    _dict_slot_close(slots, tokens, handles, count, suspended, _DICT_SLOT_UPDATE_COUNT)
     return status
 
 
