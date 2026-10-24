@@ -100,12 +100,12 @@ def _runtime_signatures_part_0():
     "pcc_gc_root_copy_lease": (_I64, [_PTR, _PTR], False),
     "pcc_gc_root_move": (_I64, [_PTR, _PTR], False),
     "pcc_gc_root_copy_borrowed_lease": (_I64, [_PTR, _PTR], False),
-    "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     }
 
 
 def _runtime_signatures_part_1():
     return {
+    "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     "pcc_gc_root_copy_lease_finish": (_VOID, [_PTR], False),
     "pcc_gc_object_is_address_pinned": (_I64, [_PYOBJ], False),
     "pcc_gc_take_pinned_slot": (_PYOBJ, [_PTR, _I64], False),
@@ -739,12 +739,12 @@ def _runtime_signatures_part_15():
     "py_dict_fromkeys": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_dict_get_default": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_dict_pop": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
-    "py_dict_popitem": (_PYOBJ, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_16():
     return {
+    "py_dict_popitem": (_PYOBJ, [_PYOBJ], False),
     "py_dict_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_dict_del": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_dict_clear": (_VOID, [_PYOBJ], False),
@@ -798,12 +798,12 @@ def _runtime_signatures_part_16():
     "py_obj_call_default_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_context_is_deferred": (_I64, [], False),
-    "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_17():
     return {
+    "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_forward": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_func_call_bound_forward": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_call_method1": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),
@@ -2228,12 +2228,12 @@ def _cross_object_signatures_part_2():
     "pcc_gc_object_node_minor_block": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_freeing": (("c_ptr",), "c_int64"),
     "pcc_gc_object_node_set_freeing": (("c_ptr", "c_int64"), "c_void"),
-    "pcc_gc_object_node_prev": (("c_ptr",), "c_ptr"),
     }
 
 
 def _cross_object_signatures_part_3():
     return {
+    "pcc_gc_object_node_prev": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_set_prev": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_object_node_zpage": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_set_zpage": (("c_ptr", "c_ptr"), "c_void"),
