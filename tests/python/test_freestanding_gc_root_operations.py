@@ -52,6 +52,9 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected", "pcc_gc_gray_count", "pcc_gc_metric_pin",
     # The refcount mode and configuration the pin fast paths read.
     "pcc_gc_refcount_fast", "pcc_gc_config_initialized",
+    # Exact static singleton addresses; no header or object-index read.
+    "py_none_storage", "py_true_storage", "py_false_storage",
+    "py_notimplemented_storage", "py_ellipsis_storage",
 }
 
 
