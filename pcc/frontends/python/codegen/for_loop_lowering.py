@@ -1232,11 +1232,12 @@ class ForLoopLoweringMixin:
 
         self.builder.position_at_end(cond_bb)
         cur = self.builder.load(idx_slot, name=self._fresh("for.idx"))
-        iter_obj = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
-            name=self._fresh("for.lst.current"),
-        )
+        if isinstance(iter_ty, ListType):
+            iter_obj = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
+                name=self._fresh("for.lst.current"),
+            )
         target_alloca, target_ir_ty, _ = slot
         native_integer_step = (
             isinstance(iter_ty, ListType)
