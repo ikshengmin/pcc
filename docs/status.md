@@ -1098,6 +1098,52 @@ throughput objective, baseline failures, native pcc1/fixed point and full P0
 scope remain open. Read-back verified receipts, code and diagnostics:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/utf8-machine-18ba7881e/README.md`.
 
+`12763ef8b` reuses unchanged borrowed parameter roots for selected
+non-consuming list-append inputs and string-method receivers. A dedicated
+borrowed address lease retains mode/movement protection while relocation
+updates the address without transferring refcounts. Closure cells, rebound
+locals, globals and generator operands keep the existing owning route; cleanup
+never clears the caller-backed parameter. Tests are `1af950363`. Post-push
+checks exposed an older handoff model missing grouped-root registration and
+using overlapping mock allocations; both were reproduced/verified and repaired
+in the separate test commit `f084854e5`. The resulting focused scope passes
+413 model/IR nodes (15 integration variants deselected). The actual input
+lifetime program, concurrent two-thread append/collection, existing static
+lease/thread control and original full-handler outputs pass GC0–4.
+
+The new original Unicode assertion remains failed: both preimage and candidate
+produce `CAFé` for `"café".upper()` on GC0–4. This is the already recorded
+ASCII-only case-mapping gap, not a changed expectation. A separate ownership
+program completes with ASCII upper and Unicode replace/prefix checks. The
+required failing Unicode test is retained; the whole suite is not green.
+
+Five rotating N/2N comparisons show append 6416.611 -> 5552.863 instructions
+(-13.46%), replace -4.31%, and synchronous payload 691756.405 -> 670663.275
+(-3.05%). The positional control is +0.51% instructions with unchanged median
+wall difference; synchronous wall difference also remains unchanged in this
+packet. Seven full-handler pairs give 13321.788 -> 13535.234 requests/s
+(+1.60%), 26.624 -> 26.271 billion instructions (-1.33%), CPU 1.52 -> 1.49 s.
+All seven pairs favor the candidate, with overlapping ranges. Same-packet
+asyncio is 89138.328: gap 6.69x -> 6.59x. This denominator must not be compared
+to the preceding packet's 6.37x.
+
+A separate same-source diagnostic runs the identical synchronous request and
+86-byte output using normal CPython json, CPython interpreting the actual
+`pcc/stdlib/json.py`, and the PCC native candidate. Provider identity and
+`dumps`/`_encode_object` code filenames are checked. Five rotating repetitions
+give 2000 / 2500 / 37500 ns per request, respectively, and 31764.711 /
+47438.846 / 672806.816 instructions. Thus the ordinary native program remains
+about 15x slower even with the same JSON source; the C JSON accelerator alone
+cannot explain the gap. This diagnostic directs work back to generic object,
+ABI and lifetime costs and does not replace the normal-Python target.
+
+These remain host-pcc0/owned-self/no-libpython native measurements with atomic
+threaded GC0; latest-source pcc1, fixed point and the full P0 target remain
+unfinished. All 949 frozen production files match the published code. The
+349-file archive, including failed prototypes, outputs, profiles, source and
+runtime identities, was read back and hash-verified:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/borrowed-input-roots-12763ef8b/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
