@@ -141,14 +141,50 @@ main()
 '''
 
 
-def test_typed_list_loop_observes_live_mutations(tmp_path: Path, pcc_runtime_archive):
+_LIST_VALUE_PROGRAM = '''
+from pcc import i64
+
+def false_values():
+    values = [None, False, 0, '']
+    seen = []
+    for value in values:
+        seen.append(value)
+    return seen
+
+def machine_growing() -> i64:
+    values: list[i64] = [1]
+    total: i64 = 0
+    for value in values:
+        total += value
+        if value < 3:
+            values.append(value + 1)
+    return total
+
+def main():
+    print(false_values())
+    print(machine_growing())
+main()
+'''
+
+
+@pytest.mark.parametrize(
+    "program,expected",
+    [
+        (_MUTATING_LIST_PROGRAM, "[1, 2, 3]\n[1]\n[1, 9]\n"),
+        (_LIST_VALUE_PROGRAM, "[None, False, 0, '']\n6\n"),
+    ],
+    ids=("mutation", "false-values-and-i64"),
+)
+def test_typed_list_loop_observes_live_mutations(
+    tmp_path: Path, pcc_runtime_archive, program, expected,
+):
     from pcc.frontends.python.pipeline import compile_python
 
     source = tmp_path / "mutating_list.py"
-    source.write_text(_MUTATING_LIST_PROGRAM)
+    source.write_text(program)
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True,
                             text=True, check=True, timeout=10)
-    assert oracle.stdout == "[1, 2, 3]\n[1]\n[1, 9]\n"
+    assert oracle.stdout == expected
     binary = tmp_path / "mutating_list"
     compile_python(str(source), str(binary), backend="self", libpython_mode="off",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
