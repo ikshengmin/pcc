@@ -1171,11 +1171,14 @@ class ForLoopLoweringMixin:
                     iter_ty.elems, first
                 ):
                     elem_ty = first
-        n_val = self.builder.call(
-            self.runtime[len_helper],
-            [iter_obj],
-            name=self._fresh("for.len"),
-        )
+        n_val = None
+        if isinstance(iter_ty, TupleType):
+            # Tuple length is immutable; lists must observe each live step.
+            n_val = self.builder.call(
+                self.runtime[len_helper],
+                [iter_obj],
+                name=self._fresh("for.len"),
+            )
 
         idx_slot = self._alloca_in_entry(_I64, name="for.idx.addr")
         self.builder.store(ir.Constant(_I64, 0), idx_slot)
@@ -1229,26 +1232,54 @@ class ForLoopLoweringMixin:
 
         self.builder.position_at_end(cond_bb)
         cur = self.builder.load(idx_slot, name=self._fresh("for.idx"))
-        cond = self.builder.icmp_signed(
-            "<",
-            cur,
-            n_val,
-            name=self._fresh("for.cond"),
-        )
-        self.builder.cbranch(cond, body_bb, end_bb)
-
-        self.builder.position_at_end(body_bb)
         iter_obj = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
             [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
             name=self._fresh("for.lst.current"),
         )
         target_alloca, target_ir_ty, _ = slot
-        if (
+        native_integer_step = (
             isinstance(iter_ty, ListType)
             and isinstance(elem_ty, IntType)
             and not isinstance(target_ir_ty, ir.PointerType)
-        ):
+        )
+        elem_obj = None
+        if isinstance(iter_ty, ListType) and not native_integer_step:
+            # The non-raising getter performs one live bounds/read operation.
+            # NULL means exhaustion; Python None remains a non-NULL object.
+            # Do not cache the initial size: callbacks can append or shrink.
+            elem_obj = self.builder.call(
+                self.runtime[get_helper],
+                [iter_obj, cur],
+                name=self._fresh("for.elem"),
+            )
+            self._emit_post_call_err_check(stmt.span)
+            cond = self.builder.icmp_unsigned(
+                "!=", elem_obj, ir.Constant(_CSTR, None),
+                name=self._fresh("for.cond"),
+            )
+        else:
+            if native_integer_step:
+                n_val = self.builder.call(
+                    self.runtime[len_helper],
+                    [iter_obj],
+                    name=self._fresh("for.len"),
+                )
+                self._emit_post_call_err_check(stmt.span)
+            cond = self.builder.icmp_signed(
+                "<", cur, n_val, name=self._fresh("for.cond"),
+            )
+        self.builder.cbranch(cond, body_bb, end_bb)
+
+        self.builder.position_at_end(body_bb)
+        if elem_obj is None:
+            # Length queries may park on moving collectors.
+            iter_obj = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
+                name=self._fresh("for.lst.current"),
+            )
+        if native_integer_step:
             # Native-i64 fast path: valid only when the loop-variable slot is
             # itself native i64. Under int-boxing (_int_exprs_are_boxed),
             # _storage_ir_type(IntType) is a PyObject* (boxed PyInt), so the
@@ -1264,12 +1295,13 @@ class ForLoopLoweringMixin:
             )
             self.builder.store(native_val, target_alloca)
         else:
-            elem_obj = self.builder.call(
-                self.runtime[get_helper],
-                [iter_obj, cur],
-                name=self._fresh("for.elem"),
-            )
-            self._emit_post_call_err_check(stmt.span)
+            if elem_obj is None:
+                elem_obj = self.builder.call(
+                    self.runtime[get_helper],
+                    [iter_obj, cur],
+                    name=self._fresh("for.elem"),
+                )
+                self._emit_post_call_err_check(stmt.span)
             if isinstance(target_ir_ty, ir.PointerType):
                 _for_store_owned_target(
                     self,
