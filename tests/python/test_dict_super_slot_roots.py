@@ -71,7 +71,10 @@ class DictMemory(Memory):
             "py_list_new": self.new_list, "py_list_append": self.append_list,
             "py_list_len": lambda obj: self.read(obj, abi.PYLISTOBJECT_LENGTH_OFFSET),
             "py_str_new": lambda value, count: self.wrap(value[:count]),
-            "load_i8": lambda value, offset: ord(value[offset]) if isinstance(value, str) and offset < len(value) else 0,
+            "load_i8": self.read_byte,
+            "store_i8": self.write,
+            "unsigned_div_i64": lambda value, divisor: (value & ((1 << 64) - 1)) // divisor,
+            "py_exc_new": self.exception,
             "py_obj_issubclass": lambda cls, base: int(cls is base),
             "py_obj_getattr": self.getattr, "py_obj_getitem": self.getitem,
             "py_obj_call_slots": self.call_slots,
@@ -79,7 +82,7 @@ class DictMemory(Memory):
             "pcc_platform_abort": lambda: (_ for _ in ()).throw(AssertionError("lease invariant")),
         })
         for filename, prefix, additional in (
-            ("py_dict.py", "_dict_slot_", {"_ptr_is_dict", "_ptr_can_have_header", "_dict_insert_rooted_slot", "_dict_read_reload_root", "_perturb_shift5", "py_dict_set_slots", "py_dict_setdefault_slots", "py_dict_update_slots"}),
+            ("py_dict.py", "_dict_slot_", {"_ptr_is_dict", "_ptr_can_have_header", "_dict_insert_rooted_slot", "_dict_read_reload_root", "_perturb_shift5", "_dict_raise_sequence_element", "_dict_decimal_append", "_dict_text_append", "py_dict_set_slots", "py_dict_setdefault_slots", "py_dict_update_slots"}),
             ("py_protocol_runtime.py", "_builtin_init_", {"_type_of", "_is_user_instance", "_dict_items_key", "_cstr_equal", "py_dict_subclass_init_slots", "py_exception_subclass_init_slots", "py_builtin_super_validate_slots"}),
         ):
             path = ROOT / filename
@@ -97,6 +100,22 @@ class DictMemory(Memory):
             for node in body:
                 node.decorator_list = []
             exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), self.ns)
+
+    def read_byte(self, value, offset):
+        if isinstance(value, str):
+            return ord(value[offset]) if 0 <= offset < len(value) else 0
+        return self.read(value, offset) or 0
+
+    def exception(self, kind, message):
+        if not isinstance(message, str):
+            output = []
+            for offset in range(128):
+                byte = self.read_byte(message, offset)
+                if byte == 0:
+                    break
+                output.append(chr(byte))
+            message = "".join(output)
+        return kind, message
 
     def global_addr(self, name):
         # Runtime switches read 0: the backend-0 fast gates stay closed, so
@@ -324,7 +343,8 @@ def test_dict_initializer_repeated_and_slots_storage(flags):
 def test_dict_initializer_partial_pair_failure_and_keyword_omission():
     memory = DictMemory("callback")
     status, env, _ = memory.init(([('first', 1), ('bad', 2, 3)],), {"later": 4})
-    assert status == -1 and memory.error[0] == 2
+    assert status == -1
+    assert memory.error == (2, "dictionary update sequence element #1 has length 3; 2 is required")
     assert env["\x00pcc.dict.items"] == {"first": 1}
 
 
