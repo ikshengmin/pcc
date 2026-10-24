@@ -23,10 +23,11 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 
 PIN_SYMBOLS = {"pcc_gc_pin", "pcc_gc_unpin"}
 TRANSFER_SYMBOLS = {"pcc_gc_take_pinned_slot"}
-LEASE_SYMBOLS = {"pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}
+LEASE_SYMBOLS = {"pcc_gc_borrowed_lease_acquire", "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}
 HANDLED_SYMBOLS = {"py_handled_context_push", "py_handled_context_pop", "py_handled_context_swap", "py_handled_exception_slot"}
 OWNED_DATA_SYMBOLS = {"pcc_gc_foreign_lease_active", "pcc_tls_handled_exception_context"}
 OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS | {
+    "pcc_gc_slot_lease_acquire",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_gray_count_load_acquire",
@@ -103,10 +104,12 @@ def test_root_operations_have_one_strict_source_owner():
     assert "freestanding_gc_root_operations" in makefile
     assert _exported_symbols(pin_caller).isdisjoint(PIN_SYMBOLS)
     for symbol in OWNED_SYMBOLS:
-        if symbol == "pcc_gc_set_mark_color":
+        if symbol in ("pcc_gc_set_mark_color", "pcc_gc_slot_lease_acquire"):
             caller = strict
         elif symbol in LEASE_SYMBOLS:
             caller = (REPO_ROOT / "pcc/frontends/python/codegen/extern_lowering.py").read_text()
+            if symbol == "pcc_gc_borrowed_lease_acquire":
+                caller = (REPO_ROOT / "pcc/frontends/python/codegen/call_object_lowering.py").read_text()
             if symbol == "pcc_gc_object_is_address_pinned":
                 caller = managed
         elif symbol in HANDLED_SYMBOLS:

@@ -47,6 +47,7 @@ class Model:
             pcc_gc_config_ensure=self.ensure_config,
             pcc_gc_resolve_root_slot_unlocked=self.resolve,
             pcc_gc_object_index_find=lambda p:self.nodes.get(p,0),
+            pcc_gc_forwarding_index_find=lambda p:0,
             pcc_gc_granule_is_object_start=lambda p:1 if p in self.proven else -1,
             pcc_gc_managed_pointer_index_contains=lambda p:0,
             pcc_gc_managed_pointer_index_seen=lambda p:0,
@@ -54,7 +55,9 @@ class Model:
         self.ns.update({name: value for name, value in vars(abi).items()
                         if name.startswith("PY_TYPE_")})
         _functions(RUNTIME / "freestanding_gc_root_operations.py", {
-            "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}, self.ns)
+            "pcc_gc_foreign_lease_acquire", "pcc_gc_borrowed_lease_acquire",
+            "_foreign_lease_acquire", "pcc_gc_foreign_lease_release",
+            "pcc_gc_object_is_address_pinned"}, self.ns)
 
     def load(self, base, offset=0):
         return self.memory.get((base,offset),0)
