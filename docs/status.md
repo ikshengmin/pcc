@@ -1,6 +1,6 @@
 # PCC current status
 
-Updated 2026-10-23. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-10-24. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
@@ -887,12 +887,52 @@ instructions fall 31.719 -> 31.519 billion (-0.63%). This is not an established
 material whole-handler speedup. Same-packet asyncio is 89140.562 requests/s,
 leaving about a 7.94x gap. Counting confirms one fewer internal snapshot tuple
 per keyword call and synchronous request (six -> five and 32 -> 31 managed
-allocations respectively). Reassess repeated root registration and operation
-wrappers shared by ordinary calls before further small local tuning. Existing
-checked grouped-root APIs and root reuse are candidates, not qualified fixes.
+allocations respectively). This comparison motivated the grouped-root
+follow-up below, targeting registration shared by ordinary operations.
 Native-pcc1, fixed point, conformance and the broader P0 scope remain open.
 Read-back verified evidence, failed preimages, source identities and outputs:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/dict-root-snapshot-c27d1d05d/README.md`.
+
+`0cfdb9cd2` groups the temporary owning roots in ordinary special calls and
+dictionary operations using the existing checked continuation-node API.
+The 26 special-call and three dictionary callers still initialize every root
+before registration, retain all leases/barriers and exception cleanup, and
+clear the saved node before removal. GC0 marking, GC3 promotion/cache/cursor
+handling and common relocation visitors already cover these owning spans;
+no collector algorithm, object layout or public ABI changes. `e67c0760b`
+adds failure/relocation/cleanup checks. `cfbae7dc8` updates related models for
+group registration and fixes baseline-reproduced stale class flags and
+constructor names. All three commits are published on shenming/master.
+
+The selected model/reference scope has 523 passing nodes across documented
+shards. Two focused native programs pass GC0–4, as does the original handler;
+eight post-push native nodes additionally cover keyword ownership, parking,
+temporary-source finalization and class-method collection. Failed preimages
+and two bounded incomplete context attempts are preserved, not counted as
+passes; their unfinished cases subsequently pass with the right runtime or
+separate shards. Frozen production files match the committed source.
+
+Five rotating N/2N repetitions (150 timed processes), host pcc0/owned-self/
+native threaded atomic GC0: keyword calls 128177.707 -> 109184.616 instructions
+(-14.82%), positional calls 48008.004 -> 41713.973 (-13.11%); two-/seven-entry
+dict.update falls 20.71%/13.33%. Synchronous payload/JSON improves only 3.23%
+instructions, 50 -> 48 us. Seven original-handler comparisons give median
+10510.550 -> 11124.454 requests/s (+5.84%), and 31.5234 -> 30.3861 billion
+instructions (-3.61%). Six pairs favor the candidate; one is much slower,
+and the ranges overlap. All observations remain in the receipt. Same-packet
+asyncio is 82234.954 requests/s: a remaining 7.39x gap, versus 7.82x for this
+packet's baseline. This is not a controlled comparison with the older 7.94x
+packet. Full throughput acceptance remains unfinished.
+
+Fresh captures of the measured artifacts finish verified outputs and outlive
+their five-second sampling windows (4147 synchronous / 4156 handler samples).
+Root store/release is 17.46% / 19.13% inclusive; foreign lease acquisition is
+13.67% / 8.59%. These shares overlap and cannot be added. Root retirement,
+lease checks and pointer provenance are the next measured owners to decompose;
+no blanket trust of Dyn values, weakened GC contracts or JSON-only shortcuts.
+Latest-source native pcc1, fixed point, broader conformance and full P0 goals
+remain open. Read-back verified code, artifacts, profiles and all run receipts:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/scratch-root-groups-0cfdb9cd2/README.md`.
 
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
