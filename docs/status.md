@@ -1180,9 +1180,9 @@ dict materialization 8.27%, object-encoder root store/retirement 6.43%, and
 string/object-encoder list append 5.22%/2.86%. These are operation costs, not
 proved removable fractions. Source confirms that sorted snapshots to a private
 values list, sorts indices, then allocates and fills a second result list and
-retires the first. Eliminating this duplicate generic construction is the next
-candidate; no implementation or gain is claimed yet. It must preserve stable
-ordering, callbacks, exceptions, identity and all five GC slot protocols.
+retires the first. That observation motivated the generic construction change recorded below;
+this earlier packet did not establish its implementation or gain. Stable
+ordering, callbacks, exceptions, identity and all five GC slot protocols remain required.
 
 The last published disposal change remains a small local gain. Longer seven-
 repetition append controls give 5503.185 -> 5160.491 instructions (-6.23%) and
@@ -1211,6 +1211,79 @@ The 290-file archive was read back and SHA256-verified, including negative
 results, exact sources/runtime/binaries, reference excerpts, profiles and
 reproduction scripts:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/discarded-results-d2459e106/README.md`.
+
+`984f67457` now reuses sorted's private working list as its result. After
+stable index sorting, its scratch allocation becomes the list payload and its
+order allocation becomes ascending old-slot/new-slot pairs. Existing GC4
+payload retargeting updates remembered/store-buffer slots and spans under the
+graph lock; write barriers, original capacity, input identity and element owner
+counts are preserved. This removes the second managed list and its per-element
+get/adopt/append/drop cycle. Tests are `4313f8819`.
+
+The initial original reverse-variable program failed on both baseline and
+candidate. At the user's direction, `66d384e41` fixes `sorted(..., reverse=flag)`
+through a new rooted runtime entry, with tests `b042a8bb9`. Keyword expressions
+retain source order; the input snapshot precedes reverse truth conversion,
+which precedes key callbacks. CPython v3.15.0 source and executed references
+confirm iterator-error precedence, __bool__/__len__, invalid bool results and
+callback mutation behavior. The original failure and both positive control
+programs now pass as three native nodes, each running GC0–4. This does not claim
+all other sorted **kwargs/unknown-keyword surfaces are complete.
+
+The initial 70 ownership models, subsequent 108 context/model checks (4
+integration variants deselected), six ABI checks and 25 post-push checks (15
+deselected) pass. The latter include sorted/input/result cleanup, list.sort
+mutation/ordering and relocation contracts. Two relocation object-closure
+checks explicitly use clang/nm as external references; they are not owned
+emitter or pcc1 evidence. All actual handler and changed-shape native programs
+use the owned self backend and explicit atomic threaded runtime. Original
+full-handler outputs pass GC0–4 for both baseline and final candidate. A test
+reference correction releases its saved exception only after identity checks,
+before asserting finalization, because CPython traceback locals retained the
+objects; the original failed reference remains in the archive.
+
+Final five-repetition N/2N comparisons, baseline 20649d13b against the combined
+change: three-item sorting 48122.974 -> 35278.946 instructions (-26.69%),
+2400 -> 1900 ns; synchronous request 661535.051 -> 641256.154 (-3.07%), with
+unchanged 38 microsecond median wall difference. The unchanged positional
+control is +0.09% instructions, 1400 -> 1500 ns. Seven full-handler pairs give
+13235.663 -> 13469.029 QPS (+1.76%), six pairs faster with overlapping ranges;
+instructions 26.055 -> 25.649 billion, user CPU 1.51 -> 1.48 s. Same-packet
+asyncio is 88523.549 QPS: gap 6.69x -> 6.57x. The earlier sorting-only packet
+had only +0.28% median handler QPS; both packets and all negative/noisy rows are
+preserved. This remains a small gain and does not meet the performance goal.
+
+Fresh final-artifact exact-PID profiles assign each stack to its first matching
+primitive family without overlap: root ownership 24.96% sync / 25.33% handler,
+lease/pin 10.11% / 7.14%, root registration 6.44% / 5.23%, and refcount outside
+those primitives 6.25% / 7.22%. Root ownership includes necessary retirement:
+sync store_root's direct decref child alone is 14.90% of total samples, and
+its downstream deallocation is substantial. These are not all removable root
+bookkeeping. List append as a separate operation view is 10.80% sync / 13.67%
+handler, dominated by growth, store-plan, memset, locking and validation inside
+append_rooted_slots. Sync dict materialization remains 8.15%, sorting 5.97%.
+These operation views overlap the primitive-family table and cannot be summed.
+The next priority is shared ordinary-object/container lifetime and repeated
+ownership/protection work, rather than more isolated sort microbenchmarks.
+
+TSRS was additionally checked at e04b62f205a11c70cc45c1fca9dc560efc6f8d80:
+mapper escape propagation, MapperCell barriers and recycling, arena size-class
+free lists and checkpoint epochs. Region::note_escape is a separate lifetime
+mechanism from mapper's object escape bit. Its recorded recycling win is memory,
+not a demonstrated instruction reduction; its historical census tools have
+since been removed. Its protected-borrow/free-list correction reinforces that
+lifetime effects and alias attributes must be true. Java/Go/Rust/Mojo source
+references remain mapped to PCC's ownership/provenance requirements; none of
+this is a claim of implemented general escape analysis or benchmarked gains
+from those languages. Ordinary synchronous performance stays the main task.
+
+All 949 frozen production files match published b042a8bb9. This is still
+host-pcc0/owned-self/no-libpython, not latest-pcc1 or fixed-point qualification.
+The approved single stage1 remains deferred under the performance-priority
+steering; full P0 and the broader semantic/concurrency/conformance scope remain
+active. The 446-file source/runtime/binary/test/reference/profile archive was
+read back and hash-verified:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/sorted-reuse-984f67457/README.md`.
 
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
