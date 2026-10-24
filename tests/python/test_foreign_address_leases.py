@@ -47,8 +47,9 @@ class Model:
             pcc_gc_config_ensure=self.ensure_config,
             pcc_gc_resolve_root_slot_unlocked=self.resolve,
             pcc_gc_object_index_find=lambda p:self.nodes.get(p,0),
-            pcc_gc_granule_is_object_start=lambda p:int(p in self.proven),
+            pcc_gc_granule_is_object_start=lambda p:1 if p in self.proven else -1,
             pcc_gc_managed_pointer_index_contains=lambda p:0,
+            pcc_gc_managed_pointer_index_seen=lambda p:0,
             pcc_py_gc_minor_graph_lock=self.lock, pcc_py_gc_minor_graph_unlock=self.unlock)
         self.ns.update({name: value for name, value in vars(abi).items()
                         if name.startswith("PY_TYPE_")})
@@ -826,7 +827,7 @@ def test_atomic_nonmoving_path_preserves_special_header_validation(flags):
     assert model.acquire(slot) == expected and model.active() == 0
 
 
-def test_non_granule_mode_lease_keeps_exact_index_read_under_graph_lock():
+def test_uncertain_non_granule_lease_checks_current_index_under_graph_lock():
     model = _atomic_mode_model()
     slot = model.object(node=False, flags=262144, proven=False)
 

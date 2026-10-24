@@ -137,10 +137,30 @@ finish:
 
 
 @pytest.mark.integration
-def test_threaded_mode_leases_preserve_backend_reset_barrier(tmp_path, threaded_pcc_runtime_archive):
+@pytest.mark.parametrize("owner_kind", ("slab", "published_literal"))
+def test_threaded_mode_leases_preserve_backend_reset_barrier(tmp_path, threaded_pcc_runtime_archive, owner_kind):
     target = host_target_triple()
     helper = tmp_path / "atomic_mode_leases.o"
-    helper.write_bytes(emit_owned_object('target triple = "' + target + '"\n' + STRESS_IR, target))
+    stress_ir = STRESS_IR
+    if owner_kind == "published_literal":
+        stress_ir = r'''@mode_lease_literal = internal global { i64, i32, i32, i64, i64, i64, [4 x i8] } { i64 1, i32 4, i32 1, i64 3, i64 3, i64 -1, [4 x i8] c"abc\00" }
+declare i64 @pcc_gc_pointer_register(ptr)
+declare i64 @pcc_gc_granule_is_object_start(ptr)
+declare i64 @pcc_gc_managed_pointer_index_seen(ptr)
+''' + stress_ir
+        stress_ir = stress_ir.replace(
+            "%object = call ptr @py_list_new(i64 0)",
+            "%object = getelementptr i8, ptr @mode_lease_literal, i64 0\n"
+            "  %registered = call i64 @pcc_gc_pointer_register(ptr %object)\n"
+            "  %granule = call i64 @pcc_gc_granule_is_object_start(ptr %object)\n"
+            "  %seen = call i64 @pcc_gc_managed_pointer_index_seen(ptr %object)\n"
+            "  %not_slab = icmp eq i64 %granule, -1\n"
+            "  %indexed = icmp eq i64 %seen, 1\n"
+            "  %exact_owner = and i1 %not_slab, %indexed\n"
+            "  br i1 %exact_owner, label %spawn, label %invalid_owner\n"
+            "invalid_owner:\n  ret i64 20\nspawn:")
+        stress_ir = stress_ir.replace("[0, %prepare]", "[0, %spawn]")
+    helper.write_bytes(emit_owned_object('target triple = "' + target + '"\n' + stress_ir, target))
     source = tmp_path / "atomic_mode_leases.py"
     source.write_text('''from pcc.extern import extern, c_ptr, c_int64
 from pcc.unsafe import null
