@@ -39,6 +39,7 @@ class Memory:
         self.phase, self.fail_copy, self.fail_release = phase, fail_copy, fail_release
         self.depth, self.moves, self.copies, self.collections = 0, 0, 0, 0
         self.roots, self.objects, self.error = {}, [], None
+        self.root_groups = {}
         self.on_equal = None
         self.fail_register, self.fail_allocation = fail_register, fail_allocation
         self.registrations, self.allocations = 0, 0
@@ -72,6 +73,8 @@ class Memory:
             "pcc_gc_resolve_root_slot_unlocked": lambda p, offset: self.read(p, offset),
             "pcc_gc_scheduler_root_register_handle": self.register,
             "pcc_gc_scheduler_root_unregister_handle": self.unregister,
+            "pcc_gc_register_continuation_root_node": self.register_group,
+            "pcc_gc_unregister_continuation_root_node": self.unregister_group,
             "pcc_gc_root_copy_lease": self.copy, "pcc_gc_root_move": self.move_root,
             "pcc_gc_root_copy_lease_prepare_locked": self.copy_prepare,
             "pcc_gc_root_copy_lease_finish": self.copy_finish,
@@ -190,6 +193,30 @@ class Memory:
         self.collect("unregister")
         assert self.read(self.roots[handle], 0) is None
         del self.roots[handle]
+
+    def register_group(self, frame_map, slots):
+        self.collect("register")
+        count = self.read(frame_map, 0)
+        assert isinstance(count, int) and count > 0, "scratch roots must own values"
+        members = [self.add(slots, index * 8) for index in range(count)]
+        assert all(self.read(slot, 0) is None for slot in members)
+        self.registrations += 1
+        if self.registrations == self.fail_register:
+            return None
+        node = object()
+        handles = [object() for _ in members]
+        self.root_groups[node] = (frame_map, count, handles)
+        self.roots.update(zip(handles, members))
+        return node
+
+    def unregister_group(self, node):
+        self.collect("unregister")
+        frame_map, count, handles = self.root_groups.pop(node)
+        assert self.read(frame_map, 0) == count, "map must stay live until removal"
+        assert self.read(frame_map, 8) is None, "clear the node before freeing it"
+        for handle in handles:
+            assert self.read(self.roots[handle], 0) is None
+            del self.roots[handle]
 
     def lock(self):
         self.collect("lock")
