@@ -242,9 +242,18 @@ def test_keyword_mapping_merges_remain_owned_through_move():
     return slot_kwargs_probe(first=1, **mapping, last=2)
 """)
     text = _probe_function(text)
-    assert len(_calls(text, "py_call_merge_kwargs_unique")) == 3
-    assert len(_calls(text, "pcc_gc_root_move")) == 3
-    assert _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    # The first explicit group is already the private output. The mapping
+    # and trailing explicit group still merge, each moving its completed
+    # owner back into that oldest root before temporaries are retired.
+    merges = _calls(text, "py_call_merge_kwargs_unique")
+    moves = _calls(text, "pcc_gc_root_move")
+    assert len(merges) == 2
+    assert len(moves) == len(merges)
+    assert len(_calls(text, "py_dict_new")) == 2
+    borrowed = _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    assert len(borrowed) == 1
+    assert "mapping.addr" in _with_slot_origins(text, borrowed[0])
+    assert text.index(borrowed[0]) < text.index(merges[0])
 
 
 def test_cpython_parameter_never_enters_native_slot_copy():
