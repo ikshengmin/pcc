@@ -15,6 +15,7 @@ class ListFactoryModel:
         self.next_address = 10000
         self.disposals = 0
         self.ns = {
+            'i64': int, 'C_POINTER_SIZE': 8,
             'PYLISTOBJECT_SIZE': 40, 'PY_TYPE_LIST': 6,
             'PYLISTOBJECT_LENGTH_OFFSET': 16, 'PYLISTOBJECT_CAPACITY_OFFSET': 24,
             'PYLISTOBJECT_ITEMS_OFFSET': 32, 'PYOBJECTHEADER_FLAGS_OFFSET': 12,
@@ -43,7 +44,11 @@ class ListFactoryModel:
             '_debug_bad_container': lambda obj, code: pytest.fail('unexpected oversized input'),
             'pcc_platform_abort': lambda: pytest.fail('invariant abort'),
         }
-        _functions(RUNTIME / 'py_list.py', {'py_list_new', '_list_factory_finish'}, self.ns)
+        _functions(
+            RUNTIME / 'py_list.py',
+            {'py_list_new', '_list_allocate_unpublished', '_list_factory_finish'},
+            self.ns,
+        )
 
     def stack(self, size):
         self.next_address += 1000
@@ -56,8 +61,7 @@ class ListFactoryModel:
     def boundary(self):
         assert self.fresh is None, 'NEW header crossed runtime boundary before root publication'
         for obj in self.objects:
-            assert self.memory.get(obj + 16) == 0
-            assert obj + 32 in self.memory, 'collector-visible shape is uninitialized'
+            self.check_shape(obj)
         if not self.relocate:
             return
         protected = self.pins | {self.load(slot, 0) for slot in self.leases}
@@ -73,6 +77,10 @@ class ListFactoryModel:
                     address = base + offset * 8
                     if self.memory.get(address) == obj:
                         self.memory[address] = moved
+
+    def check_shape(self, obj):
+        assert self.memory.get(obj + 16) == 0
+        assert obj + 32 in self.memory, 'collector-visible shape is uninitialized'
 
     def load(self, ptr, offset):
         return self.memory.get(ptr + offset)
