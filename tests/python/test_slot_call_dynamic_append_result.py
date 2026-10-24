@@ -30,7 +30,9 @@ def test_dynamic_append_joins_through_the_consumer_output_root():
     generic = _with_slot_origins(text, calls[0])
     assert re.search(r", ptr %probe\.operand[^ )]*\)", generic)
     assert "list.append.method" in text
-    assert "list.append.receiver" in text
+    receiver_leases = _calls(text, "pcc_gc_borrowed_lease_acquire")
+    assert any("receiver.addr" in _with_slot_origins(text, call) for call in receiver_leases)
+    assert _calls(text, "pcc_gc_foreign_lease_release")
 
 
 def test_dynamic_append_binds_the_generic_method_before_arguments():

@@ -8,7 +8,7 @@ from pcc.frontends.python.py_ast import Module
 from pcc.ir.compat import ir
 
 
-_FIELDS = ("_slot_call_cleanup_function", "_slot_call_cleanup_blocks")
+_FIELDS = ("_slot_call_cleanup_function", "_slot_call_cleanup_blocks", "_slot_call_borrowed_operands")
 
 
 def _start_function(codegen, name):
@@ -30,7 +30,9 @@ def test_cleanup_cache_is_initialized_and_scoped_to_real_ir_functions():
     for codegen in (first, second):
         assert codegen._slot_call_cleanup_function is None
         assert codegen._slot_call_cleanup_blocks == {}
+        assert codegen._slot_call_borrowed_operands == {}
     assert first._slot_call_cleanup_blocks is not second._slot_call_cleanup_blocks
+    assert first._slot_call_borrowed_operands is not second._slot_call_borrowed_operands
 
     function, entry, target, root = _start_function(first, "first")
     cleanup = first._slot_call_cleanup_block((root,), target)
@@ -84,6 +86,10 @@ def test_cleanup_cache_fields_have_matching_host_export_and_ir_slots(tmp_path):
         "        self._slot_call_cleanup_blocks = value\n"
         "    def load_blocks(self):\n"
         "        return self._slot_call_cleanup_blocks\n"
+        "    def store_borrowed(self, value):\n"
+        "        self._slot_call_borrowed_operands = value\n"
+        "    def load_borrowed(self):\n"
+        "        return self._slot_call_borrowed_operands\n"
     )
     paths = [str(host_source), str(mixin_source)]
     names = [host_name, mixin_name]
@@ -109,7 +115,7 @@ def test_cleanup_cache_fields_have_matching_host_export_and_ir_slots(tmp_path):
     assert counts == {mixin_name: 0}
     text = (tmp_path / (mixin_name.replace(".", "_") + ".ll")).read_text()
     prefix = "user_" + mixin_name.replace(".", "_") + "_CallObjectLoweringMixin_"
-    for suffix, field in zip(("function", "blocks"), _FIELDS):
+    for suffix, field in zip(("function", "blocks", "borrowed"), _FIELDS):
         for action, operation in (("store", "set"), ("load", "get")):
             symbol = prefix + action + "_" + suffix
             match = re.search(
