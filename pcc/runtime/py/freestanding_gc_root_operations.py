@@ -52,6 +52,9 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
 pcc_gc_managed_pointer_index_contains = extern("pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64)
+pcc_gc_managed_pointer_index_seen = extern(
+    "pcc_gc_managed_pointer_index_seen", (c_ptr,), c_int64
+)
 
 # Includes counted nodes and validated no-node mode guards. The atomic count
 # reserves mode stability independently of the graph lock; -1 reserves a
@@ -219,12 +222,17 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
         if load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0:
             fast = load_ptr(slot, 0)
             if ptr_is_null(fast) == 0 and is_tagged_int(fast) == 0:
-                if (load_i32(fast, PYOBJECTHEADER_FLAGS_OFFSET) & (1 | 524288)) == 0:
-                    # Keep lease provenance validation even when refcount
-                    # probes are disabled. The LIVE granule reader is safe
-                    # outside the graph lock; malloc/exact-index owners keep
-                    # the locked path below, including its table lifetime.
+                if (load_i32(fast, PYOBJECTHEADER_FLAGS_OFFSET) & 524288) == 0:
+                    # Both readers prove provenance without parking. A
+                    # published exact-index hit covers malloc owners and
+                    # registered literals too; their owning slot and this
+                    # mode guard keep the object live and nonmoving. The
+                    # reader retains old tables until a stopped world can
+                    # reclaim them. Zero means unknown, never absent: it
+                    # must keep the locked fallback and its fresh reload.
                     if pcc_gc_granule_is_object_start(fast) == 1:
+                        return 2
+                    if pcc_gc_managed_pointer_index_seen(fast) == 1:
                         return 2
         # Intrinsic/special values and a mode that changed before reservation
         # retain the existing validation path. No raw value survives it.
