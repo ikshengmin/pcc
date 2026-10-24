@@ -54,8 +54,20 @@ class _SpoolWork:
         if size > self.write_limit - self.written:
             raise wire.PreciseStackMapError("stack-map spool write work budget exceeded")
         self.written += size
+        cursor = 0
+        if type(value) is bytes and size:
+            # Packed runtime rows are immutable. Their first write needs no
+            # parent export as well as an identical full-range child view.
+            # Retire the writer's view before inspecting its return value,
+            # and keep the original loop for partial/custom-count results.
+            with memoryview(value) as remaining:
+                count = stream.write(remaining)
+            if count is None or count <= 0 or count > size - cursor:
+                raise wire.PreciseStackMapError("short stack-map spool write")
+            cursor += count
+            if type(count) is int and cursor == size:
+                return
         with memoryview(value) as view:
-            cursor = 0
             while cursor < size:
                 with view[cursor:] as remaining:
                     count = stream.write(remaining)
