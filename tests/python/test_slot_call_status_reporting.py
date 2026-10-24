@@ -125,6 +125,9 @@ class _RuntimeTrace:
         if name == "py_raise":
             self.current = self.current_after_raise
             return None
+        if name == "pcc_gc_release":
+            assert arguments == [self.new_exception]
+            return None
         if name == "py_current_exception":
             return self.current
         if name == "py_exc_append_frame_source":
@@ -217,16 +220,17 @@ def test_status_and_existing_exception_have_identical_runtime_trace(status, pend
         assert events == [("py_err_occurred", ())]
         assert selected is original
     else:
-        assert events[:4] == [
+        assert events[:5] == [
             ("py_err_occurred", ()),
             ("py_exc_new", (7, "slot-call operation 0 failed")),
             ("py_raise", (allocated,)),
+            ("pcc_gc_release", (allocated,)),
             ("py_current_exception", ()),
         ]
         assert selected is current
-        assert len(events) == (4 if span is None else 5)
+        assert len(events) == (5 if span is None else 6)
         if span is not None:
-            assert events[4] == ("py_exc_append_frame_source", (
+            assert events[5] == ("py_exc_append_frame_source", (
                 current, "caller", span.file or "<unknown>",
                 "call(value='雪')" if span.line == 1 else "", span.line,
             ))
@@ -346,7 +350,13 @@ def test_live_roots_leases_and_cleanup_are_not_moved_into_reporter():
     error = next(b for b in function.blocks if b.name.startswith("call.slot.error"))
     assert str(error.instructions[-1]) == "br label %" + cleanup.name
     helper = codegen.runtime[_KEY].render()
-    assert not any(name in helper for name in ("pcc_gc_", "py_tls_exc_swap_slot", "py_clear_exception"))
+    assert not any(name in helper for name in ("py_tls_exc_swap_slot", "py_clear_exception"))
+    # The only GC operation belongs to the helper's NEW exception, never a
+    # caller operand, root or address lease.
+    constructed = re.search(r"(?m)^\s*(%[^ ]+) = call ptr(?: \([^()]*\))? @py_exc_new\(", helper)
+    assert constructed is not None
+    assert re.findall(r"@pcc_gc_release\(ptr (%[^)]+)\)", helper) == [constructed.group(1)]
+    assert re.findall(r"\bcall[^@\n]*@(pcc_gc_[^(\s]+)\(", helper) == ["pcc_gc_release"]
     # Both allocation/raising safepoints remain ordinary calls. Their caller's
     # root retirement, exception-preserving cleanup and lease order are intact.
     assert "@py_exc_new(" in helper and "@py_raise(" in helper
