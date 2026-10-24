@@ -38,6 +38,7 @@ class _EncoderModel:
         self.allocations = []
         self.inputs = []
         namespace = dict(vars(abi))
+        namespace["i64"] = int
         namespace.update({
             "c_abi_export": lambda _name: lambda fn: fn,
             "ptr_is_null": lambda p: int(p is None),
@@ -49,6 +50,7 @@ class _EncoderModel:
             "store_i8": lambda p, n, v: p.data.__setitem__(p.offset + n, v & 255),
             "cstr": lambda s: _Memory(s.encode() + b"\0"),
             "null": lambda: None,
+            "stack_alloc": lambda size: _Memory(bytes(size)),
             "malloc": self.allocate,
             "free": self.free,
             "py_bytes_new": self.bytes_new,
@@ -208,7 +210,7 @@ def mutable(value: str):
 def test_encoder_scoped_runtime_ir(tmp_path):
     tree = ast.parse((ROOT / "pcc/runtime/py/py_str_accessors.py").read_text())
     tree.body = [node for node in tree.body if not isinstance(node, ast.FunctionDef)
-                 or node.name.startswith("_encode_") or node.name in (
+                 or node.name.startswith(("_encode_", "_codec_")) or node.name in (
                      "_utf8_ord_at_byte", "_str_encode_codec", "_str_encode_names_leased",
                      "_str_encode_guarded", "py_str_encode_with_encoding",
                      "py_str_utf8_encode", "py_str_ascii_encode", "py_str_latin1_encode")]
@@ -223,6 +225,10 @@ def test_encoder_scoped_runtime_ir(tmp_path):
     assert "strict.nolib.stub" not in text
     assert not re.search(r"\bcall\b[^\n]*@py_cpy_", text)
     assert "@py_unicode_encode_error(" in text
+    decoder = re.search(r"^define[^\n]*@user_encoding_runtime__utf8_ord_at_byte\([^\n]*\).*?^}", text, re.M | re.S)
+    assert decoder is not None
+    assert not re.search(r"\bcall\b[^\n]*@(py_int_|pcc_gc_frame_|pcc_gc_store_root|pcc_gc_pin|pcc_gc_unpin)", decoder.group(0))
+    assert "and i64" in decoder.group(0) and "shl i64" in decoder.group(0) and "or i64" in decoder.group(0)
     assert re.search(r"^define[^\n]*@py_str_encode_with_encoding\(ptr[^,]*, ptr[^,]*, ptr[^)]*\)", text, re.M)
 
 

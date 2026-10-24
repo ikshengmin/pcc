@@ -251,13 +251,22 @@ def mutable(value: str):
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
-    for name, count in (("method", 3), ("immutable", 1), ("mutable", 2)):
+    for name, arguments, publications in (("method", 3, 0), ("immutable", 1, 1), ("mutable", 2, 2)):
         match = re.search(r"^define[^\n]*@user_encode_leases_" + name +
                           r"\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)
         assert match, name
         body = match[1]
         assert "strict.nolib.stub" not in body and "@py_cpy_" not in body
-        assert body.count("@pcc_gc_foreign_lease_acquire(") == count
+        assert body.count("@pcc_gc_foreign_lease_acquire(") == arguments + publications
+        assert len(re.findall(r"%call\.slot\.publish\.lease[^\n]*@pcc_gc_foreign_lease_acquire\(", body)) == publications
+        helpers = {"method": (), "immutable": ("py_str_utf8_encode",),
+                   "mutable": ("py_str_latin1_encode", "py_bytearray_from_obj")}[name]
+        for helper in helpers:
+            result = re.search(r"(%[^ ]+) = call ptr[^\n]*@" + helper + r"\([^\n]*\n([^\n]+)\n([^\n]+)", body)
+            assert result is not None
+            store = re.search(r"store ptr " + re.escape(result[1]) + r", ptr (%[^ ]+)", result[2])
+            assert store is not None, result[2]
+            assert "@pcc_gc_foreign_lease_acquire(ptr " + store[1] + ")" in result[3]
         assert "@pcc_gc_foreign_lease_release(" in body
         assert "@pcc_gc_take_pinned_slot(" in body
         assert "encode.lease.cleanup.error" not in body
