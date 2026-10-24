@@ -15,9 +15,9 @@ from tests.python.owned_regression_support import assert_owned_program, explicit
 
 @pytest.mark.parametrize('expression,runtime', (
     ('str(item)', 'py_obj_str'),
-    ('format(item)', 'py_obj_format'),
-    ('format(item, spec)', 'py_obj_format'),
-    ('f"{item}"', 'py_obj_format'),
+    ('format(item)', 'py_builtin_format'),
+    ('format(item, spec)', 'py_builtin_format'),
+    ('f"{item}"', 'py_builtin_format'),
 ))
 @pytest.mark.parametrize('site', ('argument', 'default', 'return', 'later-error'))
 def test_format_producer_contexts(expression, runtime, site):
