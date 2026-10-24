@@ -1528,7 +1528,53 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_slot_call_args_tuple(self, args, label="call.args"):
-        return self._emit_slot_call_sequence(args, label, True)
+        # Small fixed-arity calls need no mutable list and list-to-tuple copy.
+        # Keep the streaming path for splats and wide calls: one cleanup
+        # scope must cover every completed argument, so prefix cleanup code
+        # would otherwise grow quadratically with unbounded argument counts.
+        if len(args) > 8:
+            return self._emit_slot_call_sequence(args, label, True)
+        for argument in args:
+            if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                    and argument.func.ident in ("*", "__starred__")
+                    and len(argument.args) == 1):
+                return self._emit_slot_call_sequence(args, label, True)
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        items = []
+        try:
+            for argument in args:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                item = self._emit_slot_call_operand(argument, label + ".item")
+                roots.append(item)
+                items.append(item)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Finish user evaluation before making a partially filled tuple.
+            # Every captured owner remains in its registered slot across
+            # allocation, collection and generated suspension/continuation.
+            value = self.builder.call(
+                self.runtime["py_tuple_new"], [ir.Constant(_I64, len(items))],
+                name=self._fresh("call.slot.fixed.tuple"),
+            )
+            self._publish_slot_call_owned(output, value, label="argument tuple")
+            index = 0
+            for item in items:
+                self._slot_call_runtime_call(
+                    "py_tuple_set_item", (output, item),
+                    suffix_args=(ir.Constant(_I64, index),), argument_order=(0, 2, 1),
+                    span=args[index].span,
+                )
+                index += 1
+            self._release_slot_call_roots(tuple(items))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
     def _slot_call_deferred_star(self, args):
         """A sole * operand is converted only after the keyword merge."""
