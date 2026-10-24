@@ -1050,6 +1050,54 @@ latest-source pcc1, fixed point and conformance remain open. Read-back verified
 source, failed preimages, native outputs, profiles, allocation and timing receipts:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/fixed-call-tuples-ebb34e1f7/README.md`.
 
+`18ba7881e` makes the private UTF-8 byte decoder's bounded intermediates explicit
+i64 values. The int-shaped ABI, offset bounds, truncation, signed-byte masking
+and surrogate/raw-payload behavior remain unchanged; the assembled payload is
+at most 21 bits. Ordinary Python arithmetic is unaffected. The former cold
+multibyte expressions generated boxed-int calls and six root slots entered
+even on ASCII. Actual runtime helper IR shrinks from 1141 to 154 lines, with
+no boxing/root calls and the original thread safepoint retained. Tests are
+`a7e0618b0`; both commits are published on shenming.
+
+174 focused model/IR checks pass, excluding the preserved raw-entry red below.
+Owned-C native execution covers all 1,114,112 codepoints, continuation positions
+and truncations on GC0. A managed native control constructs and verifies scalar
+inputs before checking 120 codec/error-mode combinations on GC0–4: exact bytes,
+UnicodeError positions/reasons/args and original-object identity agree with
+CPython. Finalizer/rebinding and Unicode constructor-cleanup controls also pass
+GC0–4. The original full handler passes GC0–4. Test models now supply the
+previously missing stack allocation/codec dependencies and distinguish input
+from result-publication leases without removing error or lifetime checks.
+
+Several pre-existing failures are explicitly retained, not certified green:
+raw encoder entry may park before publishing its borrowed frame; the forced
+GC3 finalizer probe expects 16 disposals but both versions observe zero;
+UnicodeEncodeError repr emits raw surrogate bytes rather than escapes; and a
+nested constant input table combines an adjacent high/low surrogate pair before
+encoding on both versions, while an isolated function-local literal is correct.
+The latter's precise root cause is still open. Codec tests construct from and
+verify codepoints to isolate encoding from that input defect. The original
+187-line codec/formatting program is byte-identical before/after on GC0–4;
+only its 14 surrogate-repr lines differ from CPython. Original failures, raw
+bytes and paired repros are preserved. An initial post-check selected a stale
+runtime and was rejected by provenance before execution; the corrected check
+used the matching archive.
+
+Five rotating N/2N repeats (150 timed processes) show ASCII encoding
+87049.806 -> 31659.076 instructions (-63.63%), Unicode encoding -67.28%,
+non-ASCII ord -62.47%, and synchronous payload 742370.644 -> 692797.782
+(-6.68%). The unrelated positional-call control is +0.004% instructions.
+Short wall differences remain timer-resolution limited. Seven full-handler
+comparisons give median 12654.095 -> 13232.554 requests/s (+4.57%),
+27.6993 -> 26.6302 billion instructions (-3.86%), and CPU 1.59 -> 1.53 s.
+Six of seven pairs favor the candidate; ranges overlap and the slower pair
+remains recorded. Same-packet asyncio is 84291.801 requests/s: gap 6.66x ->
+6.37x, not a comparison with an older packet's denominator. These are host-pcc0/
+owned-self handler batches, not HTTP or current-pcc1 performance proof. The
+throughput objective, baseline failures, native pcc1/fixed point and full P0
+scope remain open. Read-back verified receipts, code and diagnostics:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/utf8-machine-18ba7881e/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
