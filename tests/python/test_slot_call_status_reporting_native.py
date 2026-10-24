@@ -180,10 +180,10 @@ def takes(*, value, **extras):
     gc.collect()
     return value[0]
 
-def main():
+def main(failure):
     assert takes(value=[11]) == 11
     try:
-        fails(value=[1, 2, 3])
+        failure(value=[1, 2, 3])
     except ValueError as caught:
         assert caught is original
         assert str(caught) == 'original'
@@ -199,19 +199,20 @@ def main():
     assert events == ['argument']
     print('slot-status-owned-callsite-ok')
 
-main()
+main(fails)
 '''
 
 
 def _object_call_lines():
-    # Derive the three sites from the unchanged source rather than generated
-    # temporary names. A nested Temporary constructor is a different call.
+    # The failure function is an incoming callable so this site cannot take
+    # direct named-function lowering. Derive all three actual dynamic sites
+    # from source; a nested Temporary constructor is a different call.
     tree = ast.parse(_PROGRAM)
     main = next(node for node in tree.body
                 if isinstance(node, ast.FunctionDef) and node.name == "main")
     lines = {node.lineno for node in ast.walk(main)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-             and node.func.id in {"takes", "fails"} and node.keywords}
+             and node.func.id in {"takes", "failure"} and node.keywords}
     assert len(lines) == 3
     return lines
 
@@ -335,11 +336,18 @@ def _assert_actual_status_edges(capture):
         # output sink may stay owned by the enclosing operation instead.
         assert len(clears) >= 3
         assert all(len(call[4]) == 2 and call[4][1][1] == "null" for call in clears)
+        # The production emitter may use its precise-stack-map entries.
+        # Require one consistent enter/leave pair and the same ordered
+        # exception scope, rather than asserting a retired entry spelling.
+        enter = cleanup_names[0]
+        assert enter in ("pcc_gc_frame_enter_lifo", "pcc_gc_frame_enter_lifo_mapped")
+        leave = ("pcc_gc_frame_leave_lifo_mapped" if enter.endswith("_mapped")
+                 else "pcc_gc_frame_leave_lifo")
         assert cleanup_names == (
-            ["pcc_gc_frame_enter_lifo", "py_tls_exc_swap_slot"]
+            [enter, "py_tls_exc_swap_slot"]
             + ["pcc_gc_store_root"] * len(clears)
             + ["py_clear_exception", "py_tls_exc_swap_slot"]
-            + ["pcc_gc_frame_leave_lifo"] * (len(clears) + 1)
+            + [leave] * (len(clears) + 1)
         )
         aliases = {instruction.data[1]: instruction.data[3]
                    for instruction in cleanup_instructions
@@ -359,7 +367,7 @@ def _assert_actual_status_edges(capture):
         exception_slot = root_slot(swaps[0][4][0][1])
         assert root_slot(swaps[1][4][0][1]) == exception_slot
         assert root_slot(cleanup_calls[0][4][1][1]) == exception_slot
-        leaves = [call for call in cleanup_calls if call[2] == "pcc_gc_frame_leave_lifo"]
+        leaves = [call for call in cleanup_calls if call[2] == leave]
         assert root_slot(leaves[0][4][0][1]) == exception_slot
         assert [root_slot(call[4][0][1]) for call in leaves[1:]] == [
             root_slot(call[4][0][1]) for call in clears

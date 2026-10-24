@@ -153,3 +153,77 @@ def test_fixed_call_arguments_native_all_gc(tmp_path, threaded_pcc_runtime_archi
         (tmp_path / ("gc" + str(backend) + ".stdout")).write_text(run.stdout)
         (tmp_path / ("gc" + str(backend) + ".stderr")).write_text(run.stderr)
         assert run.returncode == 0 and run.stderr == "" and run.stdout == expected + "\n", (backend, run.returncode, run.stdout, run.stderr)
+
+
+@pytest.mark.integration
+def test_fixed_argument_tuple_allocation_failure_retires_captured_owners(tmp_path, threaded_pcc_runtime_archive):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.python.pipeline import _run_self_link_command
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    from tests.owned_ir_validation import verify_ir_text
+
+    source = tmp_path / "forced_tuple_oom.py"
+    source.write_text('''events = []
+class Item:
+    def __init__(self, label):
+        self.label = label
+    def __del__(self):
+        events.append("drop:" + self.label)
+def make(label):
+    events.append(label)
+    return Item(label)
+def target(first, second):
+    raise AssertionError("entered target")
+def probe(fn):
+    return fn(make("a"), make("b"))
+def main():
+    try:
+        probe(target)
+    except MemoryError as error:
+        assert str(error) == "forced argument tuple failure"
+        assert events == ["a", "b", "drop:b", "drop:a"]
+    else:
+        raise AssertionError("missing failure")
+    print("FIXED_TUPLE_OOM_OK")
+main()
+''')
+    target = host_target_triple()
+    original = tmp_path / "original.ll"
+    compile_python(str(source), str(original), emit_llvm_only=True, backend="self",
+                   libpython_mode="off", ir_scaffold_mode="on", target_triple=target)
+    text = original.read_text()
+    function = re.search(r"^define [^\n]*@user_forced_tuple_oom_probe\([^\n]*\).*?^}", text, re.M | re.S)
+    assert function is not None
+    body = function.group(0)
+    assert len(_calls(body, "py_tuple_new")) == 1
+    assert not _calls(body, "py_list_new") and not _calls(body, "py_tuple_from_list")
+    # Inject failure at exactly the changed caller-side allocation boundary.
+    # All captured roots and generated error/cleanup code remain production IR.
+    replacement = body.replace("@py_tuple_new(", "@force_tuple_new_failure(")
+    patched = text[:function.start()] + replacement + text[function.end():]
+    patched += "\ndeclare ptr @force_tuple_new_failure(i64)\n"
+    verify_ir_text(patched)
+    (tmp_path / "injected.ll").write_text(patched)
+    message = "forced argument tuple failure"
+    helper = ('target triple = "' + target + '"\n'
+              + '@forced_message = private constant [' + str(len(message) + 1)
+              + ' x i8] c"' + message + '\\00"\n'
+              + 'declare ptr @py_exc_new(i64, ptr)\ndeclare void @py_raise_owned(ptr)\n'
+              + 'define ptr @force_tuple_new_failure(i64 %count) {\nentry:\n'
+              + '  %error = call ptr @py_exc_new(i64 19, ptr @forced_message)\n'
+              + '  call void @py_raise_owned(ptr %error)\n  ret ptr null\n}\n')
+    verify_ir_text(helper)
+    (tmp_path / "failure.ll").write_text(helper)
+    program_object, failure_object = tmp_path / "program.o", tmp_path / "failure.o"
+    program_object.write_bytes(emit_owned_object(patched, target))
+    failure_object.write_bytes(emit_owned_object(helper, target))
+    binary = tmp_path / "forced_tuple_oom"
+    _run_self_link_command(["/usr/bin/false"], None, binary, threaded_pcc_runtime_archive,
+                           (str(program_object), str(failure_object)), False, needs_libpython=False)
+    for backend in range(5):
+        run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
+                             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent"))
+        (tmp_path / ("oom-gc" + str(backend) + ".stdout")).write_text(run.stdout)
+        (tmp_path / ("oom-gc" + str(backend) + ".stderr")).write_text(run.stderr)
+        assert run.returncode == 0 and run.stderr == "" and run.stdout == "FIXED_TUPLE_OOM_OK\n", (
+            backend, run.returncode, run.stdout, run.stderr)
