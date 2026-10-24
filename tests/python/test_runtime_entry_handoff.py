@@ -53,8 +53,11 @@ class HandoffModel(Model):
         return slot
 
     def allocate(self, size):
+        # Return the beginning of a disjoint region. Returning the end lets
+        # the next smaller allocation overlap this object's live words.
+        address = self.plan_id
         self.plan_id += size
-        return self.plan_id
+        return address
 
     def plan_init(self, plan, backend):
         self.plans[plan] = False
@@ -273,6 +276,8 @@ class SpecialCallModel(HandoffModel):
             load_i8=self.byte,
             pcc_gc_scheduler_root_register_handle=self.register,
             pcc_gc_scheduler_root_unregister_handle=self.unregister,
+            pcc_gc_register_continuation_root_node=self.register_group,
+            pcc_gc_unregister_continuation_root_node=self.unregister_group,
             pcc_gc_store_root=self.root_store,
             pcc_gc_load_ptr=lambda owner, slot: self.load(slot),
             py_tls_exc_swap_slot=self.swap_error,
@@ -386,6 +391,30 @@ class SpecialCallModel(HandoffModel):
         slot = self.registered.pop(handle)
         assert self.load(slot) == 0, "boundary leaked a managed root owner"
         self.roots.remove(slot)
+
+    def register_group(self, frame_map, slots):
+        count = self.load(frame_map)
+        assert count > 0
+        members = tuple(slots + index * 8 for index in range(count))
+        assert all(self.load(slot) == 0 for slot in members)
+        self.registration_count += 1
+        if self.registration_count == self.fail_registration:
+            return 0
+        handle = self.allocate(8)
+        self.registered[handle] = (frame_map, members)
+        self.roots.update(members)
+        if self.after_registration:
+            callback, self.after_registration = self.after_registration, None
+            callback()
+        return handle
+
+    def unregister_group(self, handle):
+        frame_map, members = self.registered.pop(handle)
+        assert self.load(frame_map) == len(members)
+        assert self.load(frame_map, 8) == 0
+        for slot in members:
+            assert self.load(slot) == 0, "boundary leaked a managed root owner"
+            self.roots.remove(slot)
 
     def swap_error(self, slot):
         self.error, previous = self.load(slot), self.error
@@ -591,9 +620,9 @@ def test_raw_native_method_is_never_a_managed_root():
     assert model.invoke(model.cls(meta=meta), (33,)) == (0, 1, 33)
 
 
-def test_partial_registration_failure_unlinks_only_published_empty_roots():
+def test_group_registration_failure_leaves_no_published_roots():
     model = SpecialCallModel()
-    model.fail_registration = 5
+    model.fail_registration = 1
     assert model.invoke(model.cls(meta=model.cls())) == (-1, 1, 0)
     assert model.error and not model.registered
 
