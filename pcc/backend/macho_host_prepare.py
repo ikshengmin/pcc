@@ -616,6 +616,20 @@ def _initialize_checked_compact_view(view, sections, undefined, weak_undefined, 
         sections = undefined = weak_undefined = rows = _row_storage = _payload_storage = None
 
 
+def _count_logical_staged_rows(data, section_rows, symbol_rows, symbol_names=None):
+    raw = None
+    try:
+        raw = _raw_row_dicts(data)
+        return link._count_folded_relocation_rows(
+            raw, section_rows, symbol_rows, {}, symbol_names=symbol_names,
+        )
+    finally:
+        if raw is not None:
+            raw.close()
+        data = raw = None
+        section_rows = symbol_rows = symbol_names = None
+
+
 def _logical_staged_rows(data, section_rows, symbol_rows, symbol_names=None):
     raw = folded = None
     try:
@@ -766,12 +780,9 @@ def _initialize_checked_payload_view(view, sections, undefined, weak_undefined, 
             with row_storage.window(index, check=lambda: ledger.check(
                     label="Mach-O compact row validation replay")) as raw_rows:
                 try:
-                    records = _logical_staged_rows(
+                    count = _count_logical_staged_rows(
                         raw_rows, section_rows, symbol_rows, symbol_names,
                     )
-                    count = sum(1 for _ in records)
-                    records.close()
-                    records = None
                     if targets[index]:
                         def patch(data):
                             _patch_section_targets(data, raw_rows, addresses, order)

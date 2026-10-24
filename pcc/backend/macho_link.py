@@ -690,10 +690,38 @@ def _folded_relocation_rows(
     generator, the keyword dataclass calls and the per-row ``spec`` lookups
     were most of a prior-gate link's relocation reads.
     """
+    out: list = []
+    _fold_relocation_rows_into(
+        raw, sections, symbols, local_rename, out,
+        offset_bias=offset_bias, symbol_names=symbol_names,
+    )
+    return out
+
+
+def _count_folded_relocation_rows(
+    raw, sections, symbols, local_rename, *, offset_bias=0, symbol_names=None,
+) -> int:
+    """Count canonical logical rows without allocating Relocation records."""
+    return _fold_relocation_rows_into(
+        raw, sections, symbols, local_rename, None,
+        offset_bias=offset_bias, symbol_names=symbol_names,
+    )
+
+
+def _fold_relocation_rows_into(
+    raw, sections, symbols, local_rename, out: list | None, *,
+    offset_bias=0, symbol_names=None,
+) -> int:
+    """Share companion/name validation between eager materialization and count.
+
+    A None output counts only. Keep resolving every constructor argument in
+    canonical order: counting must reject the same malformed raw stream before
+    the caller opens a payload window or starts semantic validation.
+    """
     reloc_unsigned = spec.ARM64_RELOC_UNSIGNED
     reloc_addend = spec.ARM64_RELOC_ADDEND
     reloc_subtractor = spec.ARM64_RELOC_SUBTRACTOR
-    out: list = []
+    count = 0
     pending_addend = None
     pending_subtractor = None
     for entry in raw:
@@ -709,23 +737,23 @@ def _folded_relocation_rows(
                     "SUBTRACTOR must be followed by a same-address, "
                     "same-width extern UNSIGNED entry"
                 )
-            out.append(new_relocation(
-                pending_subtractor["r_address"] + offset_bias,
-                _relocation_symbol_name(
-                    symbols,
-                    pending_subtractor["r_symbolnum"],
-                    local_rename,
-                    context="SUBTRACTOR relocation",
-                ),
-                reloc_subtractor, False, pending_subtractor["r_length"], 0, None,
-                _relocation_symbol_name(
-                    symbols,
-                    entry["r_symbolnum"],
-                    local_rename,
-                    context="SUBTRACTOR minuend relocation",
-                ),
-                None,
-            ))
+            offset = pending_subtractor["r_address"] + offset_bias
+            symbol_name = _relocation_symbol_name(
+                symbols, pending_subtractor["r_symbolnum"], local_rename,
+                context="SUBTRACTOR relocation",
+            )
+            length = pending_subtractor["r_length"]
+            minuend = _relocation_symbol_name(
+                symbols, entry["r_symbolnum"], local_rename,
+                context="SUBTRACTOR minuend relocation",
+            )
+            if out is None:
+                count += 1
+            else:
+                out.append(new_relocation(
+                    offset, symbol_name, reloc_subtractor, False, length,
+                    0, None, minuend, None,
+                ))
             pending_subtractor = None
             continue
         if entry["r_type"] == reloc_addend:
@@ -768,11 +796,19 @@ def _folded_relocation_rows(
                     f"section-target relocation names section {index}"
                 )
             target = sections[index - 1]
-            out.append(new_relocation(
-                entry["r_address"] + offset_bias, "",
-                entry["r_type"], bool(entry["r_pcrel"]), entry["r_length"], 0,
-                (target["segname_str"], target["sectname_str"]), None, None,
-            ))
+            offset = entry["r_address"] + offset_bias
+            relocation_type = entry["r_type"]
+            pcrel = bool(entry["r_pcrel"])
+            length = entry["r_length"]
+            target_segment = target["segname_str"]
+            target_section = target["sectname_str"]
+            if out is None:
+                count += 1
+            else:
+                out.append(new_relocation(
+                    offset, "", relocation_type, pcrel, length, 0,
+                    (target_segment, target_section), None, None,
+                ))
             pending_addend = None
             continue
         addend = (
@@ -791,15 +827,22 @@ def _folded_relocation_rows(
                 local_rename,
                 context="extern relocation",
             )
-        out.append(new_relocation(
-            entry["r_address"] + offset_bias, symbol_name, entry["r_type"],
-            bool(entry["r_pcrel"]), entry["r_length"], addend, None, None, None,
-        ))
+        offset = entry["r_address"] + offset_bias
+        relocation_type = entry["r_type"]
+        pcrel = bool(entry["r_pcrel"])
+        length = entry["r_length"]
+        if out is None:
+            count += 1
+        else:
+            out.append(new_relocation(
+                offset, symbol_name, relocation_type, pcrel, length,
+                addend, None, None, None,
+            ))
     if pending_addend is not None:
         raise LinkError("trailing ADDEND entry with nothing to modify")
     if pending_subtractor is not None:
         raise LinkError("trailing SUBTRACTOR entry without UNSIGNED pair")
-    return out
+    return count
 
 
 def _inspect_link_input(
