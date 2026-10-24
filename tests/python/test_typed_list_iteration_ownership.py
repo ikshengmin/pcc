@@ -100,3 +100,60 @@ main()
                              capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
         assert ran.stdout == oracle.stdout
+
+
+_MUTATING_LIST_PROGRAM = '''
+import gc
+
+def growing():
+    values = [1]
+    seen = []
+    for value in values:
+        seen.append(value)
+        if value < 3:
+            values.append(value + 1)
+            gc.collect()
+    return seen
+
+def shrinking():
+    values = [1, 2, 3]
+    seen = []
+    for value in values:
+        seen.append(value)
+        values.clear()
+        gc.collect()
+    return seen
+
+def replacing():
+    values = [1, 2]
+    seen = []
+    for value in values:
+        seen.append(value)
+        if value == 1:
+            values[1] = 9
+    return seen
+
+def main():
+    print(growing())
+    print(shrinking())
+    print(replacing())
+main()
+'''
+
+
+def test_typed_list_loop_observes_live_mutations(tmp_path: Path, pcc_runtime_archive):
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = tmp_path / "mutating_list.py"
+    source.write_text(_MUTATING_LIST_PROGRAM)
+    oracle = subprocess.run([sys.executable, str(source)], capture_output=True,
+                            text=True, check=True, timeout=10)
+    assert oracle.stdout == "[1, 2, 3]\n[1]\n[1, 9]\n"
+    binary = tmp_path / "mutating_list"
+    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+                   ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    for backend in range(5):
+        ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
+                             capture_output=True, text=True, timeout=15)
+        assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
+        assert ran.stdout == oracle.stdout, f"GC{backend}: {ran.stdout!r}"
