@@ -53,6 +53,7 @@ _ARCHIVE_DESCRIPTOR_FIELDS = (
 )
 _ARCHIVE_COMMAND_FIELDS = ("cmd", "cmdsize", "offset", "raw", "body", "sections")
 _INSTANCE_VALUES_BYTES = 32 + 31 * _WORD
+_STAGED_ROW_BATCH = 256
 
 
 class _Ledger:
@@ -630,26 +631,75 @@ def _count_logical_staged_rows(data, section_rows, symbol_rows, symbol_names=Non
         section_rows = symbol_rows = symbol_names = None
 
 
-def _logical_staged_rows(data, section_rows, symbol_rows, symbol_names=None):
+def _staged_row_replay_scratch(raw_count, ledger):
+    """Admit raw dictionaries and logical records before a bounded replay."""
+    count = min(raw_count, _STAGED_ROW_BATCH + 1)
+    row = (ledger.mapping(6) + ledger.integers(8)
+           + ledger.rounded(sys.getsizeof(object.__new__(Relocation)))
+           + ledger.rounded(sys.getsizeof(("", ""))))
+    return 2 * ledger.sequence(count) + count * row
+
+
+def _logical_staged_rows(data, section_rows, symbol_rows, symbol_names=None,
+                         _checked_count=None):
+    """Replay checked immutable rows without an entire section's object graph.
+
+    Only the staged payload constructor passes its preceding canonical count.
+    That full pass preserves raw/companion/name errors before any payload or
+    semantic checks. Each bounded batch still uses the canonical folder; keep
+    ADDEND/SUBTRACTOR companions together. Standalone callers retain the eager
+    folder's original error timing. No native/public folding path changes.
+    """
     raw = folded = None
+    batch = []
     try:
         raw = _raw_row_dicts(data)
-        folded = link._iter_folded_relocation_rows(
-            raw, section_rows, symbol_rows, {}, symbol_names=symbol_names,
-        )
-        yield from folded
+        if _checked_count is None:
+            folded = link._iter_folded_relocation_rows(
+                raw, section_rows, symbol_rows, {}, symbol_names=symbol_names,
+            )
+            yield from folded
+            return
+        if (type(data) is not bytes or type(_checked_count) is not int
+                or not 0 <= _checked_count <= len(data) // native._FINAL_LINK_RELOCATION.size):
+            raise native.NativeObjectError("invalid checked staged relocation count")
+        count = 0
+        for entry in raw:
+            batch.append(entry)
+            # A valid stream needs at most one extra raw row at a boundary.
+            if len(batch) < _STAGED_ROW_BATCH or entry["r_type"] in (
+                spec.ARM64_RELOC_ADDEND, spec.ARM64_RELOC_SUBTRACTOR,
+            ):
+                continue
+            folded = link._folded_relocation_rows(
+                batch, section_rows, symbol_rows, {}, symbol_names=symbol_names,
+            )
+            batch.clear()
+            count += len(folded)
+            yield from folded
+            folded = None
+        if batch:
+            folded = link._folded_relocation_rows(
+                batch, section_rows, symbol_rows, {}, symbol_names=symbol_names,
+            )
+            batch.clear()
+            count += len(folded)
+            yield from folded
+        if count != _checked_count:
+            raise native.NativeObjectError("checked staged relocation count changed")
     finally:
-        if folded is not None:
+        if folded is not None and hasattr(folded, "close"):
             folded.close()
         if raw is not None:
             raw.close()
+        batch.clear()
         data = raw = folded = None
-        section_rows = symbol_rows = symbol_names = None
+        entry = section_rows = symbol_rows = symbol_names = None
 
 
 def _semantic_rows_with_deferred_target_check(
     data, section_rows, symbol_rows, payload, sections, addrs, section_index,
-    first_target_error, symbol_names=None,
+    first_target_error, symbol_names=None, _checked_count=None,
 ):
     """Validate targets after each yielded row, without changing error priority.
 
@@ -658,7 +708,9 @@ def _semantic_rows_with_deferred_target_check(
     offset before we inspect the corresponding payload field. Keep only the
     first target error's message, never a relocation table or traceback.
     """
-    folded = _logical_staged_rows(data, section_rows, symbol_rows, symbol_names)
+    folded = _logical_staged_rows(
+        data, section_rows, symbol_rows, symbol_names, _checked_count,
+    )
     relocation = None
     try:
         for relocation in folded:
@@ -799,13 +851,15 @@ def _initialize_checked_payload_view(view, sections, undefined, weak_undefined, 
                                 len(payload), count, ledger, source_rows=True,
                                 function_count=(_stack_count(payload, 0, len(payload))
                                                 if (metadata.segname, metadata.sectname) == _STACK_KEY else 0),
+                            ) + _staged_row_replay_scratch(
+                                len(raw_rows) // native._FINAL_LINK_RELOCATION.size, ledger,
                             ) + 8192
                             ledger.check(backing + scratch, label="Mach-O compact row validation scratch")
                             budget.retained_bytes = previous + ledger.retained + backing
                             real_section = metadata.materialize(payload)
                             adapter = _ValidationBudget(budget, payload)
                             records = _logical_staged_rows(
-                                raw_rows, section_rows, symbol_rows, symbol_names,
+                                raw_rows, section_rows, symbol_rows, symbol_names, count,
                             )
                             native._validate_section(
                                 real_section, relocations=records, relocation_count=count,
@@ -815,7 +869,7 @@ def _initialize_checked_payload_view(view, sections, undefined, weak_undefined, 
                             first_target_error = [None]
                             records = _semantic_rows_with_deferred_target_check(
                                 raw_rows, section_rows, symbol_rows, payload, sections,
-                                addrs, section_index, first_target_error, symbol_names,
+                                addrs, section_index, first_target_error, symbol_names, count,
                             )
                             native._validate_source_section_relocations(
                                 real_section, symbol_index, section_by_name, records, count,
