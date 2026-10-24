@@ -193,3 +193,19 @@ def test_typed_list_loop_observes_live_mutations(
                              capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
         assert ran.stdout == oracle.stdout, f"GC{backend}: {ran.stdout!r}"
+
+
+def test_tuple_loop_has_no_unused_header_pointer_reload():
+    import re
+
+    from tests.python.test_slot_call_operand_roots import _emit, _probe_function
+
+    body = _probe_function(_emit("""def probe():
+    values = (1, 2)
+    for value in values:
+        pass
+"""))
+    header = re.search(r"^for\.lst\.cond[^:]*:.*?(?=^\S|\Z)", body, re.M | re.S)
+    assert header is not None
+    assert "@pcc_gc_load_ptr" not in header.group(0)
+    assert "@py_tuple_get" in body
