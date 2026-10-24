@@ -1676,7 +1676,7 @@ class ForLoopLoweringMixin:
                 name=self._fresh("for.obj.iter.cur"),
             )
         item = self.builder.call(
-            self.runtime["py_obj_next"],
+            self.runtime["py_obj_iter_next"],
             [iterator_cur],
             name=self._fresh("for.obj.item"),
         )
@@ -1707,6 +1707,12 @@ class ForLoopLoweringMixin:
             [],
             name=self._fresh("for.obj.cur_exc"),
         )
+        match_error_bb = fn.append_basic_block(self._fresh("for.obj.match_error"))
+        self.builder.cbranch(
+            self.builder.icmp_unsigned("==", current_exc, ir.Constant(_CSTR, None)),
+            end_bb, match_error_bb,
+        )
+        self.builder.position_at_end(match_error_bb)
         stop_cls = self.builder.call(
             self.runtime["py_exc_builtin_class"],
             [ir.Constant(_I64, _BUILTIN_EXC_TAG["StopIteration"])],

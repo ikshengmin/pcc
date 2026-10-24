@@ -1395,6 +1395,9 @@ int64_t   py_obj_isinstance(PyObject *o, PyObject *cls);
 int64_t   py_obj_issubclass(PyObject *derived, PyObject *cls);
 PyObject *py_obj_iter(PyObject *o);
 PyObject *py_obj_next(PyObject *it);
+/* Consumer entry: NULL may be ordinary exhaustion without an exception.
+ * StopIteration from a user/generator/wrapper path must still be consumed. */
+PyObject *py_obj_iter_next(PyObject *it);
 /* iter(callable, sentinel): callable-iterator over the existing PY_TYPE_ITER
  * object. Returns a new reference to a callable-iterator that yields
  * callable() until a result compares equal to sentinel. */

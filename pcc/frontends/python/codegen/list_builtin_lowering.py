@@ -227,7 +227,7 @@ class ListBuiltinLoweringMixin:
         self.builder.branch(header_bb)
         self.builder.position_at_end(header_bb)
         item = self.builder.call(
-            self.runtime["py_obj_next"],
+            self.runtime["py_obj_iter_next"],
             [iterator],
             name=self._fresh("list.iter.item"),
         )
@@ -252,6 +252,12 @@ class ListBuiltinLoweringMixin:
             [],
             name=self._fresh("list.iter.cur_exc"),
         )
+        match_error_bb = fn.append_basic_block(self._fresh("list.iter.match_error"))
+        self.builder.cbranch(
+            self.builder.icmp_unsigned("==", current_exc, ir.Constant(_CSTR, None)),
+            end_bb, match_error_bb,
+        )
+        self.builder.position_at_end(match_error_bb)
         stop_cls = self.builder.call(
             self.runtime["py_exc_builtin_class"],
             [ir.Constant(_I64, 8)],  # StopIteration

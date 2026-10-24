@@ -913,6 +913,7 @@ def _runtime_signatures_part_20():
     "py_obj_is_slice": (_I64, [_PYOBJ], False),
     "py_obj_iter": (_PYOBJ, [_PYOBJ], False),
     "py_obj_next": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_iter_next": (_PYOBJ, [_PYOBJ], False),
     "py_iter_callable_new": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_user_str_dispatch": (_PYOBJ, [_PYOBJ], False),
     "py_user_repr_dispatch": (_PYOBJ, [_PYOBJ], False),
@@ -950,12 +951,12 @@ def _runtime_signatures_part_20():
     "py_func_new_static_def": (
         _I64, [_PTR, _CSTR, _CSTR, _CSTR, _CSTR, _PYOBJ, _I64, _PTR, _PTR], False,
     ),
-    "py_builtin_function_value": (_PYOBJ, [_PTR, _CSTR], False),
     }
 
 
 def _runtime_signatures_part_21():
     return {
+    "py_builtin_function_value": (_PYOBJ, [_PTR, _CSTR], False),
     "py_builtin_abs_entry": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_func_new_bound": (_PYOBJ, [_PTR, _PYOBJ, _CSTR, _PYOBJ], False),
     "py_func_call": (_PYOBJ, [_PYOBJ, _PYOBJ], False),

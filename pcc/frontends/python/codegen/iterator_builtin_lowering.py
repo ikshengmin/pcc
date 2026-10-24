@@ -101,8 +101,10 @@ class IteratorBuiltinLoweringMixin:
         allow_exhaustion,
     ):
         """Publish the result and park the exact exception before retiring leases."""
+        consumes_exhaustion = allow_exhaustion or default is not None
+        runtime_name = "py_obj_iter_next" if consumes_exhaustion else "py_obj_next"
         self._slot_call_runtime_call(
-            "py_obj_next", (iterator,), result_slot=output, span=span,
+            runtime_name, (iterator,), result_slot=output, span=span,
             exception_slot=pending,
         )
         failed = self.current_function.append_basic_block(self._fresh("next.failed"))
@@ -114,8 +116,21 @@ class IteratorBuiltinLoweringMixin:
             failed, ready,
         )
         self.builder.position_at_end(ready)
-        self._guard_cpy_value_not_null(self.builder.load(output))
-        self.builder.branch(found)
+        if consumes_exhaustion:
+            done = self.current_function.append_basic_block(self._fresh("next.exhausted"))
+            self.builder.cbranch(
+                self.builder.icmp_unsigned(
+                    "==", self.builder.load(output), ir.Constant(_CSTR, None),
+                ),
+                done, found,
+            )
+            self.builder.position_at_end(done)
+            if default is not None:
+                self._slot_call_copy_source(output, default, span=span)
+            self.builder.branch(exhausted)
+        else:
+            self._guard_cpy_value_not_null(self.builder.load(output))
+            self.builder.branch(found)
 
         self.builder.position_at_end(failed)
         self._emit_next_pending_or_default(
