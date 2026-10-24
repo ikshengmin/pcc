@@ -610,7 +610,7 @@ def _part_51(out):
     _append_method(out, '_emit_slot_call_module_value', (('self', 'pos', False), ('module_name', 'pos', False), ('attr_name', 'pos', False), ('span', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_conditional', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
     _append_method(out, '_emit_slot_call_short_circuit', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('need_truth', 'pos', True)))
-    _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False), ('keep_pinned', 'pos', True)))
+    _append_method(out, '_take_slot_call_root', (('self', 'pos', False), ('slot', 'pos', False), ('keep_pinned', 'pos', True), ('source_expr', 'pos', True)))
     _append_method(out, '_slot_call_runtime_call', (('self', 'pos', False), ('runtime_name', 'pos', False), ('roots', 'pos', False), ('', 'kw_only', False), ('result_slot', 'pos', True), ('suffix_args', 'pos', True), ('argument_order', 'pos', True), ('span', 'pos', True), ('exception_slot', 'pos', True)))
     _append_method(out, '_emit_slot_call_sequence', (('self', 'pos', False), ('elems', 'pos', False), ('label', 'pos', False), ('tuple_result', 'pos', False)))
     _append_method(out, '_emit_slot_call_args_tuple', (('self', 'pos', False), ('args', 'pos', False), ('label', 'pos', True)))

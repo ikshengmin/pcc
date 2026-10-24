@@ -917,7 +917,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots((cls,))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("object.current"))
         finally:
             self._try_err_block = previous
@@ -953,7 +953,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots((argument,))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("unary.result.current"))
         finally:
             self._try_err_block = previous
@@ -994,7 +994,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots(tuple(operands))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("binary.result.current"))
         finally:
             self._try_err_block = previous
@@ -1034,7 +1034,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots(tuple(operands))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("descriptor.current"))
         finally:
             self._prefer_native_callable_values = saved_preference
@@ -1093,7 +1093,7 @@ class CallObjectLoweringMixin:
             self._slot_call_runtime_call("py_builtin_format", (value, spec), result_slot=output, span=expr.span)
             self._release_slot_call_roots((value, spec))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("format.current"))
         finally:
             self._try_err_block = previous
@@ -1381,7 +1381,7 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         return output
 
-    def _take_slot_call_root(self, slot, keep_pinned=False):
+    def _take_slot_call_root(self, slot, keep_pinned=False, source_expr=None):
         """Finish every parking operation before returning the root's owner.
 
         A tagged int or NULL is no managed object: it needs no graph lock,
@@ -1389,6 +1389,22 @@ class CallObjectLoweringMixin:
         then leave the root through the same pinned transfer, which keeps the
         result's root provenance single for precise stack-map planning.
         """
+        if source_expr is not None and not keep_pinned:
+            sinks = self._slot_call_result_sinks
+            for index in range(len(sinks) - 1, -1, -1):
+                expression, consumer, _published = sinks[index]
+                if expression is source_expr:
+                    if consumer is None:
+                        # The statement discards the result. Its existing
+                        # owning root can retire it directly, including
+                        # finalization/resurrection, without a raw-pointer
+                        # handoff and a second ownership protocol.
+                        self._release_slot_call_roots((slot,))
+                        sinks[index] = (source_expr, None, True)
+                        # This value is consumed only by the statement's
+                        # discarded marker, never by a Python operation.
+                        return ir.Constant(_CSTR, None)
+                    break
         _slot, flag, lifo = self._slot_call_root_record(slot)
         raw = self.builder.load(slot, name=self._fresh("call.slot.take.raw"))
         raw_bits = self.builder.ptrtoint(raw, _I64, name=self._fresh("call.slot.take.bits"))
@@ -1806,7 +1822,7 @@ class CallObjectLoweringMixin:
                     raise L1CodegenError("synchronous call operands introduced a resume edge")
         if sink is not None:
             return self.builder.load(output, name=self._fresh(label + ".output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _static_import_call_abi(self, fn) -> bool:
         """Whether ``fn``'s ABI takes and returns only objects or scalars."""
@@ -2018,7 +2034,7 @@ class CallObjectLoweringMixin:
                 self.env.pop(placeholder, None)
         if sink is not None:
             return self.builder.load(output, name=self._fresh(label + ".output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_slot_call_dict(self, pairs, span, label):
         output = self._new_slot_call_root(label)

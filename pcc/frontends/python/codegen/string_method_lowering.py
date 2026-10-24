@@ -391,7 +391,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("decode.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_bytes_decode_call(self, recv, receiver_expr, operands, span):
         if not self._owned_release_needed(recv, receiver_expr):
@@ -509,7 +509,7 @@ class StringMethodLoweringMixin:
             )
             self._release_slot_call_roots((separator, items))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh(label + ".current"))
         finally:
             self._try_err_block = previous
@@ -720,7 +720,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("padding.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_owned_strip_method(self, expr):
         """Dispatch strip through the actual text/byte family with rooted inputs.
@@ -874,7 +874,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("strip.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _maybe_emit_owned_str_result(self, expr):
         """Evaluate native string operands in roots and publish before cleanup.
@@ -978,7 +978,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("str.method.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_str_method_with_receiver(self, expr: Call, recv: ir.Value, dynamic: bool):
         if expr.func.name == "encode":

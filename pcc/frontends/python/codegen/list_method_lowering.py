@@ -491,7 +491,7 @@ class ListMethodLoweringMixin:
             self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("list.pop.output"))
-            return self._take_slot_call_root(output)
+            return self._take_slot_call_root(output, source_expr=expr)
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
@@ -590,7 +590,7 @@ class ListMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("dyn.count.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_owned_list_extend(self, expr):
         """Keep the iterable owned and propagate errors before releasing call leases."""
@@ -685,7 +685,7 @@ class ListMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("list.extend.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_dyn_list_method_with_runtime_guard(
         self,
@@ -797,7 +797,7 @@ class ListMethodLoweringMixin:
                 self._cpy_operand_cleanup_block = saved_cpy
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("list.append.output"))
-            return self._take_slot_call_root(output)
+            return self._take_slot_call_root(output, source_expr=expr)
 
         if attr.name == "pop" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_list_pop(expr)
@@ -930,7 +930,7 @@ class ListMethodLoweringMixin:
                 self._cpy_operand_cleanup_block = saved_cpy
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("dyn.index.output"))
-            return self._take_slot_call_root(output)
+            return self._take_slot_call_root(output, source_expr=expr)
 
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):
@@ -1929,7 +1929,7 @@ class ListMethodLoweringMixin:
             self._emit_post_call_err_check(expr.span)
             self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("sorted.current"))
         finally:
             self._try_err_block = previous
