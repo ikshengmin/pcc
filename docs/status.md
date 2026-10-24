@@ -934,6 +934,68 @@ Latest-source native pcc1, fixed point, broader conformance and full P0 goals
 remain open. Read-back verified code, artifacts, profiles and all run receipts:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/scratch-root-groups-0cfdb9cd2/README.md`.
 
+`81d4fa630` extends nonmoving address leases to positive results from the
+existing published managed-pointer index. The atomic mode reservation and
+post-reservation mode check remain; an uncertain result still drops that
+reservation, locks and reloads the original authoritative slot. Existing
+reader lifetime/retired-table contracts are preserved. `238dcf30e` recognizes
+only the five exact image-static singleton header addresses before any header
+read or mode protocol. Allocated immortals remain guarded. A finite raw-data
+ABI declaration names those five headers; arbitrary managed globals remain
+rejected. Tests are `68ea620eb` and `665ef8337`; all four commits are on shenming.
+
+An instrumented, untimed census explains the selected mechanism: a synchronous
+payload performs 258 non-NULL/non-tagged address lease attempts, of which 108
+enter the lock, and 37 return the unregistered-static no-op result. Registered
+string literals instead take the exact-index/mode-only route. A same-value
+literal/heap string control confirms this distinction. These are repeated
+lease calls, not allocation counts. The census's floating-point accounting
+assertion was corrected using integer deltas; native outputs were already
+validated, and the failed log/preimage is retained.
+
+Final source passes 338 focused model/ABI-boundary checks, native singleton
+collection on two threads across GC0–4, allocator/exact-index concurrent mode
+reset stress, and four sensitive native nodes covering GC3/4 movement, GC0–4
+immediates and immortal streams, and keywords surviving parking. The existing
+owned standalone C index-growth and retired-table tests also pass again.
+Both intermediate and final original handler artifacts pass GC0–4. The first
+new literal fixture expected allocator result zero instead of documented -1;
+it was corrected and re-executed. An initially undeclared static symbol was
+rejected by the strict boundary until the exact data declarations were added.
+No rejected run is counted as passing. A pcc1 fixture parameter could not run
+without a current-source compiler; its pcc0 parameter and remaining scoped
+checks pass, but this does not establish native-pcc1 qualification.
+
+A three-native-arm/CPython comparison (five rotating N/2N repeats, 200 timed
+processes) measures final vs this phase's original baseline: synchronous
+payload 844791.561 -> 754986.851 instructions (-10.63%), 48 -> 42 us;
+keywords -4.30%, positional calls -3.47%, literal strings -14.44%, heap
+strings -10.25%. The indexed-only intermediate had raised positional/heap
+string costs; the final version removes those regressions against baseline,
+while adding 1.0% instructions to indexed-only keywords. Short wall deltas
+remain limited by timer resolution.
+
+Seven original-handler comparisons give median 11468.830 -> 12241.093
+requests/s (+6.73%), 30.3663 -> 28.4632 billion instructions (-6.27%), and
+user CPU 1.76 -> 1.65 seconds. Every paired final/baseline run is faster;
+ranges overlap, and one final/indexed-only pair regresses. Same-packet asyncio
+is 85543.443 requests/s: gap 7.46x -> 6.99x. This is a controlled change within
+this packet, not a comparison against the older 7.39x packet. These are
+validated handler batches, not HTTP server measurements. Full performance
+acceptance, latest-source native pcc1, fixed point and the full P0 goal remain
+open. All commands, identities, failed preimages and receipts are read-back
+verified at:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/lease-provenance-81d4fa630/README.md`.
+
+A current-source Stage1/native-program verification operation is prepared for
+665ef8337 and requested asynchronously, not executed: the goal requires
+explicit bootstrap approval. Its reviewed script/plan are in that archive.
+The planned build keeps LC_ALL, uses the shared lock, 5 GB RSS cap, 8 GiB
+reserve, 1800-second bound and an isolated checkpoint/output. Historical
+8c53ef3c7 Stage1 took 1754 seconds with a 2.87 GB peak; those figures size the
+request and do not qualify the current source. Continue independent runtime
+work while that approval is pending; do not infer approval from elapsed time.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
