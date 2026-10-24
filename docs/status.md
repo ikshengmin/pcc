@@ -802,6 +802,52 @@ successful runs, source/runtime identities, patches and native outputs are
 read-back verified at:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/ordinary-list-construction-8b26131a9/README.md`.
 
+The next ordinary-program diagnostic preserves the original payload, JSON
+encoding and byte validation while removing tasks and per-request timers.
+It passes GC0–4 and measures 52 us/957646 instructions per operation versus
+CPython 2 us/31783. Existing runtime logging counts 37 managed allocations
+per synchronous operation, with no generators. These logged runs are a
+diagnostic census, not timing or escape evidence. The full handler separately
+counts about 79.17 allocations per request. Caller attribution identifies
+generic keyword merging and signature binding as substantial shared work.
+
+`31b06432e` removes one such concrete redundancy: the first explicit keyword
+group already constructs a private owning dictionary with syntax-proven
+distinct string names, so it directly seeds the output instead of being
+copied through an empty dictionary. Later mappings/groups retain their
+checked merge, error timing and value order. Tests are `f5a32dbf9`. Both
+source-frozen arms execute ordinary keyword ownership/error scenarios and
+first-group suspension/recovery on GC0–4. Five rotating N/2N repetitions
+measure ordinary dynamic keyword calls 221555.900 -> 141431.560 instructions
+(-36.2%), 11.8 -> 7.6 us; the synchronous payload is 956082.028 -> 884500.779
+instructions (-7.5%), 52 -> 49 us. This is host-pcc0/owned-self/native evidence.
+
+Post-push checks also reproduce an old cold error-reporter leak: the normal
+inline error path releases py_exc_new's owner after TLS retains it, while the
+shared reporter omitted the release. `01bf809d3` restores that operation;
+`5c65dc20e` verifies exact error traces and a real owned-C native driver that
+fails before and passes after the repair. The driver checks GC0's TLS owner
+count and executes new/existing-error paths on GC0–4. `539dcb9df` updates the
+old three-merge assertion to check the remaining two merges and their actual
+root transfers. 143 focused checks pass. Frozen final source 539dcb9df with
+its newly matched runtime then passes three native pytest nodes across GC0–4.
+Failed baseline/model/context receipts are retained; no failures were dropped.
+
+Both full-handler arms pass 1,000 requests and 200 warmups on each GC0–4.
+Seven rotating 20,000-request runs (C100, delay 0, the same retained bulk-frame
+comparison setting) give 10612.213 -> 11109.118 requests/s (+4.7%), versus
+asyncio 88488.413. Instructions fall 33.220 -> 31.730 billion (-4.5%), user CPU
+1.89 -> 1.80 s. Every final result exceeds every baseline result in this
+packet. The same-packet gap narrows about 8.34x -> 7.97x; it remains far from
+the target. Final-source counting confirms 37 -> 32 synchronous allocations:
+two fewer dicts and one fewer list, iterator and exception. Final runtime:
+`5eafcc9a6352b5e76db411984bab02aee151e5f9563832a3ab248dcee15a459b`.
+Next inspect generic parameter binding and internal argument metadata;
+native-pcc1, fixed point and full performance acceptance remain unfinished.
+All source identities, failed preimages, native outputs, timing and census
+receipts are read-back verified at:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/keyword-root-seed-31b06432e/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
