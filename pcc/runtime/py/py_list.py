@@ -20,6 +20,7 @@ C-header-derived py_abi_constants module.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYLISTOBJECT_SIZE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_TUPLE
 from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_DICT, PY_TYPE_SET
@@ -85,6 +86,15 @@ pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_note_slot_write_barrier = extern(
     "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
+)
+pcc_gc_resolve_root_slot_unlocked = extern(
+    "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr
+)
+pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+py_runtime_error_if_unset = extern(
+    "py_runtime_error_if_unset", (c_ptr, c_ptr), c_void
 )
 pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     "pcc_gc_backend4_zpage_register_owner_payload_span",
@@ -454,6 +464,40 @@ def _list_factory_finish(slots, token: int, success: int):
     return pcc_gc_take_pinned_slot(slots, prior)
 
 
+def _list_allocate_unpublished(output, requested: i64, lease_state) -> i64:
+    """Allocate traceable storage in an existing root; defer public tracking.
+
+    lease_state records the token even on failure, so the caller can preserve
+    its exception while retiring the lease and partial owner.
+    """
+    store_i64(lease_state, 0, -1)
+    store_ptr(output, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
+    if ptr_is_null(load_ptr(output, 0)) != 0:
+        return -1
+    # Initialize the collector-visible shape before the first parking call.
+    l = load_ptr(output, 0)
+    store_i64(l, PYLISTOBJECT_LENGTH_OFFSET, 0)
+    cap: i64 = requested
+    if cap < 4:
+        cap = 4
+    store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, null())
+    store_i64(l, PYLISTOBJECT_CAPACITY_OFFSET, cap)
+    token: i64 = i64(pcc_gc_foreign_lease_acquire(output))
+    store_i64(lease_state, 0, token)
+    if token < 0:
+        return -1
+    l = load_ptr(output, 0)
+    pcc_gc_note_slot_write_barrier(null(), output, l)
+    stride: i64 = i64(C_POINTER_SIZE)
+    items = malloc(cap * stride)
+    if ptr_is_null(items):
+        return -1
+    l = load_ptr(output, 0)
+    store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, items)
+    pcc_gc_backend4_zpage_register_owner_payload_span(l, items, cap * stride)
+    return 0
+
+
 @c_abi_export("py_list_new")
 def py_list_new(initial_capacity: int):
     if initial_capacity > 134217728:
@@ -462,28 +506,12 @@ def py_list_new(initial_capacity: int):
     slots = stack_alloc(16)
     memset(slots, 0, 16)
     pcc_gc_frame_enter(global_addr("pcc_list_factory_owned_map"), slots)
-    store_ptr(slots, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
-    if ptr_is_null(load_ptr(slots, 0)) != 0:
-        return _list_factory_finish(slots, -1, 0)
-    # Initialize the collector-visible shape before the first parking call.
-    l = load_ptr(slots, 0)
-    store_i64(l, PYLISTOBJECT_LENGTH_OFFSET, 0)
-    cap: int = initial_capacity
-    if cap < 4:
-        cap = 4
-    store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, null())
-    store_i64(l, PYLISTOBJECT_CAPACITY_OFFSET, cap)
-    token: int = pcc_gc_foreign_lease_acquire(slots)
-    if token < 0:
+    lease_state = stack_alloc(C_POINTER_SIZE)
+    status: i64 = _list_allocate_unpublished(slots, i64(initial_capacity), lease_state)
+    token: int = load_i64(lease_state, 0)
+    if status != 0:
         return _list_factory_finish(slots, token, 0)
     l = load_ptr(slots, 0)
-    pcc_gc_note_slot_write_barrier(null(), slots, l)
-    items = malloc(cap * 8)
-    if ptr_is_null(items):
-        return _list_factory_finish(slots, token, 0)
-    l = load_ptr(slots, 0)
-    store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, items)
-    pcc_gc_backend4_zpage_register_owner_payload_span(l, items, cap * 8)
     py_gc_track(l)
     pcc_gc_publish_initialized(l)
     return _list_factory_finish(slots, token, 1)
@@ -508,6 +536,80 @@ def py_list_from_static_items(items, count: int):
         py_list_append(l, load_ptr(items, index * 8))
         index = index + 1
     return l
+
+
+define_global_i32("pcc_list_construction_error_map", 1)
+
+
+def _list_owned_construction_failed(output, token: i64) -> i64:
+    error = stack_alloc(C_POINTER_SIZE)
+    store_ptr(error, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_list_construction_error_map"), error)
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("list: out of memory")))
+    py_tls_exc_swap_slot(error)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(output, token) < 0:
+            pcc_platform_abort()
+            return -1
+    pcc_gc_store_root(output, null())
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave(error)
+    return -1
+
+
+@c_abi_export("py_list_from_owned_roots")
+def py_list_from_owned_roots(sources, count: i64, output) -> i64:
+    """Consume distinct owning operand roots into a newly allocated list.
+
+    Sources is a stable array of addresses of registered, unleased owning
+    roots. Output is a distinct, registered empty root. The compiler keeps
+    every root registered until this returns. Each consumed source becomes
+    empty; on failure the caller still owns output and all remaining sources.
+    No existing/shared list is admitted by this construction-only interface.
+    """
+    if ptr_is_null(output) != 0 or count < 0 or count > 134217728:
+        py_runtime_error_if_unset(cstr("py_list_from_owned_roots"), cstr("invalid list construction roots"))
+        return -1
+    if ptr_is_null(load_ptr(output, 0)) == 0 or (count > 0 and ptr_is_null(sources) != 0):
+        py_runtime_error_if_unset(cstr("py_list_from_owned_roots"), cstr("list construction requires empty output"))
+        return -1
+    lease_state = stack_alloc(C_POINTER_SIZE)
+    status: i64 = _list_allocate_unpublished(output, count, lease_state)
+    token: i64 = i64(load_i64(lease_state, 0))
+    if status != 0:
+        return _list_owned_construction_failed(output, token)
+    stride: i64 = i64(C_POINTER_SIZE)
+    index: i64 = 0
+    while index < count:
+        # Reload authoritative roots after the lock's possible parking edge.
+        # No raw element pointer crosses a lock release or loop safepoint.
+        pcc_py_gc_minor_graph_lock()
+        owner = load_ptr(output, 0)
+        source = load_ptr(sources, index * stride)
+        value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+        items = load_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET)
+        destination = ptr_add(items, index * stride)
+        if pcc_gc_backend() != 0:
+            pcc_gc_note_store()
+        pcc_gc_note_slot_write_barrier(owner, destination, value)
+        # Exactly one existing owner moves from source to the new field.
+        # The list's published length advances only after that field is valid.
+        store_ptr(destination, 0, value)
+        store_ptr(source, 0, null())
+        store_i64(owner, PYLISTOBJECT_LENGTH_OFFSET, index + 1)
+        pcc_py_gc_minor_graph_unlock()
+        index += 1
+    # The complete list becomes publicly tracked only after all input owners
+    # have moved. Collector-safe partial shape alone is not a privacy proof.
+    owner = load_ptr(output, 0)
+    py_gc_track(owner)
+    pcc_gc_publish_initialized(owner)
+    if pcc_gc_foreign_lease_release(output, token) < 0:
+        pcc_platform_abort()
+        return -1
+    return 0
 
 
 def _append_rooted(lst, item, fresh: int) -> int:

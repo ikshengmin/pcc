@@ -538,6 +538,65 @@ class LiteralLoweringMixin:
         self._leave_container_temp_root(tup_root)
         return tup
 
+    def _emit_owned_root_list_literal(self, expr: ListExpr, prefer_native_callables: bool) -> ir.Value:
+        """Evaluate elements into roots, then transfer them into a new list.
+
+        The pointer array contains stable stack-root addresses, not raw object
+        values. Generator operands retain their existing persistent-frame path.
+        """
+        output = self._new_slot_call_root("list.construct")
+        roots = [output]
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            for element in expr.elems:
+                previous_preference = self._prefer_native_callable_values
+                if prefer_native_callables:
+                    self._prefer_native_callable_values = True
+                try:
+                    source = self._emit_slot_call_operand(element, "list.construct.item")
+                finally:
+                    self._prefer_native_callable_values = previous_preference
+                roots.append(source)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            sources = self._alloca_in_entry(
+                ir.ArrayType(_CSTR, len(expr.elems)),
+                name=self._fresh("list.construct.sources"),
+            )
+            for index, source in enumerate(roots[1:]):
+                address = self.builder.gep(
+                    sources, [ir.Constant(_I32, 0), ir.Constant(_I32, index)],
+                    name=self._fresh("list.construct.source"),
+                )
+                self.builder.store(self._as_gc_ptr(source), address)
+            status = self.builder.call(
+                self.runtime["py_list_from_owned_roots"],
+                [self._as_gc_ptr(sources), ir.Constant(_I64, len(expr.elems)),
+                 self._as_gc_ptr(output)],
+                name=self._fresh("list.construct.status"),
+            )
+            self._slot_call_note_published(output)
+            self._slot_call_check_status(status, "list construction", expr.span)
+            self._emit_post_call_err_check(expr.span)
+            # Success consumes every element owner and leaves its root empty.
+            # Retire those frames without repeating empty retaining stores.
+            for source in reversed(roots[1:]):
+                _slot, flag, lifo = self._slot_call_root_record(source)
+                if flag is not None:
+                    self.builder.store(ir.Constant(ir.IntType(1), 0), flag)
+                if lifo:
+                    self._emit_gc_frame_leave_lifo_for_slot(source)
+            self._try_err_block = self._slot_call_cleanup_block((output,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            return self._take_slot_call_root(output)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_list_literal(self, expr: ListExpr) -> ir.Value:
         static_list = self._maybe_emit_static_constant_sequence(
             expr.elems, "py_list_from_static_items", "list"
@@ -596,6 +655,9 @@ class LiteralLoweringMixin:
             or self._is_valueclass_payload_type(el.ty)
             for el in expr.elems
         ):
+            if (expr.elems and not getattr(self, "_generator_ctx_stack", ())
+                    and not self._runtime_port_module):
+                return self._emit_owned_root_list_literal(expr, prefer_native_callables)
             n_val = ir.Constant(_I64, len(expr.elems))
             lst = self.builder.call(
                 self.runtime["py_list_new"],

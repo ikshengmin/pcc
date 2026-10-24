@@ -729,6 +729,7 @@ def _runtime_signatures_part_15():
     "py_dict_from_static_pairs": (_PYOBJ, [_CSTR, _I64], False),
     "py_tuple_from_static_items": (_PYOBJ, [_CSTR, _I64], False),
     "py_list_from_static_items": (_PYOBJ, [_CSTR, _I64], False),
+    "py_list_from_owned_roots": (_I64, [_PTR, _I64, _PTR], False),
     # Nested constant table from a static descriptor; see
     # py_static_aggregate_build in pcc/runtime/py/py_dict.py.
     "py_static_aggregate_build": (_PYOBJ, [_CSTR], False),

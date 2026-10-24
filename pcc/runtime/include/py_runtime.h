@@ -1136,6 +1136,9 @@ PyObject *py_os_urandom(PyObject *n);
 /* ---- List -------------------------------------------------------------- */
 PyObject *py_list_new(int64_t initial_capacity);
 PyObject *py_list_from_static_items(PyObject *const *items, int64_t count);
+/* Move distinct, registered owning roots into an empty output root.
+ * Sources are stable root addresses; successful construction empties them. */
+int64_t py_list_from_owned_roots(void *sources, int64_t count, void *output);
 void      py_list_append(PyObject *lst, PyObject *item);
 /* Borrowed-item append for compiler-proven fresh native instances.  This is
  * not ownership transfer: the caller keeps and releases its owned ref. */
