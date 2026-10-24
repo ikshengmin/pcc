@@ -49,7 +49,7 @@ def test_next_genexpr_default_uses_native_iterator_protocol():
     body = _function_body(ir, "f")
     assert body is not None
     assert "@py_obj_iter" in body, body
-    assert "@py_obj_next" in body, body
+    assert "@py_obj_iter_next(" in body, body
     assert "@py_obj_getitem" not in body, body
     assert "cpy.builtin.next" not in body, body
     assert "cpy.call2.next" not in body, body
