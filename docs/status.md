@@ -848,6 +848,52 @@ All source identities, failed preimages, native outputs, timing and census
 receipts are read-back verified at:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/keyword-root-seed-31b06432e/README.md`.
 
+A follow-up ordinary-call comparison corrects the binding diagnosis.
+Dynamic keyword/positional/direct calls cost about 141260/48058/3348 native
+instructions per operation. In the keyword capture, dict.update accounts for
+42.66% inclusive samples beneath the binder's keyword-dictionary copy;
+py_tuple_get beneath binding is only 1.03%. The positional binder is 1.41%
+of its capture. Some short CPython wall differences round to zero and cannot
+be treated as zero execution time. All profile children finish with validated
+checksums. This directs work toward copying and root protocols rather than an
+unmeasured signature-layout rewrite.
+
+`c27d1d05d` keeps exact-dict update snapshots of up to six pairs in twelve
+unused cells of the already registered operation frame. Cached hashes use a
+bounded stack buffer; larger snapshots keep the existing implementation.
+Snapshots still complete before destination callbacks, child leases end after
+capture, later reads use authoritative roots, and cell order preserves the
+old snapshot tuple's retirement order. Tests `2bd3745f9` and `6deeaee4b` cover
+the cutoff, relocation, copy failures, source clearing during equality,
+comparison errors and cleanup. A pre-existing model omitted the production
+sequence diagnostic; `d2d7a7c93` fixes its loader and checks exact error text.
+81 models/reference checks pass. Both native arms pass cached-hash, identity,
+callback/collection, finalizer and two-thread scenarios on GC0–4; seven
+post-push sensitive native nodes also pass. All commits are on shenming/master.
+
+Frozen 38eda5eb5 plus the runtime change, host pcc0/owned-self/native atomic
+threaded GC0: five rotating N/2N repetitions measure two-entry dict update
+72991.999 -> 59475.586 instructions (-18.52%), 3800 -> 3000 ns; ordinary
+keyword calls 141907.734 -> 127953.852 (-9.83%), 7600 -> 6800 ns. Synchronous
+payload instructions fall only 1.04%, with both wall medians 48 us. The
+seven-entry control is +0.24% instructions with both wall medians 9500 ns.
+After accounting only for exact frozen-root path globals and their widths,
+the runtime IR differs in py_dict alone; actual IR/provenance was not changed.
+The new helper has no unintended integer boxing calls.
+
+Both original handler arms pass GC0–4. Seven 20,000-request comparisons give
+median 11148.831 -> 11227.383 requests/s, with overlapping native ranges;
+instructions fall 31.719 -> 31.519 billion (-0.63%). This is not an established
+material whole-handler speedup. Same-packet asyncio is 89140.562 requests/s,
+leaving about a 7.94x gap. Counting confirms one fewer internal snapshot tuple
+per keyword call and synchronous request (six -> five and 32 -> 31 managed
+allocations respectively). Reassess repeated root registration and operation
+wrappers shared by ordinary calls before further small local tuning. Existing
+checked grouped-root APIs and root reuse are candidates, not qualified fixes.
+Native-pcc1, fixed point, conformance and the broader P0 scope remain open.
+Read-back verified evidence, failed preimages, source identities and outputs:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/dict-root-snapshot-c27d1d05d/README.md`.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
