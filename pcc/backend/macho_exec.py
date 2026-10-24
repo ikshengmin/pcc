@@ -31,8 +31,8 @@ import sys
 from dataclasses import dataclass
 
 from pcc.unsafe import (
-    abi_constant, darwin_libsystem_symbol, free, load_i8, load_i32, malloc,
-    null, ptr_is_null, store_i8, store_i32,
+    abi_constant, darwin_libsystem_symbol, free, load_i8, load_i32, load_i64,
+    malloc, null, ptr_is_null, store_i8, store_i32, store_i64,
 )
 
 from . import macho_spec as spec
@@ -197,6 +197,38 @@ def _write_patch_word(data: bytearray, offset: int, value: int) -> None:
     store_i32(data, abi_constant("object.bytearray.data_offset") + offset, value)
 
 
+def _read_patch_signed64(data: bytearray, offset: int) -> int:
+    """Read a little-endian pointer addend without a temporary struct tuple."""
+    if (
+        not _NATIVE_PATCH_WORDS or sys.byteorder != "little"
+        or type(data) is not bytearray or type(offset) is not int
+        or offset < 0 or offset > len(data) - 8
+    ):
+        return struct.unpack_from("<q", data, offset)[0]
+    return load_i64(data, abi_constant("object.bytearray.data_offset") + offset)
+
+
+def _write_patch_u64(data: bytearray, offset: int, value: int) -> None:
+    """Patch an exact eight-byte field without allocating a packed payload.
+
+    Keep struct's coercion, negative-offset and error behavior for everything
+    outside the already-valid native scalar case. The rooted bytearray is
+    passed directly to the intrinsic; no derived payload pointer survives a
+    managed operation. Raw i64 stores use the signed two's-complement value.
+    """
+    if (
+        not _NATIVE_PATCH_WORDS or sys.byteorder != "little"
+        or type(data) is not bytearray or type(offset) is not int
+        or type(value) is not int or offset < 0 or offset > len(data) - 8
+        or value < 0 or value >= (1 << 64)
+    ):
+        struct.pack_into("<Q", data, offset, value)
+        return
+    if value >= (1 << 63):
+        value -= 1 << 64
+    store_i64(data, abi_constant("object.bytearray.data_offset") + offset, value)
+
+
 def _text_span_report_wanted(setting, margin: int) -> bool:
     """PCC_LINK_REPORT_TEXT_SPAN: "0", "off" or "" never reports, any other
     value always does, and unset reports only a margin under a quarter of
@@ -346,7 +378,7 @@ def _build_seg_info(fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output=No
                 if _owned_output is not None:
                     _owned_output.patch_word(out, off, base_word | (nxt << 51))
                     continue
-            struct.pack_into("<Q", out.data, off, base_word | (nxt << 51))
+            _write_patch_u64(out.data, off, base_word | (nxt << 51))
     info = struct.pack("<IHHQIH", 22 + page_count * 2, PAGE,
                        DYLD_CHAINED_PTR_64_OFFSET, seg_file_off, 0,
                        page_count)
@@ -1474,7 +1506,7 @@ def _prepare_executable_image(
                         relative = stored - old_address
                         if not 0 <= relative < len(target_out.data):
                             raise LinkError("DWARF address is outside its code section")
-                        struct.pack_into("<Q", out_data, reloc_address, target_out.addr + relative)
+                        _write_patch_u64(out_data, reloc_address, target_out.addr + relative)
                         continue
                     raise LinkError(
                         "section-target relocations must be normalized to a "
@@ -1571,7 +1603,7 @@ def _prepare_executable_image(
                             # Descriptor thunk: a chained-fixup bind to the import
                             # (e.g. __tlv_bootstrap). Field is zeroed; dyld fills
                             # it via the chain.
-                            struct.pack_into("<Q", out_data, at_off, 0)
+                            _write_patch_u64(out_data, at_off, 0)
                             import sys as execution_runtime
                             if execution_runtime.implementation.name == "cpython":
                                 if _owned_output is not None:
@@ -1582,13 +1614,13 @@ def _prepare_executable_image(
                             name in import_ordinal
                             and out.segname in ("__DATA", "__DATA_CONST")
                         ):
-                            addend, = struct.unpack_from("<q", out_data, at_off)
+                            addend = _read_patch_signed64(out_data, at_off)
                             if not 0 <= addend < (1 << 8):
                                 raise LinkError(
                                     f"import {name!r} data pointer addend {addend} "
                                     "does not fit a chained bind"
                                 )
-                            struct.pack_into("<Q", out_data, at_off, 0)
+                            _write_patch_u64(out_data, at_off, 0)
                             import sys as execution_runtime
                             if execution_runtime.implementation.name == "cpython":
                                 if _owned_output is not None:
@@ -1600,17 +1632,16 @@ def _prepare_executable_image(
                     elif in_tlv_desc and name in thread_block_offset:
                         # Descriptor offset field: the variable's offset within
                         # the thread block, not its vmaddr.
-                        struct.pack_into("<Q", out_data, at_off,
-                                         thread_block_offset[name])
+                        _write_patch_u64(out_data, at_off, thread_block_offset[name])
                     else:
-                        inline, = struct.unpack_from("<q", out_data, at_off)
+                        inline = _read_patch_signed64(out_data, at_off)
                         absolute = target + inline
                         # Store the offset from the image base; the rebase fixup
                         # below adds the runtime base back (surviving ASLR). Only
                         # data sections carry rebases — a pointer in __TEXT would
                         # be in a read-only, non-fixup segment.
                         if out.segname == "__DWARF":
-                            struct.pack_into("<Q", out_data, at_off, absolute)
+                            _write_patch_u64(out_data, at_off, absolute)
                         elif out.segname in ("__DATA", "__DATA_CONST"):
                             import sys as execution_runtime
                             if execution_runtime.implementation.name == "cpython":
@@ -1618,8 +1649,7 @@ def _prepare_executable_image(
                                     _owned_output.reserve_fixup()
                             rebase_sites.append(
                                 (out, at_off, absolute - TEXT_BASE))
-                            struct.pack_into("<Q", out_data, at_off,
-                                             absolute - TEXT_BASE)
+                            _write_patch_u64(out_data, at_off, absolute - TEXT_BASE)
                         else:
                             raise LinkError(
                                 f"absolute pointer relocation in "
