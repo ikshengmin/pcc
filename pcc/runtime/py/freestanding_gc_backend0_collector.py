@@ -206,8 +206,14 @@ def _recompute_reachability() -> None:
 
     node = global_load_ptr("py_gc_head")
     while ptr_is_null(node) == 0:
-        if load_i64(node, 8) > 0:
-            pcc_gc_backend0_mark_reachable(load_ptr(node, 0))
+        obj = load_ptr(node, 0)
+        # A last decref may park after reaching zero and before untrack.
+        # Its fields still own their references until that thread resumes
+        # disposal. Subtraction above counted those edges, so retain the
+        # whole pending owner's graph instead of collecting its children.
+        # Positive-count cycles still require an external or runtime root.
+        if load_i64(node, 8) > 0 or load_i64(obj, 0) == 0:
+            pcc_gc_backend0_mark_reachable(obj)
         node = load_ptr(node, 32)
     _mark_runtime_roots()
 
