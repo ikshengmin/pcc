@@ -200,6 +200,16 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
     immediate = load_ptr(slot, 0)
     if ptr_is_null(immediate) != 0 or is_tagged_int(immediate) != 0:
         return 0
+    # These exact objects are headers defined in static image storage by
+    # py_substrate, not allocated immortals. Their addresses survive every
+    # backend transition. Compare addresses only: an arbitrary heap operand
+    # still must reserve a mode and reload before its header can be read.
+    if (ptr_eq(immediate, global_addr("py_none_storage")) != 0
+            or ptr_eq(immediate, global_addr("py_true_storage")) != 0
+            or ptr_eq(immediate, global_addr("py_false_storage")) != 0
+            or ptr_eq(immediate, global_addr("py_notimplemented_storage")) != 0
+            or ptr_eq(immediate, global_addr("py_ellipsis_storage")) != 0):
+        return 0
     # Reserve a mode guard BEFORE reading the source or its header. The same
     # backend-0/no-probe gate as atomic refcounting has no moving object index.
     # A completed transition can invalidate the first gate read, so check it

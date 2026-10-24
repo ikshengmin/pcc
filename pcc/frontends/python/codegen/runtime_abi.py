@@ -1923,11 +1923,25 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     }
 )
 
+# Opaque header storage defined by py_substrate. These are image-static
+# objects, not movable pointer-valued runtime globals such as py_None. Raw
+# address comparisons let the GC kernel recognize their fixed lifetimes.
+FREESTANDING_GC_STATIC_GLOBALS: frozenset[str] = frozenset(
+    {
+        "py_none_storage",
+        "py_true_storage",
+        "py_false_storage",
+        "py_notimplemented_storage",
+        "py_ellipsis_storage",
+    }
+)
+
 FREESTANDING_GC_RUNTIME_GLOBALS = (
     FREESTANDING_GC_I32_GLOBALS
     | FREESTANDING_GC_I64_GLOBALS
     | FREESTANDING_GC_PTR_GLOBALS
     | FREESTANDING_GC_THREAD_LOCAL_GLOBALS
+    | FREESTANDING_GC_STATIC_GLOBALS
 )
 
 
