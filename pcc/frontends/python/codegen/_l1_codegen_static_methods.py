@@ -596,7 +596,7 @@ def _part_49(out):
 
 def _part_50(out):
     _append_method(out, '_publish_slot_call_owned', (('self', 'pos', False), ('slot', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('label', 'pos', True)))
-    _append_method(out, '_emit_slot_call_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False)))
+    _append_method(out, '_emit_slot_call_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('borrow_stable', 'pos', True)))
     _append_method(out, '_ordinary_call_needs_runtime_binding', (('self', 'pos', False), ('expr', 'pos', False), ('fd', 'pos', False), ('skip_self', 'pos', True), ('require_object_result', 'pos', True)))
     _append_method(out, '_emit_runtime_bound_user_call', (('self', 'pos', False), ('expr', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False)))
     _append_method(out, '_emit_direct_user_function_call', (('self', 'pos', False), ('', 'kw_only', False), ('display_name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('hoist_capture_name', 'pos', True)))

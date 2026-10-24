@@ -190,6 +190,23 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
 # only AFTER it succeeds. Return codes never alter Python exception state.
 @c_abi_export("pcc_gc_foreign_lease_acquire")
 def pcc_gc_foreign_lease_acquire(slot) -> i64:
+    return _foreign_lease_acquire(slot, 0)
+
+
+@c_abi_export("pcc_gc_borrowed_lease_acquire")
+def pcc_gc_borrowed_lease_acquire(slot) -> i64:
+    """Protect a traced borrowed slot whose external owner stays alive.
+
+    The caller exclusively controls the slot and cannot rebind it until
+    release. Relocation updates the borrowed address without transferring
+    a refcount. The ordinary release API consumes the returned token: a
+    counted lease prevents movement until that release finishes.
+    """
+    return _foreign_lease_acquire(slot, 1)
+
+
+@c_abi_export("pcc_gc_slot_lease_acquire")
+def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
     # The caller keeps its owning slot stable while leased. Collectors can
@@ -253,7 +270,18 @@ def pcc_gc_foreign_lease_acquire(slot) -> i64:
     if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0:
         pcc_py_gc_minor_graph_unlock()
         return -1
-    obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
+    obj = null()
+    if borrowed != 0:
+        obj = load_ptr(slot, 0)
+        if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
+            forwarding = pcc_gc_forwarding_index_find(obj)
+            if ptr_is_null(forwarding) == 0:
+                resolved = load_ptr(forwarding, 8)
+                if ptr_is_null(resolved) == 0 and ptr_eq(resolved, obj) == 0:
+                    store_ptr(slot, 0, resolved)
+                    obj = resolved
+    else:
+        obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
     status: i64 = -1
     node = null()
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:

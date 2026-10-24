@@ -719,7 +719,7 @@ class ListMethodLoweringMixin:
             try:
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver")
+                receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver", borrow_stable=True)
                 roots.append(receiver)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
@@ -737,7 +737,7 @@ class ListMethodLoweringMixin:
                 self.builder.cbranch(is_list, list_block, generic_block)
 
                 self.builder.position_at_end(list_block)
-                item = self._emit_slot_call_operand(expr.args[0], "list.append.item")
+                item = self._emit_slot_call_operand(expr.args[0], "list.append.item", borrow_stable=True)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_runtime_call(

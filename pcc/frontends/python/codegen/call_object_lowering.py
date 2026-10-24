@@ -301,7 +301,10 @@ class CallObjectLoweringMixin:
                 sinks[index] = (entry[0], entry[1], True)
 
     def _release_slot_call_roots(self, roots) -> None:
+        borrowed = getattr(self, "_slot_call_borrowed_operands", {})
         for slot in reversed(roots):
+            if borrowed.get(id(slot)) is slot:
+                continue
             _slot, flag, lifo = self._slot_call_root_record(slot)
             if flag is not None:
                 self.builder.store(ir.Constant(_I1, 0), flag)
@@ -315,6 +318,8 @@ class CallObjectLoweringMixin:
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
 
     def _slot_call_cleanup_block(self, roots, target, leases=()):
+        borrowed = getattr(self, "_slot_call_borrowed_operands", {})
+        roots = tuple(slot for slot in roots if borrowed.get(id(slot)) is not slot)
         if not roots and not leases:
             return target
         # Share only this function's identical cleanup program. Keep all
@@ -689,8 +694,26 @@ class CallObjectLoweringMixin:
         return BinOp(span=expr.span, ty=expr.ty, op="**",
                      lhs=expr.args[0], rhs=expr.args[1])
 
-    def _emit_slot_call_operand(self, expr: Expr, label: str):
-        """Evaluate one operand into an independent owning authoritative root."""
+    def _emit_slot_call_operand(self, expr: Expr, label: str, borrow_stable=False):
+        """Capture an owner, or explicitly borrow an unchanged parameter input."""
+        # This opt-in is only for non-consuming input users. A parameter
+        # whose binding never changes is already traced and borrowed from
+        # its caller for this activation. Keep the address lease, but avoid
+        # adding a second owner/frame merely to pass it to another helper.
+        # Cells, generators, globals and promoted/rebound locals keep owning
+        # operand roots. No escape or exact-type claim is inferred from Dyn.
+        if (borrow_stable and isinstance(expr, Name)
+                and expr.ident in getattr(self, "_current_param_names", ())
+                and not getattr(self, "_generator_ctx_stack", ())
+                and getattr(self, "current_func_def", None) is not None
+                and expr.ident not in getattr(self, "_closure_boxed_params", {}).get(
+                    self.current_func_def.name, ())):
+            source = self._slot_call_name_source(expr)
+            if source is not None and source[1]:
+                if not hasattr(self, "_slot_call_borrowed_operands"):
+                    self._slot_call_borrowed_operands = {}
+                self._slot_call_borrowed_operands[id(source[0])] = source[0]
+                return source[0]
         if getattr(self, "_generator_ctx_stack", ()):
             from pcc.frontends.python.codegen.generator_lowering import (
                 emit_generator_operand_spills,
@@ -1416,7 +1439,8 @@ class CallObjectLoweringMixin:
     ):
         """Expose raw operands only while independent counted leases live.
 
-        Every input is an existing owning root. Results go directly to an
+        Inputs are owning roots or proven unchanged borrowed parameter roots.
+        Results go directly to an
         empty output root before any lease release, error check, or cleanup.
         The scalar token/status values are the only SSA values crossing waits.
         """
@@ -1429,8 +1453,12 @@ class CallObjectLoweringMixin:
             for slot in roots:
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
+                borrowed = getattr(self, "_slot_call_borrowed_operands", {})
+                lease_helper = ("pcc_gc_borrowed_lease_acquire"
+                                if borrowed.get(id(slot)) is slot
+                                else "pcc_gc_foreign_lease_acquire")
                 token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
+                    self.runtime[lease_helper], [self._as_gc_ptr(slot)],
                     name=self._fresh("call.slot.argument.lease"),
                 )
                 self._slot_call_check_status(token, "argument lease", span)

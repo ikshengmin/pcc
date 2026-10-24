@@ -380,6 +380,10 @@ void      pcc_gc_unpin(PyObject *o);
  * token/slot, -3 underflow/invariant failure. Neither API touches a pending
  * Python exception. The collector predicate requires graph lock or STW. */
 int64_t   pcc_gc_foreign_lease_acquire(PyObject **slot);
+/* A private traced borrowed slot backed by an owner alive through release.
+ * Relocation changes its address without transferring refcounts. The slot
+ * must not be rebound until pcc_gc_foreign_lease_release consumes its token. */
+int64_t   pcc_gc_borrowed_lease_acquire(PyObject **slot);
 int64_t   pcc_gc_foreign_lease_release(PyObject **slot, int64_t acquired);
 /* Slot-to-slot runtime-entry handoff. Destination is an already registered
  * owning root. Source is an owning root, or (copy_lease only) a traced owning

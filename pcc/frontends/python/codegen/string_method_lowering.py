@@ -943,7 +943,7 @@ class StringMethodLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            receiver = self._emit_slot_call_operand(attr.obj, "str.method.receiver")
+            receiver = self._emit_slot_call_operand(attr.obj, "str.method.receiver", borrow_stable=True)
             roots.append(receiver)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
