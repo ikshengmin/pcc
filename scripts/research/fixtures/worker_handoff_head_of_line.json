@@ -1,0 +1,17 @@
+{
+  "available_bytes": 1000,
+  "width": 3,
+  "slot_limit": 3,
+  "tasks": [
+    {"id": 0, "duration_s": 3, "reservation_bytes": 900, "slot": 0, "depends_on": -1},
+    {"id": 1, "duration_s": 30, "reservation_bytes": 600, "slot": 0, "depends_on": 0},
+    {"id": 2, "duration_s": 3, "reservation_bytes": 800, "slot": 2, "depends_on": -1},
+    {"id": 3, "duration_s": 30, "reservation_bytes": 600, "slot": 2, "depends_on": 2},
+    {"id": 4, "duration_s": 3, "reservation_bytes": 700, "slot": 4, "depends_on": -1},
+    {"id": 5, "duration_s": 30, "reservation_bytes": 600, "slot": 4, "depends_on": 4},
+    {"id": 6, "duration_s": 3, "reservation_bytes": 400, "slot": 6, "depends_on": -1},
+    {"id": 7, "duration_s": 15, "reservation_bytes": 300, "slot": 6, "depends_on": 6},
+    {"id": 8, "duration_s": 3, "reservation_bytes": 400, "slot": 8, "depends_on": -1},
+    {"id": 9, "duration_s": 15, "reservation_bytes": 300, "slot": 8, "depends_on": 8}
+  ]
+}
