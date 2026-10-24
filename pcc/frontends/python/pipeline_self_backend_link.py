@@ -226,7 +226,7 @@ def _owned_macho_link_in_process(
     """
     from pcc.backend.arm64_asm_driver import assemble_file
     from pcc.backend.macho_exec import prepare_executable_object, link_prepared_executable
-    from pcc.backend.macho_codesign import parse_signature, build_signature
+    from pcc.backend.macho_codesign import parse_signature, _build_signature_prefix
     from pcc.backend.native_object import NativeObject, decode_packed_native_object
     from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
@@ -411,8 +411,8 @@ def _owned_macho_link_in_process(
                     2 * len(image) + signature.datasize,
                     label="owned Mach-O signature verification snapshot",
                 )
-        expected_signature = build_signature(
-            memoryview(image)[:signature.dataoff], identifier=signature.identifier,
+        expected_signature = _build_signature_prefix(
+            image, signature.dataoff, identifier=signature.identifier,
             exec_seg_base=signature.exec_seg_base, exec_seg_limit=signature.exec_seg_limit,
             exec_seg_flags=signature.exec_seg_flags,
         )
