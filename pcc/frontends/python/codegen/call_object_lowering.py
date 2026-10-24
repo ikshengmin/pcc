@@ -2118,7 +2118,15 @@ class CallObjectLoweringMixin:
                     operands.append(("mapping", expr))
             else:
                 operands.append(("mapping", kwargs_expr))
-        output = self._emit_slot_call_dict((), span, label)
+        if operands and operands[0][0] == "explicit":
+            # Syntax supplies distinct string names. This first group already
+            # builds a private owning dictionary in source evaluation order;
+            # merging it into a fresh empty dictionary only copies owners.
+            # Later mappings/groups still use the checked merge protocol.
+            output = self._emit_slot_call_dict(operands[0][1], span, label)
+            operands = operands[1:]
+        else:
+            output = self._emit_slot_call_dict((), span, label)
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
