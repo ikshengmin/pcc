@@ -1285,6 +1285,78 @@ active. The 446-file source/runtime/binary/test/reference/profile archive was
 read back and hash-verified:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/sorted-reuse-984f67457/README.md`.
 
+### 2026-10-24 round closeout: nullable exhaustion, live list iteration, pause request
+
+User instruction for this task: “这一轮结束暂停”. This round is closed;
+remaining P0 scope is retained for resume. No overall completion is claimed.
+
+The previously pushed e902c8d25 / 373dd6b38 nullable-iteration change now has
+completed follow-up evidence: 59 model/IR checks (12 deselected), six native
+nodes each executing GC0–4, original handler outputs on GC0–4, and 28 further
+regression nodes (26 deselected). Internal native exhaustion avoids creating
+StopIteration; explicit next(), user/generator errors, generator return values
+and the separate tuple-wrapper path retain their existing contracts. Lifecycle
+counts show 28 -> 25 managed allocations per ordinary sync request, exceptions
+3 -> 0; iterator objects remain 3 and strings remain 4. These are logging counts,
+not timing or escape-analysis proof. A longer same-binary synchronous packet
+confirms 641740.343 -> 611913.977 instructions and 37.6 -> 35.0 microseconds;
+the earlier adverse short wall result is retained. The corresponding original
+handler gain was only +1.46%, with a same-packet 6.31x gap. Detailed verified
+source/runtime/native artifacts and failures are archived at:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/nullable-iteration-e902c8d25/README.md`.
+
+While checking a possible indexed-iteration optimization, the existing typed
+list loop reproduced a real semantic error on GC0–4: an appended list returned
+[1] instead of [1, 2, 3]. Code 0bf5b4e9b and tests 25c85f39a / 2394b5618 make
+list steps observe live contents, while preserving independent source ownership,
+relocation, false values and explicit machine-int behavior. Initial post scope
+passed 22 / 4 deselected. A redundant tuple-header pointer load introduced by
+that change was removed in 5f5ee5c65, with IR regression 1c9f9a418. Final focused
+file: 11 passed; original handler outputs pass GC0–4. The explicit i64 program
+both executes and emits py_list_get_i64_nonnegative. All 949 final frozen
+production files match 1c9f9a418. All five commits are normally pushed to
+shenming/master; peers' bounded signature-verification commits were integrated
+without conflicts. The initial runtime-build worker setting exceeded the 1 GiB
+cap; the guard stopped its children. The successful retries correctly used two
+runtime workers, with unchanged cap/reserve/timeouts. The failed run is retained.
+
+This semantic fix is not a claimed performance win. Its first 20,000-request
+packet was -2.25% median QPS; a longer initial packet was -1.37%. After removing
+the redundant tuple load, five pairs of 100,000 requests give 13576.737 ->
+13514.920 QPS (-0.46%), 2/5 pairs faster with overlapping ranges, instructions
+124.171B -> 124.207B (+0.028%), cycles 24.457B -> 24.606B and user CPU 7.33 ->
+7.37 seconds. Residual performance uncertainty stays open. Same-packet asyncio
+84661.866 QPS leaves a 6.26x gap. Different asyncio denominators must not be
+combined into an improvement claim. These are host-pcc0/owned-self/no-libpython
+handler batches, not HTTP, latest pcc1 or fixed-point evidence.
+
+The finished diagnostic now identifies all twelve list/tuple allocations in one
+unchanged ordinary request by actual native call stacks: six lists (notification,
+output buffer, two dict materializations, two sorted working lists), six tuples
+(one single-argument call tuple, one six-argument signature-binding tuple, four
+dictionary key/value pairs). External LLDB was used only for this diagnostic;
+the program still prints the verified 86-byte total and exits zero. This does
+not establish an escape fraction. There is no empty tuple allocation per sync
+request. Actual emitter IR shows the hot ten-parameter recursive call uses the
+direct ABI with ten pins/unpins, not the wide-call list-to-tuple fallback. Old
+matching profiles put pin/unpin/borrowed loads below 4% of sync work; rewriting
+only that layer would not address the remaining gap. Larger container lifetime,
+root ownership and retirement costs remain the performance focus on resume.
+
+Final source, both runtimes, tests, adverse/final timing packets, raw emitter IR,
+all allocation stacks and commands were read back and hash-verified in:
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/list-live-iteration-0bf5b4e9b/README.md`.
+Run binaries are compressed to avoid repeated large temporary copies. The prior
+requested cleanup removed about 8.1 GB of this task's verified duplicate and
+rebuildable artifacts; source worktrees, active inputs and the native pcc1
+baseline remained intact. Its manifest is in
+`/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/cleanup-2026-10-24-temporary-builds/README.md`.
+
+Latest-source native pcc1 and full bootstrap/fixed point, complete conformance,
+concurrent collector equality, virtual-thread scaling and the throughput target
+remain unfinished. The already authorized single stage1 has not been run in
+this round. No new optimization or broad gate is launched after closeout.
+
 Historical wins require their recorded configuration: the gateway's September
 10 clean C100 reproduction (86,862 vs 84,456 req/s) explicitly used external
 LLVM runtime merge/emission. The September 26 owned report wins at C1/C10 but
