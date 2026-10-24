@@ -282,7 +282,7 @@ class NamespaceWriterModel:
         )
         assert not self.locked and not self.leased and not self.plans
         assert self.registered == {self.input_class, self.input_value}
-        assert self.events[-1] == 'closed'
+        assert self.events[-1] == 'closed' or (self.count == 0 and self.failure == 'registration')
         return result
 
 
@@ -375,25 +375,32 @@ class SharedHelperNamespaceWriterModel(NamespaceWriterModel):
             for offset in range(0, size, 8):
                 self.store(base, offset, 0)
 
-        def register(slot):
-            if not self.active_slots:
-                self.active_slots = slot
+        def register_group(frame_map, slots):
+            self.active_slots = slots
             self.interrupt('register')
-            if self.failure == 'registration' and self.registration_count == 3:
-                self.count = self.registration_count
-                return 0
-            self.registered.add(slot)
+            count = self.load(frame_map)
+            assert count == 14
+            members = [slots + index * 8 for index in range(count)]
+            assert all(self.load(slot) == 0 for slot in members)
             self.registration_count += 1
-            self.count = self.registration_count
+            if self.failure == 'registration':
+                self.count = 0
+                return 0
+            self.registered.update(members)
+            self.count = count
             handle = self.alloc(8)
-            self.handle_slots[handle] = slot
+            self.handle_slots[handle] = (frame_map, members)
             return handle
 
-        def unregister(handle):
+        def unregister_group(handle):
             self.interrupt('unregister')
-            self.registered.remove(self.handle_slots.pop(handle))
-            if not self.handle_slots:
-                self.events.append('closed')
+            frame_map, members = self.handle_slots.pop(handle)
+            assert self.load(frame_map, 8) == 0
+            assert self.load(frame_map) == len(members)
+            for slot in members:
+                assert not self.load(slot) and slot not in self.leased
+                self.registered.remove(slot)
+            self.events.append('closed')
 
         def acquire(slot):
             assert slot in self.registered
@@ -449,8 +456,9 @@ class SharedHelperNamespaceWriterModel(NamespaceWriterModel):
             raise AssertionError('lease invariant aborted')
 
         env.update({
-            'memset': memset, 'pcc_gc_scheduler_root_register_handle': register,
-            'pcc_gc_scheduler_root_unregister_handle': unregister,
+            'memset': memset, 'store_i32': self.store,
+            'pcc_gc_register_continuation_root_node': register_group,
+            'pcc_gc_unregister_continuation_root_node': unregister_group,
             'pcc_gc_root_copy_lease': copy,
             'pcc_gc_root_copy_borrowed_lease': lambda *args: pytest.fail('unexpected borrowed input'),
             'pcc_gc_foreign_lease_acquire': acquire,

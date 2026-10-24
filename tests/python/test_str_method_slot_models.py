@@ -346,10 +346,15 @@ def test_method_copy_failure_retires_acquired_owners(failure):
     mem=StringMemory(fail_copy=failure)
     assert mem.invoke("startswith","abc","a",0,3)[0]=="error"
 
-@pytest.mark.parametrize("failure",(1,4,14))
-def test_method_root_registration_failure_retires_handles(failure):
-    mem=StringMemory(fail_register=failure)
-    assert mem.invoke("startswith","abc","a")[0]=="error"
+def test_method_root_registration_failure_retires_handles():
+    successful = StringMemory()
+    assert successful.invoke("startswith", "abc", "a")[0] == "value"
+    assert successful.registrations > 0
+    for failure in range(1, successful.registrations + 1):
+        mem = StringMemory(fail_register=failure)
+        assert mem.invoke("startswith", "abc", "a")[0] == "error"
+        assert mem.registrations >= failure
+        assert not mem.root_groups
 
 
 class CanonicalStringMemory(StringMemory):
@@ -360,7 +365,7 @@ class CanonicalStringMemory(StringMemory):
         self.ns.update({
             "_object_new_cache_mutex":lambda:"owned-mutex",
             "pcc_mutex_lock":self.mutex_lock,"pcc_mutex_unlock":self.mutex_unlock,
-            "py_class_new":self.class_new,
+            "py_class_new_builtin":self.class_new,
             "py_class_write_namespace_slots":self.write_namespace,
             "py_class_add_method":self.add_method,
         })

@@ -620,7 +620,7 @@ class CanonicalTupleMemory(SelectionMemory):
         self.ns.update({
             '_object_new_cache_mutex':lambda:'owned-mutex',
             'pcc_mutex_lock':self.mutex_lock,'pcc_mutex_unlock':self.mutex_unlock,
-            'py_class_new':self.class_new,
+            'py_class_new_builtin':self.class_new,
             '_object_new_captures':lambda:self.new_tuple(0),
             'py_func_new_bound':self.function_new,
             'py_staticmethod_new':self.staticmethod_new,
