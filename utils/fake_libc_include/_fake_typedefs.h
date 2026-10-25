@@ -100,8 +100,8 @@ typedef int __tzrule_type;
 typedef int __tzinfo_type;
 typedef int mbstate_t;
 typedef int sem_t;
-#if defined(__linux__) || defined(_WIN32)
-/* pcc-owned zero-libc thread handles, not a host pthread library ABI. */
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+/* Darwin's pthread handle and the pcc-owned runtime handles are pointers. */
 typedef void *pthread_t;
 #else
 typedef int pthread_t;

@@ -3,14 +3,18 @@
 #include "_fake_defines.h"
 #include "_fake_typedefs.h"
 
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+/* Native Darwin uses libSystem; Linux/Windows use the owned finite API. */
+int pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
+int pthread_join(pthread_t, void **);
+int pthread_detach(pthread_t);
+#endif
+
 #if defined(__linux__) || defined(_WIN32)
 /* The finite pthread-shaped API implemented by the owned threaded runtime. */
 struct timespec;
 #define PTHREAD_MUTEX_INITIALIZER {0}
 #define PTHREAD_COND_INITIALIZER {0}
-int pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
-int pthread_join(pthread_t, void **);
-int pthread_detach(pthread_t);
 int pthread_mutex_init(pthread_mutex_t *, const pthread_mutexattr_t *);
 int pthread_mutex_destroy(pthread_mutex_t *);
 int pthread_mutex_lock(pthread_mutex_t *);
