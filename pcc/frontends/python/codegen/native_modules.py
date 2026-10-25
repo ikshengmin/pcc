@@ -2574,6 +2574,8 @@ class NativeModuleAliasMixin:
         if module_name is None:
             module_name = self._native_module_object_for_name(alias_name)
         if module_name is None:
+            if for_guard:
+                return self._native_builtin_compiled_export_info(alias_name, attr_name)
             return None
         native_table = self._native_module_exports
         if native_table is None:
