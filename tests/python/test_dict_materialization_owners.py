@@ -30,7 +30,7 @@ class MaterializeMemory(DictMemory):
             py_tuple_new=self.new_tuple,
             py_list_append=self.append_list,
             py_tuple_set_item=self.set_tuple,
-            py_tuple_from_owned_roots=self.tuple_from_owned_roots,
+            pcc_tuple_from_owned_roots_lease=self.tuple_from_owned_roots,
             pcc_gc_store_root=self.store_root,
         )
         tree = ast.parse(PORT.read_text())
@@ -90,7 +90,7 @@ class MaterializeMemory(DictMemory):
                 assert value.leases == 0
             pair.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
             self.write(source, 0, None)
-        return 0
+        return self.acquire(output)
 
     def append_list(self, obj, value):
         self.collect('callback')

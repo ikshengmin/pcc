@@ -10,10 +10,13 @@ PORT = Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_tuple.py'
 
 
 class TupleFactoryMemory:
-    def __init__(self, values, backend, failure=None, pending=None):
+    def __init__(self, values, backend, failure=None, pending=None, read_barrier=None):
         self.backend, self.failure, self.pending = backend, failure, pending
         self.memory, self.frames, self.objects, self.leases = {}, {}, set(), {}
         self.children = Counter(values)
+        self.read_barrier = (backend in (3, 4)) if read_barrier is None else read_barrier
+        self.memory[400] = int(self.read_barrier)
+        self.resolutions = self.transactions = 0
         self.count = len(values)
         self.next_address = 1000
         self.locked = False
@@ -37,9 +40,9 @@ class TupleFactoryMemory:
             'PYTUPLEOBJECT_LEN_OFFSET': 16, 'PYTUPLEOBJECT_ITEMS_OFFSET': 24,
             'PY_TYPE_TUPLE': 7, 'null': lambda: None,
             'ptr_is_null': lambda value: value is None, 'ptr_add': lambda p, n: p + n,
-            'cstr': lambda value: value, 'global_addr': lambda name: 1,
+            'cstr': lambda value: value, 'global_addr': lambda name: 400 if name == 'pcc_gc_read_barrier_enabled' else 1,
             'stack_alloc': self.stack, 'memset': self.zero,
-            'load_ptr': self.load, 'store_ptr': self.write, 'store_i64': self.write,
+            'load_ptr': self.load, 'load_i32': self.load, 'store_ptr': self.write, 'store_i64': self.write,
             'pcc_gc_alloc': self.allocate, 'pcc_gc_foreign_lease_acquire': self.acquire,
             'pcc_gc_foreign_lease_release': self.release,
             'pcc_py_gc_minor_graph_lock': self.lock,
@@ -60,7 +63,7 @@ class TupleFactoryMemory:
             'pcc_platform_abort': lambda: pytest.fail('invariant abort'),
         }
         _functions(PORT, {'py_tuple_new', '_tuple_owned_construction_failed',
-                          'py_tuple_from_owned_roots'}, self.ns)
+                          'py_tuple_from_owned_roots', 'pcc_tuple_from_owned_roots_lease'}, self.ns)
 
     def stack(self, size):
         self.next_address += max(1024, size + 32)
@@ -145,6 +148,7 @@ class TupleFactoryMemory:
     def lock(self):
         self.boundary()
         self.locked = True
+        self.transactions += 1
 
     def unlock(self):
         assert self.locked
@@ -153,6 +157,7 @@ class TupleFactoryMemory:
 
     def resolve(self, slot, borrowed):
         assert self.locked and borrowed == 0 and slot in self.source_slots
+        self.resolutions += 1
         return self.load(slot, 0)
 
     def note_store(self):
@@ -217,7 +222,7 @@ class TupleFactoryMemory:
 
 
 @pytest.mark.parametrize('backend', range(5))
-@pytest.mark.parametrize('values', [('a',), ('a', 'b', 'a'), ('a',) * 8, ('cycle', 'a')])
+@pytest.mark.parametrize('values', [('a',), ('a', 'b', 'a'), ('a',) * 8, ('a',) * 17, ('cycle', 'a')])
 def test_tuple_factory_transfers_each_owner_with_movement_and_tracking(values, backend):
     m = TupleFactoryMemory(values, backend)
     assert m.ns['py_tuple_from_owned_roots'](m.sources, len(values), m.output) == 0
@@ -226,6 +231,8 @@ def test_tuple_factory_transfers_each_owner_with_movement_and_tracking(values, b
     assert m.owned() == m.children
     assert m.tracked == int('cycle' in values) and m.published == 1
     assert m.stores == (len(values) if backend else 0)
+    assert m.transactions == (len(values) + 7) // 8
+    assert m.resolutions == (len(values) if backend else 0)
     assert m.frames == m.initial_frames and not m.leases and m.pending is None
 
 
@@ -352,3 +359,19 @@ def test_tuple_transfer_preserves_aliases_finalizers_and_reachable_cycles(
         (tmp_path / ('gc' + str(backend) + '.stdout')).write_text(result.stdout)
         (tmp_path / ('gc' + str(backend) + '.stderr')).write_text(result.stderr)
         assert (result.returncode, result.stdout, result.stderr) == (0, expected + '\n', ''), backend
+
+
+@pytest.mark.parametrize('backend', range(5))
+def test_tuple_factory_can_handoff_its_existing_output_lease(backend):
+    m = TupleFactoryMemory(('a', 'cycle'), backend)
+    token = m.ns['pcc_tuple_from_owned_roots_lease'](m.sources, 2, m.output)
+    assert token == 1 and m.leases == {m.output: token}
+    assert m.owned() == m.children and m.frames == m.initial_frames
+    m.release(m.output, token)
+    assert not m.leases and m.pending is None
+
+
+def test_gc0_keeps_resolution_when_read_barriers_are_enabled():
+    m = TupleFactoryMemory(('a', 'b'), 0, read_barrier=True)
+    assert m.ns['py_tuple_from_owned_roots'](m.sources, 2, m.output) == 0
+    assert m.resolutions == 2 and m.owned() == m.children
