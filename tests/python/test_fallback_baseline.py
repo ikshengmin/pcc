@@ -649,13 +649,16 @@ def test_pipeline_subprocess_run_kwargs_resolve_without_cpython_bridge():
     )
     module_name = "pcc.frontends.python.pipeline"
     typed = infer_module(parse_and_lift(source, "subprocess_probe.py", module_name))
-    ir_text = str(
-        L1CodeGen(
-            typed,
-            emit_cpy_main_exitcode=False,
-            ir_scaffold_mode="on",
-        ).generate(typed)
+    gen = L1CodeGen(
+        typed,
+        emit_cpy_main_exitcode=False,
+        ir_scaffold_mode="on",
     )
+    # Match the strict_no_libpython=True contextual closure immediately
+    # above. Compatibility mode correctly permits a CPython provider for
+    # computed capture_output; that is not this native canary's pipeline.
+    gen._strict_no_libpython = True
+    ir_text = str(gen.generate(typed))
 
     assert "@py_subprocess_run(" in ir_text
     assert "@py_subprocess_run_timeout(" in ir_text
