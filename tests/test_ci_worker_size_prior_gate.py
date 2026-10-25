@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 43, 30, 9, 75, 28)
+    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 54, 30, 9, 75, 28, 31, 17)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -79,13 +79,18 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[59:61] == (gate.MACHO_SECTION_TARGET_INDEX_TEST, gate.WIN64_DIRECT_SCALAR_TEST)
     assert gate.HOST_FILES[61:63] == (gate.CONSUMED_UNSAFE_TEST, gate.IR_BUILDER_CALL9_TEST)
     assert gate.HOST_FILES[63:65] == (gate.MACHO_ARCHIVE_RETIREMENT_TEST, gate.GC_MARK_COLOR_ATOMIC_TEST)
-    assert gate.HOST_FILES[65:] == gate.TUPLE_OWNED_ROOT_HOST_TESTS == (
+    assert gate.HOST_FILES[65:70] == gate.TUPLE_OWNED_ROOT_HOST_TESTS == (
         "tests/python/test_tuple_owned_root_factory.py",
         "tests/python/test_fixed_tuple_literal.py",
         "tests/python/test_fixed_call_argument_tuple.py",
         "tests/python/test_dict_materialization_owners.py",
         "tests/python/test_slot_call_operand_roots.py",
     )
+    assert gate.HOST_FILES[70:] == gate.AARCH64_STACKMAP_RETIREMENT_HOST_TESTS == (
+        "tests/python/test_aarch64_stackmap_emission_retirement.py",
+        "tests/python/test_aarch64_stackmap_plan_ownership.py",
+    )
+    assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_gc_mark_color_atomic.py"') == 2
@@ -94,8 +99,9 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 70
-    assert sum(gate.HOST_COUNTS) == 3153 and sum(gate.HOST_COUNTS[:65]) == 2968
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 72
+    assert sum(gate.HOST_COUNTS) == 3212 and sum(gate.HOST_COUNTS[:70]) == 3164
+    assert sum(gate.HOST_COUNTS[:65]) == 2968
     assert sum(gate.HOST_COUNTS[:63]) == 2930
     assert sum(gate.HOST_COUNTS[:62]) == 2921
     assert sum(gate.HOST_COUNTS[:61]) == 2744
@@ -217,11 +223,22 @@ def test_default_command_retains_project_xdist(tmp_path):
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     push_filters, pull_request_filters = workflow.split('\n  pull_request:', 1)
     # The default host phase executes these cases, not their native gates.
-    for path, expected_count in zip(gate.TUPLE_OWNED_ROOT_HOST_TESTS, (43, 30, 9, 75, 28)):
+    for path, expected_count in zip(
+        (*gate.TUPLE_OWNED_ROOT_HOST_TESTS, *gate.AARCH64_STACKMAP_RETIREMENT_HOST_TESTS),
+        (54, 30, 9, 75, 28, 31, 17),
+    ):
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
+        module = ast.parse((ROOT / path).read_text())
+        parameter_values = {
+            node.targets[0].id: node.value
+            for node in module.body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, (ast.List, ast.Tuple))
+        }
         count = 0
-        for node in ast.parse((ROOT / path).read_text()).body:
+        for node in module.body:
             if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
                 continue
             if any(ast.unparse(mark) == "pytest.mark.integration" for mark in node.decorator_list):
@@ -231,6 +248,8 @@ def test_default_command_retains_project_xdist(tmp_path):
                 assert isinstance(mark, ast.Call)
                 assert ast.unparse(mark.func) == "pytest.mark.parametrize"
                 values = mark.args[1]
+                if isinstance(values, ast.Name):
+                    values = parameter_values[values.id]
                 if isinstance(values, ast.Call):
                     assert isinstance(values.func, ast.Name) and values.func.id == "range"
                     assert not values.keywords
@@ -1188,7 +1207,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     ownership = "tests/python/test_aarch64_stackmap_plan_ownership.py"
     identity_test = "tests/python/test_native_func_top_level_identity.py"
     staged_source = "tests/python/test_macho_staged_source_target_order.py"
-    assert ownership not in gate.HOST_FILES
+    assert ownership in gate.HOST_FILES
     assert identity_test not in gate.HOST_FILES
     assert consumer in gate.HOST_FILES
     consumer_tree = ast.parse((ROOT / consumer).read_text())
@@ -1593,7 +1612,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 43, 30, 9, 75, 28) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 54, 30, 9, 75, 28, 31, 17) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
