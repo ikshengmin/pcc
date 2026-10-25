@@ -1156,7 +1156,12 @@ entry:
                     value = getattr(packed, field)
                     if isinstance(value, CompilerIntArena):
                         assert id(value) not in kernel_arenas
-                        assert not value._closed
+                        emission_fields = (
+                            "reload_scalars", "entry_routes", "suffix_routes",
+                            "terminator_routes", "entry_route_spans",
+                            "suffix_route_spans", "terminator_route_spans",
+                        )
+                        assert value._closed is (field in emission_fields)
             result = build_section(*args, **kwargs)
             stackmaps_finished = True
             return result

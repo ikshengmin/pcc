@@ -519,6 +519,7 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   macos-pcc0-regressions:
