@@ -98,10 +98,22 @@ single-thread cost and serializes all threads.
    so finalizers and weakref callbacks fire when CPython's would. Tests:
    `tests/python/test_biased_refcount_semantics.py` (cross-thread drops,
    `__del__` timing, weakref callbacks, sys.getrefcount).
-6. Concurrent collector threads. GC1-GC4 marking/sweeping/relocation run on
-   collector workers; mutators answer soft handshakes (scan own stack, flush
-   buffers); exited threads are handled by the collector. Tests:
-   `tests/python/test_concurrent_collector_workers.py`.
+6. Concurrent collector threads. The maintainer explicitly requires all five
+   backends (2026-10-25). GC0 keeps immediate reference-count semantics while
+   cycle discovery moves to concurrent collection with a sound mutation/root
+   protocol; do not substitute deferred decrements or weaken finalizers,
+   weakrefs and resurrection. GC1-GC4 marking/sweeping/relocation advance on
+   collector workers; mutators answer handshakes and exited threads are handled
+   by the collector. Any remaining STW phase must be explicit and measured.
+   Threaded execution alone is not proof: native tests must show collector work
+   and mutator progress during the same active collection, including mutation,
+   allocation, root publication, finalization and backend lifecycle races.
+   Moving backends need concurrent marking barriers and coherent gray ownership
+   across promotion, relocation and retirement before worker admission. Keep
+   foreign/runtime address protection until its replacement is actually proven.
+   Target gate: `tests/python/test_concurrent_collector_workers.py`; current
+   moving-barrier regressions are in
+   `tests/python/test_moving_gc_concurrent_mark_barriers.py`.
 7. Measurement. `tests/benchmarks/threading/` programs and driver; every
    package records fib/alloc/objects/strings single-thread and 1/2/4/8
    thread scaling against CPython 3.15 in `docs/status.md`.

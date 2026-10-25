@@ -1295,6 +1295,74 @@ active. The 446-file source/runtime/binary/test/reference/profile archive was
 read back and hash-verified:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/sorted-reuse-984f67457/README.md`.
 
+### 2026-10-25 tuple ownership packet and continued concurrent-GC work
+
+User direction now supersedes the earlier pause: “请完成五种 GC 并发化，优化六倍的性能！” and “可以多来几轮”. Continue the full scope; a small local speedup or five-backend thread-safety run is not completion.
+
+The tuple packet began from shenming/master 5990ee1ee. Construction-only tuple
+owner transfer landed as cd55b80cd, with 5ea54776d tests and 1a63d2b72's
+nested-operand fixture update. Temporary owners move into fresh tuple fields;
+shared objects, identity, GC barriers, cycle tracking, exceptions and finalizers
+keep their contracts. Empty/wide/splat/generator routes retain their previous
+paths. 4d3e2893c / fc388891e reuse the output lease and bound transfer batches.
+3a3312c73 / a3bc1e766 fix an introduced scratch-index loop that generated boxed
+Python arithmetic: its actual runtime IR grew to 810 lines with py_int_mul/sub,
+conversions and root frames, then fell to 294 without those calls after the
+ABI indices/stride were explicitly i64. This is bounded internal arithmetic,
+not narrowing ordinary Python integers.
+
+All positive and adverse packets remain recorded. The first variant increased
+dict-items instructions by 17.23%, with essentially unchanged full-handler QPS;
+the lease/batch variant still regressed dict-items and full-handler timing.
+The final same-source packet is: tuple-call instructions -4.08% (coarse wall
+1800 -> 2000 ns, retained as adverse); dict-items -2.39%, 2600 -> 2400 ns;
+ordinary synchronous request -0.40%, 34.0 -> 33.5 microseconds. Full handler:
+14095.307 -> 14173.481 QPS (+0.55% median), 5/7 pairs faster with overlapping
+ranges, instructions 25.065B -> 25.013B (-0.21%), user CPU 1.43 -> 1.41 s.
+Same-packet asyncio 91019.262 QPS leaves 6.42x. This is not a significant overall
+win and does not meet the performance goal. Different asyncio denominators do
+not describe a trend against the previous 6.26x packet. These are host-pcc0 /
+owned-self / no-libpython / threaded-atomic GC0 handler batches, not HTTP or
+latest-pcc1 qualification.
+
+Validation includes six native nodes each running GC0–4 (aliases, finalizers,
+reachable cycles, two-thread construction/collection, tuple literals, call
+arguments, parking and forced OOM); final native packet 6 passed / 66 deselected.
+Host/model/IR scopes passed 154, then 129, then 76 nodes; related follow-up scope
+214 passed / 2 deselected. These scopes overlap and must not be summed as unique
+coverage. Original sync and handler outputs pass GC0–4. Failed compilation,
+stale assertions, a deselected OOM retry and a driver syntax failure are retained
+and were not reported passing. The final measured snapshot predates peers'
+ARM emission/stackmap retirement changes in two backend files; our edited
+runtime/codegen paths match published source. No conflict-free peer suite was
+repeated merely due to rebase. Current pcc1, full bootstrap/fixed point and full
+conformance remain unqualified.
+
+Evidence is compressed and every archive member was read back and hash-checked:
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/tuple-root-transfer-cd55b80cd/README.md`.
+This archive closes only that packet; work continues.
+
+Current concurrent-GC audit: one threaded runtime is implemented. Background
+collector marking is still admitted only for GC1/GC2; GC0 cycles still use STW.
+The moving-backend marking prerequisites now have a verified production fix
+(8fb59c63 before rebase): GC3/GC4 root and black-to-white insertion barriers,
+black allocation during active marking, and exact gray ownership across
+oldification, relocation and terminal release. 59 model/atomic/contract checks
+passed (1 deselected); owned-native C probes passed for white, gray and black
+sources, each executing GC3 and GC4. Two existing GC4 sweep-verdict probes also
+passed. Receipts are currently in
+`/private/tmp/pcc-p0-concurrent-collectors/native-v4/receipt.json` and
+`native-v3/receipt.json`; these establish transitions, not full concurrent
+collector progress or a new-source pcc1.
+
+Worker admission, lifecycle and native mutator-progress checks remain next.
+GC4 relocation still requires other mutators at application gates. GC0's
+separate tracked-node index and immediate reference-count/finalizer semantics
+require their own concurrent-cycle design. These gaps do not explain the
+measured GC0 sixfold slowdown by themselves. Root ownership/protocol and
+shared-lock costs remain the larger performance targets; further isolated
+constructor tuning is not enough.
+
 ### 2026-10-24 round closeout: nullable exhaustion, live list iteration, pause request
 
 User instruction for this task: “这一轮结束暂停”. This round is closed;
