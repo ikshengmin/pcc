@@ -292,7 +292,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     backend: i64 = _selected_backend()
 
     if ptr_is_null(owner) != 0:
-        if backend != 1 and backend != 2 and backend != 4:
+        if backend != 1 and backend != 2 and backend != 3 and backend != 4:
             return
         pcc_py_gc_minor_graph_lock()
         if (
@@ -306,9 +306,9 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             if backend == 2 and (value_flags & 16) == 0:
                 should_gray: i64 = 1
             if should_gray != 0:
-                # GC1/2 count each non-GRAY -> GRAY transition once. GC4
-                # moving-color transfer is a separate ownership contract.
-                if (backend == 1 or backend == 2) and (value_flags & 16) == 0:
+                # A root introduces marking work for every tracing backend.
+                # Count only the actual non-GRAY -> GRAY transition.
+                if (value_flags & 16) == 0:
                     pcc_gc_gray_count_increment_acq_rel()
                 pcc_gc_set_mark_color(value, 16)
                 store_i32(global_addr("pcc_gc_mark_active"), 0, 1)
@@ -377,8 +377,9 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         return
     owner_flags = load_i32(owner, 12)
     value_flags = load_i32(value, 12)
-    if (owner_flags & 256) == 0 or (value_flags & 128) == 0:
-        return
+    if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
+        if (owner_flags & 256) == 0 or (value_flags & 128) == 0:
+            return
     pcc_py_gc_minor_graph_lock()
     if (
         pcc_gc_object_is_known_no_lock(owner) != 0
@@ -386,6 +387,16 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     ):
         owner_flags = load_i32(owner, 12)
         value_flags = load_i32(value, 12)
+        # Major marking and generation recording are independent obligations.
+        # A black young owner can acquire a white old child as well.
+        if (
+            load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+            and (owner_flags & 32) != 0
+            and (value_flags & 8) != 0
+        ):
+            if (value_flags & 16) == 0:
+                pcc_gc_gray_count_increment_acq_rel()
+            pcc_gc_set_mark_color(value, 16)
         if (owner_flags & 256) != 0 and (value_flags & 128) != 0:
             if backend == 4:
                 if pcc_gc_backend4_store_buffer_enqueue(owner, slot, value) != 0:

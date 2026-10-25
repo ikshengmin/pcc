@@ -4848,14 +4848,20 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
         elif backend == 3:
             flags: int = load_i32(o, 12)
-            new_flags: int = (flags & ~(56 | 384)) | 136
+            color: int = 8
+            if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                color = 32
+            new_flags: int = (flags & ~(56 | 384)) | 128 | color
             if ptr_is_null(pending_block) == 0:
                 new_flags = new_flags | 4096
             store_i32(o, 12, new_flags)
             store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
         elif backend == 4:
             flags: int = load_i32(o, 12)
-            new_flags: int = (flags & ~(56 | 2048 | 8192)) | 8
+            color: int = 8
+            if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                color = 32
+            new_flags: int = (flags & ~(56 | 2048 | 8192)) | color
             if (flags & 384) == 0:
                 new_flags = new_flags | 128
             store_i32(o, 12, new_flags)
@@ -5086,9 +5092,10 @@ def pcc_gc_note_object_freeing(o) -> None:
             # Retire this mark-cycle work before publishing freeing, including
             # the minor-block branch that leaves the node linked. Clearing the
             # bit and the first-transition guard make repeated notifications
-            # idempotent. Do not infer GC3/4 moving-copy ownership from color.
+            # idempotent. Only this still-active node owns the gray work;
+            # already retired forwarding-source nodes do not retire it twice.
             count_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-            if count_backend == 1 or count_backend == 2:
+            if count_backend >= 1 and count_backend <= 4:
                 dying_flags: int = load_i32(o, 12)
                 if (dying_flags & 16) != 0:
                     _gc_gray_count_decrement_acq_rel()
