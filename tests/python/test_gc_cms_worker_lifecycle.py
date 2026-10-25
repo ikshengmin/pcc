@@ -480,3 +480,17 @@ def test_gc4_gate_consumes_a_worker_completion_that_predates_the_gate(enabled, u
     exec(compile(ast.fix_missing_locations(tree), "gc4-production-gate", "exec"), namespace)
     namespace["_gc4_maybe_auto_step"]()
     assert calls == ([0] if enabled and not unsafe else [])
+
+
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
+@pytest.mark.parametrize("enabled,threshold", [(1, 700), (0, 700), (1, 0)])
+def test_finished_mark_rearms_a_consumed_wakeup_only_after_collection_is_enabled(backend, enabled, threshold):
+    rt = Runtime(backend=backend, state=1)
+    rt.memory.update({"py_gc_enabled": enabled, "py_gc_threshold0": threshold,
+                      "pcc_gc_cms_queue_pushes": 1, "pcc_gc_cms_worker_drains": 1,
+                      "pcc_gc_backend4_auto_step_pending": 0,
+                      "pcc_gc_cms_sweep_pending": 1})
+    rt.ns["pcc_platform_sleep_ns"] = lambda _: rt.memory.update({STOP: 1})
+    rt.call("pcc_gc_cms_worker_main_py", 0)
+    assert rt.memory["pcc_gc_backend4_auto_step_pending"] == int(bool(enabled and threshold))
+    assert rt.memory["pcc_gc_cms_sweep_pending"] == 1

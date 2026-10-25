@@ -193,7 +193,7 @@ def test_public_collection_preserves_config_and_collection_order():
     worker_growth = worker.index('global_addr("py_gc_tracked_count")')
     worker_trace = worker.index("pcc_gc_tracing_step_cycle(512)")
     worker_discharge = worker.index("pcc_gc_tracing_discharge_debt(traced)")
-    worker_sweep = worker.index('atomic_store_i32(pending, 0, 1, "release")')
+    worker_sweep = worker.index('atomic_store_i32(pending, 0, 1, "release")', worker_discharge)
     assert max(worker_enabled, worker_threshold0) < worker_pending
     assert worker_pending < worker_due < worker_growth < worker_trace
     assert worker_trace < worker_discharge < worker_sweep

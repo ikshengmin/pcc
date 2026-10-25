@@ -155,3 +155,83 @@ def test_worker_marks_between_heap_mutations_without_stop_epoch_change(
     assert run.returncode == 0, (backend, run.returncode, run.stdout, run.stderr)
     assert f'backend={backend} proved=1 observations=2 ' in run.stdout
     assert run.stderr == ''
+
+
+RESUME_PROBE = r'''
+#include "py_internal.h"
+#include <stdint.h>
+#include <stdio.h>
+extern int32_t pcc_gc_cms_sweep_pending;
+extern int32_t pcc_gc_backend4_auto_step_pending;
+extern int32_t pcc_gc_cms_queue_pushes;
+extern int32_t pcc_gc_cms_worker_drains;
+extern int32_t py_gc_threshold0;
+extern int32_t py_gc_threshold1;
+extern int32_t py_gc_threshold2;
+extern int64_t pcc_platform_monotonic_us(void);
+
+int main(void) {
+    int backend = pcc_gc_backend();
+    if (backend < 1 || backend > 4) return 2;
+    py_gc_disable();
+    for (int i = 0; i < 4096; i++) {
+        PyObject *temporary = py_list_new(0);
+        if (temporary == 0) return 3;
+        py_decref(temporary);
+    }
+    py_gc_enable();
+    int64_t deadline = pcc_platform_monotonic_us() + 3000000;
+    while (pcc_platform_monotonic_us() < deadline) {
+        pcc_thread_safepoint();
+        if (__atomic_load_n(&pcc_gc_cms_sweep_pending, __ATOMIC_ACQUIRE) != 0
+            && __atomic_load_n(&pcc_gc_cms_worker_drains, __ATOMIC_ACQUIRE)
+               == __atomic_load_n(&pcc_gc_cms_queue_pushes, __ATOMIC_ACQUIRE)) break;
+    }
+    if (__atomic_load_n(&pcc_gc_cms_sweep_pending, __ATOMIC_ACQUIRE) == 0) return 4;
+    int t0 = py_gc_threshold0;
+    int t1 = py_gc_threshold1;
+    int t2 = py_gc_threshold2;
+    if (@PAUSE_KIND@ == 0) py_gc_disable();
+    else py_gc_set_threshold(0, t1, t2);
+    pcc_gc_safepoint();
+    /* The disabled gate consumes the public wakeup, not the completed mark. */
+    if (__atomic_load_n(&pcc_gc_cms_sweep_pending, __ATOMIC_ACQUIRE) != 1) return 5;
+    __atomic_store_n(&pcc_gc_backend4_auto_step_pending, 0, __ATOMIC_RELEASE);
+    if (@PAUSE_KIND@ == 0) py_gc_enable();
+    else py_gc_set_threshold(t0, t1, t2);
+    deadline = pcc_platform_monotonic_us() + 3000000;
+    while (pcc_platform_monotonic_us() < deadline) {
+        pcc_thread_safepoint();
+        if (__atomic_load_n(&pcc_gc_backend4_auto_step_pending, __ATOMIC_ACQUIRE) != 0) break;
+    }
+    if (__atomic_load_n(&pcc_gc_backend4_auto_step_pending, __ATOMIC_ACQUIRE) == 0) {
+        fprintf(stderr, "completed mark lost its cleanup wakeup, backend=%d\n", backend);
+        return 11;
+    }
+    pcc_gc_safepoint();
+    if (__atomic_load_n(&pcc_gc_cms_sweep_pending, __ATOMIC_ACQUIRE) != 0) return 6;
+    puts("COMPLETED_MARK_RESUMED");
+    return 0;
+}
+'''
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('pause_kind', [0, 1], ids=('disable', 'threshold'))
+def test_completed_worker_mark_resumes_after_a_disabled_gate(tmp_path, pcc_runtime_archive, pause_kind):
+    from tests.owned_runtime_c_fixture import link_c_harness
+
+    source = tmp_path / 'worker_resume.c'
+    source.write_text(RESUME_PROBE.replace('@PAUSE_KIND@', str(pause_kind)))
+    binary = tmp_path / 'worker_resume'
+    runtime = Path(__file__).resolve().parents[2] / 'pcc/runtime'
+    link_c_harness(source, binary, extra_include_dirs=(str(runtime / 'src'),))
+    for backend in (1, 2, 3, 4):
+        run = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=15,
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                     PCC_GC_DEBT_THRESHOLD='65536', PATH='/nonexistent'),
+        )
+        (tmp_path / f'gc{backend}.stdout').write_text(run.stdout)
+        (tmp_path / f'gc{backend}.stderr').write_text(run.stderr)
+        assert (run.returncode, run.stdout, run.stderr) == (0, 'COMPLETED_MARK_RESUMED\n', ''), backend
