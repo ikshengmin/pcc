@@ -106,6 +106,9 @@ _SUBSET_OBJECT = 8
 _SUBSET_RECORD_BYTES = 16
 _SUBSET_CANDIDATE = 4
 _SUBSET_REACHABLE = 1
+# This cycle collector owns zeros produced by its own finalizers. They are
+# distinct from a mutator parked after a last decrement and before untrack.
+_COLLECTOR_FINALIZED_ZERO = 8
 
 
 @c_abi_export("pcc_gc_backend0_subset_node")
@@ -173,7 +176,7 @@ def _recompute_subset() -> None:
         if ptr_is_null(node) == 0:
             obj = load_ptr(node, 0)
             store_i64(node, 8, load_i64(obj, 0))
-            store_i32(node, 16, _SUBSET_CANDIDATE)
+            store_i32(node, 16, _SUBSET_CANDIDATE | (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO))
         index = index + 1
     index = 0
     while index < count:
@@ -186,7 +189,10 @@ def _recompute_subset() -> None:
         node = _subset_node(index)
         if ptr_is_null(node) == 0:
             obj = load_ptr(node, 0)
-            if load_i64(node, 8) > 0 or load_i64(obj, 0) == 0:
+            if load_i64(node, 8) > 0 or (
+                load_i64(obj, 0) == 0
+                and (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO) == 0
+            ):
                 pcc_gc_backend0_mark_reachable(obj)
         index = index + 1
     _mark_runtime_roots()
@@ -306,7 +312,7 @@ def _recompute_reachability() -> None:
     while ptr_is_null(node) == 0:
         obj = load_ptr(node, 0)
         store_i64(node, 8, load_i64(obj, 0))
-        store_i32(node, 16, 0)
+        store_i32(node, 16, load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO)
         node = load_ptr(node, 32)
 
     node = global_load_ptr("py_gc_head")
@@ -322,7 +328,10 @@ def _recompute_reachability() -> None:
         # disposal. Subtraction above counted those edges, so retain the
         # whole pending owner's graph instead of collecting its children.
         # Positive-count cycles still require an external or runtime root.
-        if load_i64(node, 8) > 0 or load_i64(obj, 0) == 0:
+        if load_i64(node, 8) > 0 or (
+            load_i64(obj, 0) == 0
+            and (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO) == 0
+        ):
             pcc_gc_backend0_mark_reachable(obj)
         node = load_ptr(node, 32)
     _mark_runtime_roots()
@@ -349,6 +358,13 @@ def _maybe_finalize_unreachable(unreachable, count: i64) -> i64:
             ):
                 flags_before: i64 = load_i32(obj, 12)
                 py_user_del_dispatch(obj)
+                obj_after = load_ptr(node, 0)
+                if ptr_is_null(obj_after) == 0 and load_i64(obj_after, 0) == 0:
+                    # The finalizer guard released its temporary owner without
+                    # recursively deallocating. No mutator owns this zero;
+                    # retain it in our candidate pass, not the live root set.
+                    store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_FINALIZED_ZERO)
+                    finalized = 1
                 if (flags_before & 4) == 0:
                     obj_after = load_ptr(node, 0)
                     if ptr_is_null(obj_after) != 0:
@@ -503,6 +519,11 @@ def _collect(pairs, candidate_count: i64) -> i64:
     i: i64 = 0
     while i < count:
         node = load_ptr(unreachable, i * 8)
+        if ptr_is_null(node) == 0 and ptr_is_null(load_ptr(node, 0)) == 0:
+            # Revalidation is complete. Clear this collection-only distinction
+            # even on resurrected survivors before callbacks can create new
+            # terminal ownership; never carry it into a future collection.
+            store_i32(node, 16, load_i32(node, 16) & ~_COLLECTOR_FINALIZED_ZERO)
         if (
             ptr_is_null(node) == 0
             and ptr_is_null(load_ptr(node, 0)) == 0
