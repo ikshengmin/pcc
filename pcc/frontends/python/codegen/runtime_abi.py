@@ -690,6 +690,7 @@ def _runtime_signatures_part_15():
     # ---- List ------------------------------------------------------
     "py_list_new": (_PYOBJ, [_I64], False),
     "py_list_append": (_VOID, [_PYOBJ, _PYOBJ], False),
+    "py_list_append_from_slots": (_VOID, [_PTR, _PTR, _I64], False),
     "py_list_get": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_list_getitem": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_list_get_i64": (_I64, [_PYOBJ, _I64], False),

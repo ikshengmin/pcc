@@ -82,6 +82,8 @@ pcc_gc_store_ptr_fresh_native_instance = extern(
     c_void,
 )
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_slot_lease_acquire = extern("pcc_gc_slot_lease_acquire", (c_ptr, c_int64), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_note_slot_write_barrier = extern(
@@ -639,7 +641,8 @@ def _append_rooted(lst, item, fresh: int) -> int:
 
 
 def _append_rooted_slots(
-    list_slot, item_slot, list_handle_slot, item_handle_slot, fresh: int
+    list_slot, item_slot, list_handle_slot, item_handle_slot, fresh: int,
+    caller_item_root: int = 0,
 ) -> int:
     """Append through existing authoritative roots without taking them over.
 
@@ -660,8 +663,18 @@ def _append_rooted_slots(
         # The graph lock serializes mutations for every threaded backend,
         # including GC0. Its threads-off implementation is already elided.
         pcc_py_gc_minor_graph_lock()
-        lst = _reload_moving_root(list_slot, list_handle_slot)
-        item = _reload_moving_root(item_slot, item_handle_slot)
+        if caller_item_root != 0:
+            # The caller's list lease survives growth. The item stays in its
+            # traced owner until this transaction retains it into the list;
+            # no raw item address crosses unlock or a growth allocation.
+            lst = load_ptr(list_slot, 0)
+            if caller_item_root == 2:
+                item = pcc_gc_load_borrowed_ptr(null(), item_slot)
+            else:
+                item = pcc_gc_load_ptr(null(), item_slot)
+        else:
+            lst = _reload_moving_root(list_slot, list_handle_slot)
+            item = _reload_moving_root(item_slot, item_handle_slot)
         if not _list_is_sane(lst, -101):
             pcc_py_gc_minor_graph_unlock()
             result = -2
@@ -696,6 +709,33 @@ def _append_rooted_slots(
             break
         store_ptr(list_slot, 0, grown)
     return result
+
+
+@c_abi_export("py_list_append_from_slots")
+def py_list_append_from_slots(list_slot, item_slot, borrowed_mask: int) -> None:
+    """Borrow stable source slots without adding another root or item lease.
+
+    Both source addresses stay valid for the call. They are traced owning or
+    unchanged borrowed roots; a compiler-proven permanent item may use a plain
+    stack slot. Bit 0/1 records a borrowed list/item, never an exact-type claim.
+    Only the list needs address protection across growth; the item is loaded
+    under the graph lock immediately before the existing retaining commit.
+    """
+    token: int = pcc_gc_slot_lease_acquire(list_slot, borrowed_mask & 1)
+    if token < 0:
+        py_runtime_error_if_unset(cstr("py_list_append_from_slots"), cstr("list argument lease failed"))
+        return
+    item_kind: int = 1
+    if (borrowed_mask & 2) != 0:
+        item_kind = 2
+    result: int = _append_rooted_slots(
+        list_slot, item_slot, null(), null(), 0, item_kind
+    )
+    if pcc_gc_foreign_lease_release(list_slot, token) < 0:
+        pcc_platform_abort()
+        return
+    if result == -1:
+        py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
 
 
 @c_abi_export("py_list_append")

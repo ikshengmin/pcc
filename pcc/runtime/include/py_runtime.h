@@ -1147,6 +1147,9 @@ PyObject *py_list_from_static_items(PyObject *const *items, int64_t count);
  * Sources are stable root addresses; successful construction empties them. */
 int64_t py_list_from_owned_roots(void *sources, int64_t count, void *output);
 void      py_list_append(PyObject *lst, PyObject *item);
+/* Stable traced sources, or a proven permanent item slot; mask bits 0/1 mark
+ * borrowed list/item slots. The call retains the item without consuming it. */
+void py_list_append_from_slots(void *list_slot, void *item_slot, int64_t borrowed_mask);
 /* Borrowed-item append for compiler-proven fresh native instances.  This is
  * not ownership transfer: the caller keeps and releases its owned ref. */
 void      py_list_append_fresh_native_instance(PyObject *lst, PyObject *item);

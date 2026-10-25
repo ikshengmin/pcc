@@ -42,6 +42,18 @@ _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
 
+def _append_from_caller_slots(host, receiver, item, span, permanent_item=False):
+    borrowed = getattr(host, "_slot_call_borrowed_operands", {})
+    mask = 1 if borrowed.get(id(receiver)) is receiver else 0
+    if permanent_item or borrowed.get(id(item)) is item:
+        mask |= 2
+    host.builder.call(
+        host.runtime["py_list_append_from_slots"],
+        [host._as_gc_ptr(receiver), host._as_gc_ptr(item), ir.Constant(_I64, mask)],
+    )
+    host._emit_post_call_err_check(span)
+
+
 def _stable_parameter_exact_list_guard(host, receiver, span):
     """Memoize only exact-list membership of an unchanged parameter.
 
@@ -814,15 +826,15 @@ class ListMethodLoweringMixin:
                     item = self._emit_slot_call_operand(expr.args[0], "list.append.item", borrow_stable=True)
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    self._slot_call_runtime_call(
-                        "py_list_append", (receiver, item), span=expr.span,
-                    )
+                    _append_from_caller_slots(self, receiver, item, expr.span)
                 else:
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    self._slot_call_runtime_call(
-                        "py_list_append", (receiver,), suffix_args=(constant,), span=expr.span,
-                    )
+                    # This exact literal producer denotes permanent image
+                    # storage or a tagged value; it needs no owning root.
+                    source = self._alloca_in_entry(_CSTR, name=self._fresh("list.append.static.source"))
+                    self.builder.store(constant, source)
+                    _append_from_caller_slots(self, receiver, source, expr.span, permanent_item=True)
                 if not discard_builtin:
                     none_value = self._emit_none_literal()
                     self._publish_slot_call_owned(output, none_value, label="list append result")
