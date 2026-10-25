@@ -133,8 +133,9 @@ def test_nested_literal_operands_use_slot_producers():
     assert _calls(text, "py_list_append")
     assert _calls(text, "py_dict_set")
     assert _calls(text, "py_set_add")
-    assert _calls(text, "py_tuple_new")
-    assert len(_calls(_probe_function(text), "py_tuple_set_item")) == 3
+    constructors = _calls(_probe_function(text), "py_tuple_from_owned_roots")
+    assert len(constructors) == 1 and "i64 3" in constructors[0]
+    assert not _calls(_probe_function(text), "py_tuple_set_item")
     assert not _calls(_probe_function(text), "py_tuple_from_list")
     assert not _calls(text, "pcc_gc_root_copy_borrowed_lease")
     assert "call.slot.argument.lease" in text
