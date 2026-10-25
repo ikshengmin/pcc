@@ -273,6 +273,13 @@ GC_RELOCATION_PAGE_CURSOR_INPUTS = (
     "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py",
 )
 GC_MARK_COLOR_ATOMIC_TEST = "tests/python/test_gc_mark_color_atomic.py"
+TUPLE_OWNED_ROOT_HOST_TESTS = (
+    "tests/python/test_tuple_owned_root_factory.py",
+    "tests/python/test_fixed_tuple_literal.py",
+    "tests/python/test_fixed_call_argument_tuple.py",
+    "tests/python/test_dict_materialization_owners.py",
+    "tests/python/test_slot_call_operand_roots.py",
+)
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -303,10 +310,11 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
               *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
               MACHO_SECTION_TARGET_INDEX_TEST, WIN64_DIRECT_SCALAR_TEST, CONSUMED_UNSAFE_TEST,
-              IR_BUILDER_CALL9_TEST, MACHO_ARCHIVE_RETIREMENT_TEST, GC_MARK_COLOR_ATOMIC_TEST)
+              IR_BUILDER_CALL9_TEST, MACHO_ARCHIVE_RETIREMENT_TEST, GC_MARK_COLOR_ATOMIC_TEST,
+              *TUPLE_OWNED_ROOT_HOST_TESTS)
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26)
+HOST_COUNTS = (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 43, 30, 9, 75, 28)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
