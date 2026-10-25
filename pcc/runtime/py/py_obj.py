@@ -1743,10 +1743,14 @@ def py_incref(o) -> None:
             or atomic_tag == PY_TYPE_CPY_HANDLE
             or (atomic_tag >= PY_TYPE_USER and atomic_tag < PY_TYPE_CEXT_TAG_BASE)
         ):
-            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
-                    atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
-                    return
+            # The existing admission already proves the no-probe/no-log GC0
+            # path and an accepted tag. Immortals also need no count change;
+            # do not send them through the full configuration/provenance tail.
+            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                return
+            if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
+                atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
+                return
     # Backend 0, no probe, one thread, no logging: an ordinary object that is
     # neither immortal nor dying takes a plain increment -- what the path
     # below does for it after its configuration loads, a dozen tag compares
@@ -1966,9 +1970,10 @@ def py_decref(o) -> None:
             or atomic_tag == PY_TYPE_CPY_HANDLE
             or (atomic_tag >= PY_TYPE_USER and atomic_tag < PY_TYPE_CEXT_TAG_BASE)
         ):
-            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                if _decref_above_one_atomic(o) != 0:
-                    return
+            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                return
+            if _decref_above_one_atomic(o) != 0:
+                return
     # As in py_incref; a count that would reach zero keeps the full path, so
     # deallocation, weakrefs and resurrection are untouched.
     if (
