@@ -111,7 +111,7 @@ Protocols
 +-------------------+------------+------------+------------+------------+--------------+
 | socks4            | ✔          | ✔          |            |            | socks4://    |
 +-------------------+------------+------------+------------+------------+--------------+
-| socks5            | ✔          | ✔          | ✔ udp-only | ✔ udp-only | socks5://    |
+| socks5            | ✔          | ✔          | ✔          | ✔          | socks5://    |
 +-------------------+------------+------------+------------+------------+--------------+
 | socks5 over TLS   | ✔          | ✔          |            |            | socks5+ssl://|
 +-------------------+------------+------------+------------+------------+--------------+
@@ -593,6 +593,64 @@ Examples
 
     $ pproxy -ul tunnel{8.8.8.8}://:53
     $ nslookup google.com localhost
+
+- SOCKS5 UDP ASSOCIATE and ProxyBridge
+
+  A SOCKS5 TCP listener also accepts standard RFC 1928 UDP ASSOCIATE requests.
+  It returns a dedicated UDP relay address and keeps that relay alive until
+  the TCP control connection closes. No separate ``-ul`` listener is needed:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy -l socks5://127.0.0.1:1080 -v
+
+  Run this from ``projects/python-proxy``. With no upstream configured, both
+  TCP and UDP leave from the machine running pproxy. To send both through a
+  remote SOCKS5 server that supports UDP ASSOCIATE:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy -l socks5://127.0.0.1:1080 \
+      -r socks5://proxy.example:1080 -ur socks5://proxy.example:1080 -v
+
+  ``-r`` selects the TCP route; ``-ur`` selects the UDP route. If ``-r`` is
+  present without ``-ur``, UDP ASSOCIATE is rejected instead of using an
+  unexpected direct exit. Select ``-ur direct://`` to explicitly use direct
+  UDP alongside a TCP upstream. Credentials use the existing quoted URI
+  suffix, for example ``'socks5://proxy.example:1080#username:password'``.
+
+  In ProxyBridge, add SOCKS5 server ``127.0.0.1:1080`` and route the browser
+  and its network helper processes to it for both TCP and UDP. ProxyBridge's
+  system extension must be enabled; an OS HTTP/SOCKS proxy setting is not
+  required. Its UDP support check should receive a successful association.
+
+  IPv4, IPv6, domain destinations, authentication, and standard UDP request
+  and response headers are supported. Each association keeps one direct
+  outbound socket per address family, so STUN checks against different
+  destinations see the same source port. Replies retain the actual source
+  address. The client IP must match the TCP peer; a specified client port is
+  enforced, otherwise the first valid UDP sender's port is pinned. Malformed
+  packets and SOCKS fragments (``FRAG != 0``) are dropped.
+
+  Standard associations support direct and standalone SOCKS5 ``-ur`` routes.
+  Other upstream protocols and URI ``__`` jump chains are rejected for these
+  associations. Separate pproxy instances can be chained with ``-ur socks5://``.
+  The older ``-ul`` datagram listeners remain available for explicit UDP
+  tunnels; they do not establish or authenticate a TCP-controlled association.
+  SOCKS5 UDP replies now include their standard address header.
+
+  The ``Connection(...).udp_sendto`` API and SOCKS5 ``-ur`` route used by UDP
+  listeners also negotiate UDP ASSOCIATE. Reuse a ``local_addr`` session key
+  and one callback for multiple API sends in the same association, and use
+  ``await connection.udp_close()`` to release these client associations.
+  These API/listener client associations expire after 120 seconds without
+  traffic in either direction and retain the existing ``UDP_LIMIT`` cap.
+  TCP-controlled incoming associations instead live until their control
+  connection ends, with no shared 30-client eviction limit.
+
+  Local integration tests exercise the ProxyBridge request bytes, independent
+  SOCKS5 peers and STUN binding responses. They do not certify a particular
+  browser, remote proxy, NAT/firewall, or live WebRTC audio/video session.
 
 - UDP more complicated example
 

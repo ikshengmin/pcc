@@ -123,7 +123,7 @@ def test_slow_receiver_backpressure_preserves_all_bytes(mode):
     run(scenario())
 
 
-@pytest.mark.parametrize("connection_state", ["idle", "handshake", "active"])
+@pytest.mark.parametrize("connection_state", ["idle", "handshake", "active", "udp"])
 def test_cli_sigint_exits_with_open_connections(connection_state):
     async def scenario():
         process = await asyncio.create_subprocess_exec(
@@ -147,12 +147,16 @@ def test_cli_sigint_exits_with_open_connections(connection_state):
                     writer.write(b"\x05\x01\x00")
                     await writer.drain()
                     assert await reader.readexactly(2) == b"\x05\x00"
-                    writer.write(b"\x05\x01\x00" + address("echo", 1))
+                    if connection_state == "udp":
+                        writer.write(bytes.fromhex('05 03 00 01 00 00 00 00 00 00'))
+                    else:
+                        writer.write(b"\x05\x01\x00" + address("echo", 1))
                     await writer.drain()
                     assert await socks_reply(reader) == 0
-                    writer.write(b"active")
-                    await writer.drain()
-                    assert await reader.readexactly(6) == b"active"
+                    if connection_state != "udp":
+                        writer.write(b"active")
+                        await writer.drain()
+                        assert await reader.readexactly(6) == b"active"
             process.send_signal(signal.SIGINT)
             _, stderr = await asyncio.wait_for(process.communicate(), 2)
             assert process.returncode == 0, stderr.decode()

@@ -1,8 +1,8 @@
 # Proxy stability tests
 
-Tests exercise the `http+socks5` listener using real TCP sockets on temporary
+Tests exercise the `http+socks5` listener using real TCP/UDP sockets on temporary
 loopback ports. They do not read browser data or use the live 8082/8083 listeners.
-The default suite has 93 cases; one opt-in soak case exercises another 48
+The default suite includes SOCKS5 UDP association cases; one opt-in soak case exercises another 48
 concurrent HTTP/2 streams for 245 seconds.
 
 | Area | Checks |
@@ -14,6 +14,7 @@ concurrent HTTP/2 streams for 245 seconds.
 | Data integrity | Eight simultaneous 1 MiB transfers, binary payloads, two-hop HTTP/SOCKS chains, 2 MiB transfer to a slow receiver |
 | Cleanup | Either peer closing, abrupt transport abort, healthy connections surviving a peer failure, no retained writer/task registrations |
 | CLI | SIGINT during idle, incomplete handshake and active transfer; process exit and coroutine cleanup |
+| SOCKS5 UDP | ProxyBridge's exact UDP ASSOCIATE request, IPv4/IPv6/domain destinations, authentication, binary/empty payloads, STUN mapping stability across destinations, independent upstream replies, source-port pinning, malformed/fragmented packets, 32 simultaneous associations, control EOF/timeout/rejection, UDP API and standalone listeners |
 | TLS/HTTP2 | Certificate and hostname verification, eight multiplexed streams, an injected in-flight RST_STREAM, GOAWAY with accepted streams completing, streamed responses |
 | Soak | Direct, SOCKS5 and HTTP CONNECT; idle and heartbeat responses; six TLS sessions and 48 streams concurrently |
 

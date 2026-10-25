@@ -1,11 +1,34 @@
 # PCC current status
 
-Updated 2026-10-24. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-10-25. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## python-proxy SOCKS5 UDP (2026-10-25)
+
+Validation input: `1a63d2b72edaa9bee782d069453e6633ce1a243e` plus the
+`projects/python-proxy` patch preserved in the archive below. Standard TCP-controlled UDP ASSOCIATE now
+supports direct and standalone SOCKS5 upstream routes, IPv4/IPv6/domain
+destinations, authentication, response source addresses, and per-association
+stable outgoing ports. TCP EOF releases the relay. Configuring `-r` without
+`-ur` rejects UDP instead of accidentally using a direct exit; other upstream
+protocols and `__` jump chains are explicitly rejected for these associations.
+[Configuration and limits](../projects/python-proxy/README.rst) describe the
+ProxyBridge setup and the retained standalone UDP listener mode.
+
+CPython 3.15.0 local validation: **137 passed**, no failures/skips, one optional
+soak deselected. This includes 43 UDP tests, independent SOCKS5 wire peers,
+STUN mapping responses, 32 concurrent associations, API/CLI cleanup, and the
+existing TCP/TLS/HTTP2 tests. Repro from `projects/python-proxy`:
+`gtimeout 120s uv run --no-sync python -m pytest -c tests/pytest.ini -x -n0 -vv --tb=short tests`.
+Durable source hashes/snapshot, bounded-run logs and scope:
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/python-proxy-socks5-udp/README.md`.
+Actual ProxyBridge/browser WebRTC calls, remote upstream/NAT traversal, and
+pcc1-native execution remain unverified. Existing proxy processes were not
+restarted.
 
 ## Bounded synchronous tuple operands (2026-10-24)
 

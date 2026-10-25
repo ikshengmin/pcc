@@ -6,6 +6,7 @@ from .__doc__ import *
 
 SOCKET_TIMEOUT = 60
 UDP_LIMIT = 30
+UDP_ASSOCIATION_IDLE = 120
 ALIVE_PROBE = ('1.1.1.1', 443)
 ALIVE_PROBE_TIMEOUT = 3
 DUMMY = lambda s: s
@@ -147,6 +148,20 @@ async def stream_handler(reader, writer, unix, lbind, protos, rserver, cipher, s
         local_addr = None if server_ip in ('127.0.0.1', '::1', None) else (server_ip, 0)
         reader_cipher, _ = await prepare_ciphers(cipher, reader, writer, server_side=False)
         lproto, user, host_name, port, client_connected = await proto.accept(protos, reader=reader, writer=writer, authtable=AuthTable(remote_ip, authtime), reader_cipher=reader_cipher, sock=writer.get_extra_info('socket'), **kwargs)
+        if isinstance(client_connected, proto.Socks5UDPRequest):
+            from .socks5_udp import UDPAssociation
+            urserver = kwargs.get('urserver', [])
+            if unix or (rserver and not urserver):
+                # A TCP-only upstream must not unexpectedly expose a direct
+                # UDP exit. Select -ur direct:// explicitly to opt into it.
+                verbose('SOCKS5 UDP requires an explicit -ur when -r is configured')
+                raise proto.Socks5Error(7)
+            association = UDPAssociation(
+                reader, writer, client_connected, urserver,
+                lambda remotes, host, port: schedule(remotes, salgorithm, host, port),
+                block, verbose, lbind, SOCKET_TIMEOUT)
+            await association.run()
+            return
         if host_name == 'echo':
             if client_connected:
                 await client_connected(writer)
@@ -215,11 +230,16 @@ async def datagram_handler(writer, data, addr, protos, urserver, block, cipher, 
         else:
             roption = schedule(urserver, salgorithm, host_name, port) or DIRECT
             verbose(f'UDP {lproto.name} {remote_text}{roption.logtext(host_name, port)}')
-            data = roption.udp_prepare_connection(host_name, port, data)
-            def reply(rdata):
-                rdata = lproto.udp_pack(host_name, port, rdata)
+            def reply(rdata, rhost=host_name, rport=port):
+                rdata = lproto.udp_pack(rhost, rport, rdata)
                 writer.sendto(cipher.datagram.encrypt(rdata) if cipher else rdata, addr)
-            await roption.udp_open_connection(host_name, port, data, addr, reply)
+            if isinstance(roption, ProxySimple) and isinstance(roption.rproto, proto.Socks5):
+                await roption.udp_send_datagram(
+                    host_name, port, data, (writer, addr),
+                    lambda rdata, raddr: reply(rdata, *raddr[:2]))
+            else:
+                data = roption.udp_prepare_connection(host_name, port, data)
+                await roption.udp_open_connection(host_name, port, data, addr, reply)
     except Exception as ex:
         if not str(ex).startswith('Connection closed'):
             verbose(f'{str(ex) or "Unsupported protocol"} from {remote_ip}')
@@ -373,6 +393,8 @@ class ProxySimple(ProxyDirect):
         self.sslclient = sslclient
         self.sslserver = sslserver
         self.jump = jump
+        self.udp_associations = {}
+        self.udp_association_lock = None
     def logtext(self, host, port):
         return f' -> {self.rproto.name+("+ssl" if self.sslclient else "")} {self.bind}' + self.jump.logtext(host, port)
     def match_rule(self, host, port):
@@ -395,6 +417,61 @@ class ProxySimple(ProxyDirect):
         if self.cipher:
             data = self.cipher.datagram.encrypt(data)
         return data
+    async def udp_send_datagram(self, host, port, data, addr, reply):
+        from .socks5_udp import Socks5Relay
+        if self.udp_association_lock is None:
+            self.udp_association_lock = asyncio.Lock()
+        # Legacy datagram listeners dispatch one task per packet. Serialize
+        # setup so a burst creates just one TCP association for this client.
+        async with self.udp_association_lock:
+            entry = self.udp_associations.get(addr)
+            if entry is None:
+                if len(self.udp_associations) >= UDP_LIMIT:
+                    oldest = min(self.udp_associations, key=lambda key: self.udp_associations[key][0].updated)
+                    old_relay, old_timer = self.udp_associations.pop(oldest)
+                    old_timer.cancel()
+                    await old_relay.close()
+                def disconnected():
+                    current = self.udp_associations.get(addr)
+                    if current is not None and current[0] is relay:
+                        self.udp_associations.pop(addr)
+                        current[1].cancel()
+                bind = self.lbind if self.lbind != 'in' else None
+                relay = Socks5Relay(self, reply, disconnected, bind, SOCKET_TIMEOUT)
+                await relay.start()
+            else:
+                relay, timer = entry
+                timer.cancel()
+            def expire():
+                current = self.udp_associations.get(addr)
+                if current is None or current[0] is not relay:
+                    return
+                remaining = UDP_ASSOCIATION_IDLE - (time.monotonic() - relay.updated)
+                if remaining > 0:
+                    timer = asyncio.get_event_loop().call_later(remaining, expire)
+                    self.udp_associations[addr] = (relay, timer)
+                    return
+                self.udp_associations.pop(addr, None)
+                asyncio.ensure_future(relay.close())
+            timer = asyncio.get_event_loop().call_later(UDP_ASSOCIATION_IDLE, expire)
+            self.udp_associations[addr] = (relay, timer)
+            await relay.send(host, port, data)
+    async def udp_open_connection(self, host, port, data, addr, reply):
+        if isinstance(self.rproto, proto.Socks5):
+            packet = proto.socks5_udp_unpack(data)
+            if packet is None:
+                raise ValueError('Invalid SOCKS5 UDP packet')
+            await self.udp_send_datagram(*packet, addr, lambda data, source: reply(data))
+        else:
+            await super().udp_open_connection(host, port, data, addr, reply)
+    async def udp_close(self):
+        if self.udp_association_lock is not None:
+            async with self.udp_association_lock:
+                entries = list(self.udp_associations.values())
+                self.udp_associations.clear()
+                for _, timer in entries:
+                    timer.cancel()
+                await asyncio.gather(*(relay.close() for relay, _ in entries))
     def udp_start_server(self, args):
         class Protocol(asyncio.DatagramProtocol):
             def connection_made(prot, transport):
