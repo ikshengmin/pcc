@@ -21,6 +21,7 @@ class MaterializeMemory(DictMemory):
         self.retired_tables = set()
         self.frames = []
         self.ns.update(
+            i64=int,
             pcc_gc_frame_enter=self.frame_enter,
             pcc_gc_frame_leave=self.frame_leave,
             pcc_gc_pin=self.pin,
@@ -400,3 +401,23 @@ def test_terminal_return_lease_failure_preserves_error_while_dropping_output():
     result,_=model.materialize({'a':'first'},'items',raw=True)
     assert result is None
     assert model.error==(15,'dictionary result return lease failed')
+
+
+def test_materialization_slot_indices_stay_in_machine_ir(tmp_path):
+    """Two scratch-slot indices must not introduce Python integer protocols."""
+    import re
+
+    from pcc.frontends.python.owned_runtime_build import _compile_runtime_module
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    output = tmp_path / 'dict-runtime.ll'
+    _compile_runtime_module('py_dict', str(PORT), str(output), host_target_triple())
+    match = re.search(
+        r'^define [^\n]*@user_py_dict__dict_materialize_body\([^\n]*\)[^\n]*\{.*?^}',
+        output.read_text(), re.M | re.S,
+    )
+    assert match is not None
+    calls = re.findall(r'\bcall\b[^\n]*@([^ (]+)\(', match.group(0))
+    assert 'pcc_tuple_from_owned_roots_lease' in calls
+    assert not any(name.startswith('py_int_') for name in calls), calls
+    assert 'pcc_gc_frame_enter_mapped' not in calls
