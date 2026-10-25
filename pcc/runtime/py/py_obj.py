@@ -983,6 +983,11 @@ def pcc_gc_store_root_take(slot, value) -> None:
     # retains the stored value), then release the caller's reference through
     # the slot so a relocated address is never touched.
     pcc_gc_store_root(slot, value)
+    # An empty input transfers no owner. The checked root store has already
+    # retired the old reference, and a fresh slot reload may be nonempty if
+    # that finalizer reentered and repopulated it. Do not release that value.
+    if ptr_is_null(value) != 0:
+        return
     stored = pcc_gc_load_ptr(null(), slot)
     if is_tagged_int(stored) == 0 and ptr_is_null(stored) == 0:
         py_decref(stored)

@@ -326,10 +326,11 @@ class CallObjectLoweringMixin:
             _slot, flag, lifo = self._slot_call_root_record(slot)
             if flag is not None:
                 self.builder.store(ir.Constant(_I1, 0), flag)
-            # Slot clearing precedes terminal decref/finalizers. No raw
-            # managed pointer survives this release or another root's release.
+            # Transfer NULL into the owner: there is no new reference to
+            # retain. The old owner still retires before leaving its frame,
+            # including terminal decref, finalizers and resurrection.
             self.builder.call(
-                self.runtime["pcc_gc_store_root"],
+                self.runtime["pcc_gc_store_root_take"],
                 [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
             )
             if lifo:
@@ -438,7 +439,7 @@ class CallObjectLoweringMixin:
             if flag is not None:
                 self.builder.store(ir.Constant(_I1, 0), flag)
             self.builder.call(
-                self.runtime["pcc_gc_store_root"],
+                self.runtime["pcc_gc_store_root_take"],
                 [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
             )
         if exception_slot is not None:
