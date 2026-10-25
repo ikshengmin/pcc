@@ -206,3 +206,19 @@ def test_compiled_builtin_alias_is_only_a_guard_candidate():
         "provider", {"kind": "function"},
     )
     assert host._native_module_alias_export_info("unknown", "operation", True) is None
+
+
+def test_guarded_call_host_contract_matches_live_signatures():
+    from inspect import signature
+    from pcc.frontends.python.codegen._l1_codegen_static_methods import L1_CODEGEN_STATIC_METHODS
+    from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_METHODS
+
+    entries = {item["name"]: item for item in L1_CODEGEN_STATIC_METHODS}
+    for name in ("_emit_slot_call_static_import", "_emit_slot_call_guarded_native",
+                 "_emit_static_user_function_call", "_native_module_alias_export_info",
+                 "_native_module_expr_export_info", "_native_builtin_compiled_export_info",
+                 "_dynamic_export_call_value"):
+        assert name in L1_CODEGEN_HOST_METHODS
+        assert tuple(item["name"] for item in entries[name]["call_sig"]) == tuple(
+            signature(getattr(L1CodeGen, name)).parameters
+        )
