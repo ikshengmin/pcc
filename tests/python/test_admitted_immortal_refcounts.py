@@ -28,7 +28,8 @@ class RefcountModel:
             'global_addr': lambda p: p, 'load_i32': self.load,
             'load_i64': self.load, 'atomic_load_i64': self.load,
             'atomic_rmw_i64': self.increment,
-            '_decref_above_one_atomic': self.decrement,
+            'i64': int,
+            'atomic_cas_i64': self.compare_exchange,
             '_gc_backend_fast': lambda: self.event('backend', self.backend),
             '_refcount_provenance_probe_enabled': lambda: self.probe,
             '_ptr_can_have_header': lambda p: self.event('provenance', self.managed),
@@ -41,7 +42,7 @@ class RefcountModel:
             '_py_decref_prepare': lambda *a: self.event('prepare', None),
             '_py_decref_finish': lambda *a: self.event('finish', None),
         })
-        _functions(SOURCE, {'py_incref', 'py_decref'}, self.ns)
+        _functions(SOURCE, {'py_incref', 'py_decref', '_py_incref_checked_tail', '_py_decref_checked_tail'}, self.ns)
 
     def event(self, name, result):
         self.events.append(name)
@@ -64,11 +65,13 @@ class RefcountModel:
         self.count += amount
         return self.count - amount
 
-    def decrement(self, pointer):
-        assert pointer == 'object' and self.count > 1
-        self.events.append('atomic')
-        self.count -= 1
-        return 1
+    def compare_exchange(self, pointer, offset, expected, replacement, *ordering):
+        assert pointer == 'object'
+        old = self.count
+        if old == expected:
+            self.events.append('atomic')
+            self.count = replacement
+        return old
 
 
 @pytest.mark.parametrize('operation', ['py_incref', 'py_decref'])
@@ -188,3 +191,30 @@ def test_native_immortals_mutable_counts_and_terminal_lifetimes(tmp_path, pcc_ru
             (tmp_path / f'gc{backend}-probe{probe}.stderr').write_text(run.stderr)
             expected = f'IMMORTAL_REFS_OK gc={backend} inline={int(backend == 0 and probe == 0)}\n'
             assert (run.returncode, run.stdout, run.stderr) == (0, expected, ''), (backend, probe)
+
+
+@pytest.mark.parametrize('observed', [2, 4])
+def test_nonterminal_drop_retries_a_competing_count_change(observed):
+    model = RefcountModel(count=3, immortal=False)
+    attempts = []
+    def compare(pointer, offset, expected, replacement, *ordering):
+        attempts.append(expected)
+        if len(attempts) == 1:
+            model.count = observed
+            return observed
+        return model.compare_exchange(pointer, offset, expected, replacement, *ordering)
+    model.ns['atomic_cas_i64'] = compare
+    model.ns['py_decref']('object')
+    assert attempts == [3, observed]
+    assert model.count == observed - 1 and model.events == ['atomic']
+
+
+def test_competing_drop_to_one_keeps_terminal_ownership_in_the_checked_tail():
+    model = RefcountModel(count=3, immortal=False)
+    def competing_drop(*args):
+        model.count = 1
+        return 1
+    model.ns['atomic_cas_i64'] = competing_drop
+    model.ns['_py_decref_checked_tail'] = lambda value: model.event('checked-terminal', None)
+    model.ns['py_decref']('object')
+    assert model.count == 1 and model.events == ['checked-terminal']
