@@ -1204,6 +1204,8 @@ void      py_dict_update(PyObject *dst, PyObject *src);
 PyObject *py_tuple_new(int64_t n);
 /* Consume distinct, registered unleased roots into a fresh tuple output. */
 int64_t py_tuple_from_owned_roots(void *sources, int64_t count, void *output);
+/* As above, but return the output lease token; the caller must release it. */
+int64_t pcc_tuple_from_owned_roots_lease(void *sources, int64_t count, void *output);
 PyObject *py_tuple_from_static_items(PyObject *const *items, int64_t count);
 PyObject *py_tuple_from_list(PyObject *lst);         /* new tuple from list elems */
 PyObject *py_tuple_from_splat(PyObject *seq);        /* new tuple from tuple/list/len+getitem seq */

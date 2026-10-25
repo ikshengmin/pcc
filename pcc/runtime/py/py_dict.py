@@ -147,7 +147,7 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
-py_tuple_from_owned_roots = extern("py_tuple_from_owned_roots", (c_ptr, c_int64, c_ptr), c_int64)
+pcc_tuple_from_owned_roots_lease = extern("pcc_tuple_from_owned_roots_lease", (c_ptr, c_int64, c_ptr), c_int64)
 py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
@@ -2500,10 +2500,14 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
                         return -1
                     store_i64(tokens, selected_index * C_POINTER_SIZE, 0)
                     selected_index -= 1
-                if py_tuple_from_owned_roots(pair_sources, 2,
-                        ptr_add(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE)) != 0:
+                pair_token: int = pcc_tuple_from_owned_roots_lease(pair_sources, 2,
+                    ptr_add(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE))
+                if pair_token < 0:
                     return -1
-                if _dict_slot_adopt(slots, tokens, _DICT_MATERIALIZE_PAIR) != 0:
+                # Keep the constructor's protection through the retaining
+                # append; do not release and reacquire the same output lease.
+                store_i64(tokens, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE, pair_token)
+                if py_err_occurred() != 0:
                     return -1
                 item = _DICT_MATERIALIZE_PAIR
             py_list_append(load_ptr(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE),

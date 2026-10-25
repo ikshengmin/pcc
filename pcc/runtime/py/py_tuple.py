@@ -249,13 +249,14 @@ def _tuple_owned_construction_failed(output, token: i64) -> i64:
     return -1
 
 
-@c_abi_export("py_tuple_from_owned_roots")
-def py_tuple_from_owned_roots(sources, count: i64, output) -> i64:
+@c_abi_export("pcc_tuple_from_owned_roots_lease")
+def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
     """Move nonempty distinct registered, unleased roots into a fresh tuple.
 
     The address array and output root remain stable and registered for this
     call. Each consumed source becomes empty. Output owns every transferred
     child even on failure; caller cleanup retains all unconsumed sources.
+    Success returns the output address lease; its caller must retire it.
     This construction-only ABI never mutates an existing/shared tuple.
     """
     if ptr_is_null(output) != 0 or count <= 0 or count > 134217728:
@@ -275,29 +276,49 @@ def py_tuple_from_owned_roots(sources, count: i64, output) -> i64:
     pcc_gc_note_slot_write_barrier(null(), output, load_ptr(output, 0))
     stride: i64 = i64(C_POINTER_SIZE)
     items_offset: i64 = i64(PYTUPLEOBJECT_ITEMS_OFFSET)
+    backend: i64 = i64(pcc_gc_backend())
     needs_track: i64 = 0
     index: i64 = 0
     while index < count:
+        # Bound the graph transaction independently of caller arity.
+        limit: i64 = index + 8
+        if limit > count:
+            limit = count
         pcc_py_gc_minor_graph_lock()
-        owner = load_ptr(output, 0)
-        source = load_ptr(sources, index * stride)
-        value = pcc_gc_resolve_root_slot_unlocked(source, 0)
-        destination = ptr_add(owner, items_offset + index * stride)
-        if pcc_gc_backend() != 0:
-            pcc_gc_note_store()
-        pcc_gc_note_slot_write_barrier(owner, destination, value)
-        if needs_track == 0 and _tuple_item_can_participate_in_cycle(value) != 0:
-            needs_track = 1
-        # Transfer the existing owner without a retain/decref pair. The graph
-        # transaction keeps both root and field views coherent for collectors.
-        store_ptr(destination, 0, value)
-        store_ptr(source, 0, null())
+        while index < limit:
+            owner = load_ptr(output, 0)
+            source = load_ptr(sources, index * stride)
+            if backend == 0 and load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0:
+                # Match the existing pcc_gc_load_ptr disabled-barrier path.
+                # The source is an owning registered root; the output lease
+                # reserves the backend mode. No header/type trust is inferred.
+                value = load_ptr(source, 0)
+            else:
+                value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+            destination = ptr_add(owner, items_offset + index * stride)
+            if backend != 0:
+                pcc_gc_note_store()
+            pcc_gc_note_slot_write_barrier(owner, destination, value)
+            if needs_track == 0 and _tuple_item_can_participate_in_cycle(value) != 0:
+                needs_track = 1
+            # Both root and field views change under the graph transaction.
+            store_ptr(destination, 0, value)
+            store_ptr(source, 0, null())
+            index += 1
         pcc_py_gc_minor_graph_unlock()
-        index += 1
     owner = load_ptr(output, 0)
     if needs_track != 0:
         py_gc_track(owner)
     pcc_gc_publish_initialized(owner)
+    return token
+
+
+@c_abi_export("py_tuple_from_owned_roots")
+def py_tuple_from_owned_roots(sources, count: i64, output) -> i64:
+    """Consume input owners and return an unleased owned output on success."""
+    token: i64 = pcc_tuple_from_owned_roots_lease(sources, count, output)
+    if token < 0:
+        return -1
     if pcc_gc_foreign_lease_release(output, token) < 0:
         pcc_platform_abort()
         return -1
