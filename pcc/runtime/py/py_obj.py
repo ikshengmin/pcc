@@ -14,6 +14,7 @@ not belong in this prose because the generator cannot update them.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.runtime.py.py_abi_constants import (
     PYLISTOBJECT_ITEMS_OFFSET,
@@ -1751,6 +1752,12 @@ def py_incref(o) -> None:
             if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
                 atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
                 return
+    _py_incref_checked_tail(o)
+
+
+def _py_incref_checked_tail(o) -> None:
+    # Keep prepared records and the checked/moving paths out of the common
+    # reference-update frame. This body retains the original validation order.
     # Backend 0, no probe, one thread, no logging: an ordinary object that is
     # neither immortal nor dying takes a plain increment -- what the path
     # below does for it after its configuration loads, a dozen tag compares
@@ -1934,28 +1941,6 @@ def _py_decref_finish(prepared) -> None:
                 pcc_gc_note_object_freeing(o)
 
 
-def _decref_above_one_atomic(o) -> int:
-    """Drop one reference while the count stays positive; 1 when done.
-
-    A count that would reach zero is left untouched for the full release
-    path (deallocation, weakrefs, resurrection). Release ordering publishes
-    this thread's writes before another thread can free the object.
-    """
-    count: int = atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed")
-    trying: int = 1
-    while trying != 0:
-        if count <= 1:
-            trying = 0
-        else:
-            observed: int = atomic_cas_i64(
-                o, PYOBJECTHEADER_REFCOUNT_OFFSET, count, count - 1, "release", "relaxed"
-            )
-            if observed == count:
-                return 1
-            count = observed
-    return 0
-
-
 @c_abi_export("py_decref")
 def py_decref(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
@@ -1972,8 +1957,22 @@ def py_decref(o) -> None:
         ):
             if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
                 return
-            if _decref_above_one_atomic(o) != 0:
-                return
+            # Inline the nonterminal drop so a positive count does not enter
+            # a second polled frame. Retry polls remain on the loop backedge.
+            count: i64 = i64(atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed"))
+            while count > 1:
+                observed: i64 = i64(atomic_cas_i64(
+                    o, PYOBJECTHEADER_REFCOUNT_OFFSET, count, count - 1, "release", "relaxed"
+                ))
+                if observed == count:
+                    return
+                count = observed
+    _py_decref_checked_tail(o)
+
+
+def _py_decref_checked_tail(o) -> None:
+    # Terminal counts, tracing/moving collectors and diagnostic modes retain
+    # their complete prepare/finish and finalization paths.
     # As in py_incref; a count that would reach zero keeps the full path, so
     # deallocation, weakrefs and resurrection are untouched.
     if (
