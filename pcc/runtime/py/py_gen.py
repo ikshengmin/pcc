@@ -2,7 +2,21 @@
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE, PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYLISTOBJECT_SIZE, PY_TYPE_COROUTINE, PY_TYPE_GEN, PY_FLAG_GEN_SOURCE, PY_TYPE_LIST
+from pcc import i64
+from pcc.runtime.py.py_abi_constants import (
+    C_POINTER_SIZE,
+    PYLISTOBJECT_CAPACITY_OFFSET,
+    PYLISTOBJECT_ITEMS_OFFSET,
+    PYLISTOBJECT_LENGTH_OFFSET,
+    PYLISTOBJECT_SIZE,
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_GC_PINNED,
+    PY_FLAG_GEN_SOURCE,
+    PY_TYPE_COROUTINE,
+    PY_TYPE_GEN,
+    PY_TYPE_LIST,
+)
+
 
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void
 from pcc.unsafe import (
@@ -90,6 +104,19 @@ pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_
 pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 define_global_i32("pcc_gen_sync_frame_map", 5)
 
+_GEN_FRAME_FACTORY_VALUE = 0
+_GEN_FRAME_FACTORY_ERROR = 1
+_GEN_FRAME_FACTORY_SLOT_COUNT = 2
+define_global_i32("pcc_gen_frame_factory_map", _GEN_FRAME_FACTORY_SLOT_COUNT)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_note_slot_write_barrier = extern(
+    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
+)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
 @c_abi_export("py_gen_frame_get")
 def py_gen_frame_get(frame, index: int):
     """NEW ref from a compiler-private, fixed-size managed-object frame."""
@@ -159,38 +186,85 @@ def _require_result(result, helper_name, message):
     return result
 
 
+def _gen_frame_factory_finish(slots, token: i64, success: i64):
+    value_slot = ptr_add(slots, _GEN_FRAME_FACTORY_VALUE * C_POINTER_SIZE)
+    error_slot = ptr_add(slots, _GEN_FRAME_FACTORY_ERROR * C_POINTER_SIZE)
+    if success == 0:
+        py_tls_exc_swap_slot(error_slot)
+        if token >= 0:
+            if pcc_gc_foreign_lease_release(value_slot, token) != 0:
+                pcc_platform_abort()
+                return null()
+        pcc_gc_store_root(value_slot, null())
+        py_clear_exception()
+        py_tls_exc_swap_slot(error_slot)
+        pcc_gc_frame_leave(slots)
+        return null()
+    # Bridge the terminal raw ABI with the same pin/slot transfer protocol
+    # as ordinary list construction. The counted lease remains live through
+    # every allocation, poll and initialization operation above this point.
+    pcc_py_gc_minor_graph_lock()
+    value = pcc_gc_load_ptr(null(), value_slot)
+    prior: i64 = i64(load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED)
+    pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    if pcc_gc_foreign_lease_release(value_slot, token) != 0:
+        pcc_platform_abort()
+        return null()
+    pcc_gc_frame_leave(slots)
+    return pcc_gc_take_pinned_slot(value_slot, prior)
+
+
+def _gen_frame_factory_oom(slots, token: i64, message):
+    if ptr_is_null(py_current_exception()):
+        py_raise_owned(py_exc_new(19, message))
+    return _gen_frame_factory_finish(slots, token, 0)
+
+
 @c_abi_export("py_gen_frame_new")
-def py_gen_frame_new(slot_count: int):
+def py_gen_frame_new(slot_count: i64):
     """Construct the compiler's fixed-size list frame before publishing it."""
     if slot_count < 0 or slot_count > 134217728:
         return _require_result(null(), cstr("py_gen_frame_new"), cstr("invalid generator frame size"))
-    frame = pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0)
-    if ptr_is_null(frame):
-        return _require_result(null(), cstr("pcc_gc_alloc"), cstr("generator frame allocation failed"))
-    capacity: int = slot_count
+    slots = stack_alloc(_GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
+    pcc_gc_frame_enter(global_addr("pcc_gen_frame_factory_map"), slots)
+    value_slot = ptr_add(slots, _GEN_FRAME_FACTORY_VALUE * C_POINTER_SIZE)
+    store_ptr(value_slot, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
+    if ptr_is_null(load_ptr(value_slot, 0)):
+        return _gen_frame_factory_oom(slots, -1, cstr("generator frame allocation failed"))
+    frame = load_ptr(value_slot, 0)
+    capacity: i64 = slot_count
     if capacity < 4:
         capacity = 4
     store_i64(frame, PYLISTOBJECT_LENGTH_OFFSET, 0)
     store_i64(frame, PYLISTOBJECT_CAPACITY_OFFSET, capacity)
     store_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET, null())
-    items = malloc(capacity * C_POINTER_SIZE)
+    token: i64 = i64(pcc_gc_foreign_lease_acquire(value_slot))
+    if token < 0:
+        _require_result(null(), cstr("py_gen_frame_new"), cstr("generator frame address lease failed"))
+        return _gen_frame_factory_finish(slots, token, 0)
+    frame = load_ptr(value_slot, 0)
+    pcc_gc_note_slot_write_barrier(null(), value_slot, frame)
+    slot_bytes: i64 = i64(C_POINTER_SIZE)
+    items = malloc(capacity * slot_bytes)
     if ptr_is_null(items):
-        py_decref(frame)
-        return _require_result(null(), cstr("malloc"), cstr("generator frame slots allocation failed"))
+        return _gen_frame_factory_oom(slots, token, cstr("generator frame slots allocation failed"))
+    frame = load_ptr(value_slot, 0)
     store_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET, items)
     none = global_load_ptr("py_None")
-    index: int = 0
+    # This index describes bounded ABI storage, not a Python integer value.
+    index: i64 = 0
     # None is immortal. Fill the unpublished frame without retain/release or
     # growth; subsequent argument/local stores use the ordinary list barriers.
     while index < slot_count:
-        store_ptr(items, index * C_POINTER_SIZE, none)
+        store_ptr(items, index * slot_bytes, none)
         index += 1
     store_i64(frame, PYLISTOBJECT_LENGTH_OFFSET, slot_count)
-    pcc_gc_backend4_zpage_register_owner_payload_span(frame, items, capacity * C_POINTER_SIZE)
+    pcc_gc_backend4_zpage_register_owner_payload_span(frame, items, capacity * slot_bytes)
     py_gc_track(frame)
     pcc_gc_publish_initialized(frame)
-    return frame
-
+    return _gen_frame_factory_finish(slots, token, 1)
 
 @c_abi_export("py_gen_frame_save")
 def py_gen_frame_save(frame, slot_addresses, slot_count: int) -> int:

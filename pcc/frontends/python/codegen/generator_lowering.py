@@ -2318,7 +2318,7 @@ class GeneratorLoweringMixin:
         self._emit_application_safepoint()
 
         bulk_frame_init = str(
-            os.environ.get("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "1") or "1"
+            os.environ.get("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "0") or "0"
         ).strip().lower() not in ("1", "true", "yes", "on")
         if bulk_frame_init:
             frame = self.builder.call(
