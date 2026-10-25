@@ -170,10 +170,13 @@ def test_backend0_collector_preserves_ordering_and_graph_contract():
     assert collect.index("pcc_gc_default_drain_deferred_nodes()") < collect.index(
         'store_i32(collecting_slot, 0, 0)'
     )
-    assert collect.index('store_i32(collecting_slot, 0, 0)') < collect.index(
+    # Wrong-backend candidate calls leave before publishing collecting. The
+    # admitted cleanup paths clear collecting before releasing either lock.
+    admitted = collect[collect.index('store_i32(collecting_slot, 0, 1)'):]
+    assert admitted.index('store_i32(collecting_slot, 0, 0)') < admitted.index(
         "pcc_gc_default_table_unlock()"
     )
-    assert collect.index("pcc_gc_default_table_unlock()") < collect.index(
+    assert admitted.index("pcc_gc_default_table_unlock()") < admitted.index(
         "pcc_resume_world()"
     )
 
