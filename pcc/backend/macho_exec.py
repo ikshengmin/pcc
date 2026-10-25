@@ -684,6 +684,13 @@ def prepare_executable_object(
         # relocatable core consumes it; unselected members were already parsed
         # by read_archive and a malformed member failed above.
         _validate_input_load_commands(resolved_objects)
+        # Selection and its receipt callbacks are finished. The resolved
+        # objects now own every selected member's bytes; retaining the private
+        # census or pulled list would keep those bytes alive after the consuming
+        # merge retires its inputs, along with every unused member of the last
+        # archive. Leave the caller's archive collection and buffers untouched.
+        members = pulled = selected_members = member = None
+        already_defined = pending = None
     # Even one input goes through the relocatable core: that is where CPU,
     # symbol-provenance, companion-relocation, and section-target contracts
     # are normalized and checked. A one-object fast path must not bypass them.
