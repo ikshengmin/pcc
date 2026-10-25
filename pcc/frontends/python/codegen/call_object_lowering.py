@@ -1948,10 +1948,19 @@ class CallObjectLoweringMixin:
         adapter_name = self._cross_module_static_entries.get(name)
         fn = self.functions.get(name)
         fd = self._cross_module_func_defs.get(name)
+        return self._emit_slot_call_guarded_native(expr, name, fn, fd, adapter_name)
+
+    def _emit_slot_call_guarded_native(self, expr, name, fn, fd, adapter_name):
+        """Use provider metadata only after checking the evaluated callable.
+
+        Both imported names and module attributes retain their live lookup.
+        A changed callable uses ordinary binding with the same evaluated
+        arguments. Synchronous calls inside generators use lexical operand
+        roots; no owner or raw address crosses a suspension.
+        """
         if adapter_name is None or not isinstance(fn, ir.Function) or fd is None:
             return None
         if (not self._strict_no_libpython
-                or len(getattr(self, "_generator_ctx_stack", ())) > 0
                 or self._has_unpacked_operands(expr.args, expr.kwargs)
                 or fd.is_async
                 or isinstance(fd.return_ty, RawPointerType)
@@ -1963,6 +1972,23 @@ class CallObjectLoweringMixin:
             self._resolve_call_kwargs(expr.args, expr.kwargs, fd.args)
         except L1CodegenError:
             return None
+        lexical_context = None
+        previous_lexical = False
+        lexical_state = 0
+        if len(getattr(self, "_generator_ctx_stack", ())) > 0:
+            from pcc.frontends.python.codegen.generator_lowering import (
+                _spill_function,
+                generator_expr_suspends,
+            )
+            function = _spill_function(self)
+            if function is None:
+                return None
+            caller, owner = function
+            if generator_expr_suspends(self, expr, caller, owner):
+                return None
+            lexical_context = self._generator_ctx_stack[-1]
+            previous_lexical = lexical_context.get("lexical_slot_operands", False)
+            lexical_state = lexical_context["next_state"]
         span = expr.span
         label = name + ".import"
         previous = self._current_try_err_block()
@@ -1975,6 +2001,8 @@ class CallObjectLoweringMixin:
             output = self._new_slot_call_root(label + ".result")
             roots.append(output)
         placeholders = []
+        if lexical_context is not None:
+            lexical_context["lexical_slot_operands"] = True
 
         def bind(root):
             # The root stays authoritative; a placeholder Name reads it.
@@ -2034,7 +2062,7 @@ class CallObjectLoweringMixin:
                           args=tuple(positional), kwargs=tuple(keywords))
             self._slot_call_result_sinks.append((direct, output, False))
             try:
-                raw = self._emit_static_user_function_call(direct, name, fn)
+                raw = self._emit_static_user_function_call(direct, name, fn, fd)
             finally:
                 _candidate, _slot, published = self._slot_call_result_sinks.pop()
             if not published:
@@ -2065,6 +2093,10 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
             for placeholder in placeholders:
                 self.env.pop(placeholder, None)
+            if lexical_context is not None:
+                lexical_context["lexical_slot_operands"] = previous_lexical
+                if lexical_context["next_state"] != lexical_state:
+                    raise L1CodegenError("guarded synchronous call introduced a resume edge")
         if sink is not None:
             return self.builder.load(output, name=self._fresh(label + ".output"))
         return self._take_slot_call_root(output, source_expr=expr)

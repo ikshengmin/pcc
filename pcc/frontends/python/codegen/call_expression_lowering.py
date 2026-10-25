@@ -2602,9 +2602,10 @@ class CallExpressionLoweringMixin:
             return result
         return self._emit_static_user_function_call(expr, name, fn)
 
-    def _emit_static_user_function_call(self, expr: Call, name: str, fn) -> ir.Value:
+    def _emit_static_user_function_call(self, expr: Call, name: str, fn, ast_func_def=None) -> ir.Value:
         """Call the user function bound to ``name`` through its native ABI."""
-        ast_func_def = self._find_user_funcdef(name)
+        if ast_func_def is None:
+            ast_func_def = self._find_user_funcdef(name)
         if self._ordinary_call_needs_runtime_binding(expr, ast_func_def):
             return self._emit_runtime_bound_user_call(expr, name, fn)
         if ast_func_def.is_async:

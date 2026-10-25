@@ -40,7 +40,11 @@ class NativeDataclassesLoweringMixin:
                 and expr.func.ident in ("replace", "_replace")
                 and expr.func.ident not in self.env
                 and expr.func.ident not in getattr(self, "_module_globals", {})
+                and not (expr.func.ident in self.functions
+                         and expr.func.ident not in self._cross_module_func_defs)
             ):
+                # Keep the legacy imported helper route, but a function
+                # defined in this module owns its name and must be called.
                 kind = "dataclasses.replace"
         elif isinstance(expr.func, Attr):
             kind = self._native_builtin_value_kind_for_expr(expr.func)

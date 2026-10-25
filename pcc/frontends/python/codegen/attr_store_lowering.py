@@ -16,11 +16,15 @@ _I32 = ir.IntType(32)
 def rooted_attribute_store(host, target):
     # Keep the existing proven managed-provider cell+dictionary writer.
     # Other imported object receivers must use their actual current value.
-    if live_import_expr_binding(host, target.obj) and not (
-        isinstance(target.obj, Name)
-        and target.obj.ident in getattr(host, "_native_module_aliases", {})
-    ):
-        return True
+    if live_import_expr_binding(host, target.obj):
+        module_name = None
+        if isinstance(target.obj, Name):
+            module_name = getattr(host, "_native_module_aliases", {}).get(target.obj.ident)
+        info = (host._native_module_exports or {}).get(module_name, {}).get(target.name)
+        if info is None or info.get("kind") not in ("module_global", "constant"):
+            # Functions and other attributes have no managed value cell.
+            # Their actual module/object namespace owns a replacement value.
+            return True
     if isinstance(target.obj, Name):
         return False
     # A computed receiver can produce a new owner and can run callbacks while

@@ -2563,11 +2563,12 @@ class NativeModuleAliasMixin:
         self,
         alias_name: str,
         attr_name: str,
+        for_guard: bool = False,
     ) -> Optional[tuple[str, dict]]:
         """Return ``(module_name, export_info)`` for ``alias.attr`` when
         ``alias`` names a native sibling submodule or a literal dynamic
         import of one."""
-        if live_import_global_slot(self, alias_name) is not None:
+        if not for_guard and live_import_global_slot(self, alias_name) is not None:
             return None
         module_name = self._native_module_aliases.get(alias_name)
         if module_name is None:
@@ -2608,6 +2609,7 @@ class NativeModuleAliasMixin:
         self,
         module_expr: Expr,
         attr_name: str,
+        for_guard: bool = False,
     ) -> Optional[tuple[str, dict]]:
         """Return native export info for ``module_expr.attr``.
 
@@ -2617,12 +2619,13 @@ class NativeModuleAliasMixin:
         spelling stays CPython-compatible; this only changes how pcc's
         native module alias table is queried.
         """
-        if live_import_expr_binding(self, module_expr):
+        if not for_guard and live_import_expr_binding(self, module_expr):
             return None
         if isinstance(module_expr, Name):
             return self._native_module_alias_export_info(
                 module_expr.ident,
                 attr_name,
+                for_guard,
             )
         if isinstance(module_expr, Attr) and isinstance(module_expr.obj, Name):
             base = module_expr.obj.ident
@@ -3655,6 +3658,27 @@ class NativeModuleAliasMixin:
                 if owned is not None:
                     return owned
         if live_import_expr_binding(self, attr.obj):
+            # Historical export metadata identifies a candidate, never the
+            # callable. Evaluate normal attribute lookup and arguments first;
+            # only an exact unbound native entry may bypass argument packing.
+            export = self._native_module_expr_export_info(attr.obj, attr.name, True)
+            if export is not None:
+                module_name, info = export
+                if (info.get("kind") == "function"
+                        and bool(info.get("needs_object", False))
+                        and bool(info.get("single_definition", False))
+                        and not bool(info.get("semantic_decorator", False))
+                        and not bool(info.get("manual_pointer_abi", False))
+                        and not bool(info.get("is_async", False))
+                        and not bool(info.get("may_park", False))):
+                    fn = self._declare_extern_user_function(module_name, attr.name, info)
+                    fd = self._extern_info_to_funcdef(attr.name, info)
+                    direct = self._emit_slot_call_guarded_native(
+                        expr, module_name + "." + attr.name, fn, fd,
+                        fn.name + "_native_adapter",
+                    )
+                    if direct is not None:
+                        return self._dynamic_export_call_value(expr, direct)
             # Imported computed values keep a dynamic type and a live binding.
             # Reuse ordinary dictionary method guards before materializing the
             # callable: they load that binding once and preserve normal method
