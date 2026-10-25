@@ -18,6 +18,7 @@ come from the generated C-header-derived py_abi_constants module.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import (
     extern,
     c_abi_export,
@@ -2476,6 +2477,8 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
     pcc_py_gc_minor_graph_unlock()
     key_plan = stack_alloc(256)
     value_plan = stack_alloc(256)
+    slot_stride: i64 = i64(C_POINTER_SIZE)
+    first_pair_source: i64 = i64(_DICT_MATERIALIZE_KEY)
     pair_sources = stack_alloc(2 * C_POINTER_SIZE)
     store_ptr(pair_sources, 0, ptr_add(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE))
     store_ptr(pair_sources, C_POINTER_SIZE, ptr_add(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE))
@@ -2491,14 +2494,14 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
             elif kind == _DICT_MATERIALIZE_ITEMS:
                 # Copying from the dictionary already created two owners.
                 # Retire address leases, then move those owners into the pair.
-                selected_index: int = _DICT_MATERIALIZE_VALUE
-                while selected_index >= _DICT_MATERIALIZE_KEY:
-                    selected_slot = ptr_add(slots, selected_index * C_POINTER_SIZE)
-                    selected_token: int = load_i64(tokens, selected_index * C_POINTER_SIZE)
+                selected_index: i64 = i64(_DICT_MATERIALIZE_VALUE)
+                while selected_index >= first_pair_source:
+                    selected_slot = ptr_add(slots, selected_index * slot_stride)
+                    selected_token: int = load_i64(tokens, selected_index * slot_stride)
                     if pcc_gc_foreign_lease_release(selected_slot, selected_token) != 0:
                         pcc_platform_abort()
                         return -1
-                    store_i64(tokens, selected_index * C_POINTER_SIZE, 0)
+                    store_i64(tokens, selected_index * slot_stride, 0)
                     selected_index -= 1
                 pair_token: int = pcc_tuple_from_owned_roots_lease(pair_sources, 2,
                     ptr_add(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE))
