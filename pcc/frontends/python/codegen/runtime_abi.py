@@ -1654,6 +1654,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
     "py_func_code_class_cache": _PYOBJ,
     "pcc_builtin_function_cache": _PYOBJ,
     "pcc_thread_stop_requested": _I32,
+    "pcc_object_type_epoch": _I64,
     "pcc_gc_backend4_auto_step_pending": _I32,
 }
 
@@ -1788,6 +1789,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        'pcc_object_type_epoch',
         'pcc_gc_tracked_after_collect',
         'pcc_gc_backend0_subset_count',
         # Width must match freestanding_gc_state and all telemetry endpoints.

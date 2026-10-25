@@ -53,8 +53,11 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_STR,
 )
 
+from pcc import i64
 from pcc.extern import c_abi_typed_export, c_double, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i64,
+    atomic_store_i64,
     call_i64_ptr1,
     call_i64_ptr3,
     call_i64_ptr_i64_ptr,
@@ -84,6 +87,10 @@ from pcc.unsafe import (
     store_ptr,
     strlen,
 )
+
+
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
 
 py_type_of = extern("pcc_py_type_of", (c_ptr,), c_int64)
@@ -783,8 +790,22 @@ def pcc_capi_dealloc_cext_object(o, type_tag: int) -> int:
 def pcc_capi_set_type(o, t) -> None:
     if ptr_is_null(o):
         return
-    store_i32(o, 8, pcc_capi_cext_tag_for(t))
+    tag: int = pcc_capi_cext_tag_for(t)
+    # Registry preparation can allocate. Publish the header and invalidate
+    # cached type predicates together without a parking/callback boundary.
+    pcc_py_gc_minor_graph_lock()
+    store_i32(o, 8, tag)
     store_ptr(o, 16, t)
+    epoch_slot = global_addr("pcc_object_type_epoch")
+    epoch: i64 = i64(atomic_load_i64(epoch_slot, 0, "relaxed"))
+    if epoch >= 0:
+        if epoch == 9223372036854775807:
+            atomic_store_i64(epoch_slot, 0, -1, "release")
+        else:
+            atomic_store_i64(epoch_slot, 0, epoch + 1, "release")
+    # Negative is permanent saturation: generated guards no longer reuse a
+    # predicate, rather than accepting a wrapped version as an old cache hit.
+    pcc_py_gc_minor_graph_unlock()
 
 
 # --- py_cext_number_to_i64 -------------------------------------------

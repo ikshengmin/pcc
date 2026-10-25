@@ -29,6 +29,7 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_LIST,
     PY_TYPE_TUPLE,
@@ -38,6 +39,58 @@ _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
+
+def _stable_parameter_exact_list_guard(host, receiver, span):
+    """Memoize only exact-list membership of an unchanged parameter.
+
+    A native builtin list cannot change its class or acquire an instance
+    append attribute. Other objects stay on dynamic lookup even if their
+    class/descriptor changes. C retyping invalidates the predicate through
+    its mutation epoch. No raw address or bound method is cached.
+    """
+    borrowed = getattr(host, "_slot_call_borrowed_operands", {})
+    if borrowed.get(id(receiver)) is not receiver:
+        return None
+    guards = host._exact_list_parameter_guards
+    entry = guards.get(id(receiver))
+    if entry is None or entry[0] is not receiver or entry[1] is not host.current_function:
+        ready = host._alloca_in_entry(_I1, name=host._fresh("list.parameter.guard.ready"))
+        value = host._alloca_in_entry(_I1, name=host._fresh("list.parameter.guard.value"))
+        host._store_entry_initializer(ready, ir.Constant(_I1, 0))
+        host._store_entry_initializer(value, ir.Constant(_I1, 0))
+        epoch = host._alloca_in_entry(_I64, name=host._fresh("list.parameter.guard.epoch"))
+        host._store_entry_initializer(epoch, ir.Constant(_I64, 0))
+        entry = (receiver, host.current_function, ready, value, epoch)
+        guards[id(receiver)] = entry
+    ready, value, epoch = entry[2], entry[3], entry[4]
+    current_epoch = host.builder.load_atomic(
+        declare_runtime_global(host.module, "pcc_object_type_epoch"), "acquire", 8,
+        name=host._fresh("list.parameter.guard.current_epoch"),
+    )
+    same_epoch = host.builder.icmp_signed("==", current_epoch, host.builder.load(epoch))
+    active_epoch = host.builder.icmp_signed(
+        ">=", current_epoch, ir.Constant(_I64, 0),
+    )
+    reusable = host.builder.and_(
+        host.builder.load(ready), host.builder.and_(same_epoch, active_epoch),
+    )
+    function = host.current_function
+    query = function.append_basic_block(host._fresh("list.parameter.guard.query"))
+    done = function.append_basic_block(host._fresh("list.parameter.guard.done"))
+    host.builder.cbranch(reusable, done, query)
+    host.builder.position_at_end(query)
+    # A failing query leaves the entry invalid. Read the version before the
+    # query so a mutation during a callback cannot validate an older result.
+    host.builder.store(ir.Constant(_I1, 0), ready)
+    host.builder.store(current_epoch, epoch)
+    tag = host._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=span)
+    exact = host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST))
+    host.builder.store(exact, value)
+    host.builder.store(ir.Constant(_I1, 1), ready)
+    host.builder.branch(done)
+    host.builder.position_at_end(done)
+    return host.builder.load(value, name=host._fresh("list.parameter.guard.result"))
+
 
 # Sentinel "end" for the 2-arg ``list.index(x, start)`` form: py_list_index_range
 # clamps any ``end > length`` down to ``length``, so a value safely larger than
@@ -723,13 +776,15 @@ class ListMethodLoweringMixin:
                 roots.append(receiver)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                tag = self._slot_call_runtime_call(
-                    "py_obj_type_tag", (receiver,), span=expr.span,
-                )
-                is_list = self.builder.icmp_signed(
-                    "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
-                    name=self._fresh("list.append.is_list"),
-                )
+                is_list = _stable_parameter_exact_list_guard(self, receiver, expr.span)
+                if is_list is None:
+                    tag = self._slot_call_runtime_call(
+                        "py_obj_type_tag", (receiver,), span=expr.span,
+                    )
+                    is_list = self.builder.icmp_signed(
+                        "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
+                        name=self._fresh("list.append.is_list"),
+                    )
                 function = self.current_function
                 list_block = function.append_basic_block(self._fresh("list.append.list"))
                 generic_block = function.append_basic_block(self._fresh("list.append.generic"))

@@ -53,6 +53,7 @@ from pcc.unsafe import (
     define_global_header,
     define_global_i8,
     define_global_i32,
+    define_global_i64,
     define_global_i32_array,
     define_global_null_ptr_array,
     define_global_ptr_array,
@@ -329,6 +330,8 @@ define_global_i32("py_next_user_tag", PY_TYPE_USER_CLASS_START)
 define_global_ptr_null("py_weakref_head")
 define_global_ptr_null("py_object_root_cache")
 define_global_i32("py_class_attr_cache_epoch", 0)
+# Native type-predicate caches are invalidated by supported C object retyping.
+define_global_i64("pcc_object_type_epoch", 0)
 define_thread_local_ptr_null("py_tls_current_exc_storage")
 define_thread_local_ptr_null("py_tls_current_exc_root_handle")
 

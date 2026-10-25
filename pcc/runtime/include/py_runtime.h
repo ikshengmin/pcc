@@ -923,6 +923,9 @@ int64_t   py_threading_thread_join_args(PyObject *thread, PyObject *timeout);
 void py_incref(PyObject *o);
 void py_decref(PyObject *o);
 
+/* Negative means type-predicate versions saturated and must not be cached. */
+extern int64_t pcc_object_type_epoch;
+
 /* ---- None -------------------------------------------------------------- */
 extern PyObject *const py_None;
 extern PyObject *const py_NotImplemented;

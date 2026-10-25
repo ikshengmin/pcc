@@ -123,6 +123,7 @@ class Layer1InitMixin:
         self._slot_call_root_records: list = []
         self._slot_call_root_record_index: dict = {}
         self._slot_call_borrowed_operands: dict = {}
+        self._exact_list_parameter_guards: dict = {}
         self._slot_call_cleanup_function: Optional[ir.Function] = None
         self._slot_call_cleanup_blocks: dict[tuple, tuple] = {}
         self._slot_call_result_sinks: list = []
