@@ -886,40 +886,7 @@ def pcc_gc_store_root(slot, value) -> None:
         load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
     ):
-        fast_old = load_ptr(slot, 0)
-        if ptr_eq(fast_old, value) != 0:
-            return
-        if is_tagged_int(value) == 0 and ptr_is_null(value) == 0:
-            counted: int = 0
-            new_tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-            if (
-                (new_tag >= PY_TYPE_NONE and new_tag < PY_TYPE_CONTINUATION)
-                or new_tag == PY_TYPE_CPY_HANDLE
-                or (new_tag >= PY_TYPE_USER and new_tag < PY_TYPE_CEXT_TAG_BASE)
-            ):
-                if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                    new_rc: int = load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET)
-                    if new_rc >= 0:
-                        store_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, new_rc + 1)
-                        counted = 1
-            if counted == 0:
-                py_incref(value)
-        store_ptr(slot, 0, value)
-        if is_tagged_int(fast_old) == 0 and ptr_is_null(fast_old) == 0:
-            released: int = 0
-            old_tag: int = load_i32(fast_old, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-            if (
-                (old_tag >= PY_TYPE_NONE and old_tag < PY_TYPE_CONTINUATION)
-                or old_tag == PY_TYPE_CPY_HANDLE
-                or (old_tag >= PY_TYPE_USER and old_tag < PY_TYPE_CEXT_TAG_BASE)
-            ):
-                if (load_i32(fast_old, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                    old_rc: int = load_i64(fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET)
-                    if old_rc > 1:
-                        store_i64(fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET, old_rc - 1)
-                        released = 1
-            if released == 0:
-                py_decref(fast_old)
+        _store_root_single_thread(slot, value)
         return
     backend: int = _gc_backend_fast()
     if backend == 0:
@@ -940,6 +907,52 @@ def pcc_gc_store_root(slot, value) -> None:
         if is_tagged_int(old) == 0 and ptr_is_null(old) == 0:
             py_decref(old)
         return
+    _store_root_traced(slot, value, backend)
+
+
+def _store_root_single_thread(slot, value) -> None:
+    # Preserve the existing no-probe/no-log single-thread admission. Its
+    # header temporaries do not belong in the threaded GC0 call frame.
+    fast_old = load_ptr(slot, 0)
+    if ptr_eq(fast_old, value) != 0:
+        return
+    if is_tagged_int(value) == 0 and ptr_is_null(value) == 0:
+        counted: int = 0
+        new_tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if (
+            (new_tag >= PY_TYPE_NONE and new_tag < PY_TYPE_CONTINUATION)
+            or new_tag == PY_TYPE_CPY_HANDLE
+            or (new_tag >= PY_TYPE_USER and new_tag < PY_TYPE_CEXT_TAG_BASE)
+        ):
+            if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
+                new_rc: int = load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET)
+                if new_rc >= 0:
+                    store_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, new_rc + 1)
+                    counted = 1
+        if counted == 0:
+            py_incref(value)
+    store_ptr(slot, 0, value)
+    if is_tagged_int(fast_old) == 0 and ptr_is_null(fast_old) == 0:
+        released: int = 0
+        old_tag: int = load_i32(fast_old, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if (
+            (old_tag >= PY_TYPE_NONE and old_tag < PY_TYPE_CONTINUATION)
+            or old_tag == PY_TYPE_CPY_HANDLE
+            or (old_tag >= PY_TYPE_USER and old_tag < PY_TYPE_CEXT_TAG_BASE)
+        ):
+            if (load_i32(fast_old, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
+                old_rc: int = load_i64(fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET)
+                if old_rc > 1:
+                    store_i64(fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET, old_rc - 1)
+                    released = 1
+        if released == 0:
+            py_decref(fast_old)
+    return
+
+
+def _store_root_traced(slot, value, backend: int) -> None:
+    # The checked transaction keeps its full store, relocation, logging and
+    # finalizer ordering; only its scratch frame moves off the GC0 entry.
     plan = stack_alloc(128)
     pcc_gc_store_root_plan_init(plan, backend)
     pcc_py_gc_minor_graph_lock()
