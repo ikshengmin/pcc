@@ -183,3 +183,26 @@ def test_live_module_calls_native(tmp_path, pcc_runtime_archive):
             capture_output=True, text=True, timeout=20,
         )
         assert (result.returncode, result.stdout, result.stderr) == (0, EXPECTED, ""), gc
+
+
+def test_compiled_builtin_alias_is_only_a_guard_candidate():
+    from pcc.frontends.python.codegen.native_modules import NativeModuleAliasMixin
+
+    class Aliases(NativeModuleAliasMixin):
+        _native_extension_module_env = {}
+        _module_globals = {}
+        _native_module_aliases = {}
+        _native_module_exports = {"provider": {"operation": {"kind": "function"}}}
+
+        def _native_module_object_for_name(self, name):
+            return None
+
+        def _native_builtin_module_for_name(self, name):
+            return "provider" if name == "alias" else None
+
+    host = Aliases()
+    assert host._native_module_alias_export_info("alias", "operation") is None
+    assert host._native_module_alias_export_info("alias", "operation", True) == (
+        "provider", {"kind": "function"},
+    )
+    assert host._native_module_alias_export_info("unknown", "operation", True) is None
