@@ -331,6 +331,7 @@ int64_t pcc_platform_write(int64_t fd, void *data, int64_t length) {
 }
 void pcc_platform_abort(void) { abort(); }
 int64_t pcc_threads_enabled(void) { return 1; }
+int64_t pcc_gc_reclaim_retired_index_tables(void) { return 0; }
 int64_t pcc_thread_start(void **out, void *entry, void *arg) {
     WorkerHandle *handle = (WorkerHandle *)calloc(1, sizeof(*handle));
     if (handle == NULL) return -1;

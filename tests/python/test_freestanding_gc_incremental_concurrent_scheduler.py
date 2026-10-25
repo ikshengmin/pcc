@@ -44,6 +44,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_maybe_auto_step",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_reclaim_retired_index_tables",
     "pcc_gc_is_cms_worker",
     # pcc_gc_backend4_maybe_auto_step: refused inside no-park or graph-lock
     # scopes, then a GC4 step.
