@@ -1313,10 +1313,15 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         "  group: ${{ github.workflow }}-${{ github.event_name }}-"
         "${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref "
         "|| format('{0}-{1}', github.run_id, github.run_attempt) }}\n"
-        "  cancel-in-progress: false"
+        "  cancel-in-progress: false\n"
+        "  queue: max"
     )
     group = concurrency.splitlines()[0].removeprefix("  group: ")
     cancel = concurrency.splitlines()[1].removeprefix("  cancel-in-progress: ")
+    queue = concurrency.splitlines()[2].removeprefix("  queue: ")
+    # Retain one active run and up to 100 pending in each unchanged group.
+    # GitHub orders arrivals at the group, not commits, and can cancel overflow.
+    assert queue == "max"
     base = dict(workflow="gate", event_name="push", ref="refs/heads/master",
                 run_id="101", run_attempt="1")
     for changes, expected_group, expected_cancel in (
@@ -1360,6 +1365,9 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         assert "ci_worker_size_prior_gate.py" not in body and "needs:" not in body
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in mac
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
+    assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in mac
+    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in mac
+    assert "permissions:" not in text
     # A push qualifies Stage1 plus the five-collector canary; the full
     # Stage2/Stage3 chain is a manual dispatch input, never a soft failure.
     assert "full_chain:" in text and "type: boolean" in text
