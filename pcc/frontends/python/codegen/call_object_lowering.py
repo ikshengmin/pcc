@@ -1607,6 +1607,33 @@ class CallObjectLoweringMixin:
             # Finish user evaluation before making a partially filled tuple.
             # Every captured owner remains in its registered slot across
             # allocation, collection and generated suspension/continuation.
+            if items and not getattr(self, "_generator_ctx_stack", ()):
+                sources = self._alloca_in_entry(
+                    ir.ArrayType(_CSTR, len(items)), name=self._fresh(label + ".sources"),
+                )
+                for index, item in enumerate(items):
+                    address = self.builder.gep(
+                        sources, [ir.Constant(_I32, 0), ir.Constant(_I32, index)],
+                        name=self._fresh(label + ".source"),
+                    )
+                    self.builder.store(self._as_gc_ptr(item), address)
+                status = self.builder.call(
+                    self.runtime["py_tuple_from_owned_roots"],
+                    [self._as_gc_ptr(sources), ir.Constant(_I64, len(items)), self._as_gc_ptr(output)],
+                    name=self._fresh("call.slot.tuple.transfer"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "tuple construction", args[0].span)
+                self._emit_post_call_err_check(args[0].span)
+                # Success empties every source; retire its map/flag without
+                # executing another retaining store against an empty slot.
+                for item in reversed(items):
+                    _slot, flag, lifo = self._slot_call_root_record(item)
+                    if flag is not None:
+                        self.builder.store(ir.Constant(_I1, 0), flag)
+                    if lifo:
+                        self._emit_gc_frame_leave_lifo_for_slot(item)
+                return output
             value = self.builder.call(
                 self.runtime["py_tuple_new"], [ir.Constant(_I64, len(items))],
                 name=self._fresh("call.slot.fixed.tuple"),

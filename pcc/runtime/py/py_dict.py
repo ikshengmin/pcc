@@ -147,6 +147,7 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
+py_tuple_from_owned_roots = extern("py_tuple_from_owned_roots", (c_ptr, c_int64, c_ptr), c_int64)
 py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
@@ -2475,6 +2476,9 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
     pcc_py_gc_minor_graph_unlock()
     key_plan = stack_alloc(256)
     value_plan = stack_alloc(256)
+    pair_sources = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(pair_sources, 0, ptr_add(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE))
+    store_ptr(pair_sources, C_POINTER_SIZE, ptr_add(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE))
     index: int = 0
     while index < limit:
         selected: int = _dict_materialize_entry(slots, tokens, index, kind, key_plan, value_plan)
@@ -2485,16 +2489,21 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
             if kind == _DICT_MATERIALIZE_VALUES:
                 item = _DICT_MATERIALIZE_VALUE
             elif kind == _DICT_MATERIALIZE_ITEMS:
-                store_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE, py_tuple_new(2))
+                # Copying from the dictionary already created two owners.
+                # Retire address leases, then move those owners into the pair.
+                selected_index: int = _DICT_MATERIALIZE_VALUE
+                while selected_index >= _DICT_MATERIALIZE_KEY:
+                    selected_slot = ptr_add(slots, selected_index * C_POINTER_SIZE)
+                    selected_token: int = load_i64(tokens, selected_index * C_POINTER_SIZE)
+                    if pcc_gc_foreign_lease_release(selected_slot, selected_token) != 0:
+                        pcc_platform_abort()
+                        return -1
+                    store_i64(tokens, selected_index * C_POINTER_SIZE, 0)
+                    selected_index -= 1
+                if py_tuple_from_owned_roots(pair_sources, 2,
+                        ptr_add(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE)) != 0:
+                    return -1
                 if _dict_slot_adopt(slots, tokens, _DICT_MATERIALIZE_PAIR) != 0:
-                    return -1
-                py_tuple_set_item(load_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE), 0,
-                    load_ptr(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE))
-                if py_err_occurred() != 0:
-                    return -1
-                py_tuple_set_item(load_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE), 1,
-                    load_ptr(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE))
-                if py_err_occurred() != 0:
                     return -1
                 item = _DICT_MATERIALIZE_PAIR
             py_list_append(load_ptr(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE),
@@ -2503,9 +2512,9 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
                 return -1
             if kind == _DICT_MATERIALIZE_ITEMS:
                 _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_PAIR)
-            if kind != _DICT_MATERIALIZE_KEYS:
+            if kind == _DICT_MATERIALIZE_VALUES:
                 _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_VALUE)
-            if kind != _DICT_MATERIALIZE_VALUES:
+            if kind == _DICT_MATERIALIZE_KEYS:
                 _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_KEY)
         index = index + 1
     return 0

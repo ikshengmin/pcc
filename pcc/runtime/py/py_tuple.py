@@ -21,6 +21,7 @@ there is no module-init dependency.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
@@ -49,6 +50,7 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    define_global_i32,
     global_addr,
     is_tagged_int,
     load_i32,
@@ -119,6 +121,19 @@ pcc_gc_retain_plan_prepare_locked = extern(
     "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
 )
 pcc_gc_retain_plan_finish = extern("pcc_gc_retain_plan_finish", (c_ptr,), c_void)
+
+
+
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
+pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
+pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
 def _debug_bad_container(o, code: int) -> None:
@@ -210,6 +225,83 @@ def py_tuple_new(n: int):
     else:
         pcc_gc_publish_initialized(t)
     return t
+
+
+
+define_global_i32("pcc_tuple_construction_error_map", 1)
+
+
+def _tuple_owned_construction_failed(output, token: i64) -> i64:
+    error = stack_alloc(C_POINTER_SIZE)
+    store_ptr(error, 0, null())
+    pcc_gc_frame_enter(global_addr("pcc_tuple_construction_error_map"), error)
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("tuple: out of memory")))
+    py_tls_exc_swap_slot(error)
+    if token >= 0:
+        if pcc_gc_foreign_lease_release(output, token) < 0:
+            pcc_platform_abort()
+            return -1
+    pcc_gc_store_root(output, null())
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave(error)
+    return -1
+
+
+@c_abi_export("py_tuple_from_owned_roots")
+def py_tuple_from_owned_roots(sources, count: i64, output) -> i64:
+    """Move nonempty distinct registered, unleased roots into a fresh tuple.
+
+    The address array and output root remain stable and registered for this
+    call. Each consumed source becomes empty. Output owns every transferred
+    child even on failure; caller cleanup retains all unconsumed sources.
+    This construction-only ABI never mutates an existing/shared tuple.
+    """
+    if ptr_is_null(output) != 0 or count <= 0 or count > 134217728:
+        py_runtime_error_if_unset(cstr("py_tuple_from_owned_roots"), cstr("invalid tuple construction roots"))
+        return -1
+    if ptr_is_null(load_ptr(output, 0)) == 0 or (count > 0 and ptr_is_null(sources) != 0):
+        py_runtime_error_if_unset(cstr("py_tuple_from_owned_roots"), cstr("tuple construction requires empty output"))
+        return -1
+    # py_tuple_new initializes every slot before returning; publish its NEW
+    # owner directly before the first parking/lease operation.
+    store_ptr(output, 0, py_tuple_new(count))
+    if ptr_is_null(load_ptr(output, 0)) != 0:
+        return _tuple_owned_construction_failed(output, -1)
+    token: i64 = i64(pcc_gc_foreign_lease_acquire(output))
+    if token < 0:
+        return _tuple_owned_construction_failed(output, token)
+    pcc_gc_note_slot_write_barrier(null(), output, load_ptr(output, 0))
+    stride: i64 = i64(C_POINTER_SIZE)
+    items_offset: i64 = i64(PYTUPLEOBJECT_ITEMS_OFFSET)
+    needs_track: i64 = 0
+    index: i64 = 0
+    while index < count:
+        pcc_py_gc_minor_graph_lock()
+        owner = load_ptr(output, 0)
+        source = load_ptr(sources, index * stride)
+        value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+        destination = ptr_add(owner, items_offset + index * stride)
+        if pcc_gc_backend() != 0:
+            pcc_gc_note_store()
+        pcc_gc_note_slot_write_barrier(owner, destination, value)
+        if needs_track == 0 and _tuple_item_can_participate_in_cycle(value) != 0:
+            needs_track = 1
+        # Transfer the existing owner without a retain/decref pair. The graph
+        # transaction keeps both root and field views coherent for collectors.
+        store_ptr(destination, 0, value)
+        store_ptr(source, 0, null())
+        pcc_py_gc_minor_graph_unlock()
+        index += 1
+    owner = load_ptr(output, 0)
+    if needs_track != 0:
+        py_gc_track(owner)
+    pcc_gc_publish_initialized(owner)
+    if pcc_gc_foreign_lease_release(output, token) < 0:
+        pcc_platform_abort()
+        return -1
+    return 0
 
 
 @c_abi_export("py_tuple_from_static_items")

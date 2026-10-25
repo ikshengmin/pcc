@@ -1567,6 +1567,7 @@ def _runtime_signatures_part_35():
     "py_cpy_from_pccstr": (_PTR, [_PYOBJ], False),
     "py_cpy_from_pcc_obj": (_PTR, [_PYOBJ], False),
     "py_list_append_fresh_native_instance": (_VOID, [_PYOBJ, _PYOBJ], False),
+    "py_tuple_from_owned_roots": (_I64, [_PTR, _I64, _PTR], False),
     }
 
 
