@@ -95,6 +95,17 @@ def pcc_gc_cms_worker_main_py(arg):
         if threshold0 <= 0:
             enabled = 0
         traced: i64 = 0
+        pending = global_addr("pcc_gc_backend4_auto_step_pending")
+        sweep_pending = global_addr("pcc_gc_cms_sweep_pending")
+        if (
+            enabled != 0
+            and (backend >= 1 and backend <= 4)
+            and atomic_load_i32(sweep_pending, 0, "acquire") != 0
+        ):
+            # A disabled application gate may consume its wakeup. Retain the
+            # completed mark and re-arm cleanup after enable/threshold restore,
+            # even when all allocation tickets have already been drained.
+            atomic_store_i32(pending, 0, 1, "release")
         if (
             enabled != 0
             and (backend >= 1 and backend <= 4)
@@ -107,8 +118,6 @@ def pcc_gc_cms_worker_main_py(arg):
             # while a completed mark waits for its sweep. A completed cycle
             # pays the debt (pcc_gc_finish_tracing_cycle).
             due: i64 = marking
-            pending = global_addr("pcc_gc_backend4_auto_step_pending")
-            sweep_pending = global_addr("pcc_gc_cms_sweep_pending")
             if due == 0 and atomic_load_i32(sweep_pending, 0, "acquire") == 0:
                 debt_slot = global_addr("pcc_gc_debt_bytes")
                 if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
