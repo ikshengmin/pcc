@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     free,
+    global_addr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -30,14 +31,29 @@ pcc_gc_visit_object_slots = extern(
 py_gc_index_find = extern("py_gc_index_find", (c_ptr,), c_ptr)
 
 
+# Reachability bit 0 is the existing mark; bit 2 identifies this collector's
+# validated subset. Ordinary full collections leave bit 2 clear everywhere.
+_GC0_REACHABLE = 1
+_GC0_CANDIDATE = 4
+
+
+@c_abi_export("pcc_gc_backend0_node_in_collection")
+def _in_collection(node) -> i64:
+    if ptr_is_null(node) != 0:
+        return 0
+    if load_i32(global_addr("pcc_gc_backend0_subset_active"), 0) == 0:
+        return 1
+    return 1 if (load_i32(node, 16) & _GC0_CANDIDATE) != 0 else 0
+
+
 @c_abi_export("pcc_gc_backend0_is_unreachable")
 def pcc_gc_backend0_is_unreachable(o) -> i64:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return 0
     node = py_gc_index_find(o)
-    if ptr_is_null(node) != 0:
+    if _in_collection(node) == 0:
         return 0
-    if load_i32(node, 16) == 0:
+    if (load_i32(node, 16) & _GC0_REACHABLE) == 0:
         return 1
     return 0
 
@@ -50,7 +66,7 @@ def pcc_gc_backend0_subtract_slot(slot, role: i64, context) -> None:
     if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
         return
     node = py_gc_index_find(child)
-    if ptr_is_null(node) == 0:
+    if _in_collection(node) != 0:
         store_i64(node, 8, load_i64(node, 8) - 1)
 
 
@@ -77,9 +93,9 @@ def pcc_gc_backend0_mark_reachable(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
     node = py_gc_index_find(o)
-    if ptr_is_null(node) != 0 or load_i32(node, 16) != 0:
+    if _in_collection(node) == 0 or (load_i32(node, 16) & _GC0_REACHABLE) != 0:
         return
-    store_i32(node, 16, 1)
+    store_i32(node, 16, load_i32(node, 16) | _GC0_REACHABLE)
     # Iterative, as CPython's collector: one recursion per reference level
     # overflowed the C stack on a 50,000-deep linked list.
     worklist = stack_alloc(_MARK_HEADER_BYTES)
@@ -112,9 +128,9 @@ def pcc_gc_backend0_mark_slot(slot, role: i64, context) -> None:
     if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
         return
     node = py_gc_index_find(child)
-    if ptr_is_null(node) != 0 or load_i32(node, 16) != 0:
+    if _in_collection(node) == 0 or (load_i32(node, 16) & _GC0_REACHABLE) != 0:
         return
-    store_i32(node, 16, 1)
+    store_i32(node, 16, load_i32(node, 16) | _GC0_REACHABLE)
     count: i64 = load_i64(context, _MARK_COUNT)
     capacity: i64 = load_i64(context, _MARK_CAPACITY)
     if count == capacity:

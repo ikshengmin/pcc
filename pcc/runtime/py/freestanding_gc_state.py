@@ -34,6 +34,10 @@ define_global_i32("py_gc_tracked_count", 0)
 # next is scheduled once tracking has grown by max(threshold0, this) since.
 define_global_i64("pcc_gc_tracked_after_collect", 0)
 define_global_i32("py_gc_collecting", 0)
+# Collector-private candidate context; nonzero only under stopped-world GC0.
+define_global_i32("pcc_gc_backend0_subset_active", 0)
+define_global_ptr_null("pcc_gc_backend0_subset_pairs")
+define_global_i64("pcc_gc_backend0_subset_count", 0)
 define_global_ptr_null("py_gc_callbacks")
 define_global_i32("py_gc_callbacks_firing", 0)
 

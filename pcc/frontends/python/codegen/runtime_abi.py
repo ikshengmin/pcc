@@ -1776,6 +1776,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'py_class_attr_cache_epoch',
         'py_gc_callbacks_firing',
         'py_gc_collecting',
+        'pcc_gc_backend0_subset_active',
         'py_gc_enabled',
         'py_gc_freeze_count',
         'py_gc_threshold0',
@@ -1788,6 +1789,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
         'pcc_gc_tracked_after_collect',
+        'pcc_gc_backend0_subset_count',
         # Width must match freestanding_gc_state and all telemetry endpoints.
         'pcc_gc_metric_step',
         'pcc_gc_metric_max_pause_us',
@@ -1914,6 +1916,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_trace_cext_pending_obj',
         'py_gc_callbacks',
         'py_gc_head',
+        'pcc_gc_backend0_subset_pairs',
         'py_set_dummy',
         'py_weakref_head',
     }
@@ -2787,6 +2790,7 @@ def _cross_object_signatures_part_9():
     "pcc_gc_tracked_node_pool_cached_count": ((), "c_int64"),
     "pcc_gc_tracked_node_pool_drain": ((), "c_void"),
     "pcc_gc_backend0_visit_subtract": (("c_ptr",), "c_void"),
+    "pcc_gc_backend0_collect_candidates": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc_backend0_is_unreachable": (("c_ptr",), "c_int64"),
     "pcc_gc_backend0_mark_reachable": (("c_ptr",), "c_void"),
     "pcc_gc_backend0_clear_referents": (("c_ptr",), "c_void"),
