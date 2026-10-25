@@ -869,6 +869,17 @@ class GenerationLoweringMixin:
                 _codegen_log(self, debug_codegen, "declare end")
             stmt_index += 1
 
+        # A source function that can be deleted needs the live namespace
+        # protocol before ANY function body is emitted. Otherwise an earlier
+        # getter can retain the static declaration after a later global del.
+        if not (self._freestanding_module or self._runtime_port_module
+                or self._module_has_c_abi_export):
+            for definition in self.ast_module.body:
+                if (isinstance(definition, FuncDef)
+                        and definition.name in getattr(self, "_module_del_target_names", ())
+                        and not definition.name.startswith("__nested_")):
+                    slot = self._native_extension_module_global(definition.name)
+                    self._native_extension_modules()[definition.name] = slot
         self._predeclare_native_builtin_module_attr_stores(tuple(self.ast_module.body))
         _frontend_phase_timing(self, phase_timing, "prepare", phase_started)
 
