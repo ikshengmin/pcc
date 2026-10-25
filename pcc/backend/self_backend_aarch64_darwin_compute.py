@@ -46,6 +46,7 @@ from .self_backend_aarch64_darwin_ops import (
 )
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_const_to_reg
 from .self_backend_aarch64_darwin_regalloc import (
+    aarch64_cmpxchg_scalar_projection,
     allocated_scalar_register_indexed,
     callee_saved_registers_enabled,
     commit_allocated_scalar_result,
@@ -1805,6 +1806,10 @@ def emit_compute_instruction_by_id(
         )
 
     if kind_id == PARSED_INSTRUCTION_KIND_EXTRACTVALUE:
+        projection: CompilerInt4 = aarch64_cmpxchg_scalar_projection(func, block_id, instruction_index - 1)
+        if projection.first >= 0 and projection.first == indexed_dest_id:
+            # The immediately preceding CAS already published this one field.
+            return []
         dest, aggregate_type, value, _indices, result_type, offset = data
         if not (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             return []

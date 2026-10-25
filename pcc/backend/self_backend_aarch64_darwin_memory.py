@@ -22,6 +22,7 @@ from .self_backend_aarch64_darwin_materialize import (
     store_large_aggregate_literal_to_address,
 )
 from .self_backend_aarch64_darwin_regalloc import (
+    aarch64_cmpxchg_scalar_projection,
     allocated_register_name,
     allocated_scalar_register_indexed,
     commit_allocated_scalar_result,
@@ -579,8 +580,16 @@ def emit_memory_instruction_by_id(
             lines.append(f"  {_ATOMIC_RMW_COMPUTE[op]} {r_new}, {r_old}, {r_val}")
         lines.append(f"  stlxr{ex_suffix} w13, {r_new}, [x9]")
         lines.append(emitted_branch_line("cbnz", label, "w13"))
-        if (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
-            lines.extend(store_value_regs_to_value_slot(func, dest, 11))
+        used = (indexed_kernel.value_is_used(indexed_dest_id) if indexed_kernel is not None
+                else value_has_uses(func, dest))
+        if (not value_type.is_int or used) and (
+            indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)
+        ):
+            allocated = allocated_register_name(func, dest, value_type) if value_type.is_int else None
+            if allocated is None:
+                lines.extend(store_value_regs_to_value_slot(func, dest, 11))
+            else:
+                lines.append(emitted_move_register_line(allocated, r_old))
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_CMPXCHG:
@@ -599,9 +608,16 @@ def emit_memory_instruction_by_id(
         lines = materialize_pointer(func, ptr_name, 9, module_symbols)
         lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
         lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
+        projection: CompilerInt4 = aarch64_cmpxchg_scalar_projection(func, block_id, instruction_index)
+        projected_register = -1
+        if projection.first >= 0 and indexed_kernel is not None:
+            projected_register = allocated_scalar_register_indexed(
+                indexed_kernel, projection.first, projection.second,
+            )
         r_exp = reg_name(value_type, 10)
         r_des = reg_name(value_type, 11)
-        r_old = reg_name(value_type, 12)
+        old_register = projected_register if projection.first >= 0 and projection.third == 0 and projected_register >= 0 else 12
+        r_old = reg_name(value_type, old_register)
         ex_suffix = _atomic_size_suffix(value_type)
         base = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
         lines.append(f"{base}_retry:")
@@ -614,6 +630,21 @@ def emit_memory_instruction_by_id(
         lines.append(f"{base}_fail:")
         lines.append("  clrex")
         lines.append(f"{base}_done:")
+        if projection.first >= 0 and indexed_kernel is not None:
+            projected_name = indexed_kernel.value_name(projection.first)
+            if projection.third == 0:
+                if projected_register < 0:
+                    lines.extend(store_value_regs_to_value_slot(func, projected_name, old_register))
+            else:
+                flag_register = projected_register if projected_register >= 0 else 14
+                lines.append(emitted_cset_line("w" + str(flag_register), "eq"))
+                if projected_register < 0:
+                    lines.extend(store_value_regs_to_value_slot(func, projected_name, flag_register))
+            return lines
+        used = (indexed_kernel.value_is_used(indexed_dest_id) if indexed_kernel is not None
+                else value_has_uses(func, dest))
+        if not used:
+            return lines
         lines.append(emitted_cset_line("w14", "eq"))
         if (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             lines.extend(emit_value_slot_base_address(func, dest, "x15"))

@@ -60,6 +60,9 @@ from .self_backend_kernel import (
 from .self_backend_ir import (
     I1,
     PARSED_INSTRUCTION_KIND_ALLOCA,
+    PARSED_INSTRUCTION_KIND_ATOMICRMW,
+    PARSED_INSTRUCTION_KIND_CMPXCHG,
+    PARSED_INSTRUCTION_KIND_EXTRACTVALUE,
     PARSED_INSTRUCTION_KIND_BINOP,
     PARSED_INSTRUCTION_KIND_BR,
     PARSED_INSTRUCTION_KIND_BR_COND,
@@ -143,6 +146,50 @@ def _type_mapping_get(
     return text_key_mapping_get(mapping, key)
 
 
+def aarch64_cmpxchg_scalar_projection(
+    func: ParsedFunction, block_id: int, position: int,
+) -> CompilerInt4:
+    """One adjacent, sole integer projection may consume the CAS registers.
+
+    A whole aggregate, another use, another block, or a different producer
+    retains the complete aggregate-slot ABI. No atomic operation is removed.
+    """
+    missing = CompilerInt4(-1, -1, -1, -1)
+    if block_id < 0 or position < 0:
+        return missing
+    kernel = get_indexed_function_kernel(func)
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if position + 1 >= block.second:
+        return missing
+    producer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
+    consumer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position + 1)
+    if (producer.first != PARSED_INSTRUCTION_KIND_CMPXCHG
+            or consumer.first != PARSED_INSTRUCTION_KIND_EXTRACTVALUE):
+        return missing
+    pair = kernel.defined_value_id(block_id, position)
+    if pair < 0 or kernel.last_use(block_id, pair) != position + 1:
+        return missing
+    if (kernel.instruction_use_count(block_id, position + 1) != 1
+            or kernel.instruction_use_id(block_id, position + 1, 0) != pair):
+        return missing
+    extraction = kernel.instruction_data(block_id, position + 1)
+    indices = extraction[3]
+    if len(indices) != 1 or indices[0] not in (0, 1):
+        return missing
+    source = kernel.instruction_data(block_id, position)
+    value_type = source[4]
+    result_type = extraction[4]
+    if not value_type.is_int or not result_type.is_int:
+        return missing
+    expected_width = value_type.width if indices[0] == 0 else 1
+    if result_type.width != expected_width:
+        return missing
+    result = kernel.defined_value_id(block_id, position + 1)
+    if result < 0 or kernel.value_slot_offset(result) < 0:
+        return missing
+    return CompilerInt4(result, kernel.value_type_id(result), indices[0], pair)
+
+
 def _candidate_definition_type(
     func: ParsedFunction,
     kind_id: int,
@@ -153,6 +200,9 @@ def _candidate_definition_type(
         return value_type if _is_scalar_register_type(value_type) else None
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
         value_type = data[1]
+        return value_type if value_type.is_int else None
+    if kind_id == PARSED_INSTRUCTION_KIND_ATOMICRMW:
+        value_type = data[4]
         return value_type if value_type.is_int else None
     if kind_id == PARSED_INSTRUCTION_KIND_BINOP:
         _op, _dest, value_type, _lhs, _rhs = data
@@ -1929,6 +1979,11 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                     metadata.second,
                     dest_id,
                 )
+            elif kind_id == PARSED_INSTRUCTION_KIND_EXTRACTVALUE:
+                projection: CompilerInt4 = aarch64_cmpxchg_scalar_projection(
+                    func, block_id, position - 1,
+                )
+                value_type_id = projection.second if projection.first == dest_id else -1
             elif kind_id == PARSED_INSTRUCTION_KIND_ALLOCA:
                 value_type_id = -1
             elif kind_id == PARSED_INSTRUCTION_KIND_GEP:
@@ -2247,6 +2302,7 @@ def commit_allocated_scalar_result_indexed(
 
 
 __all__ = [
+    "aarch64_cmpxchg_scalar_projection",
     "allocate_aarch64_block_registers",
     "call_result_registers_enabled",
     "allocated_scalar_register_indexed",
