@@ -607,8 +607,11 @@ def _dead_moves(
                     if not (kind == 1 and not writes & live):
                         live = (live & ~writes) | reads_of[line_index]
                 line_index -= 1
-            if out != live_out[block_id] or live != live_in[block_id]:
-                live_out[block_id] = out
+            # Predecessors read only live_in. Always retain the latest out for
+            # the dead-move pass, but an out-only change killed inside this
+            # block cannot require another sweep of its predecessors.
+            live_out[block_id] = out
+            if live != live_in[block_id]:
                 live_in[block_id] = live
                 changed = True
             block_id -= 1
