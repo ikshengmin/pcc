@@ -37,7 +37,7 @@ class Runtime:
         self.join_result = 0
         self.live = 1
         modules = [
-            _body("freestanding_gc_public_collection", ["pcc_gc_maybe_start_cms_worker", "pcc_gc_is_cms_worker", "pcc_gc_cms_worker_main_py"]),
+            _body("freestanding_gc_public_collection", ["pcc_gc_maybe_start_cms_worker", "pcc_gc_is_cms_worker", "pcc_gc_cms_worker_main_py", "pcc_gc_end_explicit_tracing_collect"]),
             _body("freestanding_gc_incremental_concurrent_scheduler", ["pcc_gc_cms_stop_worker"]),
             _body("py_gc_backend", ["pcc_gc_set_backend", "_release_cms_worker_pause", "_release_cms_worker_pause_unless_kept"]),
         ]
@@ -152,7 +152,7 @@ def test_unadmitted_start_never_clears_stop(state):
 
 def test_stale_selected_read_is_rechecked_after_start_claim():
     rt = Runtime()
-    rt.hooks[("before_cas", STATE, 0, 2)] = lambda: rt.memory.update({BACKEND: 4})
+    rt.hooks[("before_cas", STATE, 0, 2)] = lambda: rt.memory.update({BACKEND: 0})
     rt.start_worker()
     assert rt.memory[STATE] == 0
     assert ("start",) not in rt.events
@@ -208,7 +208,7 @@ def test_switch_keeps_pause_through_admission_and_publication(state, backend):
     rt.hooks[("store", BACKEND, backend)] = cannot_restart
     assert rt.set_backend(backend) == 0
     assert rt.memory[BACKEND] == backend
-    assert rt.memory[STATE] == (1 if backend in (1, 2) else 0)
+    assert rt.memory[STATE] == (1 if backend in (1, 2, 3, 4) else 0)
     assert not rt.locked
     assert rt.events.count(("join",)) == state
 
@@ -324,7 +324,7 @@ def test_every_post_pause_refusal_releases_and_restarts_if_needed(reason):
     original = rt.memory[BACKEND]
     assert rt.set_backend(target) == -1
     assert rt.memory[BACKEND] == original
-    assert rt.memory[STATE] == (1 if original in (1, 2) else 0)
+    assert rt.memory[STATE] == (1 if original in (1, 2, 3, 4) else 0)
     assert not rt.locked
     assert rt.events.count(("join",)) == 1
 
@@ -415,3 +415,68 @@ def test_collector_identity_getter_uses_owned_tls_in_host_ir(tmp_path):
     getter = match.group(1)
     assert "pcc_gc_cms_worker_current" in getter
     assert 'load i32' in getter
+
+
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
+def test_each_tracing_backend_admits_and_stops_one_worker(backend):
+    rt = Runtime(backend=backend)
+    rt.start_worker()
+    rt.start_worker()
+    assert rt.memory[STATE] == 1
+    assert rt.events.count(("start",)) == 1
+    assert rt.stop_worker() == 0
+    assert rt.events.count(("join",)) == 1
+    assert rt.memory[STATE] == 4
+
+
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
+@pytest.mark.parametrize("sweep_pending", [0, 1])
+def test_moving_work_does_not_block_marking_but_completed_sweep_does(backend, sweep_pending):
+    rt = Runtime(backend=backend, state=1)
+    rt.memory.update({"py_gc_enabled": 1, "py_gc_threshold0": 700,
+                      "pcc_gc_cms_queue_pushes": 1, "pcc_gc_debt_bytes": 4096,
+                      "pcc_gc_backend4_auto_step_pending": 1,
+                      "pcc_gc_cms_sweep_pending": sweep_pending})
+    rt.ns["pcc_gc_tracing_debt_threshold"] = lambda: 1024
+    calls = []
+    def trace(budget):
+        calls.append(budget)
+        rt.memory[STOP] = 1
+        return 7
+    rt.ns["pcc_gc_tracing_step_cycle"] = trace
+    rt.ns["pcc_platform_sleep_ns"] = lambda _: rt.memory.update({STOP: 1})
+    rt.call("pcc_gc_cms_worker_main_py", 0)
+    assert calls == ([] if sweep_pending else [512])
+    assert rt.memory.get("pcc_gc_cms_worker_traces", 0) == (0 if sweep_pending else 7)
+
+
+@pytest.mark.parametrize("mark_active", [0, 1])
+def test_collection_end_releases_only_a_finished_mark(mark_active):
+    rt = Runtime()
+    rt.memory.update({"pcc_gc_mark_active": mark_active,
+                      "pcc_gc_explicit_collect_active": 1,
+                      "pcc_gc_cms_sweep_pending": 1})
+    rt.call("pcc_gc_end_explicit_tracing_collect")
+    assert rt.memory["pcc_gc_explicit_collect_active"] == 0
+    assert rt.memory["pcc_gc_cms_sweep_pending"] == mark_active
+
+
+@pytest.mark.parametrize("enabled,unsafe", [(1, 0), (0, 0), (1, 1)])
+def test_gc4_gate_consumes_a_worker_completion_that_predates_the_gate(enabled, unsafe):
+    tree = _body("py_obj", ["_gc4_maybe_auto_step"])
+    pending = {"pcc_gc_cms_sweep_pending": 1}
+    calls = []
+    namespace = {
+        "global_addr": lambda key: key,
+        "atomic_load_i32": lambda key, *_: pending.get(key, 0),
+        "atomic_store_i32": lambda key, offset, value, *ordering: pending.update({key: value}),
+        "_gc_automatic_collection_enabled": lambda: enabled,
+        "pcc_gc_backend4_maybe_auto_step": lambda: None,
+        "pcc_gc_sweep_owed": lambda: 0,
+        "pcc_thread_no_park_depth": lambda: unsafe,
+        "pcc_py_gc_minor_graph_lock_depth": lambda: 0,
+        "_gc_tracing_automatic_collect": lambda mark: calls.append(mark),
+    }
+    exec(compile(ast.fix_missing_locations(tree), "gc4-production-gate", "exec"), namespace)
+    namespace["_gc4_maybe_auto_step"]()
+    assert calls == ([0] if enabled and not unsafe else [])

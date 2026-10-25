@@ -79,6 +79,7 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_cms_sweep_pending",
     # pcc_gc_backend4_maybe_auto_step's admission and reseed ownership.
     "pcc_gc_backend4_auto_step_pending",
     "pcc_gc_backend4_relocation_reset_owner",
@@ -288,12 +289,11 @@ def test_incremental_concurrent_scheduler_preserves_bounded_policy_order() -> No
         step.index("pcc_gc_tracing_record_pause(")
     )
 
-    # GC1 and GC2 hand allocation debt to the collector thread (d58306406):
-    # an allocating mutator no longer runs GC1's automatic step itself. GC4
-    # records the debt atomically and flags its automatic step.
+    # Every tracing backend hands allocation debt to its marker. GC4 also
+    # requests mutator-owned moving work without blocking concurrent marking.
     note_alloc = _export_body(strict, "pcc_gc_note_alloc")
     assert note_alloc.index('global_addr("pcc_gc_metric_alloc")') < note_alloc.index(
-        "if backend == 1 or backend == 2:"
+        "if backend >= 1 and backend <= 4:"
     )
     assert note_alloc.index("pcc_gc_maybe_start_cms_worker()") < note_alloc.index(
         "pcc_gc_cms_note_alloc(bytes)"
