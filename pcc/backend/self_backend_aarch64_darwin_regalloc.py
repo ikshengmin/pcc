@@ -151,6 +151,9 @@ def _candidate_definition_type(
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
         _dest, value_type, _ptr_type, _ptr = data
         return value_type if _is_scalar_register_type(value_type) else None
+    if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+        value_type = data[1]
+        return value_type if value_type.is_int else None
     if kind_id == PARSED_INSTRUCTION_KIND_BINOP:
         _op, _dest, value_type, _lhs, _rhs = data
         return value_type if value_type.is_int else None
@@ -191,6 +194,9 @@ def _candidate_indexed_definition_type_id(
     dest_id: int,
 ) -> int:
     raw: CompilerInt4 = kernel.instruction_record(record_id)
+    if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+        header: CompilerInt4 = kernel.type_header(raw.first)
+        return raw.first if header.first == TYPE_KIND_INT else -1
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
         header_is_scalar = False
         if type(kernel) is IndexedFunctionKernel:
@@ -1909,12 +1915,9 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 is_call_result = True
             if is_call_result:
                 pass
-            elif kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
-                # Atomic loads remain outside this allocator's existing
-                # candidate set. Their fixed record needs no diagnostic row.
-                value_type_id = -1
             elif (
                 kind_id == PARSED_INSTRUCTION_KIND_LOAD
+                or kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
                 or kind_id == PARSED_INSTRUCTION_KIND_BINOP
                 or kind_id == PARSED_INSTRUCTION_KIND_ICMP
                 or kind_id == PARSED_INSTRUCTION_KIND_CAST

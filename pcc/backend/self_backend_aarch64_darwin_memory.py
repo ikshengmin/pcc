@@ -22,6 +22,7 @@ from .self_backend_aarch64_darwin_materialize import (
     store_large_aggregate_literal_to_address,
 )
 from .self_backend_aarch64_darwin_regalloc import (
+    allocated_register_name,
     allocated_scalar_register_indexed,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
@@ -497,6 +498,15 @@ def emit_memory_instruction_by_id(
             )
         else:
             lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+        result_register_name = None
+        if indexed_kernel is not None and isinstance(data, int) and value_type.is_int:
+            result_register = allocated_scalar_register_indexed(
+                indexed_kernel, indexed_dest_id, record.first,
+            )
+            if result_register >= 0:
+                result_register_name = reg_name(value_type, result_register)
+        elif value_type.is_int:
+            result_register_name = allocated_register_name(func, dest, value_type)
         load_op = (
             "ldar" + _atomic_size_suffix(value_type)
             if ordering in ("acquire", "seq_cst") else mem_load_op(value_type)
@@ -504,11 +514,12 @@ def emit_memory_instruction_by_id(
         lines.append(
             emitted_memory_instruction_line(
                 load_op,
-                reg_name(value_type, 10),
+                result_register_name if result_register_name is not None else reg_name(value_type, 10),
                 "x9",
             )
         )
-        lines.extend(store_value_regs_to_value_slot(func, dest, 10))
+        if result_register_name is None:
+            lines.extend(store_value_regs_to_value_slot(func, dest, 10))
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC:
