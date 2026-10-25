@@ -105,12 +105,25 @@ def _function_body(ir_text: str, suffix: str) -> str:
     return match.group(1)
 
 
+def _assert_borrowed_parameter_root(body: str, param: str) -> None:
+    raw_uses = re.findall(r"(?<![A-Za-z0-9_.])%" + re.escape(param) + r"(?=[,)])", body)
+    assert len(raw_uses) == 1, (param, raw_uses)
+    store = re.search(r"store ptr %" + re.escape(param) + r", ptr (%" + re.escape(param) + r"\.addr\.[\w.]+)", body)
+    assert store is not None, param
+    slot = re.escape(store.group(1))
+    # Count this parameter's physical registration, not unrelated local,
+    # return, or keyword-name roots. Mapped roots use the same slot contract.
+    entries = re.findall(r"@pcc_gc_frame_enter(?:_mapped)?\(ptr @[^,]+, ptr " + slot + r"\)", body)
+    assert len(entries) == 1, (param, entries)
+    assert re.search(r"@pcc_gc_load_borrowed_ptr\(ptr [^,]+, ptr " + slot + r"\)", body), param
+
+
 @pytest.mark.parametrize(
     ("arity", "managed_params"),
     [
-        (0, ("builder", "fn")),
-        (1, ("builder", "fn", "arg0")),
-        (2, ("builder", "fn", "arg0", "arg1")),
+        (0, ("builder", "fn", "name")),
+        (1, ("builder", "fn", "arg0", "name")),
+        (2, ("builder", "fn", "arg0", "arg1", "name")),
     ],
 )
 def test_small_arity_call_wrapper_keeps_generic_native_root_contract(
@@ -130,31 +143,12 @@ def test_small_arity_call_wrapper_keeps_generic_native_root_contract(
     assert body.count(generic_symbol) == 1
     assert "_irbuilder_call" + str(arity) + "_fast" not in ir_py_on_text
     assert "_irbuilder_call" + str(arity) + "_slow" not in ir_py_on_text
-    assert body.count("@pcc_gc_frame_enter(") == len(managed_params)
 
     # GC3/4 may relocate every managed argument during str/concat work.  Each
     # raw ABI value must be stored once into an updateable borrowed root, and
     # all later uses must reload from that slot rather than reuse the raw SSA.
     for param in managed_params:
-        raw_uses = re.findall(
-            r"(?<![A-Za-z0-9_.])%" + re.escape(param) + r"(?=[,)])",
-            body,
-        )
-        assert len(raw_uses) == 1, (param, raw_uses)
-        assert re.search(
-            r"store ptr %"
-            + re.escape(param)
-            + r", ptr %"
-            + re.escape(param)
-            + r"\.addr\.",
-            body,
-        )
-        assert re.search(
-            r"@pcc_gc_load_borrowed_ptr\([^\n]*%"
-            + re.escape(param)
-            + r"\.gc\.slot\.",
-            body,
-        )
+        _assert_borrowed_parameter_root(body, param)
 
 
 def test_generic_call_argument_rendering_avoids_three_item_container(
