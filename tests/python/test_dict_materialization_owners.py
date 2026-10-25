@@ -30,6 +30,7 @@ class MaterializeMemory(DictMemory):
             py_tuple_new=self.new_tuple,
             py_list_append=self.append_list,
             py_tuple_set_item=self.set_tuple,
+            py_tuple_from_owned_roots=self.tuple_from_owned_roots,
             pcc_gc_store_root=self.store_root,
         )
         tree = ast.parse(PORT.read_text())
@@ -74,6 +75,22 @@ class MaterializeMemory(DictMemory):
         if self.fail('pair'+str(index)):
             return
         super().set_tuple(obj,index,value)
+
+    def tuple_from_owned_roots(self, sources, count, output):
+        pair = self.new_tuple(count)
+        if pair is None:
+            return -1
+        self.write(output, 0, pair)
+        for index in range(count):
+            if self.fail('pair' + str(index)):
+                return -1
+            source = self.read(sources, index * abi.C_POINTER_SIZE)
+            value = self.read(source, 0)
+            if isinstance(value, Object):
+                assert value.leases == 0
+            pair.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
+            self.write(source, 0, None)
+        return 0
 
     def append_list(self, obj, value):
         self.collect('callback')
@@ -288,7 +305,7 @@ def test_materialization_only_retains_and_drops_requested_children(kind, phase):
     # close() still visits its fixed scratch frame exactly once; the per-item
     # cleanup must not visit the unused sibling or a nonexistent pair.
     for role in (3, 4, 5):
-        per_item = role in roles or (role == 5 and kind == 'items')
+        per_item = (role in roles if kind != 'items' else role == 5)
         assert dropped.count(role) == 1 + (2 if per_item else 0)
     assert model.unwrap(result) == {
         'keys': ['a', 'b'], 'values': ['first', 'second'],

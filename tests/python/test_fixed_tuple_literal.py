@@ -39,8 +39,9 @@ def test_tuple_operand_has_a_bounded_direct_shape(count):
         "def probe(value):\n    return slot_operand_probe((" + elements + "))\n"
     ))
     if 1 <= count <= 8:
-        assert len(_calls(body, "py_tuple_new")) == 1
-        assert len(_calls(body, "py_tuple_set_item")) == count
+        assert len(_calls(body, "py_tuple_from_owned_roots")) == 1
+        assert not _calls(body, "py_tuple_new")
+        assert not _calls(body, "py_tuple_set_item")
         assert not _calls(body, "py_list_new")
         assert not _calls(body, "py_list_append")
         assert not _calls(body, "py_tuple_from_list")
@@ -103,8 +104,9 @@ def test_ordinary_dynamic_call_uses_direct_literal_without_probe_interception():
     body = _probe_function(text)
     # One tuple holds the two literal elements; the other holds the single
     # positional argument. This is the unmodified public lowering dispatch.
-    assert len(_calls(body, "py_tuple_new")) == 2
-    assert len(_calls(body, "py_tuple_set_item")) == 3
+    assert len(_calls(body, "py_tuple_from_owned_roots")) == 2
+    assert not _calls(body, "py_tuple_new")
+    assert not _calls(body, "py_tuple_set_item")
     assert not _calls(body, "py_list_new")
     assert not _calls(body, "py_list_append")
     assert not _calls(body, "py_tuple_from_list")
@@ -146,7 +148,7 @@ def test_tuple_evaluates_left_to_right_before_allocation_with_balanced_roots(bod
     body = _probe_function(text)
     first = re.search(r"call [^\n]*@user_[^\n(]*_first\(", body)
     second = re.search(r"call [^\n]*@user_[^\n(]*_second\(", body)
-    allocation = _calls(body, "py_tuple_new")
+    allocation = _calls(body, "py_tuple_from_owned_roots")
     assert first is not None and second is not None and len(allocation) == 1
     assert first.start() < second.start() < body.index(allocation[0])
     assert not _calls(body, "py_list_new")
@@ -173,9 +175,9 @@ class TupleModel(CallObjectLoweringMixin):
         self._try_err_block = "outer"
         self._cpy_operand_cleanup_block = "outer-cpy"
         self.runtime = {name: name for name in (
-            "py_tuple_new", "py_list_new", "pcc_gc_store_root",
+            "py_tuple_new", "py_list_new", "pcc_gc_store_root", "py_tuple_from_owned_roots",
         )}
-        self.builder = SimpleNamespace(call=self.call)
+        self.builder = SimpleNamespace(call=self.call, gep=self.gep, store=self.store)
 
     _expr_returns_unsafe_raw_pointer = lambda self, expr: False
     _emit_class_namespace_name_root = lambda self, expr, label: None
@@ -185,6 +187,22 @@ class TupleModel(CallObjectLoweringMixin):
     _fresh = lambda self, label: label
     _as_gc_ptr = lambda self, slot: slot
     _current_try_err_block = lambda self: self._try_err_block
+
+    def _alloca_in_entry(self, typ, **kwargs):
+        return [None] * typ.count
+
+    def gep(self, base, indices, **kwargs):
+        return base, indices[-1].value
+
+    def store(self, value, address):
+        base, index = address
+        base[index] = value
+
+    def _slot_call_check_status(self, status, *args):
+        assert status == 0
+
+    def _emit_post_call_err_check(self, *args):
+        pass
 
     def _new_slot_call_root(self, label):
         slot = [None]
@@ -248,6 +266,15 @@ class TupleModel(CallObjectLoweringMixin):
             value, slot[0] = slot[0], None
             self.release(value)
             return
+        if runtime_name == "py_tuple_from_owned_roots":
+            sources, count, output = arguments
+            self.checkpoint("py_tuple_new")
+            self._publish_slot_call_owned(output, self.node("py_tuple_new", [None] * count.value))
+            for index, source in enumerate(sources):
+                self.checkpoint("before-set:" + str(index))
+                output[0].children[index], source[0] = source[0], None
+                self.checkpoint("after-set:" + str(index))
+            return 0
         assert runtime_name in ("py_tuple_new", "py_list_new")
         self.checkpoint(runtime_name)
         return self.node(runtime_name, [None] * arguments[0].value)

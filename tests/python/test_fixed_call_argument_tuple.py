@@ -16,8 +16,9 @@ def test_fixed_argument_tuple_has_a_bounded_direct_shape(count):
     arguments = ", ".join("value" for _ in range(count))
     body = _probe_function(_emit("def probe(value):\n    return slot_args_probe(" + arguments + ")\n"))
     if count <= 8:
-        assert len(_calls(body, "py_tuple_new")) == 1
-        assert len(_calls(body, "py_tuple_set_item")) == count
+        assert len(_calls(body, "py_tuple_from_owned_roots")) == (1 if count else 0)
+        assert len(_calls(body, "py_tuple_new")) == (0 if count else 1)
+        assert not _calls(body, "py_tuple_set_item")
         assert not _calls(body, "py_list_new")
         assert not _calls(body, "py_list_append")
         assert not _calls(body, "py_tuple_from_list")
@@ -40,7 +41,7 @@ def probe():
     body = _probe_function(text)
     first = re.search(r"call [^\n]*@user_[^\n(]*_first\(", body)
     second = re.search(r"call [^\n]*@user_[^\n(]*_second\(", body)
-    allocation = _calls(body, "py_tuple_new")
+    allocation = _calls(body, "py_tuple_from_owned_roots")
     assert first is not None and second is not None and len(allocation) == 1
     assert first.start() < second.start() < body.index(allocation[0])
 
@@ -195,13 +196,13 @@ main()
     function = re.search(r"^define [^\n]*@user_forced_tuple_oom_probe\([^\n]*\).*?^}", text, re.M | re.S)
     assert function is not None
     body = function.group(0)
-    assert len(_calls(body, "py_tuple_new")) == 1
+    assert len(_calls(body, "py_tuple_from_owned_roots")) == 1
     assert not _calls(body, "py_list_new") and not _calls(body, "py_tuple_from_list")
-    # Inject failure at exactly the changed caller-side allocation boundary.
+    # Reject construction before any owner moves, at the caller-side factory boundary.
     # All captured roots and generated error/cleanup code remain production IR.
-    replacement = body.replace("@py_tuple_new(", "@force_tuple_new_failure(")
+    replacement = body.replace("@py_tuple_from_owned_roots(", "@force_tuple_new_failure(")
     patched = text[:function.start()] + replacement + text[function.end():]
-    patched += "\ndeclare ptr @force_tuple_new_failure(i64)\n"
+    patched += "\ndeclare i64 @force_tuple_new_failure(ptr, i64, ptr)\n"
     verify_ir_text(patched)
     (tmp_path / "injected.ll").write_text(patched)
     message = "forced argument tuple failure"
@@ -209,9 +210,9 @@ main()
               + '@forced_message = private constant [' + str(len(message) + 1)
               + ' x i8] c"' + message + '\\00"\n'
               + 'declare ptr @py_exc_new(i64, ptr)\ndeclare void @py_raise_owned(ptr)\n'
-              + 'define ptr @force_tuple_new_failure(i64 %count) {\nentry:\n'
+              + 'define i64 @force_tuple_new_failure(ptr %sources, i64 %count, ptr %output) {\nentry:\n'
               + '  %error = call ptr @py_exc_new(i64 19, ptr @forced_message)\n'
-              + '  call void @py_raise_owned(ptr %error)\n  ret ptr null\n}\n')
+              + '  call void @py_raise_owned(ptr %error)\n  ret i64 -1\n}\n')
     verify_ir_text(helper)
     (tmp_path / "failure.ll").write_text(helper)
     program_object, failure_object = tmp_path / "program.o", tmp_path / "failure.o"
