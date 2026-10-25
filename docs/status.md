@@ -1295,6 +1295,43 @@ active. The 446-file source/runtime/binary/test/reference/profile archive was
 read back and hash-verified:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/sorted-reuse-984f67457/README.md`.
 
+### 2026-10-25 GC3/GC4 background marking and cleanup recovery
+
+The maintainer requested multiple further rounds; work is active. Production
+1efc543c4 fixes moving mark barriers/colors/count ownership; a8358435e admits
+GC3/GC4 to the shared background marker, separates completed-mark cleanup from
+moving-work requests, and parks completed worker batches at relocation-safe
+polls. Four owned-native probes show GC1–GC4 mark progress interleaved with
+real heap mutations across an unchanged stop epoch. An overlap witness needs
+two separate observed worker advances; missing an OS scheduling window may
+retry at most three times, while runtime/corruption errors fail immediately.
+
+Post-push focused qualification: 123 checks passed. The automatic finalizer
+program (50,000 cycles in each enabled/disabled/threshold-zero phase), ordinary
+synchronous payload and full handler outputs pass on GC0–GC4. A later review
+found a cleanup wakeup lost across a disabled gate. The prior runtime fails
+the exact native recovery probe; 2cfce937c fixes it. Recovery and overlap native
+scope: 6 nodes passed (both recovery nodes run GC1–GC4); 80 model/IR checks
+passed. The same three integration scenarios pass GC0–GC4 again after the fix.
+Tests and fixture follow-ups are dc028657b, 992077b1f and 89e76a6e2.
+
+These are host-pcc0 / owned-self / no-libpython / threaded-atomic executions.
+Some strict-object ABI controls use the external clang/nm oracle and do not
+prove execution ownership. The final rebase also preserves peer a7ffc4eb3's
+gray forwarding-source retirement fix; that peer file is newer than the
+frozen binaries in these packets. No latest-native-pcc1/fixed-point claim.
+Source/runtime/binary/log archives were read back and SHA256 verified:
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/moving-mark-workers-a8358435e/README.md`
+and
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/moving-mark-wakeup-2cfce937c/README.md`.
+
+Unfinished: GC0 concurrent cycle discovery; moving phases and mutator-owned
+sweep/finalization still have stopped-world/application-gate boundaries. Threaded
+or concurrent marking does not certify five fully concurrent collectors. The
+last paired full-handler performance packet remains 6.42x behind asyncio;
+this GC packet claims no speedup. Continue the ordinary-object/ownership cost
+work alongside collector concurrency; do not trade semantics for throughput.
+
 ### 2026-10-25 tuple ownership packet and continued concurrent-GC work
 
 User direction now supersedes the earlier pause: “请完成五种 GC 并发化，优化六倍的性能！” and “可以多来几轮”. Continue the full scope; a small local speedup or five-backend thread-safety run is not completion.
@@ -1342,7 +1379,7 @@ Evidence is compressed and every archive member was read back and hash-checked:
 `/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/tuple-root-transfer-cd55b80cd/README.md`.
 This archive closes only that packet; work continues.
 
-Current concurrent-GC audit: one threaded runtime is implemented. Background
+Before worker admission, the concurrent-GC audit found one threaded runtime. Background
 collector marking is still admitted only for GC1/GC2; GC0 cycles still use STW.
 The moving-backend marking prerequisites now have a verified production fix
 (8fb59c63 before rebase): GC3/GC4 root and black-to-white insertion barriers,
