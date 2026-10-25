@@ -29,6 +29,7 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.call_object_lowering import stable_parameter_operand_source
 from pcc.frontends.python.codegen.static_object_operands import emit_nonmoving_literal_operand
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
@@ -758,13 +759,26 @@ class ListMethodLoweringMixin:
             # None singleton or an arbitrary user-method result. Publish both
             # arms into the consumer's authoritative root before any cleanup;
             # a raw PHI cannot inherit one arm's ownership or singleton proof.
-            # Without a consumer root (a direct-call argument, a return, an
-            # assignment or a statement) the result gets its own root, taken
-            # as an owned value at the end, as list.extend does.
+            # Other consumers receive a temporary owned root, as list.extend
+            # does. A statement with a borrowed receiver can omit that root
+            # on the exact-list branch; dynamic results still have an owner.
             sink = self._slot_call_result_sink(expr)
+            discarded = -1
+            sinks = self._slot_call_result_sinks
+            for index in range(len(sinks) - 1, -1, -1):
+                if sinks[index][0] is expr:
+                    if sinks[index][1] is None:
+                        discarded = index
+                    break
+            # Only an unchanged borrowed receiver has no operation-owned
+            # frame to retire. Keep the existing output/receiver cleanup
+            # order for all other shapes, including generator operands.
+            receiver = (stable_parameter_operand_source(self, attr.obj)
+                        if discarded >= 0 else None)
+            discard_builtin = receiver is not None
             output = sink
             roots = []
-            if output is None:
+            if output is None and not discard_builtin:
                 output = self._new_slot_call_root("list.append.result")
                 roots.append(output)
             previous = self._current_try_err_block()
@@ -773,7 +787,8 @@ class ListMethodLoweringMixin:
             try:
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver", borrow_stable=True)
+                if receiver is None:
+                    receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver", borrow_stable=True)
                 roots.append(receiver)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
@@ -808,8 +823,9 @@ class ListMethodLoweringMixin:
                     self._slot_call_runtime_call(
                         "py_list_append", (receiver,), suffix_args=(constant,), span=expr.span,
                     )
-                none_value = self._emit_none_literal()
-                self._publish_slot_call_owned(output, none_value, label="list append result")
+                if not discard_builtin:
+                    none_value = self._emit_none_literal()
+                    self._publish_slot_call_owned(output, none_value, label="list append result")
                 self._emit_post_call_err_check(expr.span)
                 if item is not None:
                     self._release_slot_call_roots((item,))
@@ -821,8 +837,14 @@ class ListMethodLoweringMixin:
                 # Attribute resolution precedes argument evaluation. In particular,
                 # subclass overrides and user descriptors retain their existing binding
                 # and validation behavior through the ordinary callable protocol.
+                branch_roots = list(roots)
+                if discard_builtin:
+                    output = self._new_slot_call_root("list.append.result")
+                    branch_roots.append(output)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
                 method = self._new_slot_call_root("list.append.method")
-                branch_roots = list(roots) + [method]
+                branch_roots.append(method)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_runtime_call(
@@ -856,11 +878,18 @@ class ListMethodLoweringMixin:
                 self.builder.position_at_end(done_block)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                self._slot_call_note_published(output)
-                self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+                if not discard_builtin:
+                    self._slot_call_note_published(output)
+                    self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
+            if discard_builtin:
+                # The exact-list branch returns an unobservable None. The
+                # generic branch has already retired its owned result, so
+                # statement lowering must not release this placeholder.
+                sinks[discarded] = (expr, None, True)
+                return ir.Constant(_CSTR, None)
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("list.append.output"))
             return self._take_slot_call_root(output, source_expr=expr)

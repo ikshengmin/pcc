@@ -61,6 +61,23 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
+def stable_parameter_operand_source(host, expr):
+    """Reuse only the authoritative, unchanged borrowed parameter owner."""
+    if (isinstance(expr, Name)
+            and expr.ident in getattr(host, "_current_param_names", ())
+            and not getattr(host, "_generator_ctx_stack", ())
+            and getattr(host, "current_func_def", None) is not None
+            and expr.ident not in getattr(host, "_closure_boxed_params", {}).get(
+                host.current_func_def.name, ())):
+        source = host._slot_call_name_source(expr)
+        if source is not None and source[1]:
+            if not hasattr(host, "_slot_call_borrowed_operands"):
+                host._slot_call_borrowed_operands = {}
+            host._slot_call_borrowed_operands[id(source[0])] = source[0]
+            return source[0]
+    return None
+
+
 class CallObjectLoweringMixin:
     def _slot_call_published_module_ref(self, expr):
         """Locate an already-published callable without evaluating operands."""
@@ -712,18 +729,10 @@ class CallObjectLoweringMixin:
         # adding a second owner/frame merely to pass it to another helper.
         # Cells, generators, globals and promoted/rebound locals keep owning
         # operand roots. No escape or exact-type claim is inferred from Dyn.
-        if (borrow_stable and isinstance(expr, Name)
-                and expr.ident in getattr(self, "_current_param_names", ())
-                and not getattr(self, "_generator_ctx_stack", ())
-                and getattr(self, "current_func_def", None) is not None
-                and expr.ident not in getattr(self, "_closure_boxed_params", {}).get(
-                    self.current_func_def.name, ())):
-            source = self._slot_call_name_source(expr)
-            if source is not None and source[1]:
-                if not hasattr(self, "_slot_call_borrowed_operands"):
-                    self._slot_call_borrowed_operands = {}
-                self._slot_call_borrowed_operands[id(source[0])] = source[0]
-                return source[0]
+        if borrow_stable:
+            borrowed = stable_parameter_operand_source(self, expr)
+            if borrowed is not None:
+                return borrowed
         if getattr(self, "_generator_ctx_stack", ()):
             from pcc.frontends.python.codegen.generator_lowering import (
                 emit_generator_operand_spills,
