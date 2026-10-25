@@ -30,6 +30,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_relocate_copy",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_gray_count_increment_acq_rel",
+    "pcc_gc_gray_count_decrement_acq_rel",
+    "pcc_gc_set_mark_color",
     "pcc_gc_object_is_address_pinned",
     "free",
     "memmove",
@@ -60,6 +63,7 @@ RAW_FUNCTION_IMPORTS = {
     "py_decref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_mark_active",
     "pcc_gc_backend_selected",
     "pcc_gc_backend4_evacuated_bytes_count",
     "pcc_gc_backend4_evacuation_page_head",
@@ -184,7 +188,8 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
     assert "ptr_eq(load_ptr(relocation_node, 0), from_obj)" in body
     assert "pcc_gc_backend4_relocate_copy_supported_tag(tag)" in body
     assert "known_size <= 0 or size > known_size" in body
-    assert "to_residency: i64 = load_i32(to_obj, 12) & 331776" in body
+    assert "prior_to_flags: i64 = load_i32(to_obj, 12)" in body
+    assert "to_residency: i64 = prior_to_flags & 331776" in body
     assert "memmove(to_obj, from_obj, size)" in body
     assert "pcc_gc_relocate_copy_payload_prepared_locked(" in body
     assert "from_obj, to_obj, tag, size, payload_plan" in body
