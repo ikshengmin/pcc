@@ -81,6 +81,9 @@ define_global_i32("pcc_gc_metric_pause_hist3", 0)
 # The public byte-count APIs are i64; retain that width in raw state too.
 define_global_i64("pcc_gc_debt_bytes", 0)
 define_global_i32("pcc_gc_backend4_auto_step_pending", 0)
+# A finished mark waiting for mutator-owned cleanup, distinct from a moving
+# collector's pending generation/relocation work (which must not block marking).
+define_global_i32("pcc_gc_cms_sweep_pending", 0)
 define_global_i32("pcc_gc_last_alloc_bytes", 0)
 define_global_i64("pcc_gc_live_bytes", 0)
 # Bytes the last completed tracing mark found reachable (Go's heap marked):

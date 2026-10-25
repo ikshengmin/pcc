@@ -2907,6 +2907,7 @@ def pcc_gc_set_backend(backend: int) -> int:
     store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
     store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)
     atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release")
+    atomic_store_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, 0, "release")
     store_i32(global_addr("pcc_gc_last_alloc_bytes"), 0, 0)
     if backend == 0:
         global_store_ptr("pcc_gc_backend3_promotion_head", null())

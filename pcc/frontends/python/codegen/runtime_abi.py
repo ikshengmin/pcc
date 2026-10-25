@@ -1734,6 +1734,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_worker_stop_requested',
         'pcc_gc_cms_worker_stops',
         'pcc_gc_cms_worker_traces',
+        'pcc_gc_cms_sweep_pending',
         'pcc_gc_config_initialized',
         'pcc_gc_cycle_requested',
         'pcc_gc_explicit_collect_active',
@@ -2062,6 +2063,7 @@ def _cross_object_signatures_part_0():
     return {
     "pcc_current_thread_id": ((), "c_int64"),
     "pcc_thread_safepoint": ((), "c_void"),
+    "pcc_thread_safepoint_gate": ((), "c_void"),
     "pcc_thread_stop_requested_acquire": ((), "c_int64"),
     "pcc_thread_scheduler_lock_acquired": ((), "c_void"),
     "pcc_thread_scheduler_lock_released": ((), "c_void"),

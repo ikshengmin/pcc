@@ -1366,9 +1366,13 @@ def _gc4_maybe_auto_step() -> None:
             global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release"
         )
         return
-    commits: int = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
     pcc_gc_backend4_maybe_auto_step()
-    if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits:
+    # The background marker may have finished before this gate was entered.
+    # Its completed sweep must not depend on this mutator finishing a cycle.
+    if (
+        atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") == 0
+        and pcc_gc_sweep_owed() == 0
+    ):
         return
     if pcc_thread_no_park_depth() != 0 or pcc_py_gc_minor_graph_lock_depth() != 0:
         return
