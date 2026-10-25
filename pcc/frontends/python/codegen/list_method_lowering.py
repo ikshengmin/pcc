@@ -29,6 +29,7 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.static_object_operands import emit_nonmoving_literal_operand
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_LIST,
@@ -792,16 +793,26 @@ class ListMethodLoweringMixin:
                 self.builder.cbranch(is_list, list_block, generic_block)
 
                 self.builder.position_at_end(list_block)
-                item = self._emit_slot_call_operand(expr.args[0], "list.append.item", borrow_stable=True)
-                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
-                self._cpy_operand_cleanup_block = self._try_err_block
-                self._slot_call_runtime_call(
-                    "py_list_append", (receiver, item), span=expr.span,
-                )
+                constant = emit_nonmoving_literal_operand(self, expr.args[0])
+                item = None
+                if constant is None:
+                    item = self._emit_slot_call_operand(expr.args[0], "list.append.item", borrow_stable=True)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call(
+                        "py_list_append", (receiver, item), span=expr.span,
+                    )
+                else:
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    self._slot_call_runtime_call(
+                        "py_list_append", (receiver,), suffix_args=(constant,), span=expr.span,
+                    )
                 none_value = self._emit_none_literal()
                 self._publish_slot_call_owned(output, none_value, label="list append result")
                 self._emit_post_call_err_check(expr.span)
-                self._release_slot_call_roots((item,))
+                if item is not None:
+                    self._release_slot_call_roots((item,))
                 self.builder.branch(done_block)
 
                 self.builder.position_at_end(generic_block)

@@ -44,6 +44,7 @@ from pcc.frontends.python.py_ast import (
     ValueArrayType,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.static_object_operands import emit_nonmoving_literal_operand
 from pcc.frontends.python.codegen.errors import CPythonValueRequired, L1CodegenError
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.codegen.cpy_import_state import (
@@ -642,7 +643,8 @@ class CallObjectLoweringMixin:
             # the actual destination, never merely the last opcode: a later
             # cleanup call must not make an older raw result look fresh.
             immediate = self._record_defines_value(last, value)
-        immortal = isinstance(value, (ir.Constant, ir.GlobalVariable)) or self._value_is_never_gc_object(value)
+        nonmoving = self._value_is_never_gc_object(value)
+        immortal = isinstance(value, (ir.Constant, ir.GlobalVariable)) or nonmoving
         if not immediate and not immortal:
             raise L1CodegenError(
                 "slot-call " + label + " lacks an immediate owned-result handoff; "
@@ -654,6 +656,14 @@ class CallObjectLoweringMixin:
         # may be inserted between a producer's return and this first store.
         self.builder.store(value, slot)
         self._slot_call_note_published(slot)
+        if nonmoving:
+            # The exact producer proves this address cannot move. Keep the
+            # root publication barrier, without an address lease around it.
+            self.builder.call(
+                self.runtime["pcc_gc_note_slot_write_barrier"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), value],
+            )
+            return
         token = self.builder.call(
             self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
             name=self._fresh("call.slot.publish.lease"),
@@ -1555,6 +1565,12 @@ class CallObjectLoweringMixin:
                 splat = (isinstance(elem, Call) and isinstance(elem.func, Name)
                          and elem.func.ident in ("*", "__starred__") and len(elem.args) == 1)
                 source = elem.args[0] if splat else elem
+                constant = None if splat else emit_nonmoving_literal_operand(self, source)
+                if constant is not None:
+                    self._slot_call_runtime_call(
+                        "py_list_append", (sequence,), suffix_args=(constant,), span=source.span,
+                    )
+                    continue
                 item = self._emit_slot_call_operand(source, label + ".item")
                 roots.append(item)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
