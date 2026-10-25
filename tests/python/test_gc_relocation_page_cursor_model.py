@@ -33,7 +33,7 @@ def _load_functions(path, namespace, names=None):
 
 
 class _SelectorMemory:
-    def __init__(self, threads_enabled=1):
+    def __init__(self, threads_enabled=1, *, stop_owner=0, stop_epoch=1):
         self.cells = {}
         self.allocation_sizes = {}
         self.freed = set()
@@ -52,11 +52,16 @@ class _SelectorMemory:
         self.malloc_poll_counts = []
         self.fail_malloc_at = None
         self.after_malloc = None
+        self.before_lock = None
         self.on_poll = None
         self.polls = 0
         # Preserve the threaded mutation model by default. Raw malloc cannot
         # run a managed mutation callback in the threads-off no-poll interval.
         self.threads_enabled = threads_enabled
+        self.world_stopped = stop_owner != 0
+        self.stop_owner = stop_owner
+        self.stop_epoch = stop_epoch
+        self.epoch_queries = []
         self.runtime_guard_polls = []
         self.runtime_guard_kinds = []
         self.rank_entry_pending = False
@@ -95,6 +100,7 @@ class _SelectorMemory:
             "pcc_gc_config_ensure": lambda: 4,
             "pcc_current_thread_id": lambda: 1,
             "pcc_threads_enabled": self.runtime_threads_enabled,
+            "pcc_thread_world_stop_epoch_held": self.held_epoch,
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "pcc_thread_safepoint": self.poll,
@@ -224,6 +230,12 @@ class _SelectorMemory:
         self.runtime_guard_polls.append(self.polls)
         return self.threads_enabled
 
+    def held_epoch(self):
+        assert self.locked
+        epoch = self.stop_epoch if self.world_stopped and self.stop_owner == 1 else -1
+        self.epoch_queries.append(epoch)
+        return epoch
+
     def free(self, pointer):
         assert pointer not in self.freed
         assert pointer in self.cells
@@ -257,6 +269,9 @@ class _SelectorMemory:
 
     def lock(self):
         assert not self.locked
+        if self.before_lock is not None:
+            callback, self.before_lock = self.before_lock, None
+            callback(self)
         self.locked = True
 
     def unlock(self):
@@ -340,10 +355,10 @@ def test_page_cursor_continues_without_a_heap_scan_per_object_batch(owners):
 
 
 @pytest.mark.parametrize("owners", [1, 16, 17, 48, 64, 128])
-def test_threads_off_reuses_static_preflight_and_saves_one_heap_walk(owners):
+def test_static_preflight_reuse_saves_one_heap_walk(owners):
     outcomes = []
-    for threads_enabled in (1, 0):
-        memory = _SelectorMemory(threads_enabled=threads_enabled)
+    for threads_enabled, stop_owner in ((1, 0), (0, 0), (1, 1)):
+        memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
         _, nodes = memory.page(owners)
         # Equal highest scores choose the first node in global-list order.
         memory.write(nodes[0], 72, 100)
@@ -355,16 +370,18 @@ def test_threads_off_reuses_static_preflight_and_saves_one_heap_walk(owners):
 
         assert memory.select(1) == owners
         assert memory.members == expected
-        assert memory.heap_visits == owners * (1 + threads_enabled)
-        assert len(memory.scan_starts) == 1 + threads_enabled
+        walks = 2 if threads_enabled and not stop_owner else 1
+        assert memory.heap_visits == owners * walks
+        assert len(memory.scan_starts) == walks
+        assert memory.epoch_queries == ([1, 1] if stop_owner else [-1] * threads_enabled)
         outcomes.append(memory.members)
-    assert outcomes[0] == outcomes[1]
+    assert outcomes[0] == outcomes[1] == outcomes[2]
 
 
-def test_threads_off_preserves_mixed_page_score_and_seed_tie_order():
+def test_preflight_reuse_preserves_mixed_page_score_and_seed_tie_order():
     outcomes = []
-    for threads_enabled in (1, 0):
-        memory = _SelectorMemory(threads_enabled=threads_enabled)
+    for threads_enabled, stop_owner in ((1, 0), (0, 0), (1, 1)):
+        memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
         low, low_nodes = memory.page(19, pressure=1)
         high, high_nodes = memory.page(48, pressure=100)
         tied_high, tied_nodes = memory.page(48, pressure=100)
@@ -386,10 +403,12 @@ def test_threads_off_preserves_mixed_page_score_and_seed_tie_order():
         assert not ({memory.read(node, 0) for node in low_nodes} & set(memory.members))
         assert memory.runtime_guard_kinds == ["rank-entry"] + ["preflight"] * 3
         if threads_enabled:
-            assert memory.heap_visits == 148 * 3 * 2
-            assert memory.heap_visits_by_lock == {False: 0, True: 888}
-            assert len(memory.scan_starts) == 6
+            walks = 3 if stop_owner else 6
+            assert memory.heap_visits == 148 * walks
+            assert memory.heap_visits_by_lock == {False: 0, True: 148 * walks}
+            assert len(memory.scan_starts) == walks
             assert memory.rank_score_batches == memory.ranked_page_batches == []
+            assert memory.page_best_batches == []
         else:
             # Ranking counts the static owner list once outside the lock,
             # then scores it once in bounded locked batches. Selected pages
@@ -402,13 +421,13 @@ def test_threads_off_preserves_mixed_page_score_and_seed_tie_order():
             assert memory.page_best_batches == []
             assert memory.commit_chunks == 4 + 4 + 3
         outcomes.append(memory.members)
-    assert outcomes[0] == outcomes[1]
+    assert outcomes[0] == outcomes[1] == outcomes[2]
 
 
-def test_threads_off_reuse_reduces_duplicate_fresh_skip_encounters():
+def test_preflight_reuse_reduces_duplicate_fresh_skip_encounters():
     outcomes = []
-    for threads_enabled in (1, 0):
-        memory = _SelectorMemory(threads_enabled=threads_enabled)
+    for threads_enabled, stop_owner in ((1, 0), (0, 0), (1, 1)):
+        memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
         page, nodes = memory.page(48)
         fresh = memory.read(nodes[0], 0)
         memory.write(fresh, 12, 16384)
@@ -417,19 +436,46 @@ def test_threads_off_reuse_reduces_duplicate_fresh_skip_encounters():
         assert memory.members == [memory.read(node, 0) for node in reversed(nodes[1:])]
         # The ineligible owner is still encountered in preflight, the page
         # cursor, and the residual global scan. Only the duplicate initial
-        # revalidation encounter disappears in the threads-off path.
+        # revalidation encounter disappears while the owner set is frozen.
+        duplicate_scan = int(bool(threads_enabled and not stop_owner))
         assert memory.global_get("pcc_gc_backend4_candidate_fresh_skips_g") == (
-            3 + threads_enabled
+            3 + duplicate_scan
         )
         assert memory.global_get("pcc_gc_backend4_relocation_add_refusals_g") == 0
-        assert memory.scan_starts == [(0, 1)] + [(page, 0)] * (1 + threads_enabled)
-        assert memory.heap_visits == 48 * (2 + threads_enabled)
+        assert memory.scan_starts == [(0, 1)] + [(page, 0)] * (1 + duplicate_scan)
+        assert memory.heap_visits == 48 * (2 + duplicate_scan)
         outcomes.append(memory.members)
+    assert outcomes[0] == outcomes[1] == outcomes[2]
+
+
+def test_owned_stop_reuse_preserves_pin_forwarding_and_large_defer_policy():
+    outcomes = []
+    for stop_owner in (0, 1):
+        memory = _SelectorMemory(stop_owner=stop_owner)
+        page, nodes = memory.page(48)
+        pinned, forwarded, large = [memory.read(node, 0) for node in nodes[:3]]
+        memory.write(pinned, 12, 64)
+        memory.refused.add(forwarded)
+        memory.write(nodes[2], 32, 65537)
+
+        assert memory.select(1) == 45
+        assert memory.members == [memory.read(node, 0) for node in reversed(nodes[3:])]
+        assert memory.read(page, 108) == 1
+        assert memory.read(pinned, 12) == 64
+        assert memory.read(large, 12) == 32768
+        counters = (
+            memory.global_get("pcc_gc_backend4_large_object_defers"),
+            memory.global_get("pcc_gc_backend4_large_object_deferred_bytes_count"),
+            memory.global_get("pcc_gc_backend4_relocation_add_refusals_g"),
+        )
+        assert counters[:2] == (1, 65537)
+        assert memory.heap_visits == 48 * (2 if stop_owner else 3)
+        outcomes.append((memory.members, counters))
     assert outcomes[0] == outcomes[1]
 
 
 @pytest.mark.parametrize("runtime_value", [-1, 0, 1, 2])
-def test_preflight_reuse_requires_runtime_provider_zero(monkeypatch, runtime_value):
+def test_preflight_reuse_without_owned_stop_requires_provider_zero(monkeypatch, runtime_value):
     # A contradictory build-option string cannot authorize or disable reuse.
     monkeypatch.setenv("PCC_WITH_THREADS", "1" if runtime_value == 0 else "0")
     memory = _SelectorMemory(threads_enabled=runtime_value)
@@ -442,8 +488,76 @@ def test_preflight_reuse_requires_runtime_provider_zero(monkeypatch, runtime_val
     assert len(memory.scan_starts) == walks
 
 
-def test_threads_off_registers_saved_seed_before_first_post_preflight_poll():
-    memory = _SelectorMemory(threads_enabled=0)
+@pytest.mark.parametrize(
+    ("stopped", "owner", "epoch", "walks"),
+    [(False, 1, 11, 2), (True, 99, 11, 2), (True, 1, -1, 2),
+     (True, 1, 0, 2), (True, 1, 11, 1)],
+)
+def test_threaded_seed_requires_current_owner_of_a_positive_epoch(
+    stopped, owner, epoch, walks,
+):
+    memory = _SelectorMemory(stop_owner=owner, stop_epoch=epoch)
+    memory.world_stopped = stopped
+    page, nodes = memory.page(48)
+
+    assert memory.select(1) == 48
+    assert memory.members == [memory.read(node, 0) for node in reversed(nodes)]
+    assert memory.read(page, 108) == 1
+    assert memory.heap_visits == 48 * walks
+    assert len(memory.scan_starts) == walks
+    assert len(memory.epoch_queries) == (2 if walks == 1 else 1)
+
+
+@pytest.mark.parametrize("invalidation", ["resume", "new-epoch", "new-owner"])
+@pytest.mark.parametrize("handoff", ["allocation", "relock"])
+@pytest.mark.parametrize("remove_page", [False, True])
+def test_expired_seed_is_discarded_before_any_metadata_dereference(
+    invalidation, handoff, remove_page,
+):
+    memory = _SelectorMemory(stop_owner=1, stop_epoch=11)
+    page, nodes = memory.page(48)
+    memory.write(nodes[0], 72, 100)
+    removed = []
+
+    def invalidate_and_remove(model):
+        assert not model.members
+        if invalidation == "resume":
+            model.world_stopped = False
+        elif invalidation == "new-epoch":
+            model.stop_epoch += 1
+        else:
+            model.stop_owner = 99
+        model.lock()
+        for node in nodes if remove_page else nodes[:1]:
+            removed.append(model.read(node, 0))
+            model.remove(node)
+        if remove_page:
+            model.free(page)
+        model.unlock()
+
+    def at_allocation(model):
+        model.after_malloc = None
+        if handoff == "relock":
+            model.before_lock = invalidate_and_remove
+        else:
+            invalidate_and_remove(model)
+
+    memory.after_malloc = at_allocation
+    assert memory.select(1) == (0 if remove_page else 47)
+    assert not set(removed).intersection(memory.members)
+    assert memory.epoch_queries == [11, 12 if invalidation == "new-epoch" else -1]
+    # The original registered scan, not a rejected-seed early return, finds
+    # the surviving candidates. Poisoned metadata makes stale loads fail.
+    assert memory.scan_starts[:2] == [(0, 1), (page, 0)]
+    if not remove_page:
+        assert memory.members == [memory.read(node, 0) for node in reversed(nodes[1:])]
+    else:
+        assert memory.malloc_allocations <= memory.freed
+
+
+@pytest.mark.parametrize("threads_enabled", [0, 1])
+def test_frozen_preflight_seed_is_registered_before_first_post_preflight_poll(threads_enabled):
+    memory = _SelectorMemory(threads_enabled, stop_owner=threads_enabled)
     page, nodes = memory.page(48)
     memory.write(nodes[0], 72, 100)
     registered = []
@@ -487,11 +601,11 @@ def test_page_budget_and_score_order_preserve_complete_selected_pages():
 
 
 @pytest.mark.parametrize("flags", [64, 16384])
-@pytest.mark.parametrize("threads_enabled", [1, 0])
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
 def test_residual_pass_finds_an_owner_made_eligible_after_cursor_passage(
-    flags, threads_enabled,
+    flags, threads_enabled, stop_owner,
 ):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     _, nodes = memory.page(48)
     initially_ineligible = memory.read(nodes[-1], 0)
     memory.write(initially_ineligible, 12, flags)
@@ -499,6 +613,7 @@ def test_residual_pass_finds_an_owner_made_eligible_after_cursor_passage(
 
     def publish_after_first_chunk(model):
         if not published and model.commit_chunks == 1:
+            model.world_stopped = False
             model.lock()
             model.write(initially_ineligible, 12, 0)
             model.unlock()
@@ -510,19 +625,20 @@ def test_residual_pass_finds_an_owner_made_eligible_after_cursor_passage(
     assert initially_ineligible in memory.members
     # Only initial revalidation may reuse the seed; the residual pass still
     # walks all owners after a poll makes a passed node eligible again.
-    assert len(memory.scan_starts) == 2 + threads_enabled
-    assert memory.heap_visits == 48 * (2 + threads_enabled)
+    walks = 3 if threads_enabled and not stop_owner else 2
+    assert len(memory.scan_starts) == walks
+    assert memory.heap_visits == 48 * walks
 
 
 @pytest.mark.parametrize(
     ("remove_seed", "after_first_chunk"),
     [(False, False), (True, False), (False, True)],
 )
-@pytest.mark.parametrize("threads_enabled", [1, 0])
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
 def test_page_cursor_and_pending_seed_are_repaired_before_node_free(
-    remove_seed, after_first_chunk, threads_enabled,
+    remove_seed, after_first_chunk, threads_enabled, stop_owner,
 ):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     _, nodes = memory.page(48)
     memory.write(nodes[0], 72, 100)  # Best seed differs from page-list head.
     removed = []
@@ -535,6 +651,7 @@ def test_page_cursor_and_pending_seed_are_repaired_before_node_free(
         name = "seed" if remove_seed else "cursor"
         node = model.global_get("pcc_gc_backend4_selector_page_" + name)
         removed.append(model.read(node, 0))
+        model.world_stopped = False
         model.lock()
         model.remove(node)
         model.unlock()
@@ -546,11 +663,11 @@ def test_page_cursor_and_pending_seed_are_repaired_before_node_free(
 
 
 @pytest.mark.parametrize("after_first_chunk", [False, True])
-@pytest.mark.parametrize("threads_enabled", [1, 0])
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
 def test_removing_all_page_owners_does_not_dereference_recycled_page(
-    after_first_chunk, threads_enabled,
+    after_first_chunk, threads_enabled, stop_owner,
 ):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     page, nodes = memory.page(48)
     removed = []
 
@@ -559,6 +676,7 @@ def test_removing_all_page_owners_does_not_dereference_recycled_page(
             return
         if after_first_chunk and model.commit_chunks == 0:
             return
+        model.world_stopped = False
         model.lock()
         for node in nodes:
             model.remove(node)
@@ -580,9 +698,9 @@ def test_removing_all_page_owners_does_not_dereference_recycled_page(
     assert removed == [True]
 
 
-@pytest.mark.parametrize("threads_enabled", [1, 0])
-def test_competing_page_scan_owner_keeps_its_registered_state(threads_enabled):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
+def test_competing_page_scan_owner_keeps_its_registered_state(threads_enabled, stop_owner):
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     page, nodes = memory.page(48)
     memory.global_set("pcc_gc_backend4_selector_page_owner", 99)
     memory.global_set("pcc_gc_backend4_selector_page", page)
@@ -596,9 +714,9 @@ def test_competing_page_scan_owner_keeps_its_registered_state(threads_enabled):
     assert memory.malloc_allocations <= memory.freed
 
 
-@pytest.mark.parametrize("threads_enabled", [1, 0])
-def test_competing_discovery_owner_keeps_its_registered_state(threads_enabled):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
+def test_competing_discovery_owner_keeps_its_registered_state(threads_enabled, stop_owner):
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     page, nodes = memory.page(48)
     foreign_state = {
         "owner": 99,
@@ -623,14 +741,16 @@ def test_competing_discovery_owner_keeps_its_registered_state(threads_enabled):
     assert memory.runtime_guard_polls == []
 
 
-def test_page_growth_after_preflight_retries_before_any_admission():
-    memory = _SelectorMemory()
+@pytest.mark.parametrize("stop_owner", [0, 1])
+def test_page_growth_after_preflight_retries_before_any_admission(stop_owner):
+    memory = _SelectorMemory(stop_owner=stop_owner)
     page, _ = memory.page(48)
     grew = []
 
     def grow_during_plan_allocation(model):
         if not grew:
             assert not model.members
+            model.world_stopped = False
             model.lock()
             model.add_owner(page)
             model.unlock()
@@ -651,9 +771,9 @@ def test_page_growth_after_preflight_retries_before_any_admission():
 
 
 @pytest.mark.parametrize("failure", [1, 2, 17, 49])
-@pytest.mark.parametrize("threads_enabled", [1, 0])
-def test_incomplete_page_plan_adds_nothing(failure, threads_enabled):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
+def test_incomplete_page_plan_adds_nothing(failure, threads_enabled, stop_owner):
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     page, _ = memory.page(48)
     memory.fail_malloc_at = failure
 
@@ -663,17 +783,18 @@ def test_incomplete_page_plan_adds_nothing(failure, threads_enabled):
     assert memory.malloc_allocations <= memory.freed
 
 
-@pytest.mark.parametrize("threads_enabled", [1, 0])
-def test_refused_residual_candidate_ends_on_no_progress(threads_enabled):
-    memory = _SelectorMemory(threads_enabled=threads_enabled)
+@pytest.mark.parametrize(("threads_enabled", "stop_owner"), [(1, 0), (0, 0), (1, 1)])
+def test_refused_residual_candidate_ends_on_no_progress(threads_enabled, stop_owner):
+    memory = _SelectorMemory(threads_enabled, stop_owner=stop_owner)
     _, nodes = memory.page(48)
     refused = memory.read(nodes[0], 0)
     memory.refused.add(refused)
 
     assert memory.select(1) == 47
     assert refused not in memory.members
-    assert len(memory.scan_starts) == 2 + threads_enabled
-    assert memory.heap_visits == 48 * (2 + threads_enabled)
+    walks = 3 if threads_enabled and not stop_owner else 2
+    assert len(memory.scan_starts) == walks
+    assert memory.heap_visits == 48 * walks
 
 
 @pytest.mark.parametrize("budget", [0, 1, 16, 17])

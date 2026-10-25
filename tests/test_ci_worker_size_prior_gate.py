@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 54, 30, 9, 75, 28, 31, 17)
+    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 75, 28, 31, 17)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -100,13 +100,13 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 72
-    assert sum(gate.HOST_COUNTS) == 3212 and sum(gate.HOST_COUNTS[:70]) == 3164
-    assert sum(gate.HOST_COUNTS[:65]) == 2968
-    assert sum(gate.HOST_COUNTS[:63]) == 2930
-    assert sum(gate.HOST_COUNTS[:62]) == 2921
-    assert sum(gate.HOST_COUNTS[:61]) == 2744
-    assert sum(gate.HOST_COUNTS[:60]) == 2633
-    assert sum(gate.HOST_COUNTS[:59]) == 2622
+    assert sum(gate.HOST_COUNTS) == 3246 and sum(gate.HOST_COUNTS[:70]) == 3198
+    assert sum(gate.HOST_COUNTS[:65]) == 3002
+    assert sum(gate.HOST_COUNTS[:63]) == 2964
+    assert sum(gate.HOST_COUNTS[:62]) == 2955
+    assert sum(gate.HOST_COUNTS[:61]) == 2778
+    assert sum(gate.HOST_COUNTS[:60]) == 2667
+    assert sum(gate.HOST_COUNTS[:59]) == 2656
     assert sum(gate.HOST_COUNTS[:58]) == 2571
     assert sum(gate.HOST_COUNTS[:57]) == 2567
     assert sum(gate.HOST_COUNTS[:53]) == 2454
@@ -134,7 +134,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert sum(gate.HOST_COUNTS[:17]) == 1067 and sum(gate.HOST_COUNTS[:16]) == 1007
     assert sum(gate.HOST_COUNTS[:14]) == 998
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
-                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 51),
+                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 85),
                                      (gate.IR_BUILDER_CALL9_TEST, 9)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
@@ -1612,7 +1612,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26, 54, 30, 9, 75, 28, 31, 17) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 75, 28, 31, 17) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

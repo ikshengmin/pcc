@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.python import pipeline
-from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
+from pcc.frontends.python.codegen.runtime_abi import (
+    FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
+    FREESTANDING_GC_RUNTIME_GLOBALS,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +61,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
     "pcc_thread_safepoint",
+    "pcc_thread_world_stop_epoch_held",
     "pcc_threads_enabled",
 }
 RAW_GLOBAL_IMPORTS = {
@@ -114,6 +118,30 @@ def _literal_global_imports() -> set[str]:
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             globals_.add(value.value)
     return globals_ - OWNED_GLOBALS
+
+
+def test_relocation_selector_declares_exact_raw_function_imports() -> None:
+    tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
+    externs = {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "extern"
+    }
+    assert set(externs) | {"malloc", "free"} == RAW_FUNCTION_IMPORTS
+    epoch = externs["pcc_thread_world_stop_epoch_held"]
+    assert ast.literal_eval(epoch.args[0]) == "pcc_thread_world_stop_epoch_held"
+    assert ast.literal_eval(epoch.args[1]) == ()
+    assert isinstance(epoch.args[2], ast.Name) and epoch.args[2].id == "c_int64"
+    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
+        "pcc_thread_world_stop_epoch_held"
+    ] == ((), "c_int64")
+    assert _literal_global_imports() == RAW_GLOBAL_IMPORTS
+    assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
+    assert OWNED_GLOBALS <= FREESTANDING_GC_RUNTIME_GLOBALS
 
 
 def test_relocation_selector_has_one_strict_source_owner() -> None:
