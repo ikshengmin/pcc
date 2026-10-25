@@ -161,7 +161,11 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # survivors of the last collection, and tracing pacing the heap marked.
     # Current committed storage has 223 symbols (the old 215 pin was stale).
     # Mark completion now has its own flag, separate from moving work.
-    assert len(expected) == 224
+    # Three collector-private fields bind GC0 candidate validation.
+    assert len(expected) == 227
+    assert expected["pcc_gc_backend0_subset_active"] == ("define_global_i32", 0)
+    assert expected["pcc_gc_backend0_subset_pairs"] == ("define_global_ptr_null", None)
+    assert expected["pcc_gc_backend0_subset_count"] == ("define_global_i64", 0)
     assert expected["pcc_gc_cms_sweep_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_refcount_atomic"] == ("define_global_i32", 0)
     assert expected["pcc_gc_tracked_after_collect"] == ("define_global_i64", 0)

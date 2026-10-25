@@ -19,6 +19,7 @@ CLEAR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_sweep_slots.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_backend0_node_in_collection",
     "pcc_gc_backend0_is_unreachable",
     "pcc_gc_backend0_mark_reachable",
     "pcc_gc_backend0_mark_slot",
@@ -112,7 +113,7 @@ def test_backend0_slot_actions_have_exact_raw_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS
+    assert undefined == RAW_FUNCTION_IMPORTS | {"pcc_gc_backend0_subset_active"}
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
