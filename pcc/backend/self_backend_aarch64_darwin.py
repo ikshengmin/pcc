@@ -795,6 +795,14 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 phase_timing.add(6, phase_start)
     if phase_timing is not None:
         phase_start = phase_timing.start()
+    # All function bodies and native captures have finished. Retire only the
+    # private plans' emission storage before final layout/metadata allocate.
+    # Keep the eager planning and callback order: callbacks or repeated names
+    # can make a later body reuse an earlier dictionary entry. Record/root
+    # metadata and exceptional labels remain live for the final consumers.
+    for plan in stack_map_plans.values():
+        if plan.packed_records is not None:
+            plan.packed_records.retire_emission_state()
     if native_sink is not None:
         if (
             optimize or structured_sections is None or structured_counts is None

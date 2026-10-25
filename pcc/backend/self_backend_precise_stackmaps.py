@@ -588,6 +588,22 @@ class PackedPlannedSafepoints:
     def diagnostic_records(self) -> tuple[PlannedSafepoint, ...]:
         return tuple(self)
 
+    def retire_emission_state(self) -> None:
+        """Consume reload and routing storage after every body has emitted.
+
+        Final stack-map serialization needs record/root metadata, not the
+        routes or reload instructions that the emitter has already consumed.
+        This is irreversible: diagnostic materialization still needs reloads.
+        Public planning helpers leave their returned plans fully usable.
+        """
+        self.reload_scalars.close()
+        self.entry_routes.close()
+        self.suffix_routes.close()
+        self.terminator_routes.close()
+        self.entry_route_spans.close()
+        self.suffix_route_spans.close()
+        self.terminator_route_spans.close()
+
     def close(self) -> None:
         self.scalars.close()
         self.spans.close()
