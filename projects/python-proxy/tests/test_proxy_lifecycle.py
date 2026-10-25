@@ -3,6 +3,8 @@ import base64
 import hashlib
 import re
 import signal
+import socket
+import struct
 import sys
 from pathlib import Path
 
@@ -80,7 +82,13 @@ def test_abrupt_disconnect_does_not_break_other_tunnels(mode, side):
             healthy_reader, healthy_writer = await tunnel(net, proxy, healthy_target, mode)
             bad_reader, bad_writer = await tunnel(net, proxy, bad_target, mode)
             remote_writer = await peer
-            (bad_writer if side == "client" else remote_writer).transport.abort()
+            broken = bad_writer if side == "client" else remote_writer
+            # abort() alone can send a FIN on an empty socket. Force a real
+            # reset so this remains an abrupt-disconnect test with half-close
+            # support, instead of leaving the opposite write side open.
+            linger = 'hh' if sys.platform == 'win32' else 'ii'
+            broken.get_extra_info('socket').setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(linger, 1, 0))
+            broken.transport.abort()
             try:
                 assert await bad_reader.read() == b""
             except ConnectionResetError:
@@ -119,6 +127,7 @@ def test_slow_receiver_backpressure_preserves_all_bytes(mode):
             assert await reader.readexactly(8) == b"complete"
             assert await digest == hashlib.sha256(payload).digest()
             assert await reader.read() == b""
+            writer.close()
             await settled()
     run(scenario())
 
@@ -178,4 +187,24 @@ def test_cli_sigint_exits_with_open_connections(connection_state):
             if process.returncode is None:
                 process.kill()
                 await process.wait()
+    run(scenario())
+
+
+@pytest.mark.parametrize('mode', ['domain', 'http'])
+def test_client_half_close_preserves_response_after_request_eof(mode):
+    async def scenario():
+        async with network() as net:
+            async def origin(reader, writer):
+                request = await reader.read()
+                await asyncio.sleep(0.02)
+                writer.write(b'response:' + request)
+                await writer.drain()
+                writer.close()
+            target = await net.listen(origin)
+            port = await net.proxy()
+            reader, writer = await tunnel(net, port, target, mode, b'body')
+            writer.write_eof()
+            assert await reader.read() == b'response:body'
+            await settled()
+            assert not server.ACTIVE_CHANNEL_WRITERS
     run(scenario())

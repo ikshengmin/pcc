@@ -56,6 +56,7 @@ class BaseProtocol:
     async def connect(self, reader_remote, writer_remote, rauth, host_name, port, **kw):
         raise Exception(f'{self.name} don\'t support client')
     async def channel(self, reader, writer, stat_bytes, stat_conn):
+        normal_eof = False
         try:
             stat_conn(1)
             while not reader.at_eof() and not writer.is_closing():
@@ -67,15 +68,33 @@ class BaseProtocol:
                 stat_bytes(len(data))
                 writer.write(data)
                 await writer.drain()
+            normal_eof = reader.at_eof()
         except asyncio.CancelledError:
             pass
         except Exception:
             pass
         finally:
             stat_conn(-1)
-            writer.close()
+        return await self.finish_channel(writer, normal_eof)
+
+    async def finish_channel(self, writer, normal_eof):
+        if normal_eof and getattr(writer, 'can_write_eof', lambda: False)():
+            try:
+                writer.write_eof()
+                await writer.drain()
+                return True
+            except (Exception, asyncio.CancelledError):
+                pass
+        writer.close()
+        return False
 
 class Direct(BaseProtocol):
+    pass
+
+class Turn(BaseProtocol):
+    pass
+
+class Masque(BaseProtocol):
     pass
 
 class Trojan(BaseProtocol):
@@ -442,6 +461,7 @@ class HTTP(BaseProtocol):
                 or not status[1].isdigit() or not 200 <= int(status[1]) < 300):
             raise ConnectionError('Upstream HTTP CONNECT rejected or returned an invalid response')
     async def http_channel(self, reader, writer, stat_bytes, stat_conn):
+        normal_eof = False
         try:
             stat_conn(1)
             while not reader.at_eof() and not writer.is_closing():
@@ -461,13 +481,14 @@ class HTTP(BaseProtocol):
                 stat_bytes(len(data))
                 writer.write(data)
                 await writer.drain()
+            normal_eof = reader.at_eof()
         except asyncio.CancelledError:
             pass
         except Exception:
             pass
         finally:
             stat_conn(-1)
-            writer.close()
+        return await self.finish_channel(writer, normal_eof)
 
 class HTTPOnly(HTTP):
     async def connect(self, reader_remote, writer_remote, rauth, host_name, port, myhost, **kw):
@@ -712,6 +733,8 @@ def udp_accept(protos, data, **kw):
     raise Exception(f'Unsupported protocol {data[:10]}')
 
 MAPPINGS = dict(direct=Direct, http=HTTP, httponly=HTTPOnly, httpadmin=HTTPAdmin, ssh=SSH, socks5=Socks5, socks4=Socks4, socks=Socks5, ss=SS, ssr=SSR, redir=Redir, pf=Pf, tunnel=Tunnel, echo=Echo, ws=WS, trojan=Trojan, h2=H2, h3=H3, ssl='', secure='', quic='')
+MAPPINGS['turn'] = Turn
+MAPPINGS['masque'] = Masque
 MAPPINGS['in'] = ''
 
 def get_protos(rawprotos):

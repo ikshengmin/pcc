@@ -652,6 +652,79 @@ Examples
   SOCKS5 peers and STUN binding responses. They do not certify a particular
   browser, remote proxy, NAT/firewall, or live WebRTC audio/video session.
 
+- Chrome WebRTC over the existing local UDP proxy
+
+  The companion ZeroOmega Chrome feature configures matching pages to use
+  ``turn:127.0.0.1:8082?transport=udp`` with relay-only ICE. It does not disable
+  UDP or install a native messaging host. A UDP tunnel in the existing local
+  pproxy process carries TURN packets over SOCKS5 UDP to a TURN listener in the
+  existing remote pproxy process. Ordinary web requests retain their TCP route.
+
+  On each remote host, keep its SOCKS5 listener and add authenticated TURN/UDP.
+  The TURN control listener can stay on loopback because the remote SOCKS5
+  server reaches it locally. Replace ``REMOTE_BIND_IP`` with an IP assigned to
+  the remote host and choose a dedicated TURN password:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy \
+      -l socks5://0.0.0.0:8084 \
+      -ul 'turn://127.0.0.1:3478#webrtc:CHANGE_ME' \
+      --turn-relay-address REMOTE_BIND_IP \
+      --turn-min-port 49160 --turn-max-port 49200 -v
+
+  Use the remote host's existing SOCKS5 port (for example 8089 instead of 8084
+  on the second host). Peers must be able to reach the relay IP and configured
+  UDP port range. Behind port-preserving NAT, set
+  ``--turn-external-address PUBLIC_IP`` as well. The advertised IP must have
+  the same address family as the relay bind IP. A listener supports one relay
+  address family; the current Chrome feature can use the IPv4 relay path.
+
+  On the local host, add UDP settings to the same process as the TCP listener:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy \
+      -l http+socks5://:8082 \
+      -r socks://t-arm1:8084 -r socks://t-us1:8089 \
+      -ul 'tunnel{127.0.0.1:3478}://127.0.0.1:8082' \
+      -ur socks://t-arm1:8084 -ur socks://t-us1:8089 \
+      --udp-idle 900 -a 10 -v
+
+  Here the tunnel target ``127.0.0.1:3478`` is reached by the remote SOCKS5
+  server, not directly by the local machine. TCP and UDP can share the numeric
+  port 8082. The longer UDP idle lifetime preserves a TURN mapping between
+  allocation refreshes. Health checks also cover SOCKS5 UDP upstreams, and a
+  matching but unavailable UDP route is dropped rather than sent directly.
+  Switching an upstream cannot preserve an existing TURN allocation; a failed
+  call may need an ICE restart or reconnect.
+
+  TURN/UDP supports long-term username/password authentication, nonce renewal,
+  Allocate/Refresh, CreatePermission, Send/Data indications and ChannelBind /
+  ChannelData. Repeated requests reuse their responses and allocations;
+  permissions, channels and allocations expire. Allocation count and relay
+  ports are bounded. TCP/TLS TURN, EVEN-PORT reservations and dual-family
+  allocations are not implemented. Unsupported required attributes receive
+  explicit TURN errors. Loopback peers are denied unless
+  ``--turn-allow-loopback`` is selected for isolated local testing.
+
+  For a local browser test with two pproxy instances, a TURN server and a
+  deliberate unproxied-STUN detector, run:
+
+  .. code:: sh
+
+    uv run --no-sync python tests/webrtc_udp_fixture.py
+
+  The fixture prints random loopback ports, temporary test credentials, and a
+  page URL. Configure the built ZeroOmega extension with the printed TURN URL
+  and credentials, then open the page and click Run. It verifies data-channel
+  bytes, generated audio/video, relay-only UDP candidates and that the page's
+  original STUN server receives no direct packets. It accesses no camera or
+  microphone and touches no existing 8082 listener. Stop it with Ctrl-C.
+  Local Chrome evidence does not certify remote NAT/firewall reachability or
+  compatibility with every website. Chrome's site permissions can also limit
+  access to loopback/local-network endpoints.
+
 - UDP more complicated example
 
   Run the shadowsocks udp proxy on remote machine:

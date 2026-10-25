@@ -52,11 +52,15 @@ def link_channel_tasks(channels, writers):
     ACTIVE_CHANNEL_WRITERS.extend(writers)
     def stop_peer(done_task):
         forget_channel_task(done_task)
-        for task in tasks:
-            if task is not done_task and not task.done():
-                task.cancel()
+        half_closed = (not done_task.cancelled() and done_task.exception() is None
+                       and done_task.result() is True)
+        if not half_closed:
+            for task in tasks:
+                if task is not done_task and not task.done():
+                    task.cancel()
         if all(task.done() for task in tasks):
             for writer in writers:
+                writer.close()
                 try:
                     ACTIVE_CHANNEL_WRITERS.remove(writer)
                 except ValueError:
@@ -228,7 +232,10 @@ async def datagram_handler(writer, data, addr, protos, urserver, block, cipher, 
         elif block and block(host_name):
             raise Exception('BLOCK ' + host_name)
         else:
-            roption = schedule(urserver, salgorithm, host_name, port) or DIRECT
+            roption = schedule(urserver, salgorithm, host_name, port)
+            if roption is None and any(r.match_rule(host_name, port) for r in urserver):
+                raise ConnectionError('No available UDP upstream')
+            roption = roption or DIRECT
             verbose(f'UDP {lproto.name} {remote_text}{roption.logtext(host_name, port)}')
             def reply(rdata, rhost=host_name, rport=port):
                 rdata = lproto.udp_pack(rhost, rport, rdata)
@@ -395,6 +402,7 @@ class ProxySimple(ProxyDirect):
         self.jump = jump
         self.udp_associations = {}
         self.udp_association_lock = None
+        self.udp_idle_timeout = None
     def logtext(self, host, port):
         return f' -> {self.rproto.name+("+ssl" if self.sslclient else "")} {self.bind}' + self.jump.logtext(host, port)
     def match_rule(self, host, port):
@@ -446,14 +454,16 @@ class ProxySimple(ProxyDirect):
                 current = self.udp_associations.get(addr)
                 if current is None or current[0] is not relay:
                     return
-                remaining = UDP_ASSOCIATION_IDLE - (time.monotonic() - relay.updated)
+                idle = self.udp_idle_timeout if self.udp_idle_timeout is not None else UDP_ASSOCIATION_IDLE
+                remaining = idle - (time.monotonic() - relay.updated)
                 if remaining > 0:
                     timer = asyncio.get_event_loop().call_later(remaining, expire)
                     self.udp_associations[addr] = (relay, timer)
                     return
                 self.udp_associations.pop(addr, None)
                 asyncio.ensure_future(relay.close())
-            timer = asyncio.get_event_loop().call_later(UDP_ASSOCIATION_IDLE, expire)
+            idle = self.udp_idle_timeout if self.udp_idle_timeout is not None else UDP_ASSOCIATION_IDLE
+            timer = asyncio.get_event_loop().call_later(idle, expire)
             self.udp_associations[addr] = (relay, timer)
             await relay.send(host, port, data)
     async def udp_open_connection(self, host, port, data, addr, reply):
@@ -496,6 +506,22 @@ class ProxySimple(ProxyDirect):
             return asyncio.start_unix_server(handler, path=self.bind)
         else:
             return asyncio.start_server(handler, host=self.host_name, port=self.port, reuse_port=args.get('ruport'))
+
+class ProxyTURN(ProxySimple):
+    def start_server(self, args, stream_handler=stream_handler):
+        raise ValueError('TURN is UDP-only; use -ul turn://address:port#username:password')
+    async def udp_start_server(self, args):
+        from .turn import TurnServer
+        if self.unix or self.cipher or self.sslclient or len(self.protos) != 1 or not self.jump.direct:
+            raise ValueError('TURN requires a standalone UDP listener')
+        protocol = TurnServer(
+            self.users, args.get('turn_relay_address') or self.host_name,
+            external_address=args.get('turn_external_address'),
+            min_port=args.get('turn_min_port', 0), max_port=args.get('turn_max_port', 0),
+            max_allocations=args.get('turn_max_allocations', 128),
+            allow_loopback=args.get('turn_allow_loopback', False))
+        return await asyncio.get_event_loop().create_datagram_endpoint(
+            lambda: protocol, local_addr=(self.host_name, self.port))
 
 class ProxyH2(ProxySimple):
     def __init__(self, sslserver, sslclient, **kw):
@@ -701,6 +727,17 @@ class ProxyQUIC(ProxySimple):
             self.patch_writer(writer)
             asyncio.ensure_future(stream_handler(reader, writer, **vars(self), **args))
         return aioquic.asyncio.serve(self.host_name, self.port, configuration=self.quicserver, stream_handler=handler)
+
+class ProxyMasque(ProxyQUIC):
+    def start_server(self, args, stream_handler=stream_handler):
+        from .masque import serve
+        if self.unix or self.cipher or len(self.protos) != 1 or not self.jump.direct:
+            raise ValueError('MASQUE requires a standalone HTTP/3 listener')
+        return serve(self, args)
+    async def udp_start_server(self, args):
+        raise ValueError('Use -l masque:// for the QUIC proxy listener')
+    async def wait_open_connection(self, *args):
+        raise ValueError('MASQUE is a server protocol; configure it in Chrome')
 
 class ProxyH3(ProxyQUIC):
     def get_stream(self, conn, stream_id):
@@ -971,7 +1008,7 @@ def proxy_by_uri(uri, jump):
         sslcontexts.append(sslclient)
     else:
         sslserver = sslclient = None
-    if 'quic' in rawprotos or 'h3' in protonames:
+    if 'quic' in rawprotos or 'h3' in protonames or 'masque' in protonames:
         try:
             import ssl, aioquic.quic.configuration
         except Exception:
@@ -979,6 +1016,12 @@ def proxy_by_uri(uri, jump):
         quicserver = aioquic.quic.configuration.QuicConfiguration(is_client=False, max_stream_data=2**60, max_data=2**60, idle_timeout=SOCKET_TIMEOUT)
         quicclient = aioquic.quic.configuration.QuicConfiguration(max_stream_data=2**60, max_data=2**60, idle_timeout=SOCKET_TIMEOUT*5)
         quicclient.verify_mode = ssl.CERT_NONE
+        if 'masque' in protonames:
+            quicserver.alpn_protocols = ['h3']
+            quicserver.max_datagram_frame_size = 65536
+            quicserver.max_datagram_size = 1400
+            quicserver.max_data = 16 * 1024 * 1024
+            quicserver.max_stream_data = 1024 * 1024
         sslcontexts.append(quicserver)
         sslcontexts.append(quicclient)
     if 'h2' in rawprotos:
@@ -1025,7 +1068,11 @@ def proxy_by_uri(uri, jump):
     else:
         params = dict(jump=jump, protos=protos, cipher=cipher, users=users, rule=url.query, bind=loc or urlpath,
                       host_name=host_name, port=port, unix=not loc, lbind=lbind, sslclient=sslclient, sslserver=sslserver)
-        if 'quic' in rawprotos:
+        if 'masque' in protonames:
+            proxy = ProxyMasque(quicserver, quicclient, **params)
+        elif 'turn' in protonames:
+            proxy = ProxyTURN(**params)
+        elif 'quic' in rawprotos:
             proxy = ProxyQUIC(quicserver, quicclient, **params)
         elif 'h3' in protonames:
             proxy = ProxyH3(quicserver, quicclient, **params)
@@ -1075,7 +1122,13 @@ async def test_url(url, rserver):
     print(f'============ success ============')
 
 def print_server_started(option, server, print_fn):
-    for s in server.sockets:
+    sockets = getattr(server, 'sockets', None)
+    if sockets is None:
+        sock = server.get_extra_info('socket') if hasattr(server, 'get_extra_info') else None
+        sockets = [sock] if sock is not None else []
+    if not sockets:
+        print_fn(option)
+    for s in sockets:
         # https://github.com/MagicStack/uvloop/blob/master/uvloop/pseudosock.pyx
         laddr = s.getsockname() # tuple size varies with protocol family
         h = laddr[0]
@@ -1088,11 +1141,18 @@ def print_server_started(option, server, print_fn):
 def main(args = None):
     origin_argv = sys.argv[1:] if args is None else args
 
-    parser = argparse.ArgumentParser(description=__description__+'\nSupported protocols: http,socks4,socks5,shadowsocks,shadowsocksr,redirect,pf,tunnel', epilog=f'Online help: <{__url__}>')
+    parser = argparse.ArgumentParser(description=__description__+'\nSupported protocols: http,socks4,socks5,shadowsocks,shadowsocksr,redirect,pf,tunnel,turn', epilog=f'Online help: <{__url__}>')
     parser.add_argument('-l', dest='listen', default=[], action='append', type=proxies_by_uri, help='tcp server uri (default: http+socks4+socks5://:8080/)')
     parser.add_argument('-r', dest='rserver', default=[], action='append', type=proxies_by_uri, help='tcp remote server uri (default: direct)')
     parser.add_argument('-ul', dest='ulisten', default=[], action='append', type=proxies_by_uri, help='udp server setting uri (default: none)')
     parser.add_argument('-ur', dest='urserver', default=[], action='append', type=proxies_by_uri, help='udp remote server uri (default: direct)')
+    parser.add_argument('--turn-relay-address', help='local IP for TURN peer relay sockets')
+    parser.add_argument('--turn-external-address', help='advertised TURN relay IP when using port-preserving NAT')
+    parser.add_argument('--turn-min-port', type=int, default=0, help='first TURN relay port (default: ephemeral)')
+    parser.add_argument('--turn-max-port', type=int, default=0, help='last TURN relay port')
+    parser.add_argument('--turn-max-allocations', type=int, default=128, help='maximum concurrent TURN allocations')
+    parser.add_argument('--turn-allow-loopback', action='store_true', help='allow TURN loopback peers for local testing')
+    parser.add_argument('--udp-idle', type=float, default=UDP_ASSOCIATION_IDLE, help='SOCKS5 UDP client idle lifetime in seconds; use 900 for TURN tunnels')
     parser.add_argument('-b', dest='block', type=compile_rule, help='block regex rules')
     parser.add_argument('-a', dest='alived', default=0, type=int, help='interval to check remote alive (default: no check)')
     parser.add_argument('-s', dest='salgorithm', default='fa', choices=('fa', 'rr', 'rc', 'lc'), help='scheduling algorithm (default: first_available)')
@@ -1108,6 +1168,11 @@ def main(args = None):
     parser.add_argument('--test', help='test this url for all remote proxies and exit')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args(args)
+    if not args.udp_idle > 0:
+        parser.error('--udp-idle must be positive')
+    for remote in args.urserver:
+        if isinstance(remote, ProxySimple):
+            remote.udp_idle_timeout = args.udp_idle
     if args.sslfile:
         sslfile = args.sslfile.split(',')
         for context in sslcontexts:
@@ -1185,8 +1250,11 @@ def main(args = None):
         if args.sys:
             from . import sysproxy
             args.sys = sysproxy.setup(args)
-        if args.alived > 0 and args.rserver:
-            asyncio.ensure_future(check_server_alive(args.alived, args.rserver, args.verbose if args.v else DUMMY))
+        health_remotes = list(args.rserver)
+        health_remotes.extend(r for r in args.urserver if isinstance(r, ProxySimple)
+                              and isinstance(r.rproto, proto.Socks5) and r not in health_remotes)
+        if args.alived > 0 and health_remotes:
+            asyncio.ensure_future(check_server_alive(args.alived, health_remotes, args.verbose if args.v else DUMMY))
         interrupt_handlers = {}
         for signum in (signal.SIGINT, signal.SIGTERM):
             handler = signal.getsignal(signum)

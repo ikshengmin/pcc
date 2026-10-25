@@ -7,6 +7,34 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Chrome UDP routing: TURN and MASQUE work in progress (2026-10-25)
+
+The requested scope includes Chrome TCP and UDP, WebRTC and QUIC/HTTP3, through
+the existing local and remote python-proxy processes, without another local
+proxy application. Full coverage is **not yet qualified**.
+
+The ZeroOmega checkout at `/Users/jiamo/my/ZeroOmega` adds an opt-in Chrome
+TURN/UDP page configuration hook on `codex/webrtc-turn-udp`, based on
+`c367db220e2a3af1c65e5afffa4cf42c949f2908`. Six Node tests pass. A real Chrome
+156.0.8078.48 run with a separate temporary profile and random loopback ports
+relayed generated audio/video and 128 KiB of data through the local UDP tunnel,
+a second SOCKS5 proxy, and the new remote TURN service. Selected candidates and
+TURN transport were UDP; the original page STUN detector saw zero packets.
+Receipt: `/Users/jiamo/pcc-recovery-archive/2026-10-25/zeroomega-turn-udp/chrome-initial.json`.
+This proves that local WebRTC path, not arbitrary website/NAT compatibility.
+
+The python-proxy changes based on `17ecf318fcb48029cc14c5f24cdf5f1c197d7049`
+add authenticated TURN/UDP, configurable UDP association idle time, and an
+experimental HTTP/3 CONNECT/CONNECT-UDP listener using the existing optional
+aioquic dependency (tested with 1.7.0). TURN and QUIC can share one UDP port.
+Fourteen TURN tests passed; the lifecycle/MASQUE selection passed 23 tests.
+The MASQUE TCP test exposed the existing FIN/half-close response truncation;
+generic channel completion now preserves the opposite direction. Reset tests
+explicitly send RST, and completion tests close their remaining write half.
+Native Chrome HTTP3 through MASQUE, DNS/other UDP coverage, and whole-browser
+TCP/UDP acceptance remain open. No existing 8082 listener or remote host was
+updated. Tests use CPython, with no pcc1-native or bootstrap claim.
+
 ## python-proxy SOCKS5 UDP (2026-10-25)
 
 Validation input: `1a63d2b72edaa9bee782d069453e6633ce1a243e` plus the
