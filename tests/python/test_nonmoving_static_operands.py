@@ -40,7 +40,7 @@ def test_literal_append_has_no_input_root_but_dynamic_fallback_remains():
     text = _emit("def append_constant(target):\n    target.append('value')\n")
     body = re.search(r"^define [^\n]*@user_binding_append_constant\(.*?^}", text, re.M | re.S).group(0)
     assert "list.append.item.operand" not in body
-    assert "@py_list_append(" in body and "@py_obj_call_slots(" in body
+    assert "@py_list_append_from_slots(" in body and "@py_obj_call_slots(" in body
     assert "@py_obj_getattr(" in body
 
 

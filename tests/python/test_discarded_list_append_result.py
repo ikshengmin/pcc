@@ -12,7 +12,7 @@ def test_builtin_discard_does_not_publish_none_into_result_root():
     text = _emit("def statement(target):\n    target.append('item')\ndef expression(target):\n    return target.append('item')\n")
     body = re.search(r"^define [^\n]*@user_binding_statement\(.*?^}", text, re.M | re.S).group(0)
     expression = re.search(r"^define [^\n]*@user_binding_expression\(.*?^}", text, re.M | re.S).group(0)
-    assert "@py_list_append(" in body and "@py_obj_call_slots(" in body
+    assert "@py_list_append_from_slots(" in body and "@py_obj_call_slots(" in body
     publication = r"store ptr %none[^\n]*, ptr %list\.append\.result[^\n]*"
     assert re.search(publication, body) is None
     assert re.search(publication, expression) is not None
