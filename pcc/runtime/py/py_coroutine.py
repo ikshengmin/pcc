@@ -871,13 +871,24 @@ def _coroutine_method_entry(captures, args, operation: int):
     store_ptr(slots, _CORO_RECEIVER, py_tuple_get(load_ptr(slots, _CORO_TEMP), 0))
     _coroutine_slot_adopt(slots, pins, _CORO_RECEIVER)
     _coroutine_slot_drop(slots, pins, _CORO_TEMP)
+    generator: int = 1 if _type_of(load_ptr(slots, _CORO_RECEIVER)) == PY_TYPE_GEN else 0
     if operation == 0:
         store_ptr(slots, _CORO_OPERAND, py_tuple_get(load_ptr(slots, _CORO_ARGS), 0))
         _coroutine_slot_adopt(slots, pins, _CORO_OPERAND)
-        store_ptr(slots, _CORO_RESULT, py_coroutine_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), null()))
+        if generator != 0:
+            store_ptr(slots, _CORO_RESULT, py_gen_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
+        else:
+            store_ptr(slots, _CORO_RESULT, py_coroutine_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), null()))
     elif operation == 1:
-        _coroutine_throw_call(slots, pins)
-        return _coroutine_finish(slots, pins)
+        if generator != 0:
+            if _coroutine_normalize_throw(slots, pins, count) < 0:
+                return _coroutine_finish(slots, pins)
+            store_ptr(slots, _CORO_RESULT, py_gen_throw(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
+        else:
+            _coroutine_throw_call(slots, pins)
+            return _coroutine_finish(slots, pins)
+    elif generator != 0:
+        store_ptr(slots, _CORO_RESULT, py_gen_close(load_ptr(slots, _CORO_RECEIVER)))
     else:
         store_ptr(slots, _CORO_RESULT, py_coroutine_close(load_ptr(slots, _CORO_RECEIVER)))
     _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
@@ -898,6 +909,7 @@ def _coroutine_close_entry(captures, args):
 
 @c_abi_export("py_coroutine_bound_method")
 def py_coroutine_bound_method(coro, operation: int):
+    """Bind the shared send/throw/close protocol to a coroutine or generator."""
     borrowed = stack_alloc(8)
     store_ptr(borrowed, 0, coro)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_one_map"), borrowed)

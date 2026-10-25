@@ -44,6 +44,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_FILE,
     PY_TYPE_FLOAT,
     PY_TYPE_FUNC,
+    PY_TYPE_GEN,
     PY_TYPE_INSTANCE,
     PY_TYPE_INT,
     PY_TYPE_LIST,
@@ -4399,6 +4400,13 @@ def py_obj_getattr(o, name):
         result = py_obj_getattr(target, name)
         py_decref(target)
         return result
+    if tag == PY_TYPE_GEN:
+        if _cstr_is_send(name) != 0:
+            return py_coroutine_bound_method(o, 0)
+        if strcmp(name, cstr("throw")) == 0:
+            return py_coroutine_bound_method(o, 1)
+        if strcmp(name, cstr("close")) == 0:
+            return py_coroutine_bound_method(o, 2)
     if tag == PY_TYPE_COROUTINE:  # PY_TYPE_COROUTINE
         result = null()
         if _cstr_is_dunder_class(name) != 0:
