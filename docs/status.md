@@ -1346,6 +1346,67 @@ active. The 446-file source/runtime/binary/test/reference/profile archive was
 read back and hash-verified:
 `/Users/jiamo/pcc-recovery-archive/2026-10-23/codex-p0-handoff-triage/sorted-reuse-984f67457/README.md`.
 
+### Active ten-round runtime performance work (updated 2026-10-26)
+
+Five optimization rounds are measured and published; five remain. The earlier
+pause is superseded by the maintainer's explicit continuation and ten-round
+request. Measurement-only candidates and correctness repairs do not count.
+The fifth change (atomic integer result registers), d3bba8085 / f2ad9690e,
+passed 157 focused checks, including eight owned-native width/pressure runs.
+Its matched old-emitter control passed 141 checks. All 181 runtime modules
+have exactly identical function IR between arms; the global differences are
+verified source-path/traceback strings only.
+
+| Round | Production | Full-handler QPS gain against preceding arm |
+| --- | --- | --- |
+| 1 | ed452ca3d | 7.16%: default owned bulk generator-frame construction |
+| 2 | a159e27e6 | 3.69%: admitted immortal refcount no-op |
+| 3 | 5d70d17bb | 2.05%: smaller common refcount entries |
+| 4 | 9a8c0e0ff, 7bfd22dc2 | 16.43%: guarded live module calls bypass argument packing |
+| 5 | d3bba8085 | 1.67%: atomic integer load results stay in allocated registers |
+
+Round 4's same-packet medians: preceding arm 15,242.46 QPS, candidate 17,746.47,
+original control 13,612.44, asyncio 82,670.05. Candidate instructions -11.20%;
+ordinary synchronous payload instructions 584,059 -> 505,407 (-13.47%), median
+32.5 -> 27.5 us. Cumulative QPS gain against the same-packet original is 30.37%;
+asyncio remains 4.66x faster in that packet. Round 5's separate packet is
+18,465.23 -> 18,773.63 QPS (6/7 pairs faster), instructions -4.01%; sync
+507,218 -> 486,019 instructions, 27.0 -> 26.5 us. Its same-packet asyncio gap
+is 4.79x; the native paired improvement must not be read as a regression by
+subtracting the separate 4.66x ratio. These are host-pcc0 / owned-self / no-libpython /
+threaded-atomic GC0 handler batches, not HTTP, current native pcc1 or fixed-point
+qualification. Never subtract ratios from separate asyncio measurement batches.
+
+The real sync request and generator request continuation both contain the live
+callable guard, direct native call and dynamic fallback. Argument evaluation
+order, rebinding, descriptor lookup, scalar/void results and result ownership
+are retained. Nine focused checks and both original programs executed GC0-4.
+Tests 68e0057e4 / 10cdd4da7 are published; f1e10ba11 / cf3f629b3 synchronize the
+native host-method contract (43 host checks). The latter metadata repair is
+newer than the timed snapshot; no native compiler qualification is claimed.
+
+Post-push scope passed 53 checks before an existing dynamic generator close
+failure; the previous round also fails that exact case. 8d230121 / 2dcb1ebd7
+add rooted dynamic generator send/throw/close and verify stored receiver lifetime,
+argument errors and value/exception identity on GC0-4. The larger scopes case
+then exposed a NULL resume result for a local-import generator. The follow-up
+enrolls actually owned local import bindings in the normal generator frame;
+its new module/from-import lifetime case and the original scopes case pass
+GC0-4. The scope now reaches a separate function-default lifetime failure in
+`operations`; that failure and the interrupted async remainder remain open. Additional old
+`dataclasses.replace` alias/module-attribute failures are preserved in the
+round-4 control receipts; they are not claimed repaired by the narrow fix for
+user-defined replace-name precedence.
+
+Source/runtime/binary hashes, repeated measurements, IR proofs, rejected
+NULL-tail candidate and all call-path attempts are read-back-verified under:
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/performance-five-rounds/round4/README.md`.
+Earlier rounds are sibling directories. Working campaign ledger and current
+fifth-round receipts: `/private/tmp/pcc-p0-performance-five-rounds/rounds.json`
+and `/private/tmp/pcc-p0-performance-five-rounds/round5/`.
+The full performance target, remaining rounds, current-pcc1 validation and the
+five-concurrent-GC contract remain unfinished.
+
 ### 2026-10-25 GC3/GC4 background marking and cleanup recovery
 
 The maintainer requested multiple further rounds; work is active. Production
@@ -1379,8 +1440,9 @@ and
 Unfinished: GC0 concurrent cycle discovery; moving phases and mutator-owned
 sweep/finalization still have stopped-world/application-gate boundaries. Threaded
 or concurrent marking does not certify five fully concurrent collectors. The
-last paired full-handler performance packet remains 6.42x behind asyncio;
-this GC packet claims no speedup. Continue the ordinary-object/ownership cost
+paired full-handler packet at that point was 6.42x behind asyncio;
+this GC packet claims no speedup. The active performance section above records
+later same-packet measurements. Continue the ordinary-object/ownership cost
 work alongside collector concurrency; do not trade semantics for throughput.
 
 ### 2026-10-25 tuple ownership packet and continued concurrent-GC work
