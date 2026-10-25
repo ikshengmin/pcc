@@ -1,39 +1,56 @@
 # PCC current status
 
-Updated 2026-10-25. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-10-26. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
-## Chrome UDP routing: TURN and MASQUE work in progress (2026-10-25)
+## Chrome UDP routing: validated TURN path, release-browser boundary (2026-10-26)
 
 The requested scope includes Chrome TCP and UDP, WebRTC and QUIC/HTTP3, through
 the existing local and remote python-proxy processes, without another local
 proxy application. Full coverage is **not yet qualified**.
 
 The ZeroOmega checkout at `/Users/jiamo/my/ZeroOmega` adds an opt-in Chrome
-TURN/UDP page configuration hook on `codex/webrtc-turn-udp`, based on
-`c367db220e2a3af1c65e5afffa4cf42c949f2908`. Six Node tests pass. A real Chrome
+TURN/UDP page configuration hook on `jiamo/codex/webrtc-turn-udp`, published
+through `cf2d8ba18209f0d81f3841e29f4a5e20b47593ad`. Eight Node tests and the
+normal extension build pass. A real Chrome
 156.0.8078.48 run with a separate temporary profile and random loopback ports
 relayed generated audio/video and 128 KiB of data through the local UDP tunnel,
 a second SOCKS5 proxy, and the new remote TURN service. Selected candidates and
 TURN transport were UDP; the original page STUN detector saw zero packets.
-Receipt: `/Users/jiamo/pcc-recovery-archive/2026-10-25/zeroomega-turn-udp/chrome-initial.json`.
+Strict-CSP and wrong-credential controls also pass: invalid credentials produce
+no allocation and no direct-STUN fallback. Receipts, source snapshot/hashes,
+commands and limitations are together in
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/zeroomega-turn-udp/README.md`.
 This proves that local WebRTC path, not arbitrary website/NAT compatibility.
 
 The python-proxy changes based on `17ecf318fcb48029cc14c5f24cdf5f1c197d7049`
 add authenticated TURN/UDP, configurable UDP association idle time, and an
 experimental HTTP/3 CONNECT/CONNECT-UDP listener using the existing optional
 aioquic dependency (tested with 1.7.0). TURN and QUIC can share one UDP port.
-Fourteen TURN tests passed; the lifecycle/MASQUE selection passed 23 tests.
+Published proxy/test code through `9bc98c740f1702f8f0a12980c25b8fd606055e97`
+passes **157 tests**, no failures/skips, one optional soak deselected, using
+CPython 3.15.0 and aioquic 1.7.0. Exact bounded invocation and live logs are in
+the archive's `qualification/` directory.
 The MASQUE TCP test exposed the existing FIN/half-close response truncation;
 generic channel completion now preserves the opposite direction. Reset tests
 explicitly send RST, and completion tests close their remaining write half.
-Native Chrome HTTP3 through MASQUE, DNS/other UDP coverage, and whole-browser
-TCP/UDP acceptance remain open. No existing 8082 listener or remote host was
-updated. Tests use CPython, with no pcc1-native or bootstrap claim.
+Release Chrome 156.0.8078.48 does not expose general QUIC proxy routing:
+`scheme: quic` reads back as HTTP, and startup-proxy controls produced HTTP/1.1
+with zero MASQUE requests. Matching Chromium revision
+`d0c02bfad08ec92a6ffcf989e53cd995e6381a4c:net/features.gni` explicitly sets
+`enable_quic_proxy_support = is_debug`. HTTP fallback is not HTTP3 evidence.
+ZeroOmega now restores the previous route on this downgrade and refuses
+unsupported generated QUIC PAC directives. Its WebRTC feature remains opt-in.
+
+Whole-browser TCP/UDP coverage remains open under the no-system-interception
+constraint. A possible PF implementation in the existing proxy would need
+system permission and cannot filter only the Chrome process; the scope choice
+is pending. No PF rules, system certificate trust, existing 8082 listener, or
+remote service were changed by this work. No pcc1-native/bootstrap claim.
 
 ## python-proxy SOCKS5 UDP (2026-10-25)
 
