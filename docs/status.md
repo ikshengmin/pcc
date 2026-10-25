@@ -1365,64 +1365,89 @@ read back and hash-verified:
 
 ### Active ten-round runtime performance work (updated 2026-10-26)
 
-Five optimization rounds are measured and published; five remain. The earlier
-pause is superseded by the maintainer's explicit continuation and ten-round
-request. Measurement-only candidates and correctness repairs do not count.
-The fifth change (atomic integer result registers), d3bba8085 / f2ad9690e,
-passed 157 focused checks, including eight owned-native width/pressure runs.
-Its matched old-emitter control passed 141 checks. All 181 runtime modules
-have exactly identical function IR between arms; the global differences are
-verified source-path/traceback strings only.
+Ten code optimization rounds now have positive paired performance evidence.
+The overall Python-speed target remains unmet. Rounds 1-6 are on shenming/master.
+Publication ref for the validated rounds 7-10 and follow-up tests is
+`shenming/codex/p0-handoff-triage`, using normal pushes after fetch/rebase.
+Integration into shenming/master awaits the explicit destination clarification:
+automatic approval review interpreted an earlier withdrawn message as revoking
+that target. No origin/allstoalls write or force push occurred.
 
-| Round | Production | Full-handler QPS gain against preceding arm |
+| Round | Production | Full-handler QPS gain against preceding accepted arm |
 | --- | --- | --- |
 | 1 | ed452ca3d | 7.16%: default owned bulk generator-frame construction |
 | 2 | a159e27e6 | 3.69%: admitted immortal refcount no-op |
 | 3 | 5d70d17bb | 2.05%: smaller common refcount entries |
-| 4 | 9a8c0e0ff, 7bfd22dc2 | 16.43%: guarded live module calls bypass argument packing |
-| 5 | d3bba8085 | 1.67%: atomic integer load results stay in allocated registers |
+| 4 | 9a8c0e0ff, 7bfd22dc2 | 16.43%: guarded live module calls avoid argument packing |
+| 5 | d3bba8085 | 1.67%: atomic integer loads stay in allocated registers |
+| 6 | ffcba6a99 | 2.29%: consumed atomic results project directly to scalar storage |
+| 7 | ca5969f9f, 562985dfd | 2.93%: stable parameter predicates and proven nonmoving literal inputs |
+| 8 | 99db558c4 | 1.10%: discard exact-list append None without an output owner |
+| 9 | 4cce0f1e9 | 3.96%: bounded immutable threaded name keys with registered roots |
+| 10 | 6b271f6d6 | 2.84%: append directly from caller source slots |
 
-Round 4's same-packet medians: preceding arm 15,242.46 QPS, candidate 17,746.47,
-original control 13,612.44, asyncio 82,670.05. Candidate instructions -11.20%;
-ordinary synchronous payload instructions 584,059 -> 505,407 (-13.47%), median
-32.5 -> 27.5 us. Cumulative QPS gain against the same-packet original is 30.37%;
-asyncio remains 4.66x faster in that packet. Round 5's separate packet is
-18,465.23 -> 18,773.63 QPS (6/7 pairs faster), instructions -4.01%; sync
-507,218 -> 486,019 instructions, 27.0 -> 26.5 us. Its same-packet asyncio gap
-is 4.79x; the native paired improvement must not be read as a regression by
-subtracting the separate 4.66x ratio. These are host-pcc0 / owned-self / no-libpython /
-threaded-atomic GC0 handler batches, not HTTP, current native pcc1 or fixed-point
-qualification. Never subtract ratios from separate asyncio measurement batches.
+Final same-packet medians: preceding arm 20,500.16 QPS, candidate 21,082.99.
+All 7 paired handler repetitions improve. Candidate instructions fall 1.59%;
+ordinary synchronous payload instructions fall 428,220 -> 414,870 (3.12%),
+median 23.0 -> 22.5 us. Against the same-packet original control, full-handler
+QPS rises 48.10% and the asyncio gap narrows 6.3910x -> 4.3152x. These are
+host-pcc0 / owned-self / no-libpython / threaded-atomic GC0 emitted programs,
+not HTTP, current native pcc1 or fixed-point qualification. Ratios from separate
+asyncio packets are not subtracted: round 9's 4.29x is a different packet.
 
-The real sync request and generator request continuation both contain the live
-callable guard, direct native call and dynamic fallback. Argument evaluation
-order, rebinding, descriptor lookup, scalar/void results and result ownership
-are retained. Nine focused checks and both original programs executed GC0-4.
-Tests 68e0057e4 / 10cdd4da7 are published; f1e10ba11 / cf3f629b3 synchronize the
-native host-method contract (43 host checks). The latter metadata repair is
-newer than the timed snapshot; no native compiler qualification is claimed.
+Round 7 passes 51 focused checks; round 8 passes 14; round 9 passes 15,
+including four actual native threads, checked joins, name-buffer reuse,
+collisions, live namespace rebinding and GC0-4. Round 10 passes 38, including
+concurrent list growth, source-root relocation models, owned/borrowed lifetime,
+finalizers, resurrection, dynamic method fallback and the existing barrier
+contract. Both original sync and full-handler programs execute successfully
+on GC0-4 for each accepted round. Tests acbafb828 accompany round 10.
 
-Post-push scope passed 53 checks before an existing dynamic generator close
-failure; the previous round also fails that exact case. 8d230121 / 2dcb1ebd7
-add rooted dynamic generator send/throw/close and verify stored receiver lifetime,
-argument errors and value/exception identity on GC0-4. The larger scopes case
-then exposed a NULL resume result for a local-import generator. The follow-up
-enrolls actually owned local import bindings in the normal generator frame;
-its new module/from-import lifetime case and the original scopes case pass
-GC0-4. The scope now reaches a separate function-default lifetime failure in
-`operations`; that failure and the interrupted async remainder remain open. Additional old
-`dataclasses.replace` alias/module-attribute failures are preserved in the
-round-4 control receipts; they are not claimed repaired by the narrow fix for
-user-defined replace-name precedence.
+Two root-entry experiments did not establish throughput gains (-0.39% and
+-0.32% medians); e04b7820f withdraws those performance changes. They do not
+count as rounds. The first type-cache-only trial and NULL-tail frame trial
+also remain rejected intermediate evidence. The empty ownership-transfer
+reentrancy correction remains: NULL transfers must not release a replacement
+installed by the old owner's finalizer (a4b23d648 / f66339cd3).
 
-Source/runtime/binary hashes, repeated measurements, IR proofs, rejected
-NULL-tail candidate and all call-path attempts are read-back-verified under:
-`/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/performance-five-rounds/round4/README.md`.
-Earlier rounds are sibling directories. Working campaign ledger and current
-fifth-round receipts: `/private/tmp/pcc-p0-performance-five-rounds/rounds.json`
-and `/private/tmp/pcc-p0-performance-five-rounds/round5/`.
-The full performance target, remaining rounds, current-pcc1 validation and the
-five-concurrent-GC contract remain unfinished.
+Discovered correctness work is separate from the ten performance rounds.
+8d230121 / 2dcb1ebd7 add rooted dynamic generator send/throw/close;
+61f42277e / a643e7b81 preserve executed local imports across suspension;
+5c14a8490 / 1164bac7b retire explicitly deleted module-function caches without
+invalidating surviving aliases/default owners. The original namespace bindings,
+scopes, calls, lifetime and operations scenarios now pass on GC0-4.
+01db3d92e / 5b8acaeb5 fix Darwin's owned C pthread_t width and create/join/detach
+declarations: the old 32-bit handle made join return ESRCH and left workers
+running. The independent owned C join test and threaded cache test execute
+the actual corrected ABI. Other Darwin pthread layout capabilities are not
+certified by this narrow fix. The old dataclasses.replace alias/module-attribute
+failures remain recorded in the round-4 controls, not claimed repaired.
+
+Additional qualification is incomplete. The lightweight bootstrap-baseline
+selection passes 2 checks with 2 deselected; it does not execute a new compiler.
+Thirty distinct fallback/IR checks pass across the frozen runs, including the
+per-module codegen gate and all three independent ir.py count ratchets. The
+initial 1 GiB attempt was memory-limited; bounded 2 GiB runs then exposed two
+native-mode canaries configured in compatibility mode and obsolete class/root
+IR assertions. dab149a4a / 53bf8d621 / 1f8656539 correct those tests; the computed
+subprocess capture/starred-argv/timeout case also executes on GC0-4.
+The complete multi-file closure hits the 300 s watchdog. The static Function.name
+field-index assertion remains failing: the rooted argument path uses dynamic
+getattr instead of field index 12, also reproduced on the pre-round8 control.
+That optimization constraint remains unchanged; 16 fallback nodes still lack
+qualification. This is not a full green baseline, current native pcc1, five-GC
+bootstrap or a fixed point. Wider conformance and five-concurrent-GC goals stay
+open. Detailed qualification receipts are in the archive's qualification-final
+subdirectory, with both original failures and corrected test sources.
+
+Exact frozen source/runtime/binary identities, commands, node logs, failed
+attempts and paired results are retained in the read-back-verified archive:
+`/Users/jiamo/pcc-recovery-archive/2026-10-25/codex-p0-handoff-triage/performance-five-rounds/README.md`.
+Accepted newer receipts are `round7-static-inputs`, `round8`,
+`round9-name-cache-v2` and `round10-source-slots`; earlier rounds are siblings.
+The working ledger is `/private/tmp/pcc-p0-performance-five-rounds/rounds.json`.
+The round-8 sampled processes and their verified outputs are archived with
+round8; they are attribution evidence before the last two optimizations.
 
 ### 2026-10-25 GC3/GC4 background marking and cleanup recovery
 
