@@ -208,3 +208,24 @@ def test_client_half_close_preserves_response_after_request_eof(mode):
             await settled()
             assert not server.ACTIVE_CHANNEL_WRITERS
     run(scenario())
+
+
+def test_upstream_half_close_preserves_client_upload():
+    async def scenario():
+        async with network() as net:
+            peer = asyncio.Future()
+            async def origin(reader, writer):
+                peer.set_result((reader, writer))
+            target = await net.listen(origin)
+            port = await net.proxy()
+            reader, writer = await tunnel(net, port, target, 'domain')
+            remote_reader, remote_writer = await peer
+            remote_writer.write_eof()
+            assert await reader.read() == b''
+            writer.write(b'upload-after-peer-fin')
+            await writer.drain()
+            assert await remote_reader.readexactly(21) == b'upload-after-peer-fin'
+            writer.close()
+            remote_writer.close()
+            await settled()
+    run(scenario())

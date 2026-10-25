@@ -214,9 +214,13 @@ def test_peer_close_releases_both_forwarding_tasks(mode, close_side):
             if close_side == "client":
                 writer.close()
                 assert await remote_reader.read(1) == b""
+                remote_writer.close()
             else:
                 remote_writer.close()
                 assert await reader.read(1) == b""
+                writer.close()
+            # EOF is a directional FIN. The remaining application endpoint
+            # must finish its write side before the whole tunnel is closed.
             await settled()
     run(scenario())
 

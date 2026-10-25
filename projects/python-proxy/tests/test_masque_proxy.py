@@ -30,7 +30,7 @@ def certificate(directory):
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - datetime.timedelta(minutes=1))
             .not_valid_after(now + datetime.timedelta(days=1))
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost'),
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost'), x509.DNSName('h3.test'),
                 x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), critical=False)
             .sign(key, hashes.SHA256()))
     certfile, keyfile = directory / 'cert.pem', directory / 'key.pem'
