@@ -95,7 +95,6 @@ def assign_stack_slots(
     # in block length (cProfile: maybe_free_local_value +4.4x calls, value_id
     # +27x, assign_stack_slots +0.25s on class_gen).  Reuse order is unchanged.
     free_slot_ids_by_type: dict[int, list[int]] = {}
-    free_slot_heads_by_type: dict[int, int] = {}
     active_local_value_ids: list[int] = []
     active_local_slot_ids: list[int] = []
     active_position: list[int] = [-1] * len(kernel.value_names)
@@ -165,20 +164,7 @@ def assign_stack_slots(
             )
         bucket = free_slot_ids_by_type.get(value_type_id)
         if bucket:
-            head = free_slot_heads_by_type.get(value_type_id, 0)
-            slot_id = bucket[head]
-            head += 1
-            if head == len(bucket):
-                bucket.clear()
-                free_slot_heads_by_type[value_type_id] = 0
-            elif head >= 64 and head * 2 >= len(bucket):
-                # Copy no more unread entries than the consumed prefix.
-                # This keeps FIFO reuse amortized constant-time and bounds
-                # retained history by the unread count plus 63 entries.
-                free_slot_ids_by_type[value_type_id] = bucket[head:]
-                free_slot_heads_by_type[value_type_id] = 0
-            else:
-                free_slot_heads_by_type[value_type_id] = head
+            slot_id = bucket.pop(0)
         else:
             slot_id = intern_slot_id(
                 alloc(value_layout.first, value_layout.second),
