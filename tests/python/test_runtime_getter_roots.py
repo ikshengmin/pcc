@@ -192,6 +192,10 @@ class _GetterMemory:
             "py_incref": self.incref, "pcc_gc_try_take_ptr": self.take_list_item,
             "cstr": lambda text: text, "py_exc_new": lambda tag, text: (tag, text),
             "py_raise_owned": lambda error: setattr(self, "error", error),
+            # The threaded runtime the getters ship in always reports threads.
+            "pcc_threads_enabled": lambda: 1,
+            # C-string names are Python str here, NUL-terminated by length.
+            "load_i8": lambda text, offset: ord(text[offset]) if offset < len(text) else 0,
         })
         return namespace
 
@@ -442,7 +446,12 @@ def test_missing_field_fallback_preserves_error_and_field_cache(result_kind, cac
     assert not memory.handles and memory.depth == 0
 
 
-@pytest.mark.parametrize('failed_root', [1, 2, 3])
+# With other carriers running, the field read itself roots the receiver and
+# its result on a moving collector before the missing-field lookup's roots.
+_FIELD_READ_ROOTS = 2
+
+
+@pytest.mark.parametrize('failed_root', range(1, 4 + _FIELD_READ_ROOTS))
 def test_missing_field_root_failure_balances_registration_and_pin_state(failed_root):
     memory = _MissingFieldMemory(fail_register=failed_root)
     assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
@@ -647,9 +656,10 @@ def test_missing_field_getattr_keeps_method_key_and_arguments_current(phase, raw
     assert memory.error is None
 
 
-@pytest.mark.parametrize('failed_root', range(7, 15))
+@pytest.mark.parametrize('failed_root', range(7 + _FIELD_READ_ROOTS, 15 + _FIELD_READ_ROOTS))
 def test_missing_field_temporary_root_failure_balances_all_leases(failed_root):
-    # The indexed wrapper and semantic default wrapper have three roots each.
+    # The field read, the indexed wrapper and the semantic default wrapper
+    # register their roots first (two, three and three).
     memory = _MissingFieldMemory(fail_register=failed_root)
     assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
     assert memory.error == (7, 'instance field temporary root registration failed')

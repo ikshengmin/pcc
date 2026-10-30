@@ -29,6 +29,7 @@ class FinalizerModel(Model):
         self.store(1000, 0, 0 if terminal else 2)
         self.store(1000, 16, 2000)
         self.store('pcc_class_del_defined_count', 0, 1)
+        self.store('pcc_gc_user_finalizer_runs', 0, 0)
         self.store(4000, 0, 1)
         self.store(4000, 12, 64)
         self.pending = 4000 if pending else 0
@@ -54,6 +55,7 @@ class FinalizerModel(Model):
                        pcc_gc_pin=lambda value: self.store(value, 12, self.load(value, 12) | 64),
                        pcc_gc_unpin=lambda value: self.store(value, 12, self.load(value, 12) & ~64),
                        atomic_rmw_i32=lambda op, value, offset, bits, order: self.store(value, offset, self.load(value, offset) | bits),
+                       atomic_rmw_i64=self.atomic_add,
                        py_current_exception=lambda: self.pending,
                        py_tls_exc_set=self.set_exception,
                        py_clear_exception=lambda: self.set_exception(0),
@@ -71,6 +73,13 @@ class FinalizerModel(Model):
     def alloc(self, size):
         self.next_slot += size
         return self.next_slot
+
+    def atomic_add(self, op, base, offset, delta, order):
+        # py_user_del_dispatch counts each user finalizer run.
+        assert op == "add"
+        previous = self.load(base, offset)
+        self.store(base, offset, previous + delta)
+        return previous
 
     def ref(self, value, change):
         count = self.load(value, 0) + change
