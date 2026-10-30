@@ -2638,6 +2638,7 @@ class CallExpressionLoweringMixin:
                 ast_func_def=ast_func_def,
                 args=expr.args,
                 kwargs=expr.kwargs,
+                call_expr=expr,
             )
         # Click-decorated entry functions (``@click.command``,
         # ``@click.pass_context``) expose params like

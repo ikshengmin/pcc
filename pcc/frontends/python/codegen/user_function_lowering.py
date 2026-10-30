@@ -3626,6 +3626,7 @@ class UserFunctionLoweringMixin:
         ast_func_def: FuncDef,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        call_expr=None,
     ) -> ir.Value:
         # The definition applied the decorators once and published the result
         # as the module binding; a call uses that binding. Decorating again at
@@ -3648,11 +3649,19 @@ class UserFunctionLoweringMixin:
             [fn_obj, args_tuple, kwargs_obj],
             name=self._fresh(f"{name}.decorated.call"),
         )
+        # An operand root waiting for this result (an argument of a slot
+        # call) takes it before the releases and the error check below can
+        # park or collect.
+        sink = None if call_expr is None else self._slot_call_result_sink(call_expr)
+        if sink is not None:
+            self._publish_slot_call_owned(sink, result, label="decorated call")
         self._gc_release(args_tuple)
         if kwargs:
             self._gc_release(kwargs_obj)
         self._gc_release(fn_obj)
         self._emit_post_call_err_check(ast_func_def.span)
+        if sink is not None:
+            return self.builder.load(sink, name=self._fresh(f"{name}.decorated.current"))
         return result
 
     def _emit_published_function_binding(self, name: str, span) -> ir.Value:
