@@ -1764,6 +1764,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_sweep_pending',
         'pcc_gc_config_initialized',
         'pcc_gc_backend_frozen',
+        'pcc_gc_list_container_mode',
         'pcc_gc_cycle_requested',
         'pcc_gc_explicit_collect_active',
         'pcc_gc_forwarding_population',
@@ -2913,6 +2914,9 @@ def _cross_object_signatures_part_10():
     "pcc_gc_metric_allocation_count": ((), "c_int64"),
     "pcc_gc_metric_shard_reset": (("c_int64",), "c_void"),
     "pcc_gc_granule_span": (("c_ptr",), "c_ptr"),
+    # A list transaction's lock (py_list): its container lock on GC0.
+    "pcc_list_lock": (("c_ptr",), "c_void"),
+    "pcc_list_unlock": (("c_ptr",), "c_void"),
     }
 
 

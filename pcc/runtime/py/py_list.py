@@ -124,6 +124,10 @@ pcc_py_gc_minor_graph_lock = extern(
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
+pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
+pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
+pcc_container_lock_pair = extern("pcc_container_lock_pair", (c_ptr, c_ptr), c_void)
+pcc_container_unlock_pair = extern("pcc_container_unlock_pair", (c_ptr, c_ptr), c_void)
 pcc_gc_backend4_retarget_mutator_payload_locked = extern(
     "pcc_gc_backend4_retarget_mutator_payload_locked",
     (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
@@ -176,6 +180,97 @@ def _ptr_is_list(o) -> bool:
     if not _ptr_can_have_header(o):
         return False
     return load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_LIST
+
+
+def _list_lock(lst) -> None:
+    """Lock ``lst`` for a transaction on its own length, capacity and items.
+
+    pcc_gc_fix_backend sets pcc_gc_list_container_mode before the first
+    object exists: GC0 without the refcount provenance probe takes the
+    list's container lock; the tracing and moving collectors (whose markers
+    and relocation take the graph lock) and the probe (whose checked lease
+    path takes it inside a transaction) keep the graph lock. Every site that
+    reads or writes a list's length, capacity or items goes through
+    _list_lock or pcc_list_lock, so a list keeps one discipline for the
+    process. The flag is read inline here: a mode function was not inlined,
+    and its call and entry poll ran twice per transaction. A container-lock
+    holder takes no other lock, runs no user code, allocates nothing and
+    releases displaced values after unlocking.
+    """
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        pcc_container_lock(lst)
+        return
+    pcc_py_gc_minor_graph_lock()
+
+
+def _list_unlock(lst) -> None:
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        pcc_container_unlock(lst)
+        return
+    pcc_py_gc_minor_graph_unlock()
+
+
+def _list_lock_pair(lst, other) -> None:
+    """Lock ``lst`` and ``other`` for one transaction over both.
+
+    ``other`` may be ``lst`` itself (a self-extend), which takes one lock.
+    """
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        pcc_container_lock_pair(lst, other)
+        return
+    pcc_py_gc_minor_graph_lock()
+
+
+def _list_unlock_pair(lst, other) -> None:
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        pcc_container_unlock_pair(lst, other)
+        return
+    pcc_py_gc_minor_graph_unlock()
+
+
+@c_abi_export("pcc_list_lock")
+def pcc_list_lock(lst) -> None:
+    """_list_lock for the modules outside py_list that touch list internals."""
+    _list_lock(lst)
+
+
+@c_abi_export("pcc_list_unlock")
+def pcc_list_unlock(lst) -> None:
+    _list_unlock(lst)
+
+
+def _list_type_ok(lst, code: int) -> bool:
+    """Whether ``lst`` is a list, judged by its type tag alone.
+
+    Another thread changes a shared list's length, capacity and items under
+    the list's lock; read without it they may come from different updates
+    and look inconsistent. _list_is_sane checks them under the lock.
+    """
+    if ptr_is_null(lst) != 0:
+        return False
+    if not _ptr_is_list(lst):
+        _debug_bad_container(lst, code)
+        return False
+    return True
+
+
+def _list_shape_ok(lst, code: int) -> bool:
+    """Whether a list's length, capacity and items agree.
+
+    Read under the list's lock, after _list_type_ok accepted the pointer:
+    _list_is_sane would repeat the type and provenance probe.
+    """
+    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+    capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
+    if (
+        length < 0
+        or capacity < length
+        or capacity > 134217728
+        or ptr_is_null(load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)) != 0
+    ):
+        _debug_bad_container(lst, code)
+        return False
+    return True
 
 
 def _list_is_sane(lst, code: int) -> bool:
@@ -308,9 +403,10 @@ def _grow_if_needed(l, want: int):
     # makes progress; giving up after a fixed count reported a contended
     # growth as an allocation failure.
     while True:
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(owner_slot, 0)
+        _list_lock(locked)
         if pcc_gc_backend() != initial_backend:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             break
         if ptr_is_null(owner_handle) == 0:
             l = pcc_gc_load_ptr(null(), owner_slot)
@@ -318,7 +414,7 @@ def _grow_if_needed(l, want: int):
         old_items = load_ptr(l, PYLISTOBJECT_ITEMS_OFFSET)
         old_capacity: int = load_i64(l, PYLISTOBJECT_CAPACITY_OFFSET)
         old_length: int = load_i64(l, PYLISTOBJECT_LENGTH_OFFSET)
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         if ptr_is_null(old_items) != 0 or old_capacity <= 0:
             break
         if old_length < 0 or old_length > old_capacity or old_capacity > 134217728:
@@ -352,9 +448,10 @@ def _grow_if_needed(l, want: int):
         if ptr_is_null(slot_pairs) == 0:
             memset(slot_pairs, 0, old_length * 16)
 
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(owner_slot, 0)
+        _list_lock(locked)
         if pcc_gc_backend() != initial_backend:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             free(slot_pairs)
             free(new_items)
             break
@@ -363,7 +460,7 @@ def _grow_if_needed(l, want: int):
             store_ptr(owner_slot, 0, l)
         if load_i64(l, PYLISTOBJECT_CAPACITY_OFFSET) >= want:
             # Another mutator grew the array far enough.
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             free(slot_pairs)
             free(new_items)
             if ptr_is_null(owner_handle) == 0:
@@ -377,7 +474,7 @@ def _grow_if_needed(l, want: int):
             or current_length > cap
             or (initial_backend != 0 and current_length > old_length)
         ):
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             free(slot_pairs)
             free(new_items)
             continue
@@ -408,7 +505,7 @@ def _grow_if_needed(l, want: int):
                 old_length,
             )
             if retargeted == 0:
-                pcc_py_gc_minor_graph_unlock()
+                _list_unlock(locked)
                 free(slot_pairs)
                 free(new_items)
                 break
@@ -425,7 +522,7 @@ def _grow_if_needed(l, want: int):
             pcc_gc_backend4_zpage_register_owner_payload_span(
                 l, new_items, cap * 8
             )
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         free(old_items)
         free(slot_pairs)
         if ptr_is_null(owner_handle) == 0:
@@ -615,10 +712,18 @@ def py_list_from_owned_roots(sources, count: i64, output) -> i64:
     while index < count:
         # Reload authoritative roots after the lock's possible parking edge.
         # No raw element pointer crosses a lock release or loop safepoint.
-        pcc_py_gc_minor_graph_lock()
+        private_gc0: int = 0
+        if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+            # Nothing else can reach the unpublished list, and GC0 neither
+            # moves nor forwards an owner: no lock, no resolution.
+            private_gc0 = 1
+        else:
+            pcc_py_gc_minor_graph_lock()
         owner = load_ptr(output, 0)
         source = load_ptr(sources, index * stride)
-        value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+        value = load_ptr(source, 0)
+        if private_gc0 == 0:
+            value = pcc_gc_resolve_root_slot_unlocked(source, 0)
         items = load_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET)
         destination = ptr_add(items, index * stride)
         if pcc_gc_backend() != 0:
@@ -629,7 +734,8 @@ def py_list_from_owned_roots(sources, count: i64, output) -> i64:
         store_ptr(destination, 0, value)
         store_ptr(source, 0, null())
         store_i64(owner, PYLISTOBJECT_LENGTH_OFFSET, index + 1)
-        pcc_py_gc_minor_graph_unlock()
+        if private_gc0 == 0:
+            pcc_py_gc_minor_graph_unlock()
         index += 1
     # The complete list becomes publicly tracked only after all input owners
     # have moved. Collector-safe partial shape alone is not a privacy proof.
@@ -690,7 +796,8 @@ def _append_rooted_slots(
             )
         # The graph lock serializes mutations for every threaded backend,
         # including GC0. Its threads-off implementation is already elided.
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         if caller_item_root != 0:
             # The caller's list lease survives growth. The item stays in its
             # traced owner until this transaction retains it into the list;
@@ -704,7 +811,7 @@ def _append_rooted_slots(
             lst = _reload_moving_root(list_slot, list_handle_slot)
             item = _reload_moving_root(item_slot, item_handle_slot)
         if not _list_is_sane(lst, -101):
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             result = -2
             break
         length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -724,12 +831,12 @@ def _append_rooted_slots(
                 pcc_gc_store_ptr_fresh_native_instance(lst, slot, item)
             if committed != 0:
                 store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             if use_store_plan != 0:
                 pcc_gc_store_ptr_plan_finish(store_plan)
             result = 0
             break
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         # Another mutator may grow or append while this allocation runs.
         # Growth revalidates its snapshot, and the next commit reloads length.
         grown = _grow_if_needed(lst, length + 1)
@@ -744,7 +851,8 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
     if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
             or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
         return 0
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     # Configuration reserves -1 before dropping this lock for a transition.
     # Recheck the selected backend too: the atomic admission flag is updated
     # later in that transition, so its pre-lock value is not sufficient.
@@ -752,28 +860,28 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
             or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
             or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
             or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         return 0
     # Nonmoving GC0 and the graph lock protect these existing roots and the
     # items buffer. A failed attempt exposes no raw pointer to the caller.
     lst = load_ptr(list_slot, 0)
     if not _list_is_sane(lst, -101):
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         return -2
     if (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) != 0:
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         return 0
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
     if length >= capacity:
         full_items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         return _append_grow_gc0(list_slot, item_slot, full_items, capacity)
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     result: int = pcc_gc_try_init_ptr_locked(ptr_add(items, length * C_POINTER_SIZE), item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     return result
 
 
@@ -793,17 +901,18 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     new_items = malloc(new_capacity * C_POINTER_SIZE)
     if ptr_is_null(new_items) != 0:
         return 0
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
             or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
             or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
             or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         free(new_items)
         return 0
     lst = load_ptr(list_slot, 0)
     if not _list_is_sane(lst, -101):
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         free(new_items)
         return -2
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -811,7 +920,7 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
             or ptr_eq(load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET), old_items) == 0
             or load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET) != old_capacity
             or length < 0 or length > old_capacity):
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         free(new_items)
         return 0
     memmove(new_items, old_items, length * C_POINTER_SIZE)
@@ -821,7 +930,7 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     result: int = pcc_gc_try_init_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     free(old_items)
     return result
 
@@ -910,7 +1019,7 @@ def py_list_append_fresh_native_instance(lst, item) -> None:
 
 @c_abi_export("py_list_get")
 def py_list_get(lst, i: int):
-    if not _list_is_sane(lst, -103):
+    if not _list_type_ok(lst, -103):
         return null()
     # Shared list fields can be replaced while a reader acquires its owner.
     # Threaded GC0 must load and retain under the writer's graph lock.
@@ -931,7 +1040,7 @@ def py_list_getitem(lst, i: int):
     # a[i] subscript: like py_list_get but raises IndexError on out-of-range so
     # try/except can catch it. Mirrors py_list_getitem in py_list.c; py_list_get
     # stays non-raising for other callers. Negative indices normalize.
-    if not _list_is_sane(lst, -103):
+    if not _list_type_ok(lst, -103):
         return null()
     if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
         fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -964,12 +1073,19 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
             _finish_moving_root(list_handle_slot)
             return null()
     retain_plan = stack_alloc(56)
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
+    if not _list_shape_ok(lst, -103):
+        _list_unlock(locked)
+        if ptr_is_null(result_handle) == 0:
+            pcc_gc_scheduler_root_unregister_handle(result_handle)
+        _finish_moving_root(list_handle_slot)
+        return null()
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     idx: int = _normalize_index(i, length, 0)
     if idx < 0:
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         if ptr_is_null(result_handle) == 0:
             pcc_gc_scheduler_root_unregister_handle(result_handle)
         _finish_moving_root(list_handle_slot)
@@ -980,7 +1096,7 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     v = pcc_gc_load_ptr(lst, ptr_add(items, idx * 8))
     v = pcc_gc_retain_plan_prepare_locked(retain_plan, v)
     store_ptr(result_slot, 0, v)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     pcc_gc_retain_plan_finish(retain_plan)
     if ptr_is_null(result_handle) != 0:
         # GC0/1/2 cannot relocate; return the retained owner directly.
@@ -1025,18 +1141,19 @@ def py_list_get_i64(lst, i: int) -> int:
     store_ptr(list_slot, 0, lst)
     if _prepare_moving_root(list_slot, list_handle_slot) != 0:
         return 0
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     idx: int = _normalize_index(i, length, 0)
     if idx < 0:
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         _finish_moving_root(list_handle_slot)
         return 0
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     v = pcc_gc_load_ptr(lst, ptr_add(items, idx * 8))
     result: int = _int_to_i64_or_zero(v)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     _finish_moving_root(list_handle_slot)
     return result
 
@@ -1056,23 +1173,24 @@ def py_list_get_i64_nonnegative(lst, i: int) -> int:
     store_ptr(list_slot, 0, lst)
     if _prepare_moving_root(list_slot, list_handle_slot) != 0:
         return 0
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if i < 0 or i >= length:
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         _finish_moving_root(list_handle_slot)
         return 0
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
     result: int = _int_to_i64_or_zero(v)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     _finish_moving_root(list_handle_slot)
     return result
 
 
 def _list_set_item_transaction(lst, i: int, item) -> int:
-    if not _list_is_sane(lst, -104):
+    if not _list_type_ok(lst, -104):
         return -1
     # The root-copy reader retains the selected owning field under the
     # graph lock. Its writer must use the same transaction so replacement
@@ -1101,13 +1219,16 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     pcc_gc_store_ptr_plan_init(
         store_plan, load_ptr(list_slot, 0), backend
     )
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
     item = _reload_moving_root(item_slot, item_handle_slot)
-    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+    length: int = -1
+    if _list_shape_ok(lst, -104):
+        length = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     idx: int = _normalize_index(i, length, 0)
-    if idx < 0:
-        pcc_py_gc_minor_graph_unlock()
+    if length < 0 or idx < 0:
+        _list_unlock(locked)
         pcc_gc_store_ptr_plan_finish(store_plan)
         _finish_moving_root(item_handle_slot)
         _finish_moving_root(list_handle_slot)
@@ -1116,7 +1237,7 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     committed: int = pcc_gc_store_ptr_plan_commit_locked(
         store_plan, lst, ptr_add(items, idx * 8), item
     )
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     pcc_gc_store_ptr_plan_finish(store_plan)
     _finish_moving_root(item_handle_slot)
     _finish_moving_root(list_handle_slot)
@@ -1320,8 +1441,60 @@ def _list_concat_fill(slots, handles) -> int:
     return 1
 
 
+def _list_concat_gc0(a, b):
+    """a + b as one transaction over both lists (GC0).
+
+    The new list is private: its room is allocated before locking and
+    rechecked under the locks, and lists that grew meanwhile are copied
+    again at their new lengths.
+    """
+    want: int = 4
+    out = null()
+    done: int = 0
+    while done == 0:
+        out = py_list_new(want)
+        if ptr_is_null(out):
+            if py_err_occurred() == 0:
+                py_raise_owned(py_exc_new(19, cstr("list concat: out of memory")))
+            return null()
+        _list_lock_pair(a, b)
+        if not _list_shape_ok(a, -106) or not _list_shape_ok(b, -106):
+            _list_unlock_pair(a, b)
+            py_decref(out)
+            return null()
+        left: int = load_i64(a, PYLISTOBJECT_LENGTH_OFFSET)
+        right: int = load_i64(b, PYLISTOBJECT_LENGTH_OFFSET)
+        if left + right <= load_i64(out, PYLISTOBJECT_CAPACITY_OFFSET):
+            out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
+            items = load_ptr(a, PYLISTOBJECT_ITEMS_OFFSET)
+            index: int = 0
+            while index < left:
+                value = pcc_gc_load_ptr(a, ptr_add(items, index * 8))
+                py_incref(value)
+                store_ptr(out_items, index * 8, value)
+                index = index + 1
+            items = load_ptr(b, PYLISTOBJECT_ITEMS_OFFSET)
+            index = 0
+            while index < right:
+                value = pcc_gc_load_ptr(b, ptr_add(items, index * 8))
+                py_incref(value)
+                store_ptr(out_items, (left + index) * 8, value)
+                index = index + 1
+            store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, left + right)
+            done = 1
+        want = left + right
+        _list_unlock_pair(a, b)
+        if done == 0:
+            py_decref(out)
+    return out
+
+
 @c_abi_export("py_list_concat")
 def py_list_concat(a, b):
+    if not _list_type_ok(a, -106) or not _list_type_ok(b, -106):
+        return null()
+    if pcc_gc_backend() == 0:
+        return _list_concat_gc0(a, b)
     if not _list_is_sane(a, -106):
         return null()
     if not _list_is_sane(b, -106):
@@ -1379,11 +1552,73 @@ def py_list_concat(a, b):
     return result
 
 
+def _list_snapshot_gc0(src, repeat_count: int, code: int):
+    """A new list holding ``src``'s items ``repeat_count`` times (GC0).
+
+    One transaction on the source copies a consistent snapshot. The new list
+    stays private until returned and needs no lock; its room is allocated
+    before locking (an allocation can collect) and rechecked under the lock,
+    so a source that grew meanwhile is copied again at its new length. A
+    result longer than a list can hold raises MemoryError, as CPython does.
+    """
+    want: int = 0
+    out = null()
+    done: int = 0
+    while done == 0:
+        room: int = want
+        if room <= 0:
+            room = 4
+        out = py_list_new(room)
+        if ptr_is_null(out):
+            return null()
+        locked = src
+        _list_lock(locked)
+        if not _list_shape_ok(src, code):
+            _list_unlock(locked)
+            py_decref(out)
+            return null()
+        length: int = load_i64(src, PYLISTOBJECT_LENGTH_OFFSET)
+        total: int = 0
+        if length > 0 and repeat_count > 0:
+            if repeat_count > 134217728 // length:
+                total = -1
+            else:
+                total = length * repeat_count
+        if total >= 0 and total <= load_i64(out, PYLISTOBJECT_CAPACITY_OFFSET):
+            out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
+            src_items = load_ptr(src, PYLISTOBJECT_ITEMS_OFFSET)
+            position: int = 0
+            k: int = 0
+            while k < repeat_count and length > 0:
+                i: int = 0
+                while i < length:
+                    value = pcc_gc_load_ptr(src, ptr_add(src_items, i * 8))
+                    py_incref(value)
+                    store_ptr(out_items, position * 8, value)
+                    position = position + 1
+                    i = i + 1
+                k = k + 1
+            store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, total)
+            done = 1
+        want = total
+        _list_unlock(locked)
+        if done == 0:
+            py_decref(out)
+            if want < 0:
+                py_raise_owned(py_exc_new(19, cstr("list repeat: out of memory")))  # PY_EXC_MEMORYERROR
+                return null()
+    return out
+
+
 @c_abi_export("py_list_copy")
 def py_list_copy(src):
     # list.copy() — shallow copy: fresh list, same elements (element refs
     # shared with the source, incref'd once each). Mirrors py_list_copy in
     # py_list.c. Empty source -> fresh empty list.
+    if not _list_type_ok(src, -106):
+        return null()
+    if pcc_gc_backend() == 0:
+        return _list_snapshot_gc0(src, 1, -106)
     if not _list_is_sane(src, -106):
         return null()
     n: int = load_i64(src, PYLISTOBJECT_LENGTH_OFFSET)
@@ -1393,33 +1628,26 @@ def py_list_copy(src):
     out = py_list_new(cap_hint)
     if ptr_is_null(out):
         return null()
-    if pcc_gc_backend() != 0:
-        out_slot = stack_alloc(8)
-        store_ptr(out_slot, 0, out)
-        if _append_snapshot_items(out_slot, src, n, 1) != 0:
-            py_decref(load_ptr(out_slot, 0))
-            return null()
-        return load_ptr(out_slot, 0)
-    out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
-    src_items = load_ptr(src, PYLISTOBJECT_ITEMS_OFFSET)
-    i: int = 0
-    while i < n:
-        v = pcc_gc_load_ptr(src, ptr_add(src_items, i * 8))
-        py_incref(v)
-        store_ptr(out_items, i * 8, v)
-        i = i + 1
-    store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, n)
-    return out
+    out_slot = stack_alloc(8)
+    store_ptr(out_slot, 0, out)
+    if _append_snapshot_items(out_slot, src, n, 1) != 0:
+        py_decref(load_ptr(out_slot, 0))
+        return null()
+    return load_ptr(out_slot, 0)
 
 
 @c_abi_export("py_list_repeat")
 def py_list_repeat(src, count: int):
-    if not _list_is_sane(src, -107):
+    if not _list_type_ok(src, -107):
         return null()
-    sl: int = load_i64(src, PYLISTOBJECT_LENGTH_OFFSET)
     real_count: int = count
     if real_count < 0:
         real_count = 0
+    if pcc_gc_backend() == 0:
+        return _list_snapshot_gc0(src, real_count, -107)
+    if not _list_is_sane(src, -107):
+        return null()
+    sl: int = load_i64(src, PYLISTOBJECT_LENGTH_OFFSET)
     out_len: int = sl * real_count
     cap_hint: int = out_len
     if cap_hint <= 0:
@@ -1427,30 +1655,14 @@ def py_list_repeat(src, count: int):
     out = py_list_new(cap_hint)
     if ptr_is_null(out):
         return null()
-    if pcc_gc_backend() != 0:
-        out_slot = stack_alloc(8)
-        store_ptr(out_slot, 0, out)
-        if _append_snapshot_items(
-            out_slot, src, sl, real_count
-        ) != 0:
-            py_decref(load_ptr(out_slot, 0))
-            return null()
-        return load_ptr(out_slot, 0)
-    out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
-    src_items = load_ptr(src, PYLISTOBJECT_ITEMS_OFFSET)
-    pos: int = 0
-    k: int = 0
-    while k < real_count:
-        i: int = 0
-        while i < sl:
-            v = pcc_gc_load_ptr(src, ptr_add(src_items, i * 8))
-            py_incref(v)
-            store_ptr(out_items, pos * 8, v)
-            pos = pos + 1
-            i = i + 1
-        k = k + 1
-    store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, out_len)
-    return out
+    out_slot = stack_alloc(8)
+    store_ptr(out_slot, 0, out)
+    if _append_snapshot_items(
+        out_slot, src, sl, real_count
+    ) != 0:
+        py_decref(load_ptr(out_slot, 0))
+        return null()
+    return load_ptr(out_slot, 0)
 
 
 def _list_eq_at_callback(
@@ -1465,17 +1677,18 @@ def _list_eq_at_callback(
     # With keep_equal, an equal candidate stays retained in candidate_slot
     # for the caller; every other outcome releases it here.
     retain_plan = stack_alloc(56)
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if index < 0 or index >= length:
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         return 2
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     candidate = pcc_gc_load_ptr(lst, ptr_add(items, index * 8))
     candidate = pcc_gc_retain_plan_prepare_locked(retain_plan, candidate)
     store_ptr(candidate_slot, 0, candidate)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     pcc_gc_retain_plan_finish(retain_plan)
 
     query = _reload_moving_root(query_slot, query_handle_slot)
@@ -1493,6 +1706,49 @@ def _list_eq_at_callback(
     if equal != 0:
         return 1
     return 0
+
+
+def _list_scan_simple_locked(
+    list_slot, list_handle_slot, query_slot, query_handle_slot,
+    start: int, stop: int, index_slot,
+) -> int:
+    """Compare from ``start`` while no callback can decide, in one transaction.
+
+    Returns 1 with the first equal element's index in index_slot, 2 with the
+    index of the first element whose comparison may run a callback (the
+    caller compares it through the per-element protocol), 0 when no element
+    before ``stop`` (the end when negative) is equal, or -1 when the list
+    fails its sanity check.
+    """
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
+    lst = _reload_moving_root(list_slot, list_handle_slot)
+    if not _list_shape_ok(lst, -108):
+        _list_unlock(locked)
+        return -1
+    query = _reload_moving_root(query_slot, query_handle_slot)
+    query_kind: int = 0
+    if is_tagged_int(query) != 0:
+        query_kind = 1
+    elif ptr_is_null(query) == 0 and _type_of(query) == PY_TYPE_STR:
+        query_kind = 2
+    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+    if stop >= 0 and stop < length:
+        length = stop
+    items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+    result: int = 0
+    index: int = start
+    while result == 0 and index < length:
+        verdict: int = _list_simple_eq(
+            pcc_gc_load_ptr(lst, ptr_add(items, index * 8)), query, query_kind
+        )
+        if verdict != 0:
+            result = 1 if verdict > 0 else 2
+        else:
+            index = index + 1
+    _list_unlock(locked)
+    store_i64(index_slot, 0, index)
+    return result
 
 
 def _list_equality_scan(
@@ -1516,17 +1772,30 @@ def _list_equality_scan(
         _finish_moving_root(query_handle_slot)
         _finish_moving_root(list_handle_slot)
         return -1 if mode == 1 else 0
+    index_slot = stack_alloc(8)
     index: int = start
     total: int = 0
     while stop < 0 or index < stop:
-        compared: int = _list_eq_at_callback(
-            list_slot,
-            list_handle_slot,
-            query_slot,
-            query_handle_slot,
-            candidate_slot,
-            index,
+        # Elements no callback can compare are scanned in one transaction;
+        # the first that needs one is retained and compared after unlocking.
+        simple: int = _list_scan_simple_locked(
+            list_slot, list_handle_slot, query_slot, query_handle_slot,
+            index, stop, index_slot,
         )
+        compared: int = 2
+        if simple == 1:
+            index = load_i64(index_slot, 0)
+            compared = 1
+        elif simple == 2:
+            index = load_i64(index_slot, 0)
+            compared = _list_eq_at_callback(
+                list_slot,
+                list_handle_slot,
+                query_slot,
+                query_handle_slot,
+                candidate_slot,
+                index,
+            )
         if compared < 0:
             pcc_gc_scheduler_root_unregister_handle(candidate_handle)
             _finish_moving_root(query_handle_slot)
@@ -1557,27 +1826,14 @@ def _list_equality_scan(
 
 @c_abi_export("py_list_contains")
 def py_list_contains(lst, item) -> int:
-    if not _list_is_sane(lst, -108):
+    if not _list_type_ok(lst, -108):
         return 0
-    if pcc_gc_backend() != 0:
-        return _list_equality_scan(lst, item, 0, -1, 0)
-    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-    items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    i: int = 0
-    while i < length:
-        v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
-        equal: int = py_obj_eq(v, item)
-        if py_err_occurred() != 0:
-            return 0
-        if equal != 0:
-            return 1
-        i = i + 1
-    return 0
+    return _list_equality_scan(lst, item, 0, -1, 0)
 
 
 def _push_to_list(out, v):
     # Helper: append v to out with grow-check; return canonical out or NULL.
-    if not _list_is_sane(out, -109):
+    if not _list_type_ok(out, -109):
         return null()
     if pcc_gc_backend() == 0:
         fast_length: int = load_i64(out, PYLISTOBJECT_LENGTH_OFFSET)
@@ -1616,9 +1872,16 @@ def _push_to_list(out, v):
     pcc_gc_store_ptr_plan_init(
         store_plan, load_ptr(out_slot, 0), pcc_gc_backend()
     )
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(out_slot, 0)
+    _list_lock(locked)
     out = _reload_moving_root(out_slot, out_handle_slot)
     v = _reload_moving_root(value_slot, value_handle_slot)
+    if not _list_shape_ok(out, -109):
+        _list_unlock(locked)
+        pcc_gc_store_ptr_plan_finish(store_plan)
+        _finish_moving_root(value_handle_slot)
+        _finish_moving_root(out_handle_slot)
+        return null()
     out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
     store_ptr(out_items, out_len * 8, null())
     committed: int = pcc_gc_store_ptr_plan_commit_locked(
@@ -1626,7 +1889,7 @@ def _push_to_list(out, v):
     )
     if committed != 0:
         store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, out_len + 1)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     pcc_gc_store_ptr_plan_finish(store_plan)
     _finish_moving_root(value_handle_slot)
     _finish_moving_root(out_handle_slot)
@@ -1778,8 +2041,81 @@ def py_raise_zero_slice_step() -> None:
         py_raise_owned(py_exc_new(2, cstr("slice step cannot be zero")))
 
 
+def _list_slice_gc0(lst, lo, hi, step):
+    """lst[lo:hi:step] as one transaction on the source (GC0).
+
+    The bounds are converted first, since __index__ may run Python code that
+    changes the list; under the lock they are adjusted to the length the
+    copy sees, as CPython adjusts them to the size after conversion. The new
+    list is private: its room is allocated before locking and rechecked
+    under the lock.
+    """
+    step_v: int = 1
+    if _is_none_or_null(step) == 0:
+        step_v = py_obj_index_i64(step)
+        if py_err_occurred() != 0:
+            return null()
+        if step_v == 0:
+            py_raise_zero_slice_step()
+            return null()
+    lo_none: int = _is_none_or_null(lo)
+    hi_none: int = _is_none_or_null(hi)
+    raw_lo: int = 0
+    raw_hi: int = 0
+    if lo_none == 0:
+        raw_lo = py_obj_index_i64(lo)
+        if py_err_occurred() != 0:
+            return null()
+    if hi_none == 0:
+        raw_hi = py_obj_index_i64(hi)
+        if py_err_occurred() != 0:
+            return null()
+    bounds = stack_alloc(16)
+    want: int = 4
+    out = null()
+    done: int = 0
+    while done == 0:
+        out = py_list_new(want)
+        if ptr_is_null(out):
+            return null()
+        locked = lst
+        _list_lock(locked)
+        if not _list_shape_ok(lst, -110):
+            _list_unlock(locked)
+            py_decref(out)
+            return null()
+        length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+        _normalize_delete_slice_scalars(
+            lo_none, hi_none, raw_lo, raw_hi, step_v, length,
+            bounds, ptr_add(bounds, 8),
+        )
+        index: int = load_i64(bounds, 0)
+        count: int = _slice_count(index, load_i64(bounds, 8), step_v)
+        if count <= load_i64(out, PYLISTOBJECT_CAPACITY_OFFSET):
+            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+            out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
+            n: int = 0
+            while n < count:
+                value = pcc_gc_load_ptr(lst, ptr_add(items, index * 8))
+                py_incref(value)
+                store_ptr(out_items, n * 8, value)
+                index = index + step_v
+                n = n + 1
+            store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, count)
+            done = 1
+        want = count
+        _list_unlock(locked)
+        if done == 0:
+            py_decref(out)
+    return out
+
+
 @c_abi_export("py_list_slice")
 def py_list_slice(lst, lo, hi, step):
+    if not _list_type_ok(lst, -110):
+        return null()
+    if pcc_gc_backend() == 0:
+        return _list_slice_gc0(lst, lo, hi, step)
     if not _list_is_sane(lst, -110):
         return null()
     source_slot = stack_alloc(8)
@@ -1905,7 +2241,7 @@ def py_list_slice(lst, lo, hi, step):
 
 @c_abi_export("py_list_del_slice")
 def py_list_del_slice(lst, lo, hi, step) -> int:
-    if not _list_is_sane(lst, -112):
+    if not _list_type_ok(lst, -112):
         return -1
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
@@ -2018,11 +2354,16 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
     attempt: int = 0
     while attempt < 8:
         attempt = attempt + 1
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         lst = _reload_moving_root(list_slot, list_handle_slot)
+        sane: int = 1 if _list_shape_ok(lst, -112) else 0
         length = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
+        if sane == 0:
+            _finish_moving_root(list_handle_slot)
+            return -1
         _normalize_delete_slice_scalars(
             lo_none,
             hi_none,
@@ -2075,14 +2416,15 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
             )
             i = i + 1
 
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         lst = _reload_moving_root(list_slot, list_handle_slot)
         if (
             pcc_gc_backend() != backend
             or load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) != length
             or load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET) != capacity
         ):
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             i = 0
             while i < count:
                 pcc_gc_store_ptr_plan_finish(ptr_add(plans, i * 128))
@@ -2114,7 +2456,7 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
             slot_pairs,
             pair_count,
         ) == 0:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             i = 0
             while i < count:
                 pcc_gc_store_ptr_plan_finish(ptr_add(plans, i * 128))
@@ -2135,7 +2477,7 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
                     null(),
                 )
                 if committed == 0:
-                    pcc_py_gc_minor_graph_unlock()
+                    _list_unlock(locked)
                     pcc_platform_abort()
                     return -1
                 plan_i = plan_i + 1
@@ -2157,7 +2499,7 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
             store_ptr(items, i * 8, null())
             i = i + 1
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, dst)
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
 
         i = 0
         while i < count:
@@ -2326,8 +2668,9 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
     the lock, so a concurrent clear, append or extend never leaves a hole and
     an extend of at most 1024 items is atomic. The first transaction fixes
     how many items are appended (a self-extend appends its original items);
-    a source that shrinks meanwhile appends what is left. Returns 0, or -1
-    after an allocation failure.
+    a source that shrinks meanwhile appends what is left. Returns 0, -1
+    after an allocation failure, or -2 when a list fails its sanity check
+    (reported under PCC_DEBUG_RUNTIME, as the check before the lock was).
     """
     # Plans for the current chunk only: a fixed 1024-plan buffer made every
     # small extend allocate and release 128 KiB.
@@ -2368,10 +2711,20 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
                     pcc_gc_store_ptr_plan_init(ptr_add(plans, index * 128), grown, backend)
                     index = index + 1
                 committed: int = 0
-                pcc_py_gc_minor_graph_lock()
+                locked = load_ptr(list_slot, 0)
+                # A tuple's items never change once it is shared.
+                source_locked = locked
+                if tag != PY_TYPE_TUPLE:
+                    source_locked = load_ptr(source_slot, 0)
+                _list_lock_pair(locked, source_locked)
                 a = _reload_moving_root(list_slot, list_handle_slot)
                 b = _reload_moving_root(source_slot, source_handle_slot)
-                available: int = _list_extend_source_length(b, tag)
+                sane: int = 1 if _list_shape_ok(a, -113) else 0
+                if sane != 0 and tag != PY_TYPE_TUPLE and not _list_shape_ok(b, -117):
+                    sane = 0
+                available: int = 0
+                if sane != 0:
+                    available = _list_extend_source_length(b, tag)
                 if limit < 0:
                     limit = available
                 count: int = limit - copied
@@ -2380,7 +2733,9 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
                 if count > 1024:
                     count = 1024
                 length: int = load_i64(a, PYLISTOBJECT_LENGTH_OFFSET)
-                if count > planned or length + count > load_i64(a, PYLISTOBJECT_CAPACITY_OFFSET):
+                if sane == 0:
+                    count = -2
+                elif count > planned or length + count > load_i64(a, PYLISTOBJECT_CAPACITY_OFFSET):
                     # More than planned or no room: plan and grow again.
                     count = -1
                 else:
@@ -2397,12 +2752,15 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
                         else:
                             committed = committed + 1
                     store_i64(a, PYLISTOBJECT_LENGTH_OFFSET, length + committed)
-                pcc_py_gc_minor_graph_unlock()
+                _list_unlock_pair(locked, source_locked)
                 index = 0
                 while index < planned:
                     pcc_gc_store_ptr_plan_finish(ptr_add(plans, index * 128))
                     index = index + 1
-                if count >= 0:
+                if count == -2:
+                    status = -2
+                    finished = 1
+                elif count >= 0:
                     copied = copied + committed
                     if committed < count or count == 0 or copied >= limit:
                         finished = 1
@@ -2412,7 +2770,7 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
 
 @c_abi_export("py_list_extend")
 def py_list_extend(a, b) -> None:
-    if not _list_is_sane(a, -113):
+    if not _list_type_ok(a, -113):
         return
     if ptr_is_null(b):
         return
@@ -2488,7 +2846,7 @@ def py_list_extend(a, b) -> None:
     a = _reload_moving_root(list_slot, list_handle_slot)
     b = _reload_moving_root(source_slot, source_handle_slot)
     btag: int = _type_of(b)
-    if btag == PY_TYPE_LIST and not _list_is_sane(b, -117):
+    if btag == PY_TYPE_LIST and not _list_type_ok(b, -117):
         _finish_moving_root(source_handle_slot)
         _finish_moving_root(list_handle_slot)
         return
@@ -2505,7 +2863,7 @@ def py_list_extend(a, b) -> None:
         )
         _finish_moving_root(source_handle_slot)
         _finish_moving_root(list_handle_slot)
-        if status != 0:
+        if status == -1:
             py_raise_owned(py_exc_new(19, cstr("list extend: out of memory")))  # PY_EXC_MEMORYERROR
         return
     a = _reload_moving_root(list_slot, list_handle_slot)
@@ -2517,7 +2875,7 @@ def py_list_extend(a, b) -> None:
 
 @c_abi_export("py_list_insert")
 def py_list_insert(lst, i: int, item) -> None:
-    if not _list_is_sane(lst, -119):
+    if not _list_type_ok(lst, -119):
         return
     if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
         fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -2571,8 +2929,15 @@ def py_list_insert(lst, i: int, item) -> None:
         pcc_gc_store_ptr_plan_init(
             store_plan, load_ptr(list_slot, 0), pcc_gc_backend()
         )
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         lst = _reload_moving_root(list_slot, list_handle_slot)
+        if not _list_shape_ok(lst, -119):
+            _list_unlock(locked)
+            pcc_gc_store_ptr_plan_finish(store_plan)
+            _finish_moving_root(item_handle_slot)
+            _finish_moving_root(list_handle_slot)
+            return
         length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         if length < load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET):
             idx: int = _normalize_index(i, length, 1)
@@ -2599,7 +2964,7 @@ def py_list_insert(lst, i: int, item) -> None:
                     (length - idx) * 8,
                 )
             inserted = 1
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
     pcc_gc_store_ptr_plan_finish(store_plan)
     _finish_moving_root(item_handle_slot)
     _finish_moving_root(list_handle_slot)
@@ -2607,7 +2972,7 @@ def py_list_insert(lst, i: int, item) -> None:
 
 @c_abi_export("py_list_pop")
 def py_list_pop(lst, i: int):
-    if not _list_is_sane(lst, -120):
+    if not _list_type_ok(lst, -120):
         return null()
     if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
         fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -2643,11 +3008,17 @@ def py_list_pop(lst, i: int):
     if ptr_is_null(result_handle) != 0:
         _finish_moving_root(list_handle_slot)
         return null()
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
+    if not _list_shape_ok(lst, -120):
+        _list_unlock(locked)
+        pcc_gc_scheduler_root_unregister_handle(result_handle)
+        _finish_moving_root(list_handle_slot)
+        return null()
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if length == 0:
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         pcc_gc_scheduler_root_unregister_handle(result_handle)
         _finish_moving_root(list_handle_slot)
         py_raise_owned(py_exc_new(5, cstr("pop from empty list")))  # PY_EXC_INDEXERROR
@@ -2658,7 +3029,7 @@ def py_list_pop(lst, i: int):
     else:
         idx = _normalize_index(i, length, 0)
         if idx < 0:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             pcc_gc_scheduler_root_unregister_handle(result_handle)
             _finish_moving_root(list_handle_slot)
             py_raise_owned(py_exc_new(5, cstr("pop index out of range")))  # PY_EXC_INDEXERROR
@@ -2671,7 +3042,7 @@ def py_list_pop(lst, i: int):
         dst = ptr_add(items, idx * 8)
         memmove(dst, src, (length - idx - 1) * 8)
     store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     _finish_moving_root(list_handle_slot)
     pcc_gc_scheduler_root_unregister_handle(result_handle)
     return load_ptr(result_slot, 0)
@@ -2705,10 +3076,15 @@ def _list_remove_simple_locked(list_slot, list_handle_slot, query_slot, query_ha
     Returns 1 after the deletion (the list's reference moves into the
     registered removed_slot), 0 when no element is equal, or 2 + index of
     the first element whose comparison may run a callback; the caller then
-    compares from that index through the per-element protocol.
+    compares from that index through the per-element protocol. Returns -1
+    when the list fails its sanity check.
     """
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
+    if not _list_shape_ok(lst, -121):
+        _list_unlock(locked)
+        return -1
     query = _reload_moving_root(query_slot, query_handle_slot)
     query_kind: int = 0
     if is_tagged_int(query) != 0:
@@ -2737,13 +3113,13 @@ def _list_remove_simple_locked(list_slot, list_handle_slot, query_slot, query_ha
             result = 1
         else:
             index = index + 1
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     return result
 
 
 @c_abi_export("py_list_remove")
 def py_list_remove(lst, item) -> None:
-    if not _list_is_sane(lst, -121):
+    if not _list_type_ok(lst, -121):
         return
     if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
         fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -2793,6 +3169,11 @@ def py_list_remove(lst, item) -> None:
     simple: int = _list_remove_simple_locked(
         list_slot, list_handle_slot, query_slot, query_handle_slot, candidate_slot
     )
+    if simple < 0:
+        pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+        _finish_moving_root(query_handle_slot)
+        _finish_moving_root(list_handle_slot)
+        return
     if simple == 1:
         _finish_moving_root(query_handle_slot)
         _finish_moving_root(list_handle_slot)
@@ -2830,7 +3211,8 @@ def py_list_remove(lst, item) -> None:
         # still at index: an insert or delete by another mutator during the
         # comparison shifts the list, and the scan then starts over.
         matched: int = 0
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         lst = _reload_moving_root(list_slot, list_handle_slot)
         length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         candidate = pcc_gc_load_ptr(null(), candidate_slot)
@@ -2848,7 +3230,7 @@ def py_list_remove(lst, item) -> None:
                 store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
         if matched == 0:
             store_ptr(candidate_slot, 0, null())
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
         # Drop the comparison's reference. After a removal the root keeps
         # the list's former reference through the root teardown below.
         py_decref(candidate)
@@ -2871,7 +3253,7 @@ def py_list_remove(lst, item) -> None:
 
 @c_abi_export("py_list_clear")
 def py_list_clear(lst) -> None:
-    if not _list_is_sane(lst, -122):
+    if not _list_type_ok(lst, -122):
         return
     if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
         fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -2895,10 +3277,13 @@ def py_list_clear(lst) -> None:
     attempt: int = 0
     while attempt < 8:
         attempt = attempt + 1
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         lst = _reload_moving_root(list_slot, list_handle_slot)
-        length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-        pcc_py_gc_minor_graph_unlock()
+        length: int = -1
+        if _list_shape_ok(lst, -122):
+            length = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+        _list_unlock(locked)
         if length <= 0:
             _finish_moving_root(list_handle_slot)
             return
@@ -2917,9 +3302,10 @@ def py_list_clear(lst) -> None:
             )
             plan_i = plan_i + 1
 
-        pcc_py_gc_minor_graph_lock()
+        locked = load_ptr(list_slot, 0)
+        _list_lock(locked)
         if pcc_gc_backend() != backend:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             plan_i = 0
             while plan_i < length:
                 pcc_gc_store_ptr_plan_finish(ptr_add(plans, plan_i * 128))
@@ -2929,7 +3315,7 @@ def py_list_clear(lst) -> None:
             return
         lst = _reload_moving_root(list_slot, list_handle_slot)
         if load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) != length:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
             plan_i = 0
             while plan_i < length:
                 pcc_gc_store_ptr_plan_finish(ptr_add(plans, plan_i * 128))
@@ -2946,12 +3332,12 @@ def py_list_clear(lst) -> None:
                 null(),
             )
             if committed == 0:
-                pcc_py_gc_minor_graph_unlock()
+                _list_unlock(locked)
                 pcc_platform_abort()
                 return
             plan_i = plan_i + 1
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, 0)
-        pcc_py_gc_minor_graph_unlock()
+        _list_unlock(locked)
 
         plan_i = 0
         while plan_i < length:
@@ -2996,22 +3382,9 @@ def py_obj_clear(obj) -> None:
 
 @c_abi_export("py_list_index")
 def py_list_index(lst, item) -> int:
-    if not _list_is_sane(lst, -123):
+    if not _list_type_ok(lst, -123):
         return -1
-    if pcc_gc_backend() != 0:
-        return _list_equality_scan(lst, item, 0, -1, 1)
-    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-    items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    i: int = 0
-    while i < length:
-        v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
-        equal: int = py_obj_eq(v, item)
-        if py_err_occurred() != 0:
-            return -1
-        if equal != 0:
-            return i
-        i = i + 1
-    return -1
+    return _list_equality_scan(lst, item, 0, -1, 1)
 
 
 @c_abi_export("py_list_index_range")
@@ -3022,7 +3395,7 @@ def py_list_index_range(lst, item, start: int, end: int) -> int:
     # return -1 when absent, matching CPython list.index. The frontend checks
     # py_err_occurred() after the call.
     length: int = 0
-    if _list_is_sane(lst, -126):
+    if _list_type_ok(lst, -126):
         length = py_list_len(lst)
     if start < 0:
         start = start + length
@@ -3036,51 +3409,26 @@ def py_list_index_range(lst, item, start: int, end: int) -> int:
             end = 0
     elif end > length:
         end = length
-    if pcc_gc_backend() != 0:
+    if length > 0:
         found: int = _list_equality_scan(lst, item, start, end, 1)
         if found >= 0:
             return found
         if py_err_occurred() != 0:
             return -1
-    elif length > 0:
-        items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-        i: int = start
-        while i < end:
-            v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
-            equal: int = py_obj_eq(v, item)
-            if py_err_occurred() != 0:
-                return -1
-            if equal != 0:
-                return i
-            i = i + 1
     py_raise_owned(py_exc_new(2, cstr("list.index(x): x not in list")))
     return -1
 
 
 @c_abi_export("py_list_count")
 def py_list_count(lst, item) -> int:
-    if not _list_is_sane(lst, -124):
+    if not _list_type_ok(lst, -124):
         return 0
-    if pcc_gc_backend() != 0:
-        return _list_equality_scan(lst, item, 0, -1, 2)
-    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-    items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    total: int = 0
-    i: int = 0
-    while i < length:
-        v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
-        equal: int = py_obj_eq(v, item)
-        if py_err_occurred() != 0:
-            return 0
-        if equal != 0:
-            total = total + 1
-        i = i + 1
-    return total
+    return _list_equality_scan(lst, item, 0, -1, 2)
 
 
 @c_abi_export("py_list_reverse")
 def py_list_reverse(lst) -> None:
-    if not _list_is_sane(lst, -125):
+    if not _list_type_ok(lst, -125):
         return
     if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
         fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -3112,8 +3460,13 @@ def py_list_reverse(lst) -> None:
     # and one graph transaction, so a concurrent pop or insert sees the
     # whole reversal or none of it. Loads take the read barrier and every
     # rewritten slot notes the write barrier.
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(list_slot, 0)
+    _list_lock(locked)
     lst = _reload_moving_root(list_slot, list_handle_slot)
+    if not _list_shape_ok(lst, -125):
+        _list_unlock(locked)
+        _finish_moving_root(list_handle_slot)
+        return
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     i: int = 0
     j: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) - 1
@@ -3128,5 +3481,5 @@ def py_list_reverse(lst) -> None:
         pcc_gc_note_slot_write_barrier(lst, right_slot, left)
         i = i + 1
         j = j - 1
-    pcc_py_gc_minor_graph_unlock()
+    _list_unlock(locked)
     _finish_moving_root(list_handle_slot)

@@ -17,8 +17,6 @@ __pcc_runtime_port__ = True
 from pcc import i64
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.runtime.py.py_abi_constants import (
-    PYLISTOBJECT_ITEMS_OFFSET,
-    PYLISTOBJECT_LENGTH_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
@@ -79,7 +77,6 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     malloc,
-    memmove,
     memset,
     null,
     ptr_add,
@@ -144,6 +141,7 @@ py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_remove = extern("py_list_remove", (c_ptr, c_ptr), c_void)
+py_list_copy = extern("py_list_copy", (c_ptr,), c_ptr)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_dict_new = extern("py_dict_new", (), c_ptr)
@@ -246,6 +244,20 @@ pcc_gc_backend4_slot_needs_resolve = extern(
     c_int64,
 )
 pcc_gc_object_is_known = extern("pcc_gc_object_is_known", (c_ptr,), c_int64)
+
+
+def _untracked_task_object_is_known(o, backend: int) -> int:
+    """pcc_gc_object_is_known for an untracked task object, lock-free on GC0.
+
+    GC0 publishes its object index for lock-free readers, and every caller
+    here holds a reference to ``o``, which keeps it in the index; the lock
+    only ordered the lookup. A container transaction retains and releases
+    values while holding its container lock, where the graph lock may not
+    be taken.
+    """
+    if backend == 0:
+        return pcc_gc_object_is_known_no_lock(o)
+    return pcc_gc_object_is_known(o)
 pcc_gc_has_tracing_sweep = extern("pcc_gc_has_tracing_sweep", (), c_int64)
 pcc_gc_sweep_owed = extern("pcc_gc_sweep_owed", (), c_int64)
 pcc_gc_collect_tracing = extern("pcc_gc_collect_tracing", (), c_int64)
@@ -1686,26 +1698,38 @@ def _pcc_gc_callback_eq(a, b) -> int:
 
 @c_abi_export("py_gc_callbacks_remove")
 def py_gc_callbacks_remove(callback) -> None:
+    """gc.callbacks.remove(callback) with the callback equality below.
+
+    The comparisons may run Python code, so they run on a copy taken in one
+    list transaction; the first equal callback is then removed from the
+    shared list by identity, as list.remove does in its own transaction.
+    """
     callbacks = _py_gc_callbacks_ensure()
     if ptr_is_null(callbacks) != 0:
         return
-    length: int = load_i64(callbacks, PYLISTOBJECT_LENGTH_OFFSET)
-    items = load_ptr(callbacks, PYLISTOBJECT_ITEMS_OFFSET)
+    snapshot = py_list_copy(callbacks)
+    if ptr_is_null(snapshot) != 0:
+        return
+    length: int = py_list_len(snapshot)
     i: int = 0
     while i < length:
-        existing = pcc_gc_load_ptr(callbacks, ptr_add(items, i * 8))
+        existing = py_list_get(snapshot, i)
+        if ptr_is_null(existing) != 0:
+            py_decref(snapshot)
+            return
         equal: int = _pcc_gc_callback_eq(existing, callback)
         if py_err_occurred() != 0:
+            py_decref(existing)
+            py_decref(snapshot)
             return
         if equal != 0:
-            if i < length - 1:
-                src = ptr_add(items, (i + 1) * 8)
-                dst = ptr_add(items, i * 8)
-                memmove(dst, src, (length - i - 1) * 8)
-            store_i64(callbacks, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
+            py_list_remove(callbacks, existing)
             py_decref(existing)
+            py_decref(snapshot)
             return
+        py_decref(existing)
         i = i + 1
+    py_decref(snapshot)
     py_list_remove(callbacks, callback)
     return
 
@@ -1951,7 +1975,7 @@ def _py_incref_prepare(o, prepared) -> None:
             or tag == PY_TYPE_VTHREAD_CHANNEL
         )
         and (flags & PY_FLAG_GC_TRACKED) == 0
-        and pcc_gc_object_is_known(o) == 0
+        and _untracked_task_object_is_known(o, backend) == 0
     ):
         return
     if (flags & PY_FLAG_IMMORTAL) != 0:
@@ -2064,7 +2088,7 @@ def _py_incref_checked_tail(o) -> None:
     if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS and tag != PY_TYPE_NOTIMPLEMENTED) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and pcc_gc_object_is_known(o) == 0:
+    if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and _untracked_task_object_is_known(o, 0) == 0:
         return
     if (flags & PY_FLAG_IMMORTAL) != 0:
         return
@@ -2124,7 +2148,7 @@ def _py_decref_prepare(o, prepared) -> None:
             or tag_dbg == PY_TYPE_VTHREAD_CHANNEL
         )
         and (flags & PY_FLAG_GC_TRACKED) == 0
-        and pcc_gc_object_is_known(o) == 0
+        and _untracked_task_object_is_known(o, backend) == 0
     ):
         return
     if (flags & PY_FLAG_IMMORTAL) != 0:
@@ -2285,7 +2309,7 @@ def _py_decref_checked_tail(o) -> None:
     if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS and tag != PY_TYPE_NOTIMPLEMENTED) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and pcc_gc_object_is_known(o) == 0:
+    if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and _untracked_task_object_is_known(o, 0) == 0:
         return
     if (flags & PY_FLAG_IMMORTAL) != 0:
         return

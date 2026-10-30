@@ -218,3 +218,61 @@ def test_list_set_slice_snapshots_self_and_converts_mutating_bounds_once(tmp_pat
         "5\n0 8 9 10 3\n"
         "6\n0 7 2 8 4 9\n"
     )
+
+
+def test_list_extended_slice_size_mismatch_raises_value_error(tmp_path):
+    # The store reported a mismatch by returning -1 with no exception, and
+    # the caller did not check: the assignment vanished silently.
+    src = tmp_path / "extended_slice_mismatch.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            def main() -> None:
+                xs = [1, 2, 3, 4]
+                try:
+                    xs[::2] = [9]
+                    print("no error")
+                except ValueError as error:
+                    print("ValueError", error)
+                print(xs)
+                ys = [0, 1, 2, 3, 4, 5]
+                try:
+                    ys[5:0:-2] = [1, 2, 3, 4]
+                    print("no error")
+                except ValueError as error:
+                    print("ValueError", error)
+                print(ys)
+                ys[::3] = (7, 8)
+                print(ys)
+
+            if __name__ == "__main__":
+                main()
+            """
+        ),
+        encoding="utf-8",
+    )
+    exe = tmp_path / "extended_slice_mismatch.out"
+    compile_python(
+        str(src),
+        str(exe),
+        backend="self",
+        libpython_mode="off",
+        ir_scaffold_mode="on",
+    )
+    for backend in range(5):
+        run = subprocess.run(
+            [str(exe)],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PATH": "/nonexistent", "PCC_GC_BACKEND": str(backend)},
+        )
+        assert (run.returncode, run.stdout, run.stderr) == (
+            0,
+            "ValueError attempt to assign sequence of size 1 to extended slice of size 2\n"
+            "[1, 2, 3, 4]\n"
+            "ValueError attempt to assign sequence of size 4 to extended slice of size 3\n"
+            "[0, 1, 2, 3, 4, 5]\n"
+            "[7, 1, 2, 8, 4, 5]\n",
+            "",
+        ), backend

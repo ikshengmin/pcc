@@ -17,13 +17,16 @@ from pcc.extern import extern, c_abi_export, c_ptr, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_REFCOUNT_OFFSET,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PY_FLAG_GC_DEALLOCATING,
     PY_FLAG_IMMORTAL,
+    PY_TYPE_LIST,
 )
 from pcc.unsafe import (
     atomic_load_i32,
     global_addr,
     global_load_ptr,
+    is_tagged_int,
     load_i32,
     load_i64,
     load_ptr,
@@ -39,6 +42,7 @@ pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
+py_list_copy = extern("py_list_copy", (c_ptr,), c_ptr)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
@@ -87,6 +91,12 @@ def _append_referents_to(o, out) -> None:
 
 @c_abi_export("py_gc_get_referents")
 def py_gc_get_referents(o):
+    # A list's referents are its items in order. Another thread may change a
+    # shared list, so they come from one transaction on it (py_list_copy)
+    # rather than from visiting its slots unlocked.
+    if (ptr_is_null(o) == 0 and is_tagged_int(o) == 0
+            and load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_LIST):
+        return py_list_copy(o)
     out = py_list_new(0)
     if ptr_is_null(out) != 0:
         return null()

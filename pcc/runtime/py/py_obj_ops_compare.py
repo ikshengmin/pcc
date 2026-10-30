@@ -1469,6 +1469,8 @@ py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
+pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
 pcc_gc_mode_lease_shard_index = extern("pcc_gc_mode_lease_shard_index", (c_ptr,), c_int64)
 pcc_gc_mode_lease_reserve_shard = extern("pcc_gc_mode_lease_reserve_shard", (c_int64,), c_int64)
@@ -2389,7 +2391,8 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
 
     The sorted list is private until it is published, GC0 never relocates
     and its cycle collector derives roots from reference counts, so the copy
-    is retained under one graph transaction (pcc_gc_try_init_ptr_locked) and
+    is retained in one transaction under the source's list lock
+    (pcc_gc_try_init_ptr_locked) and
     sorted in place without slot roots or leases. One mode-lease reservation
     keeps a backend switch out. A comparison that may run a callback, a
     refused retain or an unexpected source releases the copy: nothing
@@ -2428,7 +2431,7 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
             status = -1
     count: int = 0
     if status == 1:
-        pcc_py_gc_minor_graph_lock()
+        pcc_list_lock(source)
         source_items = ptr_add(source, PYTUPLEOBJECT_ITEMS_OFFSET)
         if kind == PY_TYPE_LIST:
             count = load_i64(source, PYLISTOBJECT_LENGTH_OFFSET)
@@ -2448,7 +2451,7 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
             else:
                 copied = copied + 1
                 store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, copied)
-        pcc_py_gc_minor_graph_unlock()
+        pcc_list_unlock(source)
     if status == 1 and count > 1:
         items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
         if reverse != 0:

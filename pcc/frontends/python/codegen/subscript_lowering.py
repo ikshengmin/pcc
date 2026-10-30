@@ -416,6 +416,10 @@ class SubscriptLoweringMixin:
                         self.runtime["py_list_set_slice"],
                         [obj, lo_obj, hi_obj, step_obj, rhs_obj],
                     )
+                    # A mismatched extended slice, a bound's __index__ or an
+                    # allocation failure reports through the pending-exception
+                    # channel; without this check the store vanished.
+                    self._emit_post_call_err_check(target.span)
                     release_rhs()
                     return
                 if isinstance(obj_ty, ByteArrayType):

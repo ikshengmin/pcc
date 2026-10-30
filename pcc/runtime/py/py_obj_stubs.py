@@ -89,6 +89,8 @@ define_global_i64_array("pcc_guarded_loop_counters", 0, 0, 0, 0, 0, 0)
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
+pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -2827,6 +2829,91 @@ def py_bytes_concat(a, b):
     return out
 
 
+def _bytes_join_list_size_locked(sep_len: int, lst, length_slot) -> int:
+    """Byte length of sep.join(lst) under the list's lock.
+
+    Stores the item count in length_slot. Returns -1 on overflow and
+    -2 - index for an item that is not bytes-like. Items are tagged ints
+    or valid objects, so their headers are read directly.
+    """
+    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+    store_i64(length_slot, 0, length)
+    items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+    total: int = 0
+    i: int = 0
+    while i < length:
+        e = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
+        if ptr_is_null(e) != 0:
+            return -2 - i
+        tag: int = _type_of(e)
+        if tag != PY_TYPE_BYTES and tag != PY_TYPE_BYTEARRAY:
+            return -2 - i
+        if i > 0:
+            if total > 9223372036854775807 - sep_len:
+                return -1
+            total = total + sep_len
+        elem_len: int = py_bytes_len(e)
+        if elem_len < 0 or total > 9223372036854775807 - elem_len:
+            return -1
+        total = total + elem_len
+        i = i + 1
+    return total
+
+
+def _bytes_join_list(sep, sep_len: int, lst):
+    """sep.join(lst) for a list another mutator may change meanwhile.
+
+    As _str_join_list: sized under the list's lock, allocated outside it,
+    sized again and copied in one transaction; a list that changed size
+    in between is joined again. A bytearray item resized concurrently by
+    another thread is not excluded (it has no export lock).
+    """
+    length_slot = stack_alloc(8)
+    while True:
+        locked = lst
+        pcc_list_lock(locked)
+        total: int = _bytes_join_list_size_locked(sep_len, lst, length_slot)
+        pcc_list_unlock(locked)
+        if total <= -2:
+            py_raise_owned(py_exc_new(3, cstr("sequence item: expected a bytes-like object")))
+            return null()
+        if total < 0:
+            return null()
+        length: int = load_i64(length_slot, 0)
+        if length == 0:
+            return _bytes_new_same_family(sep, null(), 0)
+        out = _bytes_new_same_family(sep, null(), total)
+        if ptr_is_null(out):
+            return null()
+        # Result allocation may run a relocating collector.
+        sep = pcc_gc_note_relocation_read(sep)
+        lst = pcc_gc_note_relocation_read(lst)
+        locked = lst
+        pcc_list_lock(locked)
+        if (_bytes_join_list_size_locked(sep_len, lst, length_slot) == total
+                and load_i64(length_slot, 0) == length):
+            dst = _bytes_data(out)
+            sd = _bytes_data(sep)
+            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+            off: int = 0
+            i: int = 0
+            while i < length:
+                e = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
+                if i > 0 and sep_len > 0:
+                    memcpy(ptr_add(dst, off), sd, sep_len)
+                    off = off + sep_len
+                elem_len: int = py_bytes_len(e)
+                if elem_len > 0:
+                    memcpy(ptr_add(dst, off), _bytes_data(e), elem_len)
+                    off = off + elem_len
+                i = i + 1
+            pcc_list_unlock(locked)
+            store_i8(dst, total, 0)
+            return out
+        pcc_list_unlock(locked)
+        py_decref(out)
+
+
 @c_abi_export("py_bytes_join")
 def py_bytes_join(sep, lst):
     # bytes.join / bytearray.join over a list or tuple of bytes-like items.
@@ -2854,11 +2941,9 @@ def py_bytes_join(sep, lst):
     if length == 0:
         return _bytes_new_same_family(sep, null(), 0)
     sep_len: int = py_bytes_len(sep)
-    items = null()
     if sequence_tag == PY_TYPE_LIST:
-        items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    else:
-        items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
+        return _bytes_join_list(sep, sep_len, lst)
+    items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
     total: int = 0
     i: int = 0
     while i < length:
@@ -2885,10 +2970,7 @@ def py_bytes_join(sep, lst):
     # inputs and the list items pointer before copying payloads.
     sep = pcc_gc_note_relocation_read(sep)
     lst = pcc_gc_note_relocation_read(lst)
-    if sequence_tag == PY_TYPE_LIST:
-        items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    else:
-        items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
+    items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
     dst = _bytes_data(out)
     sd = _bytes_data(sep)
     off: int = 0

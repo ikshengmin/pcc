@@ -27,6 +27,8 @@ from pcc.unsafe import (
 
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
+pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
 pcc_gc_root_copy_lease_prepare_locked = extern(
     "pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
 )
@@ -50,7 +52,8 @@ def pcc_list_snapshot_commit_slots(
     after outermost unlock, before any child root/token is retired.
     """
     status: i64 = -1
-    pcc_py_gc_minor_graph_lock()
+    locked = load_ptr(source_slot, 0)
+    pcc_list_lock(locked)
     source = load_ptr(source_slot, 0)
     borrowed = ptr_add(children, length * abi_constant("object.pointer.size"))
     if ptr_is_null(source) == 0 and is_tagged_int(source) == 0 and length >= 0 and ptr_is_null(children) == 0:
@@ -80,5 +83,5 @@ def pcc_list_snapshot_commit_slots(
                             else:
                                 store_i64(tokens, index * abi_constant("object.pointer.size"), token)
                         index += 1
-    pcc_py_gc_minor_graph_unlock()
+    pcc_list_unlock(locked)
     return status

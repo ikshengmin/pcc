@@ -26,6 +26,7 @@ from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PYLISTOBJECT_ITEMS_OFFSET,
+    PYLISTOBJECT_LENGTH_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
@@ -75,6 +76,9 @@ py_incref         = extern("py_incref",        (c_ptr,),                        
 py_decref         = extern("py_decref",        (c_ptr,),                             c_void)
 py_list_len       = extern("py_list_len",      (c_ptr,),                             c_int64)
 py_list_get       = extern("py_list_get",      (c_ptr, c_int64),                     c_ptr)
+py_list_copy      = extern("py_list_copy",     (c_ptr,),                             c_ptr)
+pcc_list_lock     = extern("pcc_list_lock",    (c_ptr,),                             c_void)
+pcc_list_unlock   = extern("pcc_list_unlock",  (c_ptr,),                             c_void)
 py_obj_len        = extern("py_obj_len",       (c_ptr,),                             c_int64)
 py_obj_getitem_i64 = extern("py_obj_getitem_i64", (c_ptr, c_int64),                  c_ptr)
 py_obj_eq         = extern("py_obj_eq",        (c_ptr, c_ptr),                       c_int64)
@@ -570,7 +574,7 @@ def py_tuple_from_splat(seq):
     if tag == PY_TYPE_TUPLE:
         n = load_i64(seq, PYTUPLEOBJECT_LEN_OFFSET)
     elif tag == PY_TYPE_LIST:
-        n = py_list_len(seq)
+        return _tuple_from_list(seq)
     else:
         return _tuple_from_iterable(seq)
     if n < 0:
@@ -588,14 +592,64 @@ def py_tuple_from_splat(seq):
             py_tuple_set_item(out, i, v)
             i = i + 1
         return out
-    if tag == PY_TYPE_LIST:
-        items = load_ptr(seq, PYLISTOBJECT_ITEMS_OFFSET)
-        while i < n:
-            v = pcc_gc_load_ptr(seq, ptr_add(items, i * 8))
-            py_tuple_set_item(out, i, v)
-            i = i + 1
-        return out
+    return out
 
+
+def _tuple_from_list(seq):
+    """tuple(list): a copy of one state of a list other mutators may change.
+
+    GC0 copies in one transaction under the list's lock: the tuple is
+    allocated before locking (an allocation can collect) and filled only if
+    the list still has that length, else released and allocated again at
+    the new length. Retained items are stored directly and tracking is
+    decided after unlocking, because the participation probe and tracking
+    take other locks. The tracing and moving collectors copy the list
+    first (py_list_copy reads it under its lock) and fill the tuple from
+    that private copy through the barriered py_tuple_set_item.
+    """
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
+        private = py_list_copy(seq)
+        if ptr_is_null(private):
+            return null()
+        count: int = load_i64(private, PYLISTOBJECT_LENGTH_OFFSET)
+        copied = py_tuple_new(count)
+        if ptr_is_null(copied) == 0:
+            private_items = load_ptr(private, PYLISTOBJECT_ITEMS_OFFSET)
+            k: int = 0
+            while k < count:
+                py_tuple_set_item(copied, k, pcc_gc_load_ptr(private, ptr_add(private_items, k * 8)))
+                k = k + 1
+        py_decref(private)
+        return copied
+    want: int = py_list_len(seq)
+    out = null()
+    done: int = 0
+    while done == 0:
+        out = py_tuple_new(want)
+        if ptr_is_null(out):
+            return null()
+        pcc_list_lock(seq)
+        n: int = load_i64(seq, PYLISTOBJECT_LENGTH_OFFSET)
+        if n == want:
+            items = load_ptr(seq, PYLISTOBJECT_ITEMS_OFFSET)
+            i: int = 0
+            while i < n:
+                value = load_ptr(items, i * 8)
+                py_incref(value)
+                store_ptr(out, PYTUPLEOBJECT_ITEMS_OFFSET + i * 8, value)
+                i = i + 1
+            done = 1
+        want = n
+        pcc_list_unlock(seq)
+        if done == 0:
+            py_decref(out)
+    tracked: int = 0
+    j: int = 0
+    while tracked == 0 and j < want:
+        if _tuple_item_can_participate_in_cycle(load_ptr(out, PYTUPLEOBJECT_ITEMS_OFFSET + j * 8)) != 0:
+            py_gc_track(out)
+            tracked = 1
+        j = j + 1
     return out
 
 

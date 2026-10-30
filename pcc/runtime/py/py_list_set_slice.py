@@ -17,6 +17,7 @@ from pcc.unsafe import (
     is_tagged_int,
     load_i32,
     load_i64,
+    load_i8,
     load_ptr,
     malloc,
     memset,
@@ -28,6 +29,7 @@ from pcc.unsafe import (
     ptr_to_int,
     stack_alloc,
     store_i64,
+    store_i8,
     store_ptr,
     untag_int,
 )
@@ -38,6 +40,8 @@ py_raise_zero_slice_step = extern("py_raise_zero_slice_step", (), c_void)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 py_obj_index_i64 = extern("py_obj_index_i64", (c_ptr,), c_int64)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_copy = extern("py_list_copy", (c_ptr,), c_ptr)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
@@ -71,6 +75,8 @@ pcc_py_gc_minor_graph_lock = extern(
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
+pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
+pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
 pcc_gc_backend4_retarget_mutator_payload_locked = extern(
     "pcc_gc_backend4_retarget_mutator_payload_locked",
     (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
@@ -346,13 +352,53 @@ def _snapshot_set_slice_replacement(replacement):
     return out
 
 
+def _copy_cstr(message, at: int, text) -> int:
+    k: int = 0
+    while load_i8(text, k) != 0:
+        store_i8(message, at, load_i8(text, k))
+        at = at + 1
+        k = k + 1
+    return at
+
+
+def _copy_decimal(message, at: int, value: int) -> int:
+    digits = stack_alloc(24)
+    count: int = 0
+    if value == 0:
+        store_i8(digits, 0, 48)
+        count = 1
+    while value > 0:
+        store_i8(digits, count, 48 + value % 10)
+        value = value // 10
+        count = count + 1
+    while count > 0:
+        count = count - 1
+        store_i8(message, at, load_i8(digits, count))
+        at = at + 1
+    return at
+
+
+def _raise_extended_slice_size(size: int, slice_size: int) -> None:
+    """CPython's ValueError for a replacement of another length."""
+    message = stack_alloc(128)
+    at: int = _copy_cstr(message, 0, cstr("attempt to assign sequence of size "))
+    at = _copy_decimal(message, at, size)
+    at = _copy_cstr(message, at, cstr(" to extended slice of size "))
+    at = _copy_decimal(message, at, slice_size)
+    store_i8(message, at, 0)
+    py_raise_owned(py_exc_new(2, message))  # PY_EXC_VALUEERROR
+
+
 @c_abi_export("py_list_set_slice")
 def py_list_set_slice(lst, lo, hi, step, replacement) -> int:
     return _set_slice_transaction(lst, lo, hi, step, replacement)
 
 
 def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
-    if not _list_is_sane(lst, -111):
+    # Length, capacity and items are checked under the list's lock below; read
+    # here they may come from different concurrent updates.
+    if not _ptr_is_list(lst):
+        _debug_bad_container(lst, -111)
         return -1
     if ptr_is_null(replacement) != 0:
         return -1
@@ -452,20 +498,28 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
     lo_out = stack_alloc(8)
     hi_out = stack_alloc(8)
     attempt: int = 0
+    hold: int = 0
     while attempt < 8:
         attempt = attempt + 1
+        # The last attempt keeps the list locked from reading its length to
+        # the commit: concurrent mutators can delay an assignment, never drop
+        # it. Planning there only mallocs; it neither collects nor parks.
+        if attempt == 8:
+            hold = 1
         if unlocked != 0:
             lst = _reload_moving_root(list_slot, list_handle_slot)
             old_len: int = load_i64(lst, 16)
             old_capacity: int = load_i64(lst, 24)
             old_items = load_ptr(lst, 32)
         else:
-            pcc_py_gc_minor_graph_lock()
+            locked = load_ptr(list_slot, 0)
+            pcc_list_lock(locked)
             lst = _reload_moving_root(list_slot, list_handle_slot)
             old_len = load_i64(lst, 16)
             old_capacity = load_i64(lst, 24)
             old_items = load_ptr(lst, 32)
-            pcc_py_gc_minor_graph_unlock()
+            if hold == 0:
+                pcc_list_unlock(locked)
         _normalize_set_slice_scalars(
             lo_none,
             hi_none,
@@ -487,6 +541,13 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         else:
             selected = _slice_count(lo_v, hi_v, step_v)
             if repl_len != selected:
+                if hold == 0 and unlocked == 0:
+                    # Decide on the length the commit sees.
+                    attempt = 7
+                    continue
+                if hold != 0:
+                    pcc_list_unlock(locked)
+                _raise_extended_slice_size(repl_len, selected)
                 snapshot = _reload_moving_root(
                     snapshot_slot, snapshot_handle_slot
                 )
@@ -498,6 +559,9 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         if step_v == 1:
             new_len = old_len - selected + repl_len
         if old_len < 0 or new_len < 0 or old_capacity < old_len:
+            if hold != 0:
+                pcc_list_unlock(locked)
+            _debug_bad_container(lst, -111)
             break
         new_capacity: int = old_capacity
         while new_capacity < new_len:
@@ -506,10 +570,14 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 break
             new_capacity = new_capacity * 2
         if new_capacity <= 0:
+            if hold != 0:
+                pcc_list_unlock(locked)
             break
         new_items = malloc(new_capacity * 8)
         replacement_index = malloc((old_len if old_len > 0 else 1) * 8)
         if ptr_is_null(new_items) != 0 or ptr_is_null(replacement_index) != 0:
+            if hold != 0:
+                pcc_list_unlock(locked)
             free(replacement_index)
             free(new_items)
             break
@@ -592,6 +660,8 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
             ))
             or (new_len > 0 and ptr_is_null(new_plans) != 0)
         ):
+            if hold != 0:
+                pcc_list_unlock(locked)
             free(slot_pairs)
             free(new_plans)
             free(old_plans)
@@ -610,7 +680,9 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
             )
             i = i + 1
 
-        pcc_py_gc_minor_graph_lock()
+        if hold == 0:
+            locked = load_ptr(list_slot, 0)
+            pcc_list_lock(locked)
         lst = _reload_moving_root(list_slot, list_handle_slot)
         snapshot = _reload_moving_root(snapshot_slot, snapshot_handle_slot)
         if (
@@ -620,7 +692,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
             or ptr_eq(load_ptr(lst, 32), old_items) == 0
             or load_i64(snapshot, 16) != repl_len
         ):
-            pcc_py_gc_minor_graph_unlock()
+            pcc_list_unlock(locked)
             i = 0
             while i < old_len:
                 pcc_gc_store_ptr_plan_finish(ptr_add(old_plans, i * 128))
@@ -662,7 +734,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
             pair_count,
         )
         if retargeted == 0:
-            pcc_py_gc_minor_graph_unlock()
+            pcc_list_unlock(locked)
             i = 0
             while i < old_len:
                 pcc_gc_store_ptr_plan_finish(ptr_add(old_plans, i * 128))
@@ -715,7 +787,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 null(),
             )
             if committed == 0:
-                pcc_py_gc_minor_graph_unlock()
+                pcc_list_unlock(locked)
                 pcc_platform_abort()
                 return -1
             i = i + 1
@@ -726,7 +798,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
             pcc_gc_backend4_zpage_register_owner_payload_span(
                 lst, new_items, new_capacity * 8
             )
-        pcc_py_gc_minor_graph_unlock()
+        pcc_list_unlock(locked)
 
         i = 0
         while i < new_len:
@@ -750,4 +822,6 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
     _finish_moving_root(snapshot_handle_slot)
     _finish_moving_root(list_handle_slot)
     py_decref(snapshot)
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("list slice assignment: out of memory")))  # PY_EXC_MEMORYERROR
     return -1

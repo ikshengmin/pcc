@@ -26,6 +26,10 @@ define_global_i32("py_gc_freeze_count", 0)
 # Set by the first managed allocation (pcc_gc_fix_backend): from then on the
 # selected collector never changes (pcc_gc_set_backend refuses another).
 define_global_i32("pcc_gc_backend_frozen", 0)
+# 1 when lists take their own container lock instead of the graph lock: GC0
+# without the refcount provenance probe. Set with pcc_gc_backend_frozen,
+# before the first object exists, and never changed afterwards.
+define_global_i32("pcc_gc_list_container_mode", 0)
 define_global_ptr_null("py_gc_head")
 define_global_ptr_null("pcc_gc_deferred_node_free_head")
 # Recycled 40-byte tracking nodes (freestanding_gc_tracking.py). Mutators

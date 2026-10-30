@@ -96,6 +96,8 @@ pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), 
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
+pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
 define_global_i32("pcc_str_encode_borrowed_frame_map", -3)
 define_global_i32("pcc_str_encode_owned_frame_map", 4)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
@@ -3128,7 +3130,7 @@ def _join_item_type_error(index: int, item) -> None:
 
 
 def _str_join_list_size_locked(sep_len: int, lst, length_slot) -> int:
-    """Byte length of sep.join(lst) under the graph lock, or -1 if an item
+    """Byte length of sep.join(lst) under the list's lock, or -1 if an item
     is not an exact str. Stores the item count in length_slot.
 
     A list item is a tagged int or a valid object, so its header tag is read
@@ -3160,17 +3162,18 @@ def _str_join_list_size_locked(sep_len: int, lst, length_slot) -> int:
 def _str_join_list(sep, sep_len: int, lst):
     """sep.join(lst) for a list another mutator may change meanwhile.
 
-    The items are read under the graph lock, where a replaced or removed
-    item cannot be released. The result is sized under the lock, allocated
+    The items are read under the list's lock (pcc_list_lock), where a
+    replaced or removed item cannot be released. The result is sized under the lock, allocated
     outside it, then sized again and copied in one transaction: a list that
     changed size in between is joined again, so the copy never outgrows the
     allocation.
     """
     length_slot = stack_alloc(8)
     while True:
-        pcc_py_gc_minor_graph_lock()
+        locked = lst
+        pcc_list_lock(locked)
         total: int = _str_join_list_size_locked(sep_len, lst, length_slot)
-        pcc_py_gc_minor_graph_unlock()
+        pcc_list_unlock(locked)
         if total <= -2:
             # Raise for the item still there; a str in its place joins again.
             bad = py_list_get(lst, -2 - total)
@@ -3194,7 +3197,8 @@ def _str_join_list(sep, sep_len: int, lst):
         # The allocation may run a relocating collector.
         sep = pcc_gc_note_relocation_read(sep)
         lst = pcc_gc_note_relocation_read(lst)
-        pcc_py_gc_minor_graph_lock()
+        locked = lst
+        pcc_list_lock(locked)
         if (_str_join_list_size_locked(sep_len, lst, length_slot) == total
                 and load_i64(length_slot, 0) == length):
             out_data = ptr_add(out, PYSTROBJECT_DATA_OFFSET)
@@ -3212,9 +3216,9 @@ def _str_join_list(sep, sep_len: int, lst):
                     memmove(ptr_add(out_data, off), ptr_add(e, PYSTROBJECT_DATA_OFFSET), elem_len)
                     off = off + elem_len
                 i = i + 1
-            pcc_py_gc_minor_graph_unlock()
+            pcc_list_unlock(locked)
             return out
-        pcc_py_gc_minor_graph_unlock()
+        pcc_list_unlock(locked)
         py_decref(out)
 
 

@@ -21,6 +21,7 @@ from pcc.unsafe import (
     call_ptr1,
     define_global_i32,
     define_global_i64,
+    define_global_null_ptr_array,
     define_global_ptr_null,
     define_thread_local_i32,
     define_thread_local_ptr_null,
@@ -36,6 +37,7 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     null,
+    ptr_add,
     ptr_is_null,
     ptr_to_int,
     stack_alloc,
@@ -110,6 +112,14 @@ _GRAPH_CONTEXT_NEXT: i64 = 8
 _GRAPH_CONTEXT_TAIL: i64 = 16
 _GRAPH_CONTEXT_ALLOCATION: i64 = 24
 _GRAPH_QUEUED_BIT: i64 = 4503599627370496
+
+# Per-object container locks (GC0): one 0/1 word per 128-byte stripe (64
+# stripes, 8 KiB: 512 stripes cost one worker an L1 miss per transaction),
+# chosen by the object's address, so every transaction on one object takes
+# the same word and transactions on unrelated objects rarely share one. A holder sets bit 53 (9007199254740992) of the thread state word
+# next to its no-park level. The state word is a plain int, so the masks
+# below are literals.
+define_global_null_ptr_array("pcc_container_lock_stripes", 1024)
 
 
 pthread_create = extern(
@@ -915,6 +925,12 @@ def pcc_thread_graph_lock_acquire(lock_word) -> None:
             return
         store_i64(state_slot, 0, state + 16777216)
         return
+    # 9007199254740992: the container-lock held bit.
+    if (state & 9007199254740992) != 0:
+        # The graph lock is taken outside a container lock, never inside:
+        # waiting for it here could wait on a holder that waits for us.
+        pcc_platform_abort()
+        return
     if (state & 562949953421312) == 0:
         if pcc_current_thread_id() <= 0:
             pcc_platform_abort()
@@ -995,6 +1011,161 @@ def pcc_thread_graph_lock_depth() -> int:
     return (
         load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 281474959933440
     ) // 16777216
+
+
+def _container_stripe_index(obj) -> int:
+    address: int = ptr_to_int(obj)
+    return ((address >> 4) ^ (address >> 13)) & 63
+
+
+def _container_stripe_word(index: int):
+    return ptr_add(global_addr("pcc_container_lock_stripes"), index * 128)
+
+
+def _container_stripe(obj):
+    return _container_stripe_word(_container_stripe_index(obj))
+
+
+def _container_enter() -> None:
+    """Mark this thread as a no-park container-lock holder."""
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 9007199254740992) != 0 or (state & 16777215) == 16777215:
+        pcc_platform_abort()
+        return
+    if (state & 562949953421312) == 0:
+        if pcc_current_thread_id() <= 0:
+            pcc_platform_abort()
+            return
+        state = load_i64(state_slot, 0)
+    store_i64(state_slot, 0, state + 9007199254740992 + 1)
+
+
+def _container_acquire(word) -> None:
+    acquired: int = 0
+    while acquired == 0:
+        if atomic_load_i32(word, 0, "relaxed") == 0:
+            if atomic_cas_i32(word, 0, 0, 1, "acquire", "relaxed") == 0:
+                acquired = 1
+
+
+def _container_exit() -> None:
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 9007199254740992) == 0 or (state & 16777215) == 0:
+        pcc_platform_abort()
+        return
+    state = state - 9007199254740992 - 1
+    store_i64(state_slot, 0, state)
+    if (state & 16777215) == 0:
+        # As in pcc_thread_no_park_exit.
+        if (state & 281474976710656) != 0:
+            pcc_platform_abort()
+            return
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
+            pcc_thread_safepoint()
+
+
+@c_abi_export("pcc_container_lock")
+def pcc_container_lock(obj) -> None:
+    """Lock one container for a transaction on its own memory (GC0).
+
+    The graph lock may be held outside. The holder takes neither the graph
+    lock nor another container lock (both abort), runs no user code and
+    releases displaced values after unlocking. Holder and waiter are
+    no-park, as the graph lock's: a stop waits for the transactions ahead of
+    it, and none of them waits on anything but its own stripes. One body,
+    no calls on the uncontended path (_container_enter, _container_stripe
+    and _container_acquire written out).
+    """
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 9007199254740992) != 0 or (state & 16777215) == 16777215:
+        pcc_platform_abort()
+        return
+    if (state & 562949953421312) == 0:
+        if pcc_current_thread_id() <= 0:
+            pcc_platform_abort()
+            return
+        state = load_i64(state_slot, 0)
+    store_i64(state_slot, 0, state + 9007199254740992 + 1)
+    address: int = ptr_to_int(obj)
+    word = ptr_add(
+        global_addr("pcc_container_lock_stripes"),
+        (((address >> 4) ^ (address >> 13)) & 63) * 128,
+    )
+    acquired: int = 0
+    while acquired == 0:
+        if atomic_load_i32(word, 0, "relaxed") == 0:
+            if atomic_cas_i32(word, 0, 0, 1, "acquire", "relaxed") == 0:
+                acquired = 1
+
+
+@c_abi_export("pcc_container_unlock")
+def pcc_container_unlock(obj) -> None:
+    """Release pcc_container_lock (_container_exit written out)."""
+    address: int = ptr_to_int(obj)
+    atomic_store_i32(
+        ptr_add(
+            global_addr("pcc_container_lock_stripes"),
+            (((address >> 4) ^ (address >> 13)) & 63) * 128,
+        ),
+        0, 0, "release",
+    )
+    state_slot = global_addr("pcc_tls_thread_state_py")
+    state: int = load_i64(state_slot, 0)
+    if (state & 9007199254740992) == 0 or (state & 16777215) == 0:
+        pcc_platform_abort()
+        return
+    state = state - 9007199254740992 - 1
+    store_i64(state_slot, 0, state)
+    if (state & 16777215) == 0:
+        # As in pcc_thread_no_park_exit.
+        if (state & 281474976710656) != 0:
+            pcc_platform_abort()
+            return
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
+            pcc_thread_safepoint()
+
+
+@c_abi_export("pcc_container_lock_pair")
+def pcc_container_lock_pair(first, second) -> None:
+    """Lock two containers for one transaction over both (GC0).
+
+    The stripes are taken in index order, a shared stripe once. A waiter
+    then holds only stripes below the one it waits for, so no wait closes a
+    cycle. The holder rules are pcc_container_lock's.
+    """
+    low: int = _container_stripe_index(first)
+    high: int = _container_stripe_index(second)
+    swap: int = 0
+    if high < low:
+        swap = low
+        low = high
+        high = swap
+    _container_enter()
+    _container_acquire(_container_stripe_word(low))
+    if high != low:
+        _container_acquire(_container_stripe_word(high))
+
+
+@c_abi_export("pcc_container_unlock_pair")
+def pcc_container_unlock_pair(first, second) -> None:
+    low: int = _container_stripe_index(first)
+    high: int = _container_stripe_index(second)
+    if high != low:
+        atomic_store_i32(_container_stripe_word(high), 0, 0, "release")
+    atomic_store_i32(_container_stripe_word(low), 0, 0, "release")
+    _container_exit()
+
+
+@c_abi_export("pcc_container_lock_held")
+def pcc_container_lock_held() -> int:
+    """Whether this thread holds a container lock."""
+    # 9007199254740992: the container-lock held bit.
+    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 9007199254740992) != 0:
+        return 1
+    return 0
 
 
 @c_abi_export("pcc_thread_note_deferred_tripwire")
@@ -1155,8 +1326,12 @@ def pcc_thread_registration_waiter_count() -> int:
 
 @c_abi_export("pcc_stop_the_world")
 def pcc_stop_the_world() -> int:
-    # A scheduler-lock owner cannot wait for mutators that need this lock.
-    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 281474976710656) != 0:
+    # A scheduler-lock owner cannot wait for mutators that need this lock,
+    # nor a container-lock owner for mutators waiting on its container.
+    if (
+        load_i64(global_addr("pcc_tls_thread_state_py"), 0)
+        & (281474976710656 | 9007199254740992)
+    ) != 0:
         pcc_platform_abort()
         return -1
     if _world_init() != 0:
