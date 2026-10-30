@@ -1551,15 +1551,13 @@ class CallObjectLoweringMixin:
         done_block = self.current_function.append_basic_block(self._fresh("call.slot.take.done"))
         self.builder.cbranch(immediate, word_block, object_block)
         self.builder.position_at_end(object_block)
-        self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
-        current = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(slot)],
-            name=self._fresh("call.slot.take.current"),
+        # The runtime pins the current object inside a graph transaction on a
+        # moving collector; GC0 never relocates and pins without that lock.
+        prior = self.builder.call(
+            self.runtime["pcc_gc_pin_slot_for_take"],
+            [self._as_gc_ptr(slot), ir.Constant(_I64, 1 if keep_pinned else 0)],
+            name=self._fresh("call.slot.take.prior"),
         )
-        prior = ir.Constant(_I64, 64) if keep_pinned else self._extern_prior_pin(current)
-        self._gc_pin(current)
-        self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
         object_end = self.builder.block
         self.builder.branch(done_block)
         self.builder.position_at_end(word_block)

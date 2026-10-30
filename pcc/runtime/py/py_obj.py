@@ -1798,6 +1798,37 @@ pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 
 
+@c_abi_export("pcc_gc_pin_slot_for_take")
+def pcc_gc_pin_slot_for_take(slot, keep_pinned: int) -> int:
+    """Pin a call root's object before pcc_gc_take_pinned_slot; return its prior pin.
+
+    Compiled code hands the object to a call as a raw argument. A moving
+    collector must not relocate it between the load and the pin, so those
+    run inside a graph transaction. GC0 never relocates and the root belongs
+    to this activation, so it pins without taking the global lock.
+    """
+    value = load_ptr(slot, 0)
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return PY_FLAG_GC_PINNED if keep_pinned != 0 else 0
+    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0):
+        prior: int = PY_FLAG_GC_PINNED
+        if keep_pinned == 0:
+            prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(value)
+        return prior
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_load_ptr(null(), slot)
+    moved_prior: int = PY_FLAG_GC_PINNED
+    if keep_pinned == 0:
+        moved_prior = 0
+        if ptr_is_null(current) == 0 and is_tagged_int(current) == 0:
+            moved_prior = load_i32(current, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+    pcc_gc_pin(current)
+    pcc_py_gc_minor_graph_unlock()
+    return moved_prior
+
+
 @c_abi_export("pcc_gc_immortalize")
 def pcc_gc_immortalize(o) -> None:
     # Mirror of C pcc_gc_immortalize: pin + set PY_FLAG_IMMORTAL (0x1) so

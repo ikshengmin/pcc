@@ -116,6 +116,8 @@ def _runtime_signatures_part_1():
     "pcc_gc_root_copy_lease_finish": (_VOID, [_PTR], False),
     "pcc_gc_object_is_address_pinned": (_I64, [_PYOBJ], False),
     "pcc_gc_take_pinned_slot": (_PYOBJ, [_PTR, _I64], False),
+    # Pin a call root's object before the take above; returns the prior pin.
+    "pcc_gc_pin_slot_for_take": (_I64, [_PTR, _I64], False),
     "pcc_gc_immortalize": (_VOID, [_PYOBJ], False),
     "pcc_gc_object_id": (_I64, [_PYOBJ], False),
     "py_obj_id": (_I64, [_PYOBJ], False),
