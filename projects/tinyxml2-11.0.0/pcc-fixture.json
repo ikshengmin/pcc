@@ -1,0 +1,17 @@
+{
+  "name": "tinyxml2-11.0.0",
+  "upstream": "https://github.com/leethomason/tinyxml2",
+  "revision": "9148bdf719e997d1f474be6bcc7943881046dba1",
+  "tag": "11.0.0",
+  "license": "Zlib",
+  "license_file": "LICENSE.txt",
+  "standard": "c++17",
+  "translation_units": ["tinyxml2.cpp"],
+  "headers": ["tinyxml2.h"],
+  "driver": "tests/cpp/fixtures/tinyxml2_smoke.cpp",
+  "expected": {
+    "returncode": 0,
+    "stdout": "tinyxml2:42:hello&world\n",
+    "stderr": ""
+  }
+}
