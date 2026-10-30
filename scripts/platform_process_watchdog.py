@@ -2,6 +2,10 @@
 
 This is a host test driver, not a tool invoked by native pcc. It owns only
 children it starts and retains durable output and resource samples.
+
+Native-owner checks classify sampled executable names, not every execution.
+Short-lived or renamed tools and in-process libraries need separate execution
+evidence and source-route review; an empty denied list is not ownership proof.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -18,6 +23,44 @@ import time
 
 WINDOWS_GUARD_SCHEMA = "pcc.windows-direct-root-guard.v1"
 WINDOWS_GUARD_ENV = "PCC_WINDOWS_DIRECT_ROOT_GUARD"
+
+
+_FORBIDDEN_NATIVE_BASENAMES = {
+    "python", "python3", "python3.15", "python.exe", "pythonw.exe",
+    "cc", "gcc", "clang", "clang.exe", "cl.exe", "ld", "ld.lld", "link.exe",
+    "ar", "ranlib", "make", "make.exe", "codesign",
+    "sh", "bash", "zsh", "cmd.exe", "powershell.exe", "pwsh.exe",
+    "ls", "rm", "mkdir", "find", "tar", "unzip", "nm", "objdump", "otool",
+}
+_NATIVE_PYTHON_NAME = re.compile(r"pythonw?(?:[0-9]+(?:\.[0-9]+)*[dmtu]*)?(?:_d)?")
+_NATIVE_TOOL_NAME = re.compile(
+    # Conventional target prefixes, not arbitrary substring matches. The
+    # suffix covers gcc-14, clang++-20 and dotted tool release versions.
+    r"(?:[a-z0-9_.]+-)*"
+    r"(?:cc|c\+\+|cpp|gcc|g\+\+|clang(?:\+\+|-cl|-cpp)?|cl|cc1(?:plus)?|collect2|"
+    r"as|ld(?:\.(?:bfd|gold|lld))?|lld(?:-link)?|link|ar|ranlib|nm|objdump|"
+    r"llvm-(?:ar|ranlib|nm|objdump|as|link|mc|objcopy)|llc|opt)"
+    r"(?:-[0-9]+(?:\.[0-9]+)*)?"
+)
+
+
+def is_forbidden_native_owner(image):
+    """Recognize known host-tool name families in a Linux/Windows sample.
+
+    A non-match is unknown, not an owned-artifact attestation. Normalize both
+    path separators so Windows image names also have deterministic host tests.
+    Linux /proc can append `` (deleted)`` to an unlinked executable's path.
+    """
+    name = image.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if name.endswith(" (deleted)"):
+        name = name[:-10]
+    if name in _FORBIDDEN_NATIVE_BASENAMES:
+        return True
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return (name in _FORBIDDEN_NATIVE_BASENAMES
+            or _NATIVE_PYTHON_NAME.fullmatch(name) is not None
+            or _NATIVE_TOOL_NAME.fullmatch(name) is not None)
 
 
 def _direct_host_launch(command, environment, *, native):
@@ -278,11 +321,6 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel
     observation_written = False
     known = {}
     peak = 0
-    forbidden = {"python", "python3", "python3.15", "python.exe", "pythonw.exe",
-                 "cc", "gcc", "clang", "clang.exe", "cl.exe", "ld", "ld.lld", "link.exe",
-                 "ar", "ranlib", "make", "make.exe", "codesign",
-                 "sh", "bash", "zsh", "cmd.exe", "powershell.exe", "pwsh.exe",
-                 "ls", "rm", "mkdir", "find", "tar", "unzip", "nm", "objdump", "otool"}
     with log_path.open("wb") as log, log_path.with_suffix(".resources.jsonl").open("w") as samples:
         # Acquire the Job only after all pure preparation/file opens. Popen
         # failures must close it too; no suspended child may escape cleanup.
@@ -315,7 +353,7 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel
                 samples.write(json.dumps(sample) + "\n")
                 samples.flush()
                 if native:
-                    denied = [row[2] for row in rows if os.path.basename(row[2]).lower() in forbidden]
+                    denied = [row[2] for row in rows if is_forbidden_native_owner(row[2])]
                     if denied:
                         raise RuntimeError("native stage invoked external execution owners: " + repr(denied))
                 if rss > rss_limit:
