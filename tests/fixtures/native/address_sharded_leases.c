@@ -33,8 +33,13 @@ static int64_t stopped_count(void) {
     pcc_resume_world();
     return result;
 }
+/* The collector is fixed once an object exists, so every other mode is
+ * refused. A counted lease also refuses a same-mode reset while it lives;
+ * a no-op token (GC0-2 without the provenance probe) does not. */
+static int trivial;
 static int refuses_all_modes(int64_t original) {
     for (int64_t target = 0; target < 5; target++) {
+        if (trivial && target == original) continue;
         if (pcc_gc_set_backend(target) != -1 || pcc_gc_backend() != original) return 0;
     }
     return 1;
@@ -43,6 +48,10 @@ int main(int argc, char **argv) {
     if (argc != 3) return 1;
     int64_t backend = atoi(argv[1]);
     int different = atoi(argv[2]);
+    const char *probe = getenv("PCC_GC_REFCOUNT_PROVENANCE_PROBE");
+    trivial = backend <= 2 && !(probe && probe[0] != '0');
+    /* A held lease's token and how much it adds to the stopped count. */
+    int64_t leaf = trivial ? 0 : 2, held = trivial ? 0 : 1;
     if (pcc_gc_set_backend(backend) != 0 || pcc_threads_enabled() == 0) return 2;
     PyObject *roots[ROOTS] = {NULL};
     int32_t map = ROOTS;
@@ -69,21 +78,21 @@ int main(int argc, char **argv) {
     if (pcc_thread_start(&handles[0], acquire_then_exit, &workers[0]) != 0) return 6;
     if (pcc_thread_start(&handles[1], acquire_then_exit, &workers[1]) != 0) return 7;
     wait_for(&ready, 2);
-    if (workers[0].token != 2 || workers[1].token != 2) return 8;
-    if (stopped_count() != baseline + 2) return 9;
+    if (workers[0].token != leaf || workers[1].token != leaf) return 8;
+    if (stopped_count() != baseline + 2 * held) return 9;
     /* Token2 traffic must not quietly retain writes to the old shared line. */
     if (__atomic_load_n(&pcc_gc_foreign_lease_active, __ATOMIC_ACQUIRE) != central_before) return 10;
     if (!refuses_all_modes(backend)) return 11;
     __atomic_store_n(&leave, 1, __ATOMIC_RELEASE);
     if (pcc_thread_join(handles[0], &result) != 0 || pcc_thread_join(handles[1], &result) != 0) return 12;
-    if (stopped_count() != baseline + 2 || !refuses_all_modes(backend)) return 13;
+    if (stopped_count() != baseline + 2 * held || !refuses_all_modes(backend)) return 13;
     if (pcc_gc_root_move(&roots[MOVED], &roots[0]) != 0 || roots[0] != NULL) return 14;
     int64_t copy_token = pcc_gc_root_copy_lease(&roots[COPIED], &roots[MOVED]);
-    if (copy_token != 2 || roots[COPIED] != roots[MOVED] || stopped_count() != baseline + 3) return 15;
+    if (copy_token != leaf || roots[COPIED] != roots[MOVED] || stopped_count() != baseline + 3 * held) return 15;
     pcc_gc_collect(1);
     if (py_int_value_i64(roots[MOVED]) != INT64_C(4611686018427388001)) return 16;
     if (pcc_gc_foreign_lease_release(&roots[MOVED], workers[0].token) != 0) return 17;
-    if (stopped_count() != baseline + 2) return 18;
+    if (stopped_count() != baseline + 2 * held) return 18;
     if (pcc_gc_foreign_lease_release(&roots[COPIED], copy_token) != 0) return 19;
     PyObject **second_release = different ? &roots[second] : &roots[MOVED];
     if (pcc_gc_foreign_lease_release(second_release, workers[1].token) != 0) return 20;
@@ -93,8 +102,8 @@ int main(int argc, char **argv) {
     if (!roots[INDEXED]) return 22;
     int64_t indexed_token = pcc_gc_foreign_lease_acquire(&roots[INDEXED]);
     int64_t leaf_token = pcc_gc_foreign_lease_acquire(&roots[MOVED]);
-    if (indexed_token != (backend == 0 ? 2 : 1) || leaf_token != 2) return 23;
-    if (stopped_count() != baseline + 2 || !refuses_all_modes(backend)) return 24;
+    if (indexed_token != (trivial ? 0 : backend == 0 ? 2 : 1) || leaf_token != leaf) return 23;
+    if (stopped_count() != baseline + 2 * held || !refuses_all_modes(backend)) return 24;
     if (pcc_gc_foreign_lease_release(&roots[MOVED], leaf_token) != 0) return 25;
     if (pcc_gc_foreign_lease_release(&roots[INDEXED], indexed_token) != 0) return 26;
     if (stopped_count() != baseline || pcc_gc_set_backend(backend) != 0) return 27;

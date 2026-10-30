@@ -1,6 +1,7 @@
 #include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern PyObject *pcc_str_ascii_char(int64_t);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
@@ -39,8 +40,12 @@ static void *worker(void *arg) {
     return 0;
 }
 
-int main(void) {
-    if (pcc_gc_set_backend(0) != 0) return 10;
+int main(int argc, char **argv) {
+    if (argc != 2) return 1;
+    int backend = atoi(argv[1]);
+    /* The collector is selected before the first managed allocation and is
+       fixed from then on: one process per collector. */
+    if (pcc_gc_set_backend(backend) != 0) return 10;
     void *threads[CARRIERS];
     for (int i = 0; i < CARRIERS; i++) {
         if (pcc_thread_start(&threads[i], worker, (void *)(intptr_t)i) != 0) return 11;
@@ -55,8 +60,8 @@ int main(void) {
             return 100 + (intptr_t)status;
         }
     }
-    for (int backend = 0; backend < 5; backend++) {
-        if (pcc_gc_set_backend(backend) != 0) return 13;
+    {
+        if (pcc_gc_backend() != backend) return 13;
         if (pcc_str_ascii_char(-1) || pcc_str_ascii_char(128)) return 14;
         for (int c = 0; c < ASCII_COUNT; c++) {
             PyObject *p = pcc_str_ascii_char(c);
@@ -72,8 +77,16 @@ int main(void) {
             void *handle = pcc_gc_scheduler_root_register_handle(&slot);
             if (!handle) return 19;
             int64_t token = pcc_gc_foreign_lease_acquire(&slot);
-            if (token != 2) return 20;
-            if (pcc_gc_set_backend(backend) == 0) return 21;
+            /* GC0-2 never move an object, so the lease is the no-op token
+               and a reset proceeds; a moving collector counts the lease and
+               refuses a reset while it lives. */
+            if (backend <= 2) {
+                if (token != 0) return 20;
+                if (pcc_gc_set_backend(backend) != 0) return 21;
+            } else {
+                if (token != 2) return 20;
+                if (pcc_gc_set_backend(backend) == 0) return 21;
+            }
             if (pcc_gc_foreign_lease_release(&slot, token) != 0) return 22;
             pcc_gc_scheduler_root_unregister_handle(handle);
             if (slot != p) return 23;

@@ -73,7 +73,7 @@ def test_inline_factory_is_default_and_legacy_bulk_control_wins(tmp_path, monkey
 
 
 @pytest.mark.integration
-def test_inline_storage_ownership_slots_and_backend_switches(tmp_path, pcc_runtime_archive):
+def test_inline_storage_ownership_slots_and_same_backend_resets(tmp_path, pcc_runtime_archive):
     source = tmp_path / "frame.c"
     source.write_text(r'''#include "py_runtime.h"
 #include <stdio.h>
@@ -155,7 +155,9 @@ int main(int argc, char **argv) {
 ''')
     binary = tmp_path / "frame"
     compile_owned_c_with_runtime(source, binary, runtime_archive=pcc_runtime_archive)
-    for initial, final in [(n, n) for n in range(5)] + [(0, n) for n in range(1, 5)]:
+    # The collector is fixed once an object exists; a reset to the same
+    # collector between the frame's stores stays legal.
+    for initial, final in [(n, n) for n in range(5)]:
         run = subprocess.run([str(binary), str(initial), str(final)], capture_output=True,
                              text=True, timeout=20)
         assert (run.returncode, run.stdout, run.stderr) == (0, "INLINE_FRAME_OK\n", ""), (initial, final)

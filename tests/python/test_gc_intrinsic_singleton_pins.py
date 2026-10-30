@@ -17,13 +17,15 @@ def test_intrinsic_singletons_preserve_flags_and_balance_with_heap_controls(
         ROOT / "tests/fixtures/native/gc_intrinsic_singleton_pins.c", binary,
         runtime_archive=Path(pcc_runtime_archive),
     )
-    run = subprocess.run(
-        [str(binary)], capture_output=True, text=True, timeout=30,
-        env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND="0"),
-    )
-    assert (run.returncode, run.stdout, run.stderr) == (
-        0, "INTRINSIC_SINGLETON_PINS_OK\n", "",
-    )
+    # The collector is fixed by the first managed object: one run each.
+    for backend in range(5):
+        run = subprocess.run(
+            [str(binary), str(backend)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert (run.returncode, run.stdout, run.stderr) == (
+            0, "INTRINSIC_SINGLETON_PINS_OK\n", "",
+        ), backend
 
 
 PROGRAM = """import gc

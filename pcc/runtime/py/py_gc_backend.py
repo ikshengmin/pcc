@@ -2628,10 +2628,35 @@ def pcc_gc_reclaim_retired_index_tables_if_alone() -> None:
     pcc_gc_reclaim_retired_index_tables()
 
 
+@c_abi_export("pcc_gc_fix_backend")
+def pcc_gc_fix_backend() -> None:
+    """Fix the collector at the first managed allocation.
+
+    pcc_gc_alloc runs this, and so does registering a raw allocation (a big
+    int, a C-API object, a builtin class or standard stream: malloc'd and
+    flagged PY_FLAG_GC_MALLOC_ALLOC). The configuration is read first, so
+    PCC_GC_BACKEND applies before the first managed object exists; from then
+    on pcc_gc_set_backend refuses every other collector. Data-segment images
+    (compiled literals, the ASCII character table) register without fixing
+    it: no collector moves or frees them, and a C-ABI image's constructor
+    registers its literals before main, ahead of a C program's own choice.
+    """
+    if load_i32(global_addr("pcc_gc_backend_frozen"), 0) != 0:
+        return
+    _init_config()
+    atomic_store_i32(global_addr("pcc_gc_backend_frozen"), 0, 1, "release")
+
+
 @c_abi_export("pcc_gc_pointer_register")
 def pcc_gc_pointer_register(o) -> int:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return -1
+    # 262144 = PY_FLAG_GC_MALLOC_ALLOC: a raw managed allocation.
+    if (
+        load_i32(global_addr("pcc_gc_backend_frozen"), 0) == 0
+        and (load_i32(o, 12) & 262144) != 0
+    ):
+        pcc_gc_fix_backend()
     granule_result: int = pcc_gc_granule_object_publish(o)
     if granule_result < 0:
         return -1
@@ -2817,6 +2842,15 @@ def pcc_gc_set_backend(backend: int) -> int:
     _init_config()
     if backend < 0 or backend > 4:
         return -1
+    # The collector is selected before the first managed allocation, by
+    # PCC_GC_BACKEND or by one call here, and never changes afterwards: code
+    # on a non-moving collector holds raw object pointers without pins or
+    # leases. A same-backend reset stays legal.
+    if (
+        backend != load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
+    ):
+        return -1
     # A same-backend reset of GC1 or GC2 keeps the collector thread: the graph
     # lock orders the reset against its batches and the cycle epoch retires
     # any claim a stepper still holds, so it neither pauses nor joins the
@@ -2857,6 +2891,14 @@ def pcc_gc_set_backend(backend: int) -> int:
     if keeps_collector != 0 and old_backend != backend:
         # A concurrent switch won; this was a reset of the backend it left.
         _object_graph_unlock()
+        return -1
+    if (
+        old_backend != backend
+        and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
+    ):
+        # An allocation on another thread fixed the collector meanwhile.
+        _object_graph_unlock()
+        _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
     if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") != 0:
         _object_graph_unlock()

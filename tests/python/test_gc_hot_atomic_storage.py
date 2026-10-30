@@ -15,7 +15,7 @@ def test_hot_atomic_storage_preserves_pin_abi_across_five_collectors(
     fixture = ROOT / "tests/fixtures/native/threaded_path_ownership/pin_abi.c"
     source = fixture.read_text()
     assert source.count("int main(void)") == 1
-    source = "#include <stdint.h>\nstatic int backend;\n" + source.replace(
+    source = "#include <stdint.h>\n#include <stdlib.h>\nstatic int backend;\n" + source.replace(
         "EXPECTED_BACKEND", "backend",
     ).replace("int main(void)", "int pin_case(void)")
     # Refer to the live scalar neighbours, not the padding symbols: a future
@@ -41,7 +41,8 @@ static int outside_shards(void *a) {
     uintptr_t x = (uintptr_t)a, base = (uintptr_t)pcc_gc_metric_shards;
     return x + 128 <= base || x >= base + 64 * 128;
 }
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc != 2) return 1;
     if (!outside_shards(&pcc_gc_metric_safepoint)) return 60;
     if (!outside_shards(&pcc_gc_metric_step)) return 61;
     if (!separate(&g_pcc_py_gc_minor_graph_lock, &pcc_allocator_side_arena)) return 62;
@@ -59,12 +60,10 @@ int main(void) {
     }
     if (!separate(&pcc_gc_foreign_lease_active, &pcc_py_gc_scheduler_root_free_count)) return 64;
     if (!separate(&pcc_gc_foreign_lease_active, &pcc_gc_backend4_candidate_fresh_skips_g)) return 65;
-    for (backend = 0; backend < 5; backend++) {
-        if (pcc_gc_set_backend(backend) != 0) return 80;
-        int result = pin_case();
-        if (result != 0) return result;
-    }
-    return 0;
+    /* The collector is fixed by the first object: one process each. */
+    backend = atoi(argv[1]);
+    if (pcc_gc_set_backend(backend) != 0) return 80;
+    return pin_case();
 }
 '''
     src = tmp_path / "pin_storage.c"
@@ -73,10 +72,11 @@ int main(void) {
     compile_owned_c_with_runtime(
         src, binary, runtime_archive=Path(pcc_runtime_archive),
     )
-    run = subprocess.run(
-        [str(binary)], capture_output=True, text=True, timeout=20,
-        env=dict(os.environ, PATH="/nonexistent"),
-    )
-    assert (run.returncode, run.stdout, run.stderr) == (
-        0, "pin-public-abi-and-metric-ok\n" * 5, "",
-    )
+    for backend in range(5):
+        run = subprocess.run(
+            [str(binary), str(backend)], capture_output=True, text=True, timeout=20,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert (run.returncode, run.stdout, run.stderr) == (
+            0, "pin-public-abi-and-metric-ok\n", "",
+        ), backend

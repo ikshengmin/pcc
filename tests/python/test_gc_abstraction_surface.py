@@ -212,131 +212,6 @@ def test_python_codegen_uses_gc_surface_for_owned_ref_release():
     assert 'runtime["py_decref"]' not in layer1
 
 
-def test_gc_backend_selector_runs_in_no_libpython_binary(tmp_path):
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "prog.py"
-    exe = tmp_path / "prog.out"
-    src.write_text(textwrap.dedent(f"""
-        from pcc.extern import extern, c_int32, c_int64, c_ptr, c_void, c_obj
-        from pcc.unsafe import free, load_i32, malloc, null, ptr_add, store_i32, store_i64, store_ptr
-
-        pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_obj)
-        pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
-        pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_obj)
-        pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
-        pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-        pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
-        pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-        pcc_gc_set_backend = extern("pcc_gc_set_backend", (c_int64,), c_int64)
-        pcc_gc_collect = extern("pcc_gc_collect", (c_int32,), c_int64)
-        pcc_gc_telemetry = extern("pcc_gc_telemetry", (c_int64,), c_int64)
-        pcc_gc_telemetry_reset = extern("pcc_gc_telemetry_reset", (), c_void)
-        pcc_gc_safepoint = extern("pcc_gc_safepoint", (), c_void)
-        pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
-
-        def main() -> None:
-            pcc_gc_set_backend({BACKEND_REFCOUNT})
-            print(pcc_gc_backend())
-            print(pcc_gc_set_backend({BACKEND_TRICOLOR}))
-            print(pcc_gc_backend())
-            print(pcc_gc_set_backend({BACKEND_COLORED_RELOCATING}))
-            print(pcc_gc_backend())
-            print(pcc_gc_set_backend({BACKEND_INVALID}))
-            print(pcc_gc_backend())
-            # Startup work pending under the selected collector (for example
-            # GC4 remembered roots under PCC_GC_BACKEND=4) is drained first,
-            # so the step below is the idle one this sequence measures.
-            while pcc_gc_step(1024) != 0:
-                pass
-            pcc_gc_telemetry_reset()
-            print(pcc_gc_telemetry(5))
-            print(pcc_gc_step(7))
-            print(pcc_gc_telemetry(5))
-            pcc_gc_safepoint()
-            print(pcc_gc_telemetry(3))
-            print(pcc_gc_telemetry(5))
-
-            pcc_gc_set_backend({BACKEND_TRICOLOR})
-            pcc_gc_telemetry_reset()
-            o = pcc_gc_alloc(24, 2, 0)
-            print(pcc_gc_telemetry(0))
-            print(pcc_gc_telemetry(5))
-            pcc_gc_release(o)
-
-            owner = pcc_gc_alloc(24, 2, 0)
-            child = pcc_gc_alloc(24, 2, 0)
-            print(load_i32(child, 12) & 8)
-            store_i32(owner, 12, 32)
-            slot2 = malloc(8)
-            store_ptr(slot2, 0, null())
-            pcc_gc_store_ptr(owner, slot2, child)
-            print(load_i32(child, 12) & 16)
-            pcc_gc_step(1)
-            print(load_i32(child, 12) & 32)
-            print(pcc_gc_collect(0))
-            free(slot2)
-
-            slot = malloc(8)
-            store_ptr(slot, 0, null())
-            pcc_gc_set_backend({BACKEND_CONCURRENT})
-            v = pcc_gc_alloc(24, 2, 0)
-            pcc_gc_telemetry_reset()
-            pcc_gc_store_ptr(null(), slot, v)
-            print(pcc_gc_telemetry(1))
-            pcc_gc_store_ptr(null(), slot, null())
-            pcc_gc_release(v)
-
-            owner3 = pcc_gc_alloc(24, 2, 0)
-            child3 = pcc_gc_alloc(24, 2, 0)
-            pcc_gc_store_ptr(owner3, slot, child3)
-            print(load_i32(child3, 12) & 16)
-            pcc_gc_step(1024)
-            print(load_i32(child3, 12) & 32)
-            pcc_gc_store_ptr(owner3, slot, null())
-            pcc_gc_release(child3)
-            pcc_gc_release(owner3)
-
-            pcc_gc_set_backend({BACKEND_GENERATIONAL})
-            gen = pcc_gc_alloc(24, 2, 0)
-            print(load_i32(gen, 12) & 128)
-            pcc_gc_release(gen)
-
-            pcc_gc_set_backend({BACKEND_COLORED_RELOCATING})
-            pcc_gc_telemetry_reset()
-            pcc_gc_load_ptr(null(), slot)
-            print(pcc_gc_telemetry(2))
-            moving = pcc_gc_alloc(24, 2, 0)
-            pcc_gc_pin(moving)
-            print(load_i32(moving, 12) & 64)
-            pcc_gc_unpin(moving)
-            print(load_i32(moving, 12) & 64)
-            pcc_gc_release(moving)
-            free(slot)
-
-        if __name__ == "__main__":
-            main()
-        """).lstrip(), encoding="utf-8")
-    compile_python(
-        str(src),
-        str(exe),
-        ir_scaffold_mode="on",
-        libpython_mode="off",
-    )
-    result = subprocess.run(
-        [str(exe)], capture_output=True, text=True, timeout=20,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines() == [
-        "0", "0", "1", "0", "4", "-1", "4", "0", "0", "1", "1", "1",
-            # No tracing step occurs between selecting backend #1 and this
-            # store, so there is no active tricolor invariant: the white child
-            # correctly remains white until the following explicit step.
-            "1", "0", "8", "0", "32", "0", "1", "0", "32",
-        "128", "0", "64", "0",
-    ]
-
-
 def test_tracing_gc_backend_preserves_owned_locals_and_frame_roots(tmp_path):
     from pcc.frontends.python.pipeline import compile_python
 
@@ -396,6 +271,8 @@ def test_tracing_gc_backend_preserves_owned_locals_and_frame_roots(tmp_path):
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
+        # The collector is fixed by the first object: select it at start.
+        env={**os.environ, "PCC_GC_BACKEND": str(BACKEND_TRICOLOR)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == [
@@ -453,6 +330,8 @@ def test_tracing_gc_backend_traces_tuple_child_from_frame_root(tmp_path):
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
+        # The collector is fixed by the first object: select it at start.
+        env={**os.environ, "PCC_GC_BACKEND": str(BACKEND_TRICOLOR)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == ["0", "32", "32"]
@@ -524,6 +403,8 @@ def test_tracing_gc_backend_traces_dict_and_instance_children(tmp_path):
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
+        # The collector is fixed by the first object: select it at start.
+        env={**os.environ, "PCC_GC_BACKEND": str(BACKEND_TRICOLOR)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == ["32", "32", "32"]
@@ -590,6 +471,8 @@ def test_tracing_gc_backend_traces_instance_class_child(tmp_path):
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
+        # The collector is fixed by the first object: select it at start.
+        env={**os.environ, "PCC_GC_BACKEND": str(BACKEND_TRICOLOR)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == ["32", "32", "0"]
@@ -644,6 +527,8 @@ def test_tracing_gc_backend_traces_coroutine_children(tmp_path):
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
+        # The collector is fixed by the first object: select it at start.
+        env={**os.environ, "PCC_GC_BACKEND": str(BACKEND_TRICOLOR)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == ["0", "32", "32", "32"]

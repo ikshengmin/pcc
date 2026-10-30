@@ -43,7 +43,7 @@ def test_ascii_image_layout_matches_header_abi():
         assert data[payload:payload + 2] == bytes((codepoint, 0))
 
 
-def test_cold_ascii_cache_has_one_identity_across_threads_and_backend_changes(
+def test_cold_ascii_cache_has_one_identity_across_threads_on_every_collector(
     tmp_path, threaded_pcc_runtime_archive,
 ):
     binary = tmp_path / "ascii_cache"
@@ -51,14 +51,16 @@ def test_cold_ascii_cache_has_one_identity_across_threads_and_backend_changes(
         ROOT / "tests/fixtures/native/ascii_character_cache.c", binary,
         runtime_archive=Path(threaded_pcc_runtime_archive),
     )
-    for repeat in range(3):
-        run = subprocess.run(
-            [str(binary)], capture_output=True, text=True, timeout=30,
-            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND="0"),
-        )
-        assert (run.returncode, run.stdout, run.stderr) == (
-            0, "ASCII_CANONICAL_CACHE_OK\n", "",
-        ), repeat
+    # The collector never changes within a process: one cold cache each.
+    for backend in range(5):
+        for repeat in range(2):
+            run = subprocess.run(
+                [str(binary), str(backend)], capture_output=True, text=True, timeout=30,
+                env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+            )
+            assert (run.returncode, run.stdout, run.stderr) == (
+                0, "ASCII_CANONICAL_CACHE_OK\n", "",
+            ), (backend, repeat)
 
 
 PROGRAM = '''import gc

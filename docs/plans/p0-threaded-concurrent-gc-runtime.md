@@ -74,11 +74,17 @@ single-thread cost and serializes all threads.
    (`PCC_IMPLICIT_THREAD_SAFEPOINTS=0`, Makefile and owned builder);
    `freestanding_thread_kernel.py` leaves the inventory; tests and fixtures
    use the one archive. Tests: `tests/test_threaded_only_runtime.py`.
-2. Lock-free rooting primitives. GC0/1/2 foreign leases return the no-op
-   token without the lock or a shared counter; pin/unpin update the header
-   with atomic or/and and keep no shared metric on the fast path; backend
-   switches into a moving collector are refused while other threads exist.
-   Tests: `tests/python/test_lockfree_rooting_primitives.py`.
+2. Lock-free rooting primitives. The collector is selected before the
+   first managed allocation (`PCC_GC_BACKEND`, or one `pcc_gc_set_backend`
+   call) and never changes afterwards; a same-backend reset stays legal
+   (maintainer decision, 2026-10-30). GC0/1/2 therefore never move an object
+   that compiled code holds: their address leases return the no-op token
+   without the lock, a mode reservation or a provenance lookup (debug runs
+   and the refcount provenance probe keep the checked path). Pins stay: the
+   GC0 cycle collector treats pinned tracked objects as roots. pin/unpin
+   update the header with atomic or/and and keep no shared metric on the
+   fast path. Tests: `tests/python/test_gc_backend_fixed_after_first_allocation.py`,
+   `tests/python/test_foreign_address_leases.py`.
 3. Stack walks for every thread. Thread records (id, state, parked frame
    pointer, stack range) are linked at registration; parking and exited
    waits publish the frame pointer; the root visitor walks every thread when
@@ -129,8 +135,24 @@ single-thread cost and serializes all threads.
    (`Condition(lock)`, reentrant default, ownership errors, `notify(n)`,
    `wait_for`), Barrier/Timer.
 
+9. Per-object container synchronization (maintainer-directed 2026-10-30).
+   Every GC0 container transaction takes the one lock word
+   `g_pcc_py_gc_minor_graph_lock`; at four carriers waiting for it is about
+   13% of samples (list append, field load, dict get first). Containers take
+   their own lock (or skip it while provably private to one thread), with an
+   ordering rule for operations that touch two containers and no lock held
+   across user code. Tests: concurrent mutation and read races per container
+   kind on five collectors.
+10. Per-carrier scheduler state (maintainer-directed 2026-10-30). A request
+    takes the global virtual-thread scheduler lock 29.4 times (step finish
+    and dequeue 6.2 each; start, complete, join and join_result 3 each).
+    Ready queues and the transitions of a thread a carrier owns move to that
+    carrier; cross-carrier wakeups, timers and fds keep an explicit protocol.
+    Tests: model interleavings plus native five-collector carrier runs.
+
 ## Invariants every package keeps
 
+- The collector is fixed from the first managed allocation onward.
 - Five collectors, one slot/root contract; CPython-visible semantics
   (identity, exceptions, finalizers, weakrefs, resurrection, refcounts as
   observed by `sys.getrefcount`).

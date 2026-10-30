@@ -1763,6 +1763,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_worker_traces',
         'pcc_gc_cms_sweep_pending',
         'pcc_gc_config_initialized',
+        'pcc_gc_backend_frozen',
         'pcc_gc_cycle_requested',
         'pcc_gc_explicit_collect_active',
         'pcc_gc_forwarding_population',

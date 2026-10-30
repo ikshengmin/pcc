@@ -23,6 +23,9 @@ define_global_i32("py_gc_threshold0", 2000)
 define_global_i32("py_gc_threshold1", 10)
 define_global_i32("py_gc_threshold2", 10)
 define_global_i32("py_gc_freeze_count", 0)
+# Set by the first managed allocation (pcc_gc_fix_backend): from then on the
+# selected collector never changes (pcc_gc_set_backend refuses another).
+define_global_i32("pcc_gc_backend_frozen", 0)
 define_global_ptr_null("py_gc_head")
 define_global_ptr_null("pcc_gc_deferred_node_free_head")
 # Recycled 40-byte tracking nodes (freestanding_gc_tracking.py). Mutators

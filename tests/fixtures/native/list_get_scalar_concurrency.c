@@ -1,6 +1,7 @@
 #include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern int64_t pcc_gc_foreign_lease_count_quiescent(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
@@ -90,7 +91,10 @@ int main(int argc, char **argv) {
     py_list_append(roots[0], roots[1]);
     pcc_gc_store_root(&roots[1], NULL);
     int64_t token = pcc_gc_foreign_lease_acquire(&roots[0]);
-    if (token != 2) return 3;
+    /* GC0 never moves and its collector is fixed: the lease is the no-op
+     * token unless the refcount provenance probe checks it (token 2). */
+    const char *probe = getenv("PCC_GC_REFCOUNT_PROVENANCE_PROBE");
+    if (token != ((probe && probe[0] != '0') ? 2 : 0)) return 3;
     /* The list root and its mode lease survive both workers. The lease
      * does not freeze the item field or retain old elements/buffers. */
     struct Context context = {roots[0]};
@@ -102,7 +106,7 @@ int main(int argc, char **argv) {
     wait_for(&writer_done, 1);
     wait_for(&reader_done, 1);
     if (pcc_thread_join(writer, &result) != 0 || pcc_thread_join(reader, &result) != 0) return 6;
-    if (failures || copied != READS || active() != baseline + 1) {
+    if (failures || copied != READS || active() != baseline + (token != 0)) {
         printf("BAD value=%lld copied=%lld failures=%lld\n", (long long)first_bad,
                (long long)copied, (long long)failures);
         return 7;

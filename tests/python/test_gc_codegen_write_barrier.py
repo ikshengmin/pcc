@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import subprocess
 import textwrap
 
@@ -783,7 +784,7 @@ def test_generated_heap_stores_increment_barrier_counter_only_for_tracing_backen
     src.write_text(textwrap.dedent("""
         from pcc.extern import extern, c_int64, c_ptr, c_void, c_obj
 
-        pcc_gc_set_backend = extern("pcc_gc_set_backend", (c_int64,), c_int64)
+        pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
         pcc_gc_telemetry = extern("pcc_gc_telemetry", (c_int64,), c_int64)
         pcc_gc_telemetry_reset = extern("pcc_gc_telemetry_reset", (), c_void)
         py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_obj)
@@ -814,15 +815,14 @@ def test_generated_heap_stores_increment_barrier_counter_only_for_tracing_backen
             t = py_tuple_new(1)
             py_tuple_set_item(t, 0, value)
 
-        def run_backend(backend: int) -> int:
-            pcc_gc_set_backend(backend)
+        def main() -> None:
+            # The collector comes from PCC_GC_BACKEND and is fixed from the
+            # first object on: one run per collector.
+            backend = pcc_gc_backend()
             pcc_gc_telemetry_reset()
             exercise()
-            return pcc_gc_telemetry(1)  # PCC_GC_COUNTER_WRITE_BARRIERS
-
-        def main() -> None:
-            print(run_backend(0))
-            print(run_backend(1) > 0)
+            print(backend)
+            print(pcc_gc_telemetry(1))  # PCC_GC_COUNTER_WRITE_BARRIERS
 
         if __name__ == "__main__":
             main()
@@ -834,6 +834,11 @@ def test_generated_heap_stores_increment_barrier_counter_only_for_tracing_backen
         ir_scaffold_mode="on",
         libpython_mode="off",
     )
-    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines() == ["0", "True"]
+    for backend in ("0", "1"):
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
+                                env=dict(os.environ, PCC_GC_BACKEND=backend))
+        assert result.returncode == 0, (backend, result.stderr)
+        selected, barriers = result.stdout.strip().splitlines()
+        assert selected == backend
+        # GC0 has no tracing write barrier to count; GC1 counts every store.
+        assert (int(barriers) == 0) if backend == "0" else (int(barriers) > 0), barriers

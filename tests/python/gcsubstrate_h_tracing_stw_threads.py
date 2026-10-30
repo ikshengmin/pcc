@@ -684,6 +684,7 @@ def test_no_libpython_all_backends_collect_through_thread_gate(tmp_path):
     src.write_text(textwrap.dedent("""
         from pcc.extern import extern, c_int32, c_int64, c_void
 
+        pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
         pcc_gc_set_backend = extern("pcc_gc_set_backend", (c_int64,), c_int64)
         pcc_gc_collect = extern("pcc_gc_collect", (c_int32,), c_int64)
         pcc_gc_safepoint = extern("pcc_gc_safepoint", (), c_void)
@@ -691,14 +692,13 @@ def test_no_libpython_all_backends_collect_through_thread_gate(tmp_path):
         pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 
         def main() -> None:
-            b = 0
-            while b < 5:
-                print(pcc_gc_set_backend(b))
-                pcc_gc_safepoint()
-                print(pcc_gc_collect(0) >= 0)
-                print(pcc_stop_the_world())
-                print(pcc_resume_world())
-                b = b + 1
+            # The collector comes from PCC_GC_BACKEND; a same-backend reset
+            # stays legal.
+            print(pcc_gc_set_backend(pcc_gc_backend()))
+            pcc_gc_safepoint()
+            print(pcc_gc_collect(0) >= 0)
+            print(pcc_stop_the_world())
+            print(pcc_resume_world())
 
         if __name__ == "__main__":
             main()
@@ -709,12 +709,11 @@ def test_no_libpython_all_backends_collect_through_thread_gate(tmp_path):
         ir_scaffold_mode="on",
         libpython_mode="off",
     )
-    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stderr
-    expected: list[str] = []
-    for _backend in range(5):
-        expected.extend(["0", "True", "0", "0"])
-    assert result.stdout.strip().splitlines() == expected
+    for backend in range(5):
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20,
+                                env={**os.environ, "PCC_GC_BACKEND": str(backend)})
+        assert result.returncode == 0, (backend, result.stderr)
+        assert result.stdout.strip().splitlines() == ["0", "True", "0", "0"], backend
 
 
 def test_pthread_substrate_stop_the_world_stress(tmp_path):
@@ -974,20 +973,15 @@ def test_thread_safepoint_composes_with_all_gc_backends(tmp_path):
         pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
         pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 
-        def exercise(backend: int) -> None:
-            print(pcc_gc_set_backend(backend))
+        def main() -> None:
+            # The collector comes from PCC_GC_BACKEND; a same-backend reset
+            # stays legal.
+            print(pcc_gc_set_backend(pcc_gc_backend()))
             print(pcc_stop_the_world())
             pcc_gc_safepoint()
             print(pcc_resume_world())
             print(pcc_gc_backend())
             print(pcc_gc_collect(0) >= 0)
-
-        def main() -> None:
-            exercise(0)
-            exercise(1)
-            exercise(2)
-            exercise(3)
-            exercise(4)
 
         if __name__ == "__main__":
             main()
@@ -998,12 +992,11 @@ def test_thread_safepoint_composes_with_all_gc_backends(tmp_path):
         ir_scaffold_mode="on",
         libpython_mode="off",
     )
-    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stderr
-    expected: list[str] = []
     for backend in range(5):
-        expected.extend(["0", "0", "0", str(backend), "True"])
-    assert result.stdout.strip().splitlines() == expected
+        result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20,
+                                env={**os.environ, "PCC_GC_BACKEND": str(backend)})
+        assert result.returncode == 0, (backend, result.stderr)
+        assert result.stdout.strip().splitlines() == ["0", "0", "0", str(backend), "True"], backend
 
 
 def test_threading_substrate_runs_in_no_libpython_binary(tmp_path):

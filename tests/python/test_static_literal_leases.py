@@ -105,10 +105,12 @@ def test_native_static_origins_survive_collection_and_backend_transitions(
         ROOT / "tests/fixtures/native/static_literal_leases.c", binary,
         runtime_archive=Path(threaded_pcc_runtime_archive),
     )
-    result = subprocess.run(
-        [str(binary)], capture_output=True, text=True, timeout=30,
-        env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND="0"),
-    )
-    assert (result.returncode, result.stdout, result.stderr) == (
-        0, "STATIC_LITERAL_LEASES_OK\n", "",
-    )
+    # The collector is fixed by the first managed allocation: one run each.
+    for backend in range(5):
+        result = subprocess.run(
+            [str(binary), str(backend)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, "STATIC_LITERAL_LEASES_OK\n", "",
+        ), backend

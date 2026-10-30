@@ -1,6 +1,7 @@
 #include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 extern PyObjectHeader py_none_storage, py_true_storage, py_false_storage;
 extern PyObjectHeader py_notimplemented_storage, py_ellipsis_storage;
 /* The pin balance is summed from the runtime's statistics shards. */
@@ -9,7 +10,7 @@ extern void pcc_gc_immortalize(PyObject *);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 static PyObject *values[5];
-static PyObject *permanent[5];
+static PyObject *permanent;
 static void *worker(void *unused) {
     if(pcc_current_thread_id()<=0)return (void *)1;
     for(int repeat=0;repeat<5000;repeat++)for(int i=0;i<5;i++){
@@ -17,11 +18,15 @@ static void *worker(void *unused) {
     }
     return 0;
 }
-int main(void) {
+int main(int argc, char **argv) {
+    if(argc!=2)return 1;
+    int backend=atoi(argv[1]);
     values[0]=(PyObject *)&py_none_storage; values[1]=(PyObject *)&py_true_storage;
     values[2]=(PyObject *)&py_false_storage;values[3]=(PyObject *)&py_notimplemented_storage;
     values[4]=(PyObject *)&py_ellipsis_storage;
-    for(int backend=0;backend<5;backend++) {
+    /* The collector is selected before the first managed object and is
+       fixed from then on: one process per collector. */
+    {
         if(pcc_gc_set_backend(backend)!=0)return 10;
         for(int i=0;i<5;i++) {
             int64_t count = pcc_gc_metric_pin_balance();
@@ -36,7 +41,7 @@ int main(void) {
         }
         /* Same IMMORTAL bit on a heap object is deliberately NOT admitted. */
         PyObject *heap=(PyObject *)py_list_new(0);if(!heap)return 24;
-        permanent[backend]=heap;
+        permanent=heap;
         int64_t count = pcc_gc_metric_pin_balance();
         pcc_gc_pin(heap);if(pcc_gc_metric_pin_balance()!=count+1)return 25;
         if((((PyObjectHeader *)heap)->flags&64)==0)return 26;
@@ -46,7 +51,7 @@ int main(void) {
         pcc_gc_unpin(heap);if(pcc_gc_metric_pin_balance()!=count+1)return 30;
         if((((PyObjectHeader *)heap)->flags&1)==0)return 31;
     }
-    if(pcc_gc_set_backend(0)!=0)return 32;
+    if(pcc_gc_set_backend((backend+1)%5)!=-1 || pcc_gc_backend()!=backend)return 32;
     int64_t count = pcc_gc_metric_pin_balance();
     void *threads[4];
     for(int i=0;i<4;i++)if(pcc_thread_start(&threads[i],worker,0)!=0)return 33;

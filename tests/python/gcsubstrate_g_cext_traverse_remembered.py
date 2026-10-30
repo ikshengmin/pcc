@@ -479,9 +479,6 @@ def test_initial_seed_cext_traverse_owns_stw_without_graph_lock(
                     ) != -1) return 12;
 
                 pcc_gc_frame_leave(roots);
-                if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) != 0) {
-                    return 13;
-                }
                 py_decref(roots[0]);
                 py_decref(anchor);
                 return 0;
@@ -675,9 +672,6 @@ def test_final_cut_cext_traverse_runs_outside_graph_lock(
                     ) != 1) return 46;
 
                 pcc_gc_frame_leave(roots);
-                if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) != 0) {
-                    return 47;
-                }
                 for (int i = 0; i < 18; i++) py_decref(roots[i]);
                 py_decref(anchor);
                 return 0;

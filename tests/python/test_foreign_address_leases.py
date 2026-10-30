@@ -27,6 +27,12 @@ class Model:
         self.memory = {
             ("pcc_gc_backend_selected", 0): backend,
             ("pcc_gc_config_initialized", 0): int(initialized),
+            # These models run the checked lease path, which the refcount
+            # provenance probe keeps on every collector. Without it a lease
+            # on GC0-2 is a no-op token (see the production cases below):
+            # the collector cannot change once an object exists, and GC0-2
+            # never move one.
+            ("pcc_gc_refcount_provenance_probe", 0): 1,
         }
         self.nodes = {}
         self.proven = set()
@@ -42,6 +48,7 @@ class Model:
             null=lambda: 0, ptr_eq=lambda a,b: int(a == b), global_addr=lambda p:p,
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
             atomic_load_i64=lambda base,offset,order:self.load(base,offset),
+            atomic_load_i32=lambda base,offset,order:self.load(base,offset),
             atomic_store_i64=lambda base,offset,value,order:self.store(base,offset,value),
             atomic_cas_i64=self.compare_exchange,
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
@@ -273,8 +280,8 @@ def test_mode_change_and_same_mode_reset_refuse_live_leases(before,after,initial
     token=m.acquire(slot)
     assert token == (2 if before == 0 else 1)
     assert m.load("pcc_gc_config_initialized", 0) == 1
-    # First-use initialization must not turn later leases into uncounted
-    # no-ops, even though GC0/1/2 do not currently move objects.
+    # In the checked path, first-use initialization must not turn later
+    # leases into uncounted no-ops.
     second=m.acquire(slot)
     assert second == token and m.active() == 2
     setter=_mode_setter(m)
@@ -858,3 +865,65 @@ def test_uncertain_non_granule_lease_checks_current_index_under_graph_lock():
     assert model.acquire(slot) == 2 and model.active() == 1
     assert any(event[0] == 'lock' for event in model.events)
     assert model.release(slot, 2) == 0 and model.active() == 0
+
+
+@pytest.mark.parametrize("backend", (0, 1, 2))
+def test_a_production_lease_on_a_non_moving_collector_is_a_no_op(backend):
+    # The collector is fixed once an object exists (pcc_gc_set_backend) and
+    # GC0-2 never move one: the lease takes no mode reservation, graph lock,
+    # provenance lookup or count.
+    m = Model(backend)
+    m.store("pcc_gc_refcount_provenance_probe", 0, 0)
+    m.store("pcc_gc_refcount_atomic", 0, int(backend == 0))
+    slot = m.object(node=backend != 0, flags=262144)
+    before = dict(m.memory)
+    assert m.acquire(slot) == 0 and m.events == [] and m.memory == before
+    assert m.release(slot, 0) == 0 and m.events == [] and m.active() == 0
+
+
+@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("checked", ("probe", "uninitialized"))
+def test_checked_runs_and_moving_collectors_keep_the_counted_lease(backend, checked):
+    m = Model(backend, initialized=checked != "uninitialized")
+    m.store("pcc_gc_refcount_provenance_probe", 0, int(checked == "probe"))
+    slot = m.object(node=backend != 0, flags=262144)
+    token = m.acquire(slot)
+    assert token == (2 if backend == 0 else 1) and m.active() == 1
+    assert m.release(slot, token) == 0 and m.active() == 0
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+def test_a_production_lease_on_a_moving_collector_still_counts(backend):
+    m = Model(backend)
+    m.store("pcc_gc_refcount_provenance_probe", 0, 0)
+    slot = m.object(flags=262144)
+    assert m.acquire(slot) == 1 and m.count() == 1
+    assert m.release(slot, 1) == 0 and m.count() == 0
+
+
+@pytest.mark.parametrize("before", range(5))
+@pytest.mark.parametrize("after", range(5))
+def test_the_collector_is_fixed_once_an_object_exists(before, after):
+    # The first managed allocation sets pcc_gc_backend_frozen; from then on
+    # another collector is refused before any worker stop, lock or state
+    # change. A same-backend reset stays legal.
+    m = Model(before)
+    m.store("pcc_gc_backend_frozen", 0, 1)
+    setter = _mode_setter(m)
+    stops = []
+    m.ns["_stop_cms_worker"] = lambda: stops.append(after) or 0
+    before_memory = dict(m.memory)
+    result = setter(after)
+    if after == before:
+        assert result == 0 and m.load("pcc_gc_backend_selected") == before
+    else:
+        assert result == -1 and stops == [] and m.events == []
+        assert m.memory == before_memory
+
+
+@pytest.mark.parametrize("after", range(5))
+def test_the_collector_can_be_selected_before_the_first_object(after):
+    m = Model(0)
+    assert m.load("pcc_gc_backend_frozen") == 0
+    assert _mode_setter(m)(after) == 0
+    assert m.load("pcc_gc_backend_selected") == after

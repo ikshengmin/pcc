@@ -160,9 +160,6 @@ int main(int argc, char **argv) {
         int overflow = 0;
         if (py_int_to_i64(number, &overflow) != 42 || overflow) return 3;
         py_decref(number);
-        /* Switching between nonmoving collectors must not lose ownership. */
-        if (atoi(argv[1]) == 0 && iteration == 2 && pcc_gc_set_backend(1) != 0) return 4;
-        if (atoi(argv[1]) == 0 && iteration == 4 && pcc_gc_set_backend(0) != 0) return 5;
         unsigned char owned = 1;
         py_list_set_from_owned_root(roots[0], 0, &roots[1], &owned);
         if (owned) pcc_gc_store_root(&roots[1], NULL);

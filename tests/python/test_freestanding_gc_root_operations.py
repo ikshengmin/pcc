@@ -77,6 +77,9 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected", "pcc_gc_gray_count",
+    # A lease on a non-moving collector is a no-op once the configuration
+    # is known, unless the provenance probe checks it.
+    "pcc_gc_config_initialized", "pcc_gc_refcount_provenance_probe",
     # The atomic refcount mode admitted by the pin and lease paths.
     "pcc_gc_refcount_atomic", "pcc_diagnostics_runtime_log_fast_state",
     # Exact static singleton addresses; no header or object-index read.
