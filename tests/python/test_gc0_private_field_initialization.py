@@ -98,8 +98,18 @@ class CapacityModel(InitModel):
                                "pcc_py_gc_minor_graph_lock": self.lock,
                                "pcc_py_gc_minor_graph_unlock": self.unlock,
                                "_list_is_sane": self.validate,
-                               "pcc_gc_try_init_ptr_locked": (lambda *args: 0) if miss else self.namespace["pcc_gc_try_init_ptr_locked"]})
+                               "pcc_gc_try_init_ptr_locked": (lambda *args: 0) if miss else self.namespace["pcc_gc_try_init_ptr_locked"],
+                               # A full list is handed to the doubling path
+                               # (test_list_append_growth_gc0's); declining
+                               # here keeps this transaction's own contract.
+                               "_append_grow_gc0": self.grow})
+        self.grown = []
         load_body("py_list.py", "_append_existing_capacity_gc0", self.namespace)
+
+    def grow(self, list_slot, item_slot, items, capacity):
+        assert self.depth == 0
+        self.grown.append((list_slot, item_slot, items, capacity))
+        return 0
 
     def lock(self):
         assert self.depth == 0
@@ -144,6 +154,7 @@ def test_capacity_miss_unlocks_without_publishing(settings):
     assert "publish-length" not in m.events
     if settings.get("switch"):
         assert m.events == []
+    assert m.grown == ([(100, 200, 2000, 4)] if settings.get("full") else [])
 
 
 C_PROBE = r'''
