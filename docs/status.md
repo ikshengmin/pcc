@@ -395,6 +395,54 @@ of the virtual-thread layer and coroutine frames, per-carrier scheduler
 queues, GC0 tracking counters and shard locality, then container
 privatization.
 
+Rounds R41-R50 (2026-10-30, same README, receipts `r60`-`r70`) followed the
+GC3 heal (`4118634a1`) and GC4 direct-step (`26e754e70`) fixes. Accepted: a
+dying object untracks only when tracked (`6c160920a`), collector
+bookkeeping off the death and allocation path (`9f08463ff`), a carrier
+queues the work it readies on its own queue instead of round-robin
+(`a1c23bcb1`; 4w +5.1% / +3.5%, 5/7 both), and a GC0 field read of NULL, a
+tagged int or static None/True/False skips the graph transaction
+(`0e3e14a22`; 1w +0.4% / +1.9%, 4w +2.3% / +1.9%). Rejected, patches
+archived: gated scheduler bookkeeping, fewer transactions in dict views
+and `str.encode`, a scheduler ticket lock (4w -1.0% / -6.9%: FIFO handoff
+convoys; it also needed its idle wait kept no-park, since a carrier leaving
+an exited wait holds the idle mutex until a stop resumes), a per-carrier
+run-next slot (4w -2.1% / -10.5%), a GC0 immediate-over-immediate field
+store as one CAS (4w -3.5% / -8.3%) and per-shard tracked node pool budgets
+(1w +0.8% over five runs, 4w median -1.2%). Direct cumulative from the
+`26e754e70` runtime to the `185944a19` runtime: one worker 33,851 -> 34,907
+(+2.5%, cycles -2.6% 7/7) and 33,566 -> 34,116 (+0.8%, cycles -1.6% 7/7),
+instructions -2.1%; four workers 69,770 -> 69,513 (paired +1.2%, 4/7) and
+66,452 -> 66,939 (paired +9.7%, 6/7); same-run asyncio 85-88k / 268-289k
+(2.5x / 4x ahead). Scheduler lock acquisitions per request (one worker,
+lldb by call site, 29.4 total): step finish 6.2, dequeue 6.2, start,
+complete, join and join_result 3 each, sleep 2, timer and fd polls 1 each.
+Four-worker profile after the locality change: graph-lock waiting 12.6%
+inclusive (`_graph_wait_acquire` 9.5% self), by caller list append 23%,
+field load 20%, dict get 12%; scheduler mutex 5.6%; idle carriers 5%. Every
+GC0 container transaction takes the one lock word
+`g_pcc_py_gc_minor_graph_lock`, which serializes all carriers. The
+remaining routes are multi-week: per-object container locks or
+privatization, per-carrier scheduler state, and P0 packages 4 and 5
+(protocol-free compiled code, biased counts). GC0 pins and mode/slot
+leases (about 343 and 281 calls per one-worker request, about 7% of self
+time) exist for a runtime switch into a moving collector; removing them
+changes that contract and is a maintainer decision.
+
+Found in these rounds, not fixed: `a, b = vt.recv(r)` and
+`s, r = vt.mpsc(n)` fail to compile ("slot-call Call lacks an immediate
+owned-result handoff"; indexing the result compiles). Failing identically
+on unmodified arms: `test_gc_tracked_node_pool.py` expects `pool:4096` on
+GC4, which tracks nothing under threads (GC0-3 print it);
+`test_native_init_field_rhs_type.py::test_class_self_call_argument_types_reach_literal_dispatch_target`
+(no `@py_list_get` in the IR); `test_freestanding_runtime_no_c_closure.py`
+run from an arm (provisioning, and a `py_cleanup_runtime.o` record whose
+source is missing). GC1 and GC2 do not collect every cyclic object with
+`__del__` within 20 `gc.collect()` calls, so
+`test_dead_object_untrack_skip.py` uses acyclic nodes. Repro: the archive's
+`freeze.py <arm> <rev>`, `guard_build.py <arm>`, `check_workers.py <arm> 2`,
+`guard_measure.py <base> <cand> <tag>` and `summarize.py <tag>.json`.
+
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
 Current route, at the user's explicit request: **arm1:8084 first, us1:8089
