@@ -188,6 +188,38 @@ environment can select a different one. NumPy and other CPython-extension
 packages are not supported in general yet. See
 [package environments](docs/developer-reference.md#install-application-packages-into-one-environment).
 
+### Python package support
+
+Package compatibility is experimental. There is **no verified overall package
+support percentage**: installing or discovering a package is not evidence that
+its imports or application workloads execute natively under pcc1.
+
+Pure-Python packages still depend on the implemented Python and standard-library
+semantics. General compatibility with CPython binary wheels and extension
+packages must not be assumed.
+
+The committed qualification catalog records these version-pinned targets:
+
+| Package | Workload | Recorded qualification status |
+|---|---|---|
+| pproxy 1.9.5 | Native pure-Python service | Unverified |
+| NumPy 2.4.4 | Scientific package | Unverified |
+| simplejson 4.1.1 | Native extension | Unverified |
+
+These are qualification targets, not a list of passing packages. The catalog
+also contains non-package workloads, so its total entry count is not a package
+support denominator. Historical NumPy 2.4.x experiments cover selected
+import/version, construction, scalar-addition and element-access cases; they
+do not qualify general NumPy compatibility on the current source.
+
+Native support claims must identify the package version, platform, pcc1/runtime
+build and workload actually executed. Parsing, host tests and CPython-fallback
+results must not be counted as native pcc1 package support.
+
+See the [qualification catalog](docs/compat/pcc1-cpython-replacement-workloads.json),
+[claim contract](docs/compat/pcc1-cpython-replacement-matrix.json), and
+[package limitations](docs/developer-reference.md#numpy-and-other-packages).
+
 ## Related projects
 
 - [pcc-gateway](https://github.com/allstoalls/pcc-gateway): an experimental
