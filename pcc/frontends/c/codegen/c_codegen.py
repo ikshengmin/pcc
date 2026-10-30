@@ -1017,8 +1017,13 @@ class CCodeGenerator(
 
     def _is_unsigned_val(self, val):
         """Check if a value should use unsigned operations."""
-        # Check if the value was produced by an unsigned operation
-        return getattr(val, "_is_unsigned", False)
+        # C _Bool values are always 0 or 1, including after loads, calls and
+        # explicit casts whose declaration tags clear unsigned metadata. A
+        # signed i1 extension/conversion would turn true into -1 instead.
+        return (
+            isinstance(getattr(val, "type", None), ir.IntType)
+            and val.type.width == 1
+        ) or getattr(val, "_is_unsigned", False)
 
     def _is_unsigned_binding(self, binding):
         return binding is not None and (
@@ -4633,12 +4638,11 @@ class CCodeGenerator(
         if self._is_floating_ir_type(expr.type) and isinstance(
             dest_ir_type, ir.IntType
         ):
-            if is_unsigned:
-                result = self.builder.fptoui(expr, dest_ir_type)
-                self._tag_value_from_decl_type(result, node.to_type.type)
-                return result, None
-            result = self.builder.fptosi(expr, dest_ir_type)
-            self._clear_unsigned(result)
+            # In particular, _Bool is a comparison with zero, not a numeric
+            # float-to-integer conversion followed by truncation to one bit.
+            result = self._implicit_convert(
+                expr, dest_ir_type, target_unsigned=is_unsigned
+            )
             self._tag_value_from_decl_type(result, node.to_type.type)
             return result, None
         if self._same_ir_type_semantics(expr.type, dest_ir_type):

@@ -1,7 +1,7 @@
 """Handwritten C++ parser with semantic lookup and reversible lookahead.
 
 This increment accepts arithmetic free functions with arithmetic/void results,
-deduced arithmetic function templates and block statements. It builds the existing C AST only *after*
+deduced arithmetic function templates and scalar control-flow statements. It builds the existing C AST only *after*
 resolving names and checking supported semantics. It does not rewrite source
 text, invoke the C parser, or discard missing lifetime/exception/template
 semantics. Unimplemented features remain explicit errors.
@@ -41,8 +41,14 @@ _FEATURES = {
     "operator": "overload", "&": "references", "&&": "references",
     "*": "pointers", "[": "arrays-or-lambdas",
 }
-_BINARY_PRECEDENCE = {"|": 1, "^": 2, "&": 3, "+": 4, "-": 4,
-                      "*": 5, "/": 5, "%": 5}
+_BINARY_PRECEDENCE = {
+    "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6,
+    "<": 7, "<=": 7, ">": 7, ">=": 7, "<<": 8, ">>": 8,
+    "+": 9, "-": 9, "*": 10, "/": 10, "%": 10,
+}
+_COMPARISONS = frozenset(("==", "!=", "<", "<=", ">", ">="))
+_ALTERNATIVE_TOKENS = {"and": "&&", "or": "||", "not": "!", "bitand": "&",
+                       "bitor": "|", "xor": "^", "compl": "~", "not_eq": "!="}
 
 
 class CppToken:
@@ -106,6 +112,7 @@ class CppParser:
         self.return_type = None
         self.template_function = None
         self.pending_instances = []
+        self.loop_depth = 0
         self.cursor = TokenCursor(self._tokenize(text, filename))
         declarations = []
         while self._peek().kind != "EOF":
@@ -152,7 +159,8 @@ class CppParser:
             token = lexer.token()
             if token is None:
                 break
-            tokens.append(CppToken(token.type, token.value,
+            kind = "CPP_OPERATOR" if token.value in _ALTERNATIVE_TOKENS else token.type
+            tokens.append(CppToken(kind, _ALTERNATIVE_TOKENS.get(token.value, token.value),
                                    Coord(lexer.filename, token.lineno,
                                          lexer.find_tok_column(token))))
         tokens.append(CppToken("EOF", "<eof>", Coord(lexer.filename, lexer.lineno)))
@@ -426,6 +434,37 @@ class CppParser:
         if token.value in ("using", "typedef"):
             self._alias()
             return None
+        if token.value == "if":
+            self.cursor.take()
+            condition = self._condition()
+            consequent = self._substatement()
+            alternative = self._substatement() if self._accept("else") else None
+            if self.template_function is not None:
+                children = [condition, consequent]
+                if alternative is not None:
+                    children.append(alternative)
+                return Pattern("if", token.coord, children=children)
+            return c_ast.If(condition.node, consequent, alternative, token.coord)
+        if token.value == "while":
+            self.cursor.take()
+            condition = self._condition()
+            self.loop_depth += 1
+            try:
+                body = self._substatement()
+            finally:
+                self.loop_depth -= 1
+            if self.template_function is not None:
+                return Pattern("while", token.coord, children=[condition, body])
+            return c_ast.While(condition.node, body, token.coord)
+        if token.value in ("break", "continue"):
+            self.cursor.take()
+            if not self.loop_depth:
+                raise CppDiagnostic("cpp.jump-outside-loop",
+                                    token.value + " is not inside an implemented loop", token.coord)
+            self._expect(";")
+            if self.template_function is not None:
+                return Pattern(token.value, token.coord)
+            return c_ast.Break(token.coord) if token.value == "break" else c_ast.Continue(token.coord)
         if self._accept("return"):
             expression = None if self._peek().value == ";" else self._expression()
             self._expect(";")
@@ -460,6 +499,30 @@ class CppParser:
         self._require_value(expression, allow_void=True)
         self._expect(";")
         return expression.node
+
+    def _condition(self):
+        self._expect("(")
+        if self._is_declaration():
+            raise CppDiagnostic("cpp.unsupported.condition-declaration",
+                                "condition declarations and init-statements are not implemented",
+                                self._peek().coord)
+        expression = self._expression()
+        self._expect(")")
+        return Expression(self._convert(expression, "bool", expression.node.coord), "bool")
+
+    def _substatement(self):
+        # C++ selection/iteration substatements have block scope even without
+        # braces. In particular an unbraced declaration must not leak its name.
+        parent = self.scope
+        self.scope = Scope(parent)
+        coord = self._peek().coord
+        try:
+            statement = self._statement()
+        finally:
+            self.scope = parent
+        if statement is None:
+            return Pattern("empty", coord) if self.template_function is not None else c_ast.EmptyStatement(coord)
+        return statement
 
     def _check_object_type(self, dtype, coord):
         if dtype == "void":
@@ -529,20 +592,36 @@ class CppParser:
     def _binary_expression(self, operator, lhs, rhs, coord):
         self._require_value(lhs)
         self._require_value(rhs)
+        operand_type = None
         dtype = None
+        logical = operator in ("&&", "||")
+        comparison = operator in _COMPARISONS
+        shift = operator in ("<<", ">>")
         if not dependent(lhs.dtype) and not dependent(rhs.dtype):
-            if operator in ("%", "&", "|", "^") and not (
+            if operator in ("%", "&", "|", "^", "<<", ">>") and not (
                     self.types.integral(lhs.dtype) and self.types.integral(rhs.dtype)):
                 raise CppDiagnostic("cpp.invalid-operands", "operator requires integral operands", coord)
-            dtype = self.types.common(lhs.dtype, rhs.dtype)
+            if logical:
+                operand_type = "bool"
+            elif shift:
+                operand_type = self.types.promote(lhs.dtype)
+            else:
+                operand_type = self.types.common(lhs.dtype, rhs.dtype)
+            dtype = "bool" if logical or comparison else operand_type
         if self.template_function is not None:
             return Expression(Pattern("binary", coord, operator, [lhs, rhs]), dtype)
-        return Expression(c_ast.BinaryOp(operator, self._convert(lhs, dtype, coord),
-                                         self._convert(rhs, dtype, coord), coord), dtype)
+        rhs_type = self.types.promote(rhs.dtype) if shift else operand_type
+        node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord),
+                              self._convert(rhs, rhs_type, coord), coord)
+        if logical or comparison:
+            # C comparisons/logical operators yield int; C++ yields bool. Keep
+            # the bool projection explicit for overloads and following C ops.
+            node = self._convert(Expression(node, "int"), "bool", coord)
+        return Expression(node, dtype)
 
     def _unary(self):
         token = self._peek()
-        if token.value in ("+", "-", "~"):
+        if token.value in ("+", "-", "~", "!"):
             self.cursor.take()
             expression = self._unary()
             return self._unary_expression(token.value, expression, token.coord)
@@ -554,10 +633,13 @@ class CppParser:
         if not dependent(expression.dtype):
             if operator == "~" and not self.types.integral(expression.dtype):
                 raise CppDiagnostic("cpp.invalid-operands", "operator requires an integral operand", coord)
-            dtype = self.types.promote(expression.dtype)
+            dtype = "bool" if operator == "!" else self.types.promote(expression.dtype)
         if self.template_function is not None:
             return Expression(Pattern("unary", coord, operator, [expression]), dtype)
-        return Expression(c_ast.UnaryOp(operator, self._convert(expression, dtype, coord), coord), dtype)
+        node = c_ast.UnaryOp(operator, self._convert(expression, dtype, coord), coord)
+        if operator == "!":
+            node = self._convert(Expression(node, "int"), "bool", coord)
+        return Expression(node, dtype)
 
     def _literal(self, kind, value, dtype, coord):
         if self.template_function is not None:
@@ -689,6 +771,18 @@ class CppParser:
                                    for child in pattern.children], coord)
         if kind == "empty":
             return c_ast.EmptyStatement(coord)
+        if kind == "if":
+            condition = self._instantiate_expression(pattern.children[0], bindings, environment)
+            consequent = self._instantiate_statement(pattern.children[1], bindings, environment)
+            alternative = (self._instantiate_statement(pattern.children[2], bindings, environment)
+                           if len(pattern.children) > 2 else None)
+            return c_ast.If(condition.node, consequent, alternative, coord)
+        if kind == "while":
+            condition = self._instantiate_expression(pattern.children[0], bindings, environment)
+            body = self._instantiate_statement(pattern.children[1], bindings, environment)
+            return c_ast.While(condition.node, body, coord)
+        if kind in ("break", "continue"):
+            return c_ast.Break(coord) if kind == "break" else c_ast.Continue(coord)
         if kind == "decl":
             symbol = pattern.value
             dtype = substitute(symbol.dtype, bindings)

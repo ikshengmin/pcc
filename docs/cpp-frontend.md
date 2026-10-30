@@ -36,7 +36,8 @@ G++17 byte-oracle tests; this is not a native C++ driver qualification.
 
 Currently accepted semantics are deliberately narrow: arithmetic free functions,
 arithmetic/void aliases, prototypes, single-object block declarations, nested lexical
-blocks, arithmetic, direct calls and returns. Types keep canonical C++ identity
+blocks, scalar arithmetic/comparison/logical operators, direct calls, returns,
+if/else and while with break/continue. Types keep canonical C++ identity
 and rank, even when `long` and `long long` have the same storage width. Target
 width/signedness and ordinary integer-literal candidates reuse the owned C ABI.
 By-value arithmetic overloads use per-argument standard-conversion ranks, not a
@@ -54,6 +55,16 @@ and lowered into existing C nodes. Repeated calls reuse one instance. A selected
 body error is an error, not permission to fall back to a worse overload.
 Non-template functions win equal conversion sequences; more general template
 partial ordering and ADL-only dependent calls still fail explicitly.
+
+Scalar comparison/equality/logical results retain C++ `bool` identity rather
+than inheriting C's `int` result type. Lowering inserts explicit `_Bool` casts
+and reuses the C generator's short-circuit branch nodes, not an eager helper
+call. Shift operands undergo independent integral promotions. `if`/`else` and
+`while` conditions are contextually converted to bool, and unbraced substatements
+have their own lexical scopes. Templates retain these statements as patterns
+and re-check them after substitution. Condition declarations, init-statements,
+`if constexpr`, remaining loop forms and switch remain unsupported. This does
+not introduce object cleanup or erase a future destructor at a branch/return.
 
 The void/return increment admits void free-function results, explicit discarded
 expressions and `return;` / `return void_expression;`. A sole unnamed `void`
@@ -134,6 +145,12 @@ through PCC's parser/Sema/C generator and owned object/link path.
 `native_void_probe.py` is a changed-shape native parser gate, but has not yet
 been run with pcc1. The earlier successful native probes do not qualify this
 newer closure.
+
+`test_cpp_control_flow.py` adds 19 host parser/Sema/C-IR checks for C++ bool
+overload selection, operator precedence, short-circuit C nodes, lexical scopes,
+loop exits and instantiated control flow. `native_control_probe.py` covers the
+changed parser/model shape, but has not yet been run with pcc1; host test results
+must not be relabeled as native parser or C++ execution qualification.
 
 The first parser at `287bc4a` was also compiled and executed with the restored
 Linux x86-64 Stage1 `pcc1` from `bf8c03e`. The bounded run used that compiler's
@@ -256,3 +273,9 @@ The void return checks were independently implemented after consulting
 [Clang's `BuildReturnStmt`](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaStmt.cpp#L3995-L4075).
 That reference distinguishes dependent checks, void return expressions and
 missing values; no Clang source is copied or called by the owned frontend.
+
+The scalar control-flow slice was also checked against Clang's independently
+implemented [shift operand promotions](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaExpr.cpp#L11515-L11575)
+and [logical operand checks](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaExpr.cpp#L13169-L13298).
+The C++ bool projection and lazy evaluation are implemented in PCC's existing
+C AST/IR path; no Clang runtime dependency or copied implementation is added.
