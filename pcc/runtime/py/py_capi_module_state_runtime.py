@@ -2,7 +2,7 @@
 
 Replaces the PccCapiModuleStateNode registry + PyModule_Create2/GetState +
 PyType_FromSpec/FromModuleAndSpec/GetModule/GetModuleByDef block of
-py_capi_shim.c.  The registry is a singly-linked list of 24-byte nodes
+py_capi_shim.c.  The registry is a singly-linked list of 32-byte nodes
 (module@0, def@8, state@16, next@24) rooted at a global pointer.
 
 PyModuleDef layout (pcc fake_libc Python.h shape, NOT CPython's):
@@ -112,7 +112,7 @@ def pcc_capi_find_module_state(module) -> c_ptr:
 
 @c_abi_typed_export("pcc_capi_register_module_state", "i32", ("ptr", "ptr", "ptr"))
 def pcc_capi_register_module_state(module, def_obj, state) -> int:
-    node = PyMem_Calloc(1, 24)
+    node = PyMem_Calloc(1, 32)  # module, def, state, next: four 8-byte pointers
     if ptr_is_null(node):
         return -1
     store_ptr(node, 0, module)
