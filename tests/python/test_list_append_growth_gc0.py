@@ -118,6 +118,8 @@ class ListMemory:
             "memmove": memmove, "memset": memset,
             "pcc_gc_try_init_ptr_locked": try_init,
             "pcc_py_gc_minor_graph_lock": lock, "pcc_py_gc_minor_graph_unlock": unlock,
+            # The list's transaction lock (container or graph lock).
+            "_list_lock": lambda _list: lock(), "_list_unlock": lambda _list: unlock(),
             "_list_is_sane": lambda value, code: True,
             "C_POINTER_SIZE": 8,
         })

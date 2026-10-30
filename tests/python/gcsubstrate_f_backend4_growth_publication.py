@@ -1576,6 +1576,9 @@ def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payl
                         py_int_from_i64(2),
                         mismatch
                     ) != -1) return 21;
+                // The size mismatch raises ValueError; its root is not the list's.
+                if (!py_err_occurred()) return 29;
+                py_clear_exception();
                 py_decref(mismatch);
                 if (py_list_len(list) != 6) return 22;
                 for (int64_t i = 0; i < 6; i++) {

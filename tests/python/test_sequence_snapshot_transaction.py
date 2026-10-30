@@ -68,7 +68,10 @@ class StagedSnapshot:
                         pcc_gc_foreign_lease_release=self.release,
                         pcc_gc_store_root_plan_finish=self.finish,
                         pcc_py_gc_minor_graph_lock=self.lock,
-                        pcc_py_gc_minor_graph_unlock=self.unlock)
+                        pcc_py_gc_minor_graph_unlock=self.unlock,
+                        # The list's transaction lock (container or graph lock).
+                        pcc_list_lock=lambda _list: self.lock(),
+                        pcc_list_unlock=lambda _list: self.unlock())
         abi = {'object.list.items_offset':32, 'object.list.length_offset':16,
                'object.pointer.size':8, 'object.header.type_tag_offset':8, 'object.type.list':5}
         self.env['abi_constant'] = abi.__getitem__

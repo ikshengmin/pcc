@@ -9,8 +9,11 @@ from tests.python.test_foreign_address_leases import _functions
 
 
 class OwnedListFactoryModel(ListFactoryModel):
-    def __init__(self, values, failure=None, pending=None, relocate=False):
+    def __init__(self, values, failure=None, pending=None, relocate=False, container=False):
         self.count = len(values)
+        # GC0 lists use container locks: the unpublished list is private,
+        # so the factory moves owners without the graph lock.
+        self.container = container
         self.locked = False
         self.moves = 0
         self.children = Counter(values)
@@ -28,8 +31,10 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.memory[slot] = value
             self.memory[self.sources + index * 8] = slot
         self.initial_frames = dict(self.frames)
+        self.memory[3] = int(container)
         self.ns.update({
-            'global_addr': lambda name: 1 if name == 'pcc_list_construction_error_map' else 2,
+            'global_addr': lambda name: {'pcc_list_construction_error_map': 1,
+                                         'pcc_gc_list_container_mode': 3}.get(name, 2),
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
             'pcc_gc_resolve_root_slot_unlocked': self.resolve,
@@ -106,7 +111,7 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.boundary()
             assert destination == self.output and self.memory[destination] == value
         else:
-            assert self.locked and owner in self.objects and value in self.children
+            assert (self.locked or self.container) and owner in self.objects and value in self.children
 
     def publish(self, obj):
         self.boundary()
@@ -120,10 +125,10 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.pending = message
 
 
-@pytest.mark.parametrize('relocate', (False, True))
+@pytest.mark.parametrize('relocate, container', ((False, False), (False, True), (True, False)))
 @pytest.mark.parametrize('values', ((), ('a',), ('a', 'b', 'a'), tuple('a' for _ in range(8))))
-def test_owned_list_factory_moves_each_reference_before_publication(values, relocate):
-    model = OwnedListFactoryModel(values, relocate=relocate)
+def test_owned_list_factory_moves_each_reference_before_publication(values, relocate, container):
+    model = OwnedListFactoryModel(values, relocate=relocate, container=container)
     assert model.ns['py_list_from_owned_roots'](model.sources, len(values), model.output) == 0
     owner = model.memory[model.output]
     assert owner in model.objects and model.refs[owner] == 1

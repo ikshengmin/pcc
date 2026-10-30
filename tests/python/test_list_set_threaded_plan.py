@@ -15,6 +15,7 @@ class StoreModel:
         self.reject = reject
         self.ns = {
             "int": int, "_list_is_sane": lambda *args: True,
+            "_list_type_ok": lambda *args: True, "_list_shape_ok": lambda *args: True,
             "pcc_gc_backend": lambda: backend,
             "pcc_threads_enabled": lambda: threads,
             "PYLISTOBJECT_LENGTH_OFFSET": 16, "PYLISTOBJECT_ITEMS_OFFSET": 32,
@@ -27,6 +28,9 @@ class StoreModel:
             "pcc_gc_store_ptr_plan_init": self.initialize,
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
+            # The list's transaction lock (container or graph lock).
+            "_list_lock": lambda _list: self.lock(),
+            "_list_unlock": lambda _list: self.unlock(),
             "pcc_gc_store_ptr_plan_commit_locked": self.commit,
             "pcc_gc_store_ptr_plan_finish": self.finish,
             "pcc_gc_store_ptr": self.unlocked_store,

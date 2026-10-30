@@ -12,12 +12,30 @@ from test_exception_constructor_roots import _Object, _Slots
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class _FieldWord:
+    """A field read as one machine word, as the GC0 immediate check sees it.
+
+    NULL reads 0 and a tagged int (a Python int here) has its low bit set;
+    any other word is an object address. int_to_ptr returns the field.
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return other == 0 and self.value is None
+
+    def __and__(self, mask):
+        return mask & 1 if isinstance(self.value, int) else 0
+
+
 class _GetterMemory:
     def __init__(self, backend=4, phase="unregister", prior_pin=False, fail_register=0):
         self.backend, self.phase, self.fail_register = backend, phase, fail_register
         self.objects, self.payloads, self.handles, self.forward = [], [], {}, {}
         self.depth = self.moves = self.pins = self.registrations = 0
         self.error = None
+        self.globals = {}
         self.item = self.make(abi.PY_TYPE_STR, abi.PY_FLAG_GC_PINNED if prior_pin else 0)
         self.items = _Slots(8)
         self.items.fields[0] = self.item
@@ -42,6 +60,14 @@ class _GetterMemory:
                 and isinstance(node.value, (ast.Constant, ast.UnaryOp, ast.BinOp)))
         ]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), self.namespace)
+
+    def global_cell(self, name):
+        # A data-segment global starts zeroed: the backend is not yet
+        # configured and lists keep the graph lock unless a test sets them.
+        if name not in self.globals:
+            self.globals[name] = _Slots(8)
+            self.globals[name].fields[0] = 0
+        return self.globals[name]
 
     def make(self, tag, flags=0):
         value = _Object(tag, flags)
@@ -178,6 +204,9 @@ class _GetterMemory:
             "ptr_eq": lambda first, second: first is second,
             "ptr_add": self.add, "stack_alloc": _Slots,
             "load_ptr": self.read, "load_i64": self.read, "load_i32": self.read,
+            "global_addr": self.global_cell,
+            "atomic_load_i64": lambda value, offset, _order: _FieldWord(self.read(value, offset)),
+            "int_to_ptr": lambda word: word.value if isinstance(word, _FieldWord) else word,
             "store_ptr": self.write,
             "pcc_gc_load_ptr": lambda _owner, slot: self.read(*self.pointer(slot)),
             "pcc_gc_pointer_is_managed": lambda value: isinstance(value, _Object) and value.alive,
@@ -268,14 +297,10 @@ class _FieldMemory(_GetterMemory):
         self.record.fields[abi.PYINSTANCEOBJECT_CLS_OFFSET] = self.klass
         self.record.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = self.item
         self.original = self.record
-        self.globals = {name: _Slots(8) for name in
-                        ("pcc_gc_read_barrier_enabled", "pcc_gc_backend_selected",
-                         "pcc_gc_config_initialized")}
-        self.globals["pcc_gc_read_barrier_enabled"].fields[0] = int(backend in (3, 4))
-        self.globals["pcc_gc_backend_selected"].fields[0] = backend
-        self.globals["pcc_gc_config_initialized"].fields[0] = 1
-        self.namespace.update({"global_addr": self.globals.__getitem__,
-                               "pcc_gc_note_relocation_read": self.resolve})
+        self.global_cell("pcc_gc_read_barrier_enabled").fields[0] = int(backend in (3, 4))
+        self.global_cell("pcc_gc_backend_selected").fields[0] = backend
+        self.global_cell("pcc_gc_config_initialized").fields[0] = 1
+        self.namespace.update({"pcc_gc_note_relocation_read": self.resolve})
         self.load("pcc/runtime/py/py_class.py")
         if stale_receiver:
             self.gc("before_call")

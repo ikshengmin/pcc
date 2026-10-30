@@ -97,6 +97,9 @@ class CapacityModel(InitModel):
                                "ptr_add": lambda p, n: p + n,
                                "pcc_py_gc_minor_graph_lock": self.lock,
                                "pcc_py_gc_minor_graph_unlock": self.unlock,
+                               # The list's transaction lock (container or graph lock).
+                               "_list_lock": lambda _list: self.lock(),
+                               "_list_unlock": lambda _list: self.unlock(),
                                "_list_is_sane": self.validate,
                                "pcc_gc_try_init_ptr_locked": (lambda *args: 0) if miss else self.namespace["pcc_gc_try_init_ptr_locked"],
                                # A full list is handed to the doubling path

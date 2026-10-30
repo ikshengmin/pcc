@@ -28,6 +28,9 @@ class AppendRoots:
             'pcc_threads_enabled': lambda: 1, 'pcc_gc_backend': lambda: backend,
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
+            # The list's transaction lock (container or graph lock).
+            '_list_lock': lambda _list: self.lock(),
+            '_list_unlock': lambda _list: self.unlock(),
             'pcc_gc_load_ptr': self.heal,
             '_list_is_sane': self.validate,
             '_grow_if_needed': self.grow,

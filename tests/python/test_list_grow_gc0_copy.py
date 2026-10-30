@@ -82,6 +82,9 @@ def _grow(backend):
         "pcc_gc_scheduler_root_unregister_handle": lambda handle: None,
         "pcc_py_gc_minor_graph_lock": lambda: memory.calls.append(("lock",)),
         "pcc_py_gc_minor_graph_unlock": lambda: memory.calls.append(("unlock",)),
+        # The list's transaction lock (container or graph lock).
+        "_list_lock": lambda _list: memory.calls.append(("lock",)),
+        "_list_unlock": lambda _list: memory.calls.append(("unlock",)),
         "pcc_gc_load_ptr": barrier_load,
         "pcc_gc_note_slot_write_barrier": write_barrier,
         "pcc_gc_backend4_retarget_mutator_payload_locked": lambda *args: 1,
