@@ -74,6 +74,8 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 py_obj_index = extern("py_obj_index", (c_ptr,), c_ptr)
 py_obj_format = extern("py_obj_format", (c_ptr, c_ptr), c_ptr)
 py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_obj_hash = extern("py_obj_hash", (c_ptr,), c_int64)
+py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
@@ -528,8 +530,48 @@ def py_obj_identity_hash(o) -> int:
     return _identity_hash(o)
 
 
+def _raise_unhashable(o) -> None:
+    # CPython: "unhashable type: 'EqOnly'".
+    message = stack_alloc(160)
+    prefix = cstr("unhashable type: '")
+    length: int = 0
+    while load_i8(prefix, length) != 0:
+        store_i8(message, length, load_i8(prefix, length))
+        length = length + 1
+    name = py_obj_type_name(o)
+    if not ptr_is_null(name):
+        text = py_str_utf8(name)
+        count: int = py_str_byte_len(name)
+        if count > 100:
+            count = 100
+        index: int = 0
+        while index < count:
+            store_i8(message, length, load_i8(text, index))
+            length = length + 1
+            index = index + 1
+        py_decref(name)
+    store_i8(message, length, 39)
+    store_i8(message, length + 1, 0)
+    py_raise_owned(py_exc_new(3, message))
+
+
 @c_abi_export("py_user_hash_dispatch")
 def py_user_hash_dispatch(o, handled) -> int:
+    if ptr_is_null(o) == 0 and is_tagged_int(o) == 0:
+        hash_tag: int = load_i32(o, 8)
+        if ((hash_tag == PY_TYPE_INSTANCE or hash_tag >= PY_TYPE_USER_CLASS_START)
+                and pcc_capi_is_cext_type_tag(hash_tag) == 0):
+            hash_cls = _load_instance_cls(o)
+            # A class defining __eq__ without __hash__ stores __hash__ = None:
+            # unhashable, rather than a call of None. Identity only; the
+            # borrowed attribute is never dereferenced.
+            if ptr_is_null(hash_cls) == 0 and ptr_eq(
+                py_class_lookup(hash_cls, cstr("__hash__")), global_addr("py_none_storage")
+            ) != 0:
+                if ptr_is_null(handled) == 0:
+                    store_i64(handled, 0, 1)
+                _raise_unhashable(o)
+                return -1
     selected = stack_alloc(8)
     scalar = stack_alloc(8)
     py_user_special_dispatch(o, cstr("__hash__"), null(), null(), 0, 4, scalar, selected)
@@ -553,6 +595,11 @@ def py_user_hash_dispatch(o, handled) -> int:
         return 0
     if ptr_is_null(handled) == 0:
         store_i64(handled, 0, 1)
+    # A str subclass inherits str.__hash__, which has no method entry: hash
+    # the payload py_obj_eq compares, or it misses equal str dict keys.
+    payload = py_str_payload(o)
+    if ptr_is_null(payload) == 0:
+        return py_obj_hash(payload)
     return _identity_hash(o)
 
 
