@@ -704,10 +704,20 @@ def _push_ready_node(node) -> None:
         global_addr("pcc_vthread_carrier_queue_count_py")
     )
     if carrier_count > 0:
-        sequence = _counter_add(
-            global_addr("pcc_vthread_next_carrier_enqueue_py"), 1
-        ) - 1
-        index = sequence % carrier_count
+        # A carrier keeps the work it readies: a child it spawned, a joiner
+        # its step woke and a timer it fired run on the core that just wrote
+        # their data, and an idle carrier steals from the head of the queue.
+        # Spreading every push round-robin moved each step to another core
+        # and put one shared counter on every push. Work injected from
+        # outside the pool is still spread round-robin.
+        index = load_i32(
+            global_addr("pcc_current_virtual_thread_carrier_py"), 0
+        )
+        if index < 0 or index >= carrier_count:
+            sequence = _counter_add(
+                global_addr("pcc_vthread_next_carrier_enqueue_py"), 1
+            ) - 1
+            index = sequence % carrier_count
         _queue_push(
             _carrier_head_slot(index), _carrier_tail_slot(index), node
         )
