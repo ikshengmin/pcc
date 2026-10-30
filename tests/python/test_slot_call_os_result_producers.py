@@ -117,7 +117,8 @@ def probe():
     aliases = [result_slot] + re.findall(
         r"(%[^ ]+) = bitcast ptr " + re.escape(result_slot) + r" to ptr", after,
     )
-    assert any("@pcc_gc_load_ptr(ptr null, ptr " + alias + ")" in after for alias in aliases)
+    # The take reloads the root and pins its current object before handing it off.
+    assert any("@pcc_gc_pin_slot_for_take(ptr " + alias + "," in after for alias in aliases)
     assert any("@pcc_gc_take_pinned_slot(ptr " + alias + "," in after for alias in aliases)
 
 

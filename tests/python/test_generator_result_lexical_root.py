@@ -179,20 +179,13 @@ def _assert_exact_slot_protocol(text, slot):
     # The exact root is loaded and pinned before its success-side leave;
     # the owned take remains the final handoff after retirement. A tagged
     # int or empty root has nothing to pin, so the take branches around the
-    # object path that loads and pins it; both paths join at the leave.
-    loads = named("pcc_gc_load_ptr")
-    assert len(loads) == 1
-    loaded = re.search(r"(%[\w.]+) = call", loads[0][3]).group(1)
-    load_label, load_position = loads[0][1], loads[0][2]
-    pin_pattern = r"call[^\n]*@pcc_gc_pin\(ptr " + re.escape(loaded) + r"\)"
-    pins = [(label, match.start()) for label, block in blocks.items()
-            for match in re.finditer(pin_pattern, block)]
+    # object path; there pcc_gc_pin_slot_for_take reloads the root and pins
+    # its current object (inside a graph transaction on a moving collector).
+    # Both paths join at the leave.
+    pins = named("pcc_gc_pin_slot_for_take")
     assert len(pins) == 1, (slot, pins)
-    pin_label, pin_position = pins[0]
-    if pin_label == load_label:
-        assert load_position < pin_position
-    else:
-        assert reaches(load_label, pin_label), (slot, load_label, pin_label)
+    assert not named("pcc_gc_load_ptr"), slot
+    pin_label, pin_position = pins[0][1], pins[0][2]
     if pin_label == take[1]:
         assert pin_position < success_leaves[0][2]
     else:
