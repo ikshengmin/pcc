@@ -317,6 +317,8 @@ class ExtensionMemory(CacheMemory):
         self.definition = self.malloc(32)
         self.definition.fields[0] = "pcc_capi_moduledef_marker"
         self.ns.update(
+            atomic_load_i64=self.extension_atomic_load,
+            atomic_cas_i64=self.extension_atomic_cas,
             pcc_platform_getenv=lambda _name: None,
             pcc_platform_write=lambda *_args: 0,
             dynamic_library_open_global=self.open_library,
@@ -330,6 +332,21 @@ class ExtensionMemory(CacheMemory):
         tree = ast.parse(EXTENSION.read_text(), filename=str(EXTENSION))
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(EXTENSION), "exec"), self.ns)
+
+    def extension_atomic_load(self, slot, offset, order):
+        if slot == "pcc_extension_code_owners":
+            assert offset == 0 and order == "acquire"
+            return self.globals.get(slot)
+        return self.mutex_bits
+
+    def extension_atomic_cas(self, slot, offset, expected, value, *orders):
+        if slot == "pcc_extension_code_owners":
+            assert offset == 0 and orders == ("acq_rel", "acquire")
+            previous = self.globals.get(slot)
+            if previous is expected:
+                self.globals[slot] = value
+            return previous
+        return self.cas_mutex(slot, offset, expected, value, *orders)
 
     def open_library(self, path):
         self.loads += 1

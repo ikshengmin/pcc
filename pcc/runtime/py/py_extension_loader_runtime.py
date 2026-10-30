@@ -12,6 +12,8 @@ from pcc.runtime.py.py_abi_constants import C_POINTER_SIZE
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     access,
+    atomic_cas_i64,
+    atomic_load_i64,
     call_ptr0,
     calloc,
     cstr,
@@ -25,6 +27,7 @@ from pcc.unsafe import (
     free,
     global_load_ptr,
     global_store_ptr,
+    int_to_ptr,
     load_i8,
     load_ptr,
     malloc,
@@ -33,6 +36,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    ptr_to_int,
     stack_alloc,
     store_i8,
     store_ptr,
@@ -145,7 +149,10 @@ def _find_module(module_name):
 
 
 def _find_code_owner(module_name):
-    owner = global_load_ptr("pcc_extension_code_owners")
+    # Nodes are immutable after release publication and live for the process.
+    owner = int_to_ptr(atomic_load_i64(
+        global_addr("pcc_extension_code_owners"), 0, "acquire"
+    ))
     while not ptr_is_null(owner):
         if _cstr_equal(load_ptr(owner, 0), module_name) != 0:
             return owner
@@ -166,8 +173,20 @@ def _retain_extension_code(module_name, handle) -> int:
         return -1
     store_ptr(owner, 0, name)
     store_ptr(owner, 8, handle)
-    store_ptr(owner, 16, global_load_ptr("pcc_extension_code_owners"))
-    global_store_ptr("pcc_extension_code_owners", owner)
+    # Different modules may finish preparation concurrently. A plain head
+    # store loses one ownership record. Publish fully initialized immutable
+    # nodes with CAS; there is no removal/reuse and therefore no ABA reclamation.
+    # This protects ownership publication, not same-module PyInit ordering.
+    slot = global_addr("pcc_extension_code_owners")
+    previous: int = atomic_load_i64(slot, 0, "acquire")
+    while True:
+        store_ptr(owner, 16, int_to_ptr(previous))
+        observed: int = atomic_cas_i64(
+            slot, 0, previous, ptr_to_int(owner), "acq_rel", "acquire"
+        )
+        if observed == previous:
+            break
+        previous = observed
     return 0
 
 

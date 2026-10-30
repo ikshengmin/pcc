@@ -70,6 +70,7 @@ class _Memory:
             "global_load_ptr": self.globals.get,
             "global_store_ptr": self.globals.__setitem__,
             "py_class_new": lambda *_args: self.object("class"),
+            "py_class_new_builtin": lambda *_args: self.object("class"),
             "pcc_gc_pin": self.pin, "pcc_gc_unpin": self.unpin,
             "py_err_occurred": lambda: int(self.error is not None),
             "py_module_attrs_dict": self.attrs_dict,
