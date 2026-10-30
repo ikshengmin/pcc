@@ -54,6 +54,10 @@ def mangle_function(name, parameters):
     return "_Z" + str(len(name)) + name + ("".join(_CODES[p] for p in parameters) or "v")
 
 
+def scalar_mangling_code(name):
+    return _CODES[name]
+
+
 class ArithmeticTypes:
     def __init__(self, target_triple=None):
         self.target_triple = c_target_triple(target_triple)

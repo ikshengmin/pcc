@@ -168,7 +168,7 @@ def test_cpp_project_link_does_not_synthesize_missing_definitions(owned_only):
     "source,code",
     (
         ("struct Guard { ~Guard(); };", "cpp.unsupported.classes"),
-        ("template<class T> T value(T x){return x;}", "cpp.unsupported.templates"),
+        ("template<class T> struct Box {};", "cpp.unsupported.classes"),
         ("int cpp_test_entry(){throw 1;}", "cpp.unsupported.exceptions"),
         ("int cpp_test_entry(){return missing;}", "cpp.undeclared"),
         (

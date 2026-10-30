@@ -7,6 +7,9 @@ misparse C++ declaration/expression ambiguities.
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import mangle_function
+from pcc.frontends.cpp.templates import (
+    deduce, mangle_instance, same_type, signature_key, substitute,
+)
 
 
 class Symbol:
@@ -21,6 +24,12 @@ class Symbol:
         self.dtype = dtype
         self.parameters = parameters
         self.overloads = []
+        self.template_parameters = ()
+        self.template_origin = None
+        self.template_arguments = ()
+        self.pattern = None
+        self.parameter_symbols = []
+        self.instances = {}
 
 
 class Scope:
@@ -39,12 +48,16 @@ class Scope:
 
     def is_type_name(self, name):
         symbol = self.lookup(name)
-        return symbol is not None and symbol.kind == "type"
+        return symbol is not None and symbol.kind in ("type", "template-type")
 
     def declare(self, symbol):
+        hidden = self.lookup(symbol.name)
+        if hidden is not None and hidden.kind == "template-type":
+            raise CppDiagnostic("cpp.template-parameter-shadowing",
+                                f"declaration shadows template parameter '{symbol.name}'", symbol.coord)
         previous = self.names.get(symbol.name)
         if previous is not None:
-            if previous.kind == symbol.kind == "type" and previous.dtype == symbol.dtype:
+            if previous.kind == symbol.kind == "type" and same_type(previous.dtype, symbol.dtype):
                 return previous
             raise CppDiagnostic(
                 "cpp.redeclaration", f"redeclaration of '{symbol.name}'", symbol.coord
@@ -60,9 +73,14 @@ class Scope:
                     "cpp.redeclaration", f"'{symbol.name}' is not a function", symbol.coord
                 )
             for candidate in previous.overloads:
-                if candidate.parameters != symbol.parameters:
+                if bool(candidate.template_parameters) != bool(symbol.template_parameters):
                     continue
-                if candidate.dtype != symbol.dtype:
+                if symbol.template_parameters:
+                    if signature_key(candidate) != signature_key(symbol):
+                        continue
+                elif candidate.parameters != symbol.parameters:
+                    continue
+                if not symbol.template_parameters and candidate.dtype != symbol.dtype:
                     raise CppDiagnostic("cpp.return-type-overload",
                                         "functions cannot differ only in return type", symbol.coord)
                 if definition and candidate.defined:
@@ -76,7 +94,8 @@ class Scope:
             group = Symbol(symbol.name, "function", symbol.coord)
             group.overloads.append(symbol)
             self.names[symbol.name] = group
-        symbol.c_name = mangle_function(symbol.name, symbol.parameters)
+        if not symbol.template_parameters:
+            symbol.c_name = mangle_function(symbol.name, symbol.parameters)
         if definition:
             symbol.defined = True
         return symbol
@@ -94,6 +113,19 @@ def resolve_overload(group, arguments, types, coord):
     for candidate in group.overloads:
         if len(candidate.parameters) != len(arguments):
             continue
+        if candidate.template_parameters:
+            bindings = deduce(candidate, arguments)
+            if bindings is None:
+                continue
+            origin = candidate
+            candidate = origin.instances.get(bindings)
+            if candidate is None:
+                candidate = Symbol(origin.name, "function", origin.coord,
+                                   c_name=mangle_instance(origin, bindings),
+                                   arity=len(arguments), dtype=substitute(origin.dtype, bindings),
+                                   parameters=tuple(substitute(p, bindings) for p in origin.parameters))
+                candidate.template_origin = origin
+                candidate.template_arguments = bindings
         ranks = []
         for source, destination in zip(arguments, candidate.parameters):
             rank = types.conversion_rank(source, destination)
@@ -113,12 +145,17 @@ def resolve_overload(group, arguments, types, coord):
                 continue
             no_worse = all(a <= b for a, b in zip(ranks, other_ranks))
             better = any(a < b for a, b in zip(ranks, other_ranks))
-            if not (no_worse and better):
+            non_template_preferred = (candidate.template_origin is None
+                                      and other.template_origin is not None)
+            if not (no_worse and (better or non_template_preferred)):
                 beats_all = False
                 break
         if beats_all:
             best.append(candidate)
     if len(best) != 1:
+        if sum(candidate.template_origin is not None for candidate, ranks in viable) > 1:
+            raise CppDiagnostic("cpp.unsupported.template-ordering",
+                                "function-template partial ordering is not implemented", coord)
         raise CppDiagnostic("cpp.ambiguous-overload",
                             f"ambiguous overload for '{group.name}'", coord)
     return best[0]

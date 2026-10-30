@@ -42,8 +42,26 @@ width/signedness and ordinary integer-literal candidates reuse the owned C ABI.
 By-value arithmetic overloads use per-argument standard-conversion ranks, not a
 sum of costs; unresolved or ambiguous calls fail before lowering. Selected calls,
 initializers, assignments, returns and arithmetic operands carry explicit C AST
-conversions. Pointer/reference, user-defined and template overload rules remain
+conversions. Pointer/reference, user-defined and full template overload rules remain
 unimplemented, not silently approximated by this arithmetic slice.
+
+The function-template increment admits deduced, by-value arithmetic type
+parameters. A template retains `TypeParameter` identities, a structured `Pattern`
+body, and definition-point name/candidate bindings; it is not source text to
+reparse or a C AST with `T` replaced by `int`. Only a selected, successfully
+substituted instance is checked through the same conversion/operator/call Sema
+and lowered into existing C nodes. Repeated calls reuse one instance. A selected
+body error is an error, not permission to fall back to a worse overload.
+Non-template functions win equal conversion sequences; more general template
+partial ordering and ADL-only dependent calls still fail explicitly.
+
+The emitted fundamental template signatures use Itanium parameter identities
+and substitutions, including the dependent return type. Weak/COMDAT ODR
+publication is **not** implemented: two translation units instantiating the
+same function currently fail at the owned linker's duplicate strong symbol
+check. The corresponding G++17 reference succeeds; a reference-only pass is not
+owned multi-TU template support. No candidate is silently deleted and no
+specialization is silently made TU-local to conceal that missing ABI behavior.
 
 Extended `long double` value/call ABI lowering is still missing on targets whose
 format exceeds binary64. An executed x86-64 test retaining a `long double`
@@ -71,7 +89,7 @@ particular, none of these are implemented merely by accepting their syntax:
 | Types and names | Remaining fundamental types/literals, extended long-double values/call ABI, cv qualifiers, pointers/references, recursive declarators, namespaces, qualified/dependent lookup, using declarations, ADL and access checks |
 | Expressions | Value categories, conversions and sequencing, full Pratt/operator coverage, casts, constant evaluation and constexpr |
 | Functions | Remaining overload conversions and tie-breaks, defaults, operators, function/member pointers, linkage and complete target ABI |
-| Templates | Dependent AST, two-phase lookup, deduction/substitution, specialization and instantiation; tests must execute selected specializations |
+| Templates | Remaining dependent types/lookup, ADL, explicit/default arguments, parameter packs, NTTPs, template-template parameters, SFINAE, partial ordering, class/variable templates, specialization and complete ODR/COMDAT publication |
 | Objects | Layout, initialization, constructors, copy/move, temporaries, destructors, reverse-order scope cleanup, inheritance, virtual dispatch and RTTI |
 | Exceptions | Throw/catch matching, unwind cleanup, rethrow and noexcept; never erase handlers or destructors |
 | Statements | Remaining control flow, lambdas, captures, structured bindings and statement attributes |
@@ -85,9 +103,14 @@ tokens or borrowing Python garbage collection semantics.
 
 ## Evidence and reference discipline
 
-`tests/cpp/test_cpp_frontend.py` and `test_cpp_overload.py` are host-development
-parser/Sema/C-lowering tests. The latter exercises actual selected calls and
-conversion instructions in the existing C generator, not only declarations.
+`tests/cpp/test_cpp_frontend.py`, `test_cpp_overload.py` and
+`test_cpp_templates.py` are host-development parser/Sema/C-lowering tests.
+They exercise actual selected calls, instantiated bodies and conversion
+instructions in the existing C generator, not only declarations. Six template
+programs separately passed host-owned ELF execution (twice each) and an explicit
+G++17 byte/status/stderr oracle, including definition-point overload lookup and
+post-instantiation arithmetic promotion. These do not prove the public pcc1 C++
+driver or complete template semantics.
 
 The first parser at `287bc4a` was also compiled and executed with the restored
 Linux x86-64 Stage1 `pcc1` from `bf8c03e`. The bounded run used that compiler's
@@ -126,6 +149,30 @@ and matched a separately invoked G++17 oracle in output bytes, status and stderr
 That is host-compiler/owned-target execution, not a pcc1 C++ compilation claim.
 Complete C++17, the standard library and the owned NumPy build remain unqualified.
 
+The first combined `native_template_probe.py` attempt, with one frontend
+worker, reached its 300-second compile deadline before producing an ELF.
+That failed attempt remains distinct: no template native execution occurred in
+it, and generated object files do not change the result.
+
+A separately authorized **two-frontend-worker** configuration then compiled the
+reviewed template/declarator closure in 255.2 seconds with 1.60 GB peak tree RSS.
+Its static ELF ran in 0.204 seconds and produced the exact expected selected
+`tag(long)`, distinct `twice<int>`/`twice<double>`, selected-body-error and
+declarator-shape observations. The same bf8 Stage1 compiler/runtime, original
+300-second compile / 30-second run / 4-GiB bounds, no-cache settings and owned
+chain were retained; only `PCC_PY_FRONTEND_JOBS=2` was selected, while
+`PCC_SELF_BACKEND_JOBS=1` prevented nested parallelism. Source identities were
+stable during this run. The reviewed source differs from the failed attempt
+only in a parser docstring and import wrapping, so this is a scheduling
+configuration validation, not an algorithm improvement or strict same-source
+speed comparison. It qualifies native execution of this parser/model closure,
+not native compilation of the parsed C++ TU, the public CLI or a fixed point.
+
+Both attempts used the strengthened process-name watchdog from `c62f3f36`.
+Its sampling checks are an ownership guard, not an exhaustive audit of every
+possible exec event. No wall-clock/RSS bound was widened. Later void/control-flow
+increments require their own changed-shape native validation.
+
 External C++ compilers may be explicit, separate reference oracles. Acceptance
 compares outputs as bytes, exit status and diagnostics, then grows through real
 translation units. Successful parsing, emitted Python passing `compile()`, or
@@ -140,11 +187,16 @@ uv run python scripts/cpp_feature_inventory.py --libclang /path/to/libclang.so \
   --source /path/to/unit.cpp --output /tmp/features.json -- -x c++ -std=c++17
 ```
 
-Pass the real include/generated-header options after `--`. The NumPy 2.4.4
-source-level superset inventory currently yielded 25 partial translation units
-and zero complete units because required generated headers were unavailable.
-Its AST counts are lower bounds, not a complete feature list, semantic support
-or an owned build result. `parsed`, `partial` and `unavailable` stay distinct.
+Pass the real include/generated-header options after `--`. The first NumPy 2.4.4
+source-level superset inventory yielded 25 partial units because generated
+headers were unavailable. A later explicitly external Linux development
+configuration generated the real headers and selected 131 objects for
+`_multiarray_umath` (110 C and 21 C++). Adding the production FFT/linalg inputs
+gave 23 C++ units; all 23 then parsed with LibClang19. This configuration-specific
+observation is not the entire NumPy build or evidence of PCC semantic support.
+AST feature counts remain observations, not instantiated-template counts or a
+complete requirement list. `parsed`, `partial` and `unavailable` stay distinct;
+the inventory/oracle dependencies do not enter the owned target chain.
 
 Reference designs consulted (no third-party source copied in this increment):
 
@@ -160,6 +212,13 @@ Reference designs consulted (no third-party source copied in this increment):
   are references for candidate viability, per-argument ordering and ambiguity.
   This implementation and its regressions are independently authored; it does
   not port the remainder of Clang's conversion/template machinery by implication.
+- [Clang type-parameter deduction](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaTemplateDeduction.cpp#L1639-L1744)
+  and [function-body instantiation](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaTemplateInstantiateDecl.cpp#L5279-L5336)
+  distinguish consistent type substitution from body checking. The present
+  by-value scalar pattern/instance implementation is not a port of their full
+  dependent-language machinery. [Itanium template parameter mangling](https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangle.template-param)
+  is a separate ABI requirement; scalar storage equality does not erase template
+  parameter identity in a specialization's name.
 - TagStack's TAG grammar is a syntax checklist; its expression traversal,
   cleanup model and native differential-test structure are design references.
   Its permissive legacy Python text transformations are not C++ semantics.

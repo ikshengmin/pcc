@@ -116,3 +116,31 @@ a negative capability test. It requires an explicit
 selected target. **Extended-float value/ABI lowering remains unimplemented**;
 this rejection is not a successful C++17 program execution. The separate
 float/double/long positive case establishes only supported overload ranking.
+
+## Single-translation-unit function templates
+
+`tests/cpp/test_cpp_template_execution.py` executes arithmetic function-template
+instances through the same owned emitter/linker and explicit C++17 oracle. The
+cases distinguish int/double instances, ordinary-function preference only for
+equal conversion sequences, definition-point lookup, instantiated promotion,
+two type parameters with a dependent cast, and local alias/shadowing behavior.
+Repeated builds compare IR/object/image bytes; each emitted program runs twice.
+
+```bash
+uv run pytest -x -vv --tb=short tests/cpp/test_cpp_template_execution.py
+uv run pytest -x -vv --tb=short -m integration tests/cpp/test_cpp_template_execution.py
+```
+
+Negative controls require diagnostics before object emission for conflicting
+deduction, an invalid selected template body, and a missing selected definition.
+An invalid body cannot fall back to a worse ordinary overload or the external
+oracle. The old blanket function-template rejection is replaced by the still
+unsupported class-template boundary, not silently removed.
+
+This is a single-TU arithmetic slice, not complete template support. Partial
+ordering, ADL, class templates, and multi-TU weak ODR/COMDAT remain unqualified;
+the harness does not internalize instances or concatenate TUs to conceal those
+gaps. A two-TU `id<int>` program remains a required duplicate-strong-symbol
+rejection in the owned linker and a separately named **reference-only** positive
+control. Its successful external execution is not owned multi-TU template
+support. Native pcc1 C++ project execution remains a separate unsatisfied gate.
