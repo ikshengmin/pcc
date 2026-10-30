@@ -86,6 +86,7 @@ from pcc.unsafe import (
     ptr_diff,
     ptr_eq,
     ptr_is_null,
+    ptr_to_int,
     stack_alloc,
     store_ptr,
     store_i32,
@@ -528,6 +529,26 @@ def pcc_gc_release(o) -> None:
     py_decref(o)
 
 
+def _heal_forwarded_field(slot, shell, copy) -> None:
+    """Point a container field at the GC3 copy of the shell it names.
+
+    GC3 counts a field's reference on the object the field names: promotion
+    heals a field by retaining the copy and releasing the shell
+    (pcc_gc_generational_promote_owned_slot_mode), and the forwarding node
+    holds its own reference on the copy. A plain store left the count on
+    the shell, so the field's later release took the node's reference and
+    the copy died while other fields still named the shell. Only GC3's
+    scalar copies (int, float, str, complex, bytes, bytearray) are forwarded,
+    and a field naming one is an owning data slot. The reader that swaps
+    the field moves the count; a reader that loses the swap moves nothing.
+    """
+    py_incref(copy)
+    if atomic_cas_i64(slot, 0, ptr_to_int(shell), ptr_to_int(copy), "acq_rel", "acquire") == ptr_to_int(shell):
+        py_decref(shell)
+    else:
+        py_decref(copy)
+
+
 @c_abi_export("pcc_gc_load_ptr")
 def pcc_gc_load_ptr(owner, slot):
     if ptr_is_null(slot):
@@ -561,7 +582,10 @@ def pcc_gc_load_ptr(owner, slot):
         if needs_resolve != 0:
             resolved = pcc_gc_note_relocation_read(v)
             if ptr_eq(resolved, v) == 0:
-                store_ptr(slot, 0, resolved)
+                if backend == 3 and ptr_is_null(owner) == 0:
+                    _heal_forwarded_field(slot, v, resolved)
+                else:
+                    store_ptr(slot, 0, resolved)
                 v = resolved
         return v
     return v
@@ -596,7 +620,10 @@ def pcc_gc_load_borrowed_ptr(owner, slot):
         if needs_resolve != 0:
             resolved = pcc_gc_note_relocation_read(v)
             if ptr_eq(resolved, v) == 0:
-                store_ptr(slot, 0, resolved)
+                if backend == 3 and ptr_is_null(owner) == 0:
+                    _heal_forwarded_field(slot, v, resolved)
+                else:
+                    store_ptr(slot, 0, resolved)
                 v = resolved
         return v
     return v
