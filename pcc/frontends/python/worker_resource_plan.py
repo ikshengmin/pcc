@@ -169,8 +169,8 @@ def estimated_task_bytes(task, observations) -> int:
 def _modeled_observation_ratio(observations, execution_class, model):
     """Fold a plain modeled snapshot, or defer all validation to the reader.
 
-    This is only an acceleration hint while computing one sort's keys. Never
-    reject here: legacy envelopes, malformed rows and non-builtin objects
+    This is only an acceleration hint for one sort or callback-free fit scan.
+    Never reject here: legacy envelopes, malformed rows and non-builtin objects
     retain the original estimator's lazy validation and exception ordering.
     Only immutable class/model/peak/prior fields participate in the ratio;
     modeled observations do not read their mutable input-envelope list.
@@ -261,6 +261,36 @@ def _sort_modeled_tasks(pending, tasks, observations):
     return sorted(pending, key=lambda index: (
         -_choose_task_estimate(tasks[index], observations, ratio_cache), index,
     ))
+
+
+def _foldable_fit_estimate(task, observations, ratio_cache):
+    """Return a callback-free estimate, or leave the original call untouched.
+
+    Unlike the sort helper, this probe never invokes an unsupported fallback.
+    The caller must deoptimize its whole remaining scan before a callback can
+    replace tasks/indices/history or retain custom comparison state.
+    """
+    if type(task) is not dict or any(type(key) is not str for key in task):
+        return None
+    model = task.get("startup_prior_model", "")
+    execution_class = task.get("class")
+    inputs = task.get("inputs")
+    if (type(model) is not str or not model
+            or type(execution_class) is not str
+            or (type(inputs) is not list and type(inputs) is not tuple)
+            or any(type(value) is not int for value in inputs)
+            or type(task.get("estimate_bytes")) is not int
+            or type(task.get("incomplete_peak_bytes", 0)) is not int
+            or type(task.get("input_ready", False)) is not bool
+            or type(task.get("prior_input_bytes", 0)) is not int):
+        return None
+    key = execution_class, model
+    if key not in ratio_cache:
+        ratio = _modeled_observation_ratio(observations, execution_class, model)
+        if ratio is None:
+            return None
+        ratio_cache[key] = ratio
+    return _choose_task_estimate(task, observations, ratio_cache)
 
 
 def minimum_task_bytes(task) -> int:
@@ -520,10 +550,29 @@ def choose_task(pending, tasks, observations, active_reservations,
             return -1, 0, False
         return calibration, available, True
     remaining = available - sum(active_reservations)
+    # Calibration hooks and reservation arithmetic may mutate observations.
+    # Start a separate snapshot only after both have completed. Keep custom
+    # sequences, indices and comparison controls on the original lazy path.
+    fit_ratio_cache = None
+    if ((type(tasks) is list or type(tasks) is tuple)
+            and (type(pending) is list or type(pending) is tuple)
+            and all(type(index) is int for index in pending)
+            and type(remaining) is int and type(available) is int
+            and type(guarded_calibration) is bool):
+        fit_ratio_cache = {}
     unknown = -1
     forecast_only = -1
     for index in pending:
-        demand = estimated_task_bytes(tasks[index], observations)
+        if type(index) is not int:
+            fit_ratio_cache = None
+        demand = None
+        if fit_ratio_cache is not None:
+            demand = _foldable_fit_estimate(tasks[index], observations, fit_ratio_cache)
+        if demand is None:
+            # Deoptimize permanently before any fallback callback. Retain the
+            # original expression and temporary lifetime, not a task alias.
+            fit_ratio_cache = None
+            demand = estimated_task_bytes(tasks[index], observations)
         if demand == 0:
             if unknown < 0:
                 unknown = index

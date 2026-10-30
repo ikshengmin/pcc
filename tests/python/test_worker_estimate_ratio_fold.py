@@ -49,6 +49,9 @@ def assert_estimate_equal(owner, observations):
 @contextmanager
 def uncached_selection():
     saved = plan._choose_task_estimate
+    saved_fit = plan._foldable_fit_estimate
+    # Disable both independent fold boundaries for the original raw oracle.
+    plan._foldable_fit_estimate = lambda owner, observations, cache: None
     plan._choose_task_estimate = lambda owner, observations, cache: plan.estimated_task_bytes(
         owner, observations,
     )
@@ -56,6 +59,7 @@ def uncached_selection():
         yield
     finally:
         plan._choose_task_estimate = saved
+        plan._foldable_fit_estimate = saved_fit
 
 
 def assert_selection_equal(tasks, observations, active=(), available=2**40, width=3,
