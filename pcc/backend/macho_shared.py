@@ -7,7 +7,6 @@ Only libSystem imports are supported; other library inputs fail explicitly.
 
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import platform
 import struct
@@ -15,7 +14,13 @@ import sys
 
 from . import BackendUnavailable, macho_spec as spec
 from .macho_codesign import _signature_size, build_signature, parse_signature
-from .macho_exec import LIBSYSTEM, PAGE, TEXT_BASE, link_executable, prepare_executable_object
+from .macho_exec import (
+    PAGE,
+    TEXT_BASE,
+    _libsystem_exports_symbol,
+    link_executable,
+    prepare_executable_object,
+)
 from .macho_obj import Section, TextSymbol, TEXT_SECTION_FLAGS
 from .native_object import NativeObject
 from .self_backend_target_match import is_aarch64_darwin_triple
@@ -27,8 +32,9 @@ _LIBSYSTEM_NAMES = frozenset({"System", "c", "m", "pthread", "dl"})
 
 def validate_target(target):
     if (not is_aarch64_darwin_triple(target) or platform.system() != "Darwin"
-            or platform.machine() != "arm64" or sys.implementation.name != "cpython"):
-        raise BackendUnavailable("owned shared libraries currently require a CPython Darwin arm64 host")
+            or platform.machine() != "arm64"
+            or sys.implementation.name not in ("cpython", "pcc")):
+        raise BackendUnavailable("owned shared libraries require a CPython or pcc Darwin arm64 host")
 
 
 def validate_link_args(link_args):
@@ -96,15 +102,12 @@ def _exports_trie(exports):
 
 
 def _check_imports(merged):
-    library = ctypes.CDLL(LIBSYSTEM.decode("ascii"))
-    dlsym = ctypes.CDLL(None).dlsym
-    dlsym.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
-    dlsym.restype = ctypes.c_void_p
+    # Share the executable linker's native loader intrinsic and host oracle.
+    # Do not turn an unsupported import into a different execution owner.
     for symbol in merged.symbols:
         if symbol.section_index or symbol.weak_reference:
             continue
-        name = symbol.name[1:] if symbol.name.startswith("_") else symbol.name
-        if not dlsym(library._handle, name.encode("utf-8")):
+        if not _libsystem_exports_symbol(symbol.name):
             raise BackendUnavailable("owned shared library has an unsupported libSystem import: " + symbol.name)
 
 
