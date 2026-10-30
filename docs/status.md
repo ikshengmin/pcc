@@ -469,21 +469,86 @@ packages 4 and 5.
   candidate; most of those base failures are `NativeProvisioningError`
   (tests that provision their own runtime), the rest stale IR/source-shape
   assertions (`test_gc_root_precision.py`, `test_gc_backend_generational.py`).
-- In progress, uncommitted: container locks. The kernel has 512 striped
-  0/1 words (`pcc_container_lock`, and `pcc_container_lock_pair`, which takes
-  two stripes in index order for `list.extend(list)` and `a + b`); holders
-  are no-park, never take the graph lock or a second container lock (both
-  abort) and run no user code. `py_list.py` routes every list transaction
-  through `_list_lock`, still the graph lock until `_lists_lock_themselves()`
-  is switched on after the other modules that touch list internals
-  (`sorted`, `str.join`, `bytes.join`, `pcc_list_snapshot_commit_slots`,
-  `gc.callbacks`, tuple splat, generator frames) are converted and the
-  checked-lease path (graph lock under the provenance probe) is kept out of
-  container regions. Pre-existing GC0 races fixed on the way: `in`, `index`
-  and `count` compared borrowed items with no lock, `copy`, `*` and slicing
-  read items unlocked, and sanity checks read length and capacity before
-  locking (false negatives under concurrent growth). Open: GC1-4 slicing
-  still reads source items without a lock.
+- `1bcad2915`: GC0 lists take their own container lock
+  (`pcc_container_lock`: 64 striped 0/1 words, 128 B apart;
+  `pcc_container_lock_pair` takes two stripes in index order for
+  `list.extend(list)` and `a + b`), selected by `pcc_gc_list_container_mode`
+  (GC0 with the provenance probe off, set when the collector is fixed);
+  GC1-4 and probed GC0 keep the graph lock. Holders are no-park, take neither
+  the graph lock nor a second container lock (both abort) and run no user
+  code. An AST lock-state audit over the runtime call graph (archive
+  `design/audit/`) found one container-region path to the graph lock
+  (refcount prepare of an untracked task object), now lock-free on GC0.
+  r78 (parent -> this change, host load 12-22): one worker -0.01% QPS
+  (cycles -0.55%), four workers +5.12% (cycles -6.77% 7/7). 512 stripes and
+  an uninlined mode function had cost one worker 3.4% (r77). The new
+  four-carrier race test (`test_list_container_lock_races.py`) found, on
+  every collector at the parent: concurrent slice assignment `xs[i:i] = [v]`
+  dropped 70-140 of 1920 values (eight optimistic attempts, then a silent -1
+  nobody checked) and `xs[::2] = [9]` did nothing instead of raising
+  ValueError; both fixed. Also fixed: `in`/`index`/`count`, copy, repeat,
+  slicing, concatenation, `tuple(list)`, `bytes.join` and
+  `gc.get_referents` read items without a lock; `gc.callbacks.remove`
+  rewrote the list without one. Open: GC1-4 `py_list_slice` reads source
+  items unlocked, os.path sequence helpers (`commonpath(list)`), bytearray
+  items resized during `bytes.join`; whether 64 stripes cost four workers
+  anything was not measurable at load 12-17 (r79). Absolute r78 QPS: one
+  worker 33,462 (CPython asyncio 74,944), four workers 52,602 (asyncio
+  260,556). Follow-up `ab9d55141` updates the model harnesses and source
+  pins for `_list_lock`; the getter-roots harness now also models the GC0
+  immediate field read from `0e3e14a22` (six instance getter tests had
+  failed with NameError since that commit).
+- Next structural step: instance fields (20% of four-worker graph-lock
+  waiting, stores 4.7%). Accesses are centralized (`py_instance_get_field`
+  -> `_instance_field_load`, `py_instance_set_field` ->
+  `pcc_gc_store_field_ptr`, `_instance_field_clear`); other readers are in
+  py_pickle_copy_runtime, py_protocol_runtime and py_obj_ops_compare.
+- `8de88c5fa`: a lazily created instance `__dict__` is installed only while
+  its slot is empty (`pcc_gc_store_field_ptr_if_empty`). At the parent,
+  eight tasks setting distinct attributes on one shared instance on four
+  carriers lost 2-15 attributes or crashed (SIGSEGV in 7 of 15 runs); with
+  the fix `test_instance_attribute_races.py` passed six times (60 runs
+  over the five collectors).
+- `e7bad1333`, `5728f620d`: two model tests failing since `93f1a039f`
+  were stale: the struct-sequence test failed registrations 7 and 14
+  although the constructor registers its scratch roots once, and the
+  class visitor probe expected MRO entries as borrowed edges (they are
+  update-only).
+- numpy (maintainer request, 2026-10-30): `import numpy` compiled from
+  `projects/numpy-2.4.4` with the owned self backend now passes three former
+  blockers: a decorated function's call result as an imported call's
+  operand (`558de810d`, rot90), a slice inside a tuple subscript key and an
+  `object.__getattribute__` result as an operand (`51d3cb881`; that call
+  also never checked its error and continued with NULL). The next blocker
+  is `numpy._core.records`: `class record(nt.void)` subclasses a C-extension
+  type ("native class base is unavailable"); `memmap`, `recarray`,
+  `matrix` and `chararray` subclass `ndarray` the same way. Compiled classes
+  with C-extension bases need dynamic heap-type creation through the C-API
+  layer. The numpy C core still builds only with the host clang reference
+  route (`scripts/numpy_head_gate.py` compiles with the compile commands'
+  compiler and links with host `c++`). NumPy 2.4.4 needs C11, C++17 and
+  Cython (`meson.build`): 175 C files, 27 `.c.src` and 8 `.h.src` templates
+  expanded by Python generators (9 custom targets), 23 C++ files on arm64
+  (sorting, einsum, unique, hash table, half floats, string ufuncs, clip,
+  pocketfft, umath_linalg; 303 templates, libc++ containers and mutexes,
+  exceptions in two files) and nine Cython modules in `numpy.random`;
+  `allow-noblas` defaults on with `lapack_lite`. The owned C-extension
+  chain itself is open at four points: self-link rejects executable
+  C-API exports (`pipeline_self_link.py`), the owned shared-library
+  linker resolves imports only against libSystem and requires a CPython
+  host (`macho_shared.py`), and the package executor rejects every link
+  output (`build_exec.py`); loader tests use `PCC_SELF_LINK=cc`. Seen while
+  testing: `bytes.split` is missing and `repr(slice)` prints
+  `<slice object at 0x...>`.
+- Runtime archive staleness: any change to the compiler source set changes
+  `codegen_checksum()` and every runtime member is rebuilt (the check exists
+  because objects from a previous compiler once produced three retracted
+  benchmark conclusions). Emission is about half of a member's build time
+  (six large modules: frontend+passes 15.7 s, emission 17.3 s). Reusing a
+  member's object when its final IR is unchanged is sound only with the
+  emission path's import closure and `PCC_*` environment recorded (emission
+  imports nine codegen modules through pipeline imports); not implemented.
+  Correctness arms now build with six runtime jobs (archive `fast_build.py`).
 
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
