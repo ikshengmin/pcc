@@ -264,6 +264,7 @@ py_clear_exception = extern("py_clear_exception", (), c_void)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_gc_store_field_ptr = extern("pcc_gc_store_field_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
@@ -2814,6 +2815,18 @@ def _instance_field_load(inst, offset: int, out) -> int:
             py_incref(value)
         store_ptr(out, 0, value)
         return 0
+    if _gc_backend_selected_fast() == 0:
+        # GC0 never relocates: one transaction around the load and retain,
+        # unless acquiring it parked through a backend switch.
+        pcc_py_gc_minor_graph_lock()
+        if _gc_backend_selected_fast() == 0:
+            shared = load_ptr(inst, offset)
+            if ptr_is_null(shared) == 0:
+                py_incref(shared)
+            pcc_py_gc_minor_graph_unlock()
+            store_ptr(out, 0, shared)
+            return 0
+        pcc_py_gc_minor_graph_unlock()
     receiver_slot = stack_alloc(C_POINTER_SIZE)
     receiver_handle_slot = stack_alloc(C_POINTER_SIZE)
     store_ptr(receiver_slot, 0, inst)
@@ -2998,7 +3011,7 @@ def py_instance_set_field(inst, idx: int, value) -> None:
     if idx >= n_fields:
         return
     fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-    pcc_gc_store_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)
+    pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)
 
 
 @c_abi_export("py_valuebox_new")
@@ -3312,7 +3325,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
             if ptr_is_null(dyn) != 0:
                 return null()
             dyn = _instance_lookup_hold(slots, pins, 2, dyn, 0)
-            pcc_gc_store_ptr(inst, dyn_slot, dyn)
+            pcc_gc_store_field_ptr(inst, dyn_slot, dyn)
             if field_fallback_rooted == 0:
                 py_decref(dyn)
         else:
@@ -3550,7 +3563,7 @@ def py_instance_setattr(inst, name, value) -> int:
     # store goes straight to its slot, as the full walk below would decide.
     entry = _attr_res_find_any(cls, name)
     if ptr_is_null(entry) == 0 and load_i32(entry, 12) == _ATTR_RES_FIELD:
-        pcc_gc_store_ptr(
+        pcc_gc_store_field_ptr(
             inst,
             ptr_add(
                 inst,
@@ -3582,7 +3595,7 @@ def py_instance_setattr(inst, name, value) -> int:
             # outcome the read path records for this field.
             _attr_res_store(cls, name, _ATTR_RES_FIELD, idx, outcome_epoch)
         fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-        pcc_gc_store_ptr(
+        pcc_gc_store_field_ptr(
             inst,
             ptr_add(fields_base, idx * C_POINTER_SIZE),
             value,
@@ -3598,7 +3611,7 @@ def py_instance_setattr(inst, name, value) -> int:
         dyn = py_dict_new()
         if ptr_is_null(dyn) != 0:
             return -1
-        pcc_gc_store_ptr(inst, dyn_slot, dyn)
+        pcc_gc_store_field_ptr(inst, dyn_slot, dyn)
         py_decref(dyn)
     key = py_str_new(name, strlen(name))
     py_dict_set(dyn, key, value)

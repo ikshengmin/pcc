@@ -667,10 +667,7 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         backend = pcc_gc_backend()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    # With other carriers running, a heap slot is shared: two unlocked
-    # read-modify-writes released one old value twice, and a reader's
-    # retain raced the release. Swap it inside a graph transaction instead.
-    if backend == 0 and pcc_threads_enabled() == 0:
+    if backend == 0:
         if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
             pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, owner)
         old = load_ptr(slot, 0)
@@ -682,6 +679,35 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         store_ptr(slot, 0, value)
         py_decref(old)
         return
+    plan = stack_alloc(128)
+    pcc_gc_store_ptr_plan_init(plan, owner, backend)
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_ptr_plan_finish(plan)
+
+
+@c_abi_export("pcc_gc_store_field_ptr")
+def pcc_gc_store_field_ptr(owner, slot, value) -> None:
+    """Rebind a field other carriers may read or rebind (an instance field).
+
+    The GC0 store above is an unlocked read-modify-write: two concurrent
+    stores released one old value twice, and a reader's retain raced the
+    release. With threads enabled every collector swaps such a field inside
+    a graph transaction and releases the displaced value after it; readers
+    load and retain inside one. Private and runtime-owned slots keep
+    pcc_gc_store_ptr.
+    """
+    if ptr_is_null(slot):
+        return
+    if pcc_threads_enabled() == 0:
+        pcc_gc_store_ptr(owner, slot, value)
+        return
+    backend: int = 0
+    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
+        backend = pcc_gc_backend()
+    else:
+        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
     pcc_py_gc_minor_graph_lock()
