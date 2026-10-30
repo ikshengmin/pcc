@@ -144,3 +144,23 @@ gaps. A two-TU `id<int>` program remains a required duplicate-strong-symbol
 rejection in the owned linker and a separately named **reference-only** positive
 control. Its successful external execution is not owned multi-TU template
 support. Native pcc1 C++ project execution remains a separate unsatisfied gate.
+
+## Scalar void/return effects
+
+`test_cpp_void_execution.py` observes effects, not just acceptance of a void
+body. Explicit/dependent discards must retain assignments; void-return calls,
+template forwarding, empty returns and fallthrough must preserve call count and
+the last observed argument. The owned assembler supplies generic scalar ABI
+observer functions from `abi_observer.py`; a separate C++ TU supplies the same
+observer contract to the external reference compiler. Neither observer
+implements C++ source semantics or changes the translation unit under test.
+
+`compile_host_cpp(..., owned_support_assembly=...)` records each owned support
+object in its artifact. The default path is unchanged. Missing support and
+duplicate source/support definitions fail at the owned linker; support cannot
+silently replace a source definition. Invalid void values/returns must diagnose
+before emission, without creating an executable or falling back to an oracle.
+
+These checks execute Linux x86-64 scalar programs only. They do not establish
+class temporary destruction, full discarded-value semantics for every type, or
+native pcc1 frontend execution.

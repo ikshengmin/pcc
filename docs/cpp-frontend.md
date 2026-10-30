@@ -35,7 +35,7 @@ a two-translation-unit case, have host-owned emitted execution and separate
 G++17 byte-oracle tests; this is not a native C++ driver qualification.
 
 Currently accepted semantics are deliberately narrow: arithmetic free functions,
-arithmetic aliases, prototypes, single-object block declarations, nested lexical
+arithmetic/void aliases, prototypes, single-object block declarations, nested lexical
 blocks, arithmetic, direct calls and returns. Types keep canonical C++ identity
 and rank, even when `long` and `long long` have the same storage width. Target
 width/signedness and ordinary integer-literal candidates reuse the owned C ABI.
@@ -54,6 +54,16 @@ and lowered into existing C nodes. Repeated calls reuse one instance. A selected
 body error is an error, not permission to fall back to a worse overload.
 Non-template functions win equal conversion sequences; more general template
 partial ordering and ADL-only dependent calls still fail explicitly.
+
+The void/return increment admits void free-function results, explicit discarded
+expressions and `return;` / `return void_expression;`. A sole unnamed `void`
+parameter (including an alias) denotes an empty signature; named or additional
+void parameters are errors, never removed to make a call fit. Void objects and
+value-consuming uses of void expressions are rejected before C lowering.
+Template return checks are repeated after substitution. A selected invalid body
+cannot fall back to a worse overload. Returned calls and explicit-discard child
+expressions remain in the C AST, so their effects are evaluated before return
+or statement completion; no lifetime semantics are erased by this scalar slice.
 
 The emitted fundamental template signatures use Itanium parameter identities
 and substitutions, including the dependent return type. Weak/COMDAT ODR
@@ -111,6 +121,19 @@ programs separately passed host-owned ELF execution (twice each) and an explicit
 G++17 byte/status/stderr oracle, including definition-point overload lookup and
 post-instantiation arithmetic promotion. These do not prove the public pcc1 C++
 driver or complete template semantics.
+
+`test_cpp_void.py` adds 20 host-development checks for void signatures,
+parameter-list normalization, return diagnostics, dependent instantiation and
+actual C IR containing the retained call followed by `ret void`. Eight new
+void programs also passed actual host-owned ELF execution and separate G++17
+byte/status/stderr comparison. A generic test-only ABI observer records call
+count and value, proving returned void calls execute exactly once and early
+`return;` does not execute subsequent calls. The helper implements only the
+external observation API, not C++ return semantics; the source body still goes
+through PCC's parser/Sema/C generator and owned object/link path.
+`native_void_probe.py` is a changed-shape native parser gate, but has not yet
+been run with pcc1. The earlier successful native probes do not qualify this
+newer closure.
 
 The first parser at `287bc4a` was also compiled and executed with the restored
 Linux x86-64 Stage1 `pcc1` from `bf8c03e`. The bounded run used that compiler's
@@ -228,3 +251,8 @@ Reference designs consulted (no third-party source copied in this increment):
   and bounded streams are useful references, but declaration extraction drops
   function bodies and is not semantic analysis. Source licensing and test
   provenance differ; regressions here are independently authored.
+
+The void return checks were independently implemented after consulting
+[Clang's `BuildReturnStmt`](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaStmt.cpp#L3995-L4075).
+That reference distinguishes dependent checks, void return expressions and
+missing values; no Clang source is copied or called by the owned frontend.

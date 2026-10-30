@@ -1,7 +1,7 @@
 """Handwritten C++ parser with semantic lookup and reversible lookahead.
 
-This increment accepts arithmetic free functions, deduced arithmetic function
-templates and block statements. It builds the existing C AST only *after*
+This increment accepts arithmetic free functions with arithmetic/void results,
+deduced arithmetic function templates and block statements. It builds the existing C AST only *after*
 resolving names and checking supported semantics. It does not rewrite source
 text, invoke the C parser, or discard missing lifetime/exception/template
 semantics. Unimplemented features remain explicit errors.
@@ -253,6 +253,14 @@ class CppParser:
         return c_ast.Decl(name, [], [], [], self._scalar_type(name, dtype, coord), init, None, coord)
 
     def _convert(self, expression, dtype, coord, force=False):
+        # Only an explicit conversion may discard an arithmetic result. Return
+        # statements perform their own void check and preserve their expression.
+        if dtype == "void" and force:
+            self._require_value(expression, allow_void=True)
+            if self.template_function is not None:
+                return Pattern("cast", coord, dtype, [expression])
+            typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
+            return c_ast.Cast(typename, expression.node, coord)
         self._require_value(expression)
         if self.template_function is not None:
             if not dependent(expression.dtype) and not dependent(dtype):
@@ -305,11 +313,19 @@ class CppParser:
         parameter_scope = Scope(parent)
         self.scope = parameter_scope
         try:
-            if self._accept("void"):
-                self._expect(")")
-            elif not self._accept(")"):
+            if not self._accept(")"):
                 while True:
+                    dtype_token = self._peek()
                     dtype = self._type()
+                    # Exactly one unnamed void parameter denotes an empty
+                    # parameter list, including a typedef naming void. A named
+                    # or additional void parameter is never silently removed.
+                    if dtype == "void":
+                        if not params and self._accept(")"):
+                            break
+                        raise CppDiagnostic("cpp.invalid-parameter",
+                                            "void must be the sole unnamed parameter",
+                                            dtype_token.coord)
                     param = None
                     if self._peek().value not in (",", ")"):
                         param = self._declarator_name()
@@ -411,16 +427,13 @@ class CppParser:
             self._alias()
             return None
         if self._accept("return"):
-            expression = self._expression()
-            self._require_value(expression)
+            expression = None if self._peek().value == ";" else self._expression()
             self._expect(";")
-            if self.template_function is not None:
-                self._convert(expression, self.return_type, token.coord)
-                return Pattern("return", token.coord, children=[expression])
-            return c_ast.Return(self._convert(expression, self.return_type, token.coord), token.coord)
+            return self._return_statement(expression, token.coord)
         if self._is_declaration():
             dtype = self._type()
             name = self._declarator_name()
+            self._check_object_type(dtype, name.coord)
             # The point of declaration precedes the initializer.
             symbol = self.scope.declare(Symbol(name.value, "value", name.coord, dtype=dtype))
             init = None
@@ -444,11 +457,43 @@ class CppParser:
                                [] if initializer is None else [initializer])
             return self._decl(name.value, dtype, name.coord, init)
         expression = self._expression()
-        self._require_value(expression)
+        self._require_value(expression, allow_void=True)
         self._expect(";")
         return expression.node
 
-    def _require_value(self, expression):
+    def _check_object_type(self, dtype, coord):
+        if dtype == "void":
+            raise CppDiagnostic("cpp.invalid-object-type", "an object cannot have type void", coord)
+
+    def _return_statement(self, expression, coord):
+        if expression is None:
+            if not dependent(self.return_type) and self.return_type != "void":
+                raise CppDiagnostic("cpp.return-value-required",
+                                    "non-void function requires a return expression", coord)
+        else:
+            self._require_value(expression, allow_void=True)
+            if not dependent(self.return_type) and not dependent(expression.dtype):
+                if self.return_type == "void" and expression.dtype != "void":
+                    raise CppDiagnostic("cpp.return-value-in-void",
+                                        "void function cannot return a non-void expression", coord)
+                if self.return_type != "void" and expression.dtype == "void":
+                    raise CppDiagnostic("cpp.return-void-expression",
+                                        "non-void function cannot return a void expression", coord)
+        if self.template_function is not None:
+            if expression is not None and expression.dtype != "void" and self.return_type != "void":
+                self._convert(expression, self.return_type, coord)
+            return Pattern("return", coord, children=[] if expression is None else [expression])
+        if expression is None:
+            return c_ast.Return(None, coord)
+        if self.return_type == "void":
+            # Existing C lowering evaluates node.expr before ret void. Keep the
+            # checked void expression intact so calls and other effects survive.
+            return c_ast.Return(expression.node, coord)
+        return c_ast.Return(self._convert(expression, self.return_type, coord), coord)
+
+    def _require_value(self, expression, allow_void=False):
+        if expression.dtype == "void" and not allow_void:
+            raise CppDiagnostic("cpp.void-value", "void expression has no value", expression.node.coord)
         if expression.symbol is not None and expression.symbol.kind == "function":
             self._unsupported(self._peek(), "function-to-pointer conversion")
 
@@ -580,7 +625,6 @@ class CppParser:
                 zero = self._literal("int", "0", "int", token.coord)
                 return Expression(self._convert(zero, dtype, token.coord, force=True), dtype)
             expression = self._expression()
-            self._require_value(expression)
             self._expect(")")
             return Expression(self._convert(expression, dtype, token.coord, force=True), dtype)
         if token.kind != "ID" or token.value in _KEYWORDS:
@@ -648,6 +692,7 @@ class CppParser:
         if kind == "decl":
             symbol = pattern.value
             dtype = substitute(symbol.dtype, bindings)
+            self._check_object_type(dtype, coord)
             environment[id(symbol)] = Expression(c_ast.ID(symbol.c_name, coord), dtype, True)
             init = None
             if pattern.children:
@@ -655,8 +700,9 @@ class CppParser:
                 init = self._convert(expression, dtype, coord)
             return self._decl(symbol.c_name, dtype, coord, init)
         if kind == "return":
-            expression = self._instantiate_expression(pattern.children[0], bindings, environment)
-            return c_ast.Return(self._convert(expression, self.return_type, coord), coord)
+            expression = (self._instantiate_expression(pattern.children[0], bindings, environment)
+                          if pattern.children else None)
+            return self._return_statement(expression, coord)
         return self._instantiate_expression(pattern, bindings, environment).node
 
     def _instantiate_body(self, instance, request_coord):
@@ -667,6 +713,9 @@ class CppParser:
         parameters = []
         environment = {}
         for symbol, dtype in zip(origin.parameter_symbols, instance.parameters):
+            if dtype == "void":
+                raise CppDiagnostic("cpp.invalid-parameter",
+                                    "template substitution formed a void parameter", symbol.coord)
             parameters.append(self._decl(symbol.name, dtype, symbol.coord))
             environment[id(symbol)] = Expression(c_ast.ID(symbol.name, symbol.coord), dtype, True)
         declaration = self._decl(instance.c_name, instance.dtype, origin.coord)

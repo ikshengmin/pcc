@@ -11,8 +11,9 @@ from pcc.frontends.c.c_abi_layout import (
 )
 
 
-TYPE_WORDS = frozenset("bool char short int long signed unsigned float double".split())
+TYPE_WORDS = frozenset("void bool char short int long signed unsigned float double".split())
 _CODES = {
+    "void": "v",
     "bool": "b", "char": "c", "signed char": "a", "unsigned char": "h",
     "short": "s", "unsigned short": "t", "int": "i", "unsigned int": "j",
     "long": "l", "unsigned long": "m", "long long": "x",
@@ -88,6 +89,8 @@ class ArithmeticTypes:
     def conversion_rank(self, source, destination):
         # This is the arithmetic, by-value standard-conversion slice only.
         # No pointer/reference/user-defined conversion is silently ranked here.
+        if source == "void" or destination == "void":
+            return None
         if source == destination:
             return 0
         if source not in _CODES or destination not in _CODES:

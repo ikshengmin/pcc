@@ -74,15 +74,25 @@ def entry_definition(symbol) -> str | None:
     return matches[0].c_name if matches else None
 
 
-def compile_host_cpp(units: tuple[tuple[str, str], ...]) -> HostArtifact:
+def compile_host_cpp(
+    units: tuple[tuple[str, str], ...],
+    *,
+    owned_support_assembly: tuple[str, ...] = (),
+) -> HostArtifact:
     """Compile separate TUs; fail before publication at every missing boundary.
 
     The corpus defines ``int cpp_test_entry()``. Its int result is written as
     four little-endian bytes to stdout and is also the process exit status
     (low eight bits on Linux). This exposes more than an exit-code-only test.
     No libc, C++ runtime, host assembler, linker, or external compiler is used.
+    Optional ABI-observer support is assembly processed by the owned assembler,
+    not an injected external object or a replacement for source operations.
     """
-    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.elf_x86_64 import (
+        emit_relocatable,
+        link_static_executable,
+        parse_relocatable,
+    )
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.backend.x86_64_asm_driver import assemble_file
     from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
@@ -116,6 +126,8 @@ def compile_host_cpp(units: tuple[tuple[str, str], ...]) -> HostArtifact:
         raise ValueError("C++ project does not define int cpp_test_entry()")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", entry_symbol):
         raise ValueError("C++ test entry has an invalid assembly symbol")
+    for assembly in owned_support_assembly:
+        object_bytes.append(emit_relocatable(assemble_file(assembly)))
     # Linux starts with 16-byte aligned rsp; retain SysV call alignment. The
     # source result survives write's use of rax/rcx/r11 in the local stack slot.
     startup = assemble_file(
