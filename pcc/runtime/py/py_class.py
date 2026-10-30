@@ -227,6 +227,12 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
+pcc_gc_retain_plan_prepare_locked = extern(
+    "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
+)
+pcc_gc_retain_plan_finish = extern(
+    "pcc_gc_retain_plan_finish", (c_ptr,), c_void
+)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
@@ -270,6 +276,7 @@ pcc_gc_pointer_register = extern(
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
 pcc_gc_note_write_barrier = extern(
@@ -2723,10 +2730,13 @@ def py_instance_get_field(inst, idx: int):
             return null()
         if idx < 0 or idx >= load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET):
             return null()
-        field = load_ptr(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE)
-        if ptr_is_null(field) == 0:
-            py_incref(field)
-        else:
+        field_out = stack_alloc(C_POINTER_SIZE)
+        if _instance_field_load(
+            inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE, field_out,
+        ) != 0:
+            return null()
+        field = load_ptr(field_out, 0)
+        if ptr_is_null(field) != 0:
             return _instance_missing_field_lookup(inst, idx)
         return field
     if not _ptr_is_instance(inst):
@@ -2740,13 +2750,137 @@ def py_instance_get_field(inst, idx: int):
     n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if idx >= n_fields:
         return null()
-    fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-    v = pcc_gc_load_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE))
-    if ptr_is_null(v) == 0:
-        py_incref(v)
-    else:
+    v_out = stack_alloc(C_POINTER_SIZE)
+    if _instance_field_load(
+        inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE, v_out,
+    ) != 0:
+        return null()
+    v = load_ptr(v_out, 0)
+    if ptr_is_null(v) != 0:
         return _instance_missing_field_lookup(inst, idx)
     return v
+
+
+def _instance_prepare_moving_root(slot, handle_slot) -> int:
+    store_ptr(handle_slot, 0, null())
+    value = load_ptr(slot, 0)
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return 0
+    backend: int = pcc_gc_backend()
+    if backend != 3 and backend != 4:
+        return 0
+    handle = pcc_gc_scheduler_root_register_handle(slot)
+    if ptr_is_null(handle) != 0:
+        return -1
+    store_ptr(handle_slot, 0, handle)
+    value = pcc_gc_load_ptr(null(), slot)
+    store_ptr(slot, 0, value)
+    if ptr_is_null(value) != 0:
+        pcc_gc_scheduler_root_unregister_handle(handle)
+        store_ptr(handle_slot, 0, null())
+        return -1
+    return 0
+
+
+def _instance_reload_moving_root(slot, handle_slot):
+    value = load_ptr(slot, 0)
+    if ptr_is_null(load_ptr(handle_slot, 0)) == 0:
+        value = pcc_gc_load_ptr(null(), slot)
+        store_ptr(slot, 0, value)
+    return value
+
+
+def _instance_finish_moving_root(handle_slot) -> None:
+    handle = load_ptr(handle_slot, 0)
+    if ptr_is_null(handle) == 0:
+        pcc_gc_scheduler_root_unregister_handle(handle)
+        store_ptr(handle_slot, 0, null())
+
+
+def _instance_field_load(inst, offset: int, out) -> int:
+    """Store the field at ``offset`` into ``out`` as a new reference.
+
+    NULL in ``out`` is an unbound field; a negative result raised an error.
+    Writers swap a field inside a graph transaction and release the value
+    they displaced after it. While other carriers run, the load and retain
+    share one transaction too, or that value can be freed between them. As
+    in py_list_get, acquiring or leaving the transaction can park, so on a
+    moving collector the receiver and the result stay rooted across it.
+    """
+    store_ptr(out, 0, null())
+    if pcc_threads_enabled() == 0:
+        value = pcc_gc_load_ptr(inst, ptr_add(inst, offset))
+        if ptr_is_null(value) == 0:
+            py_incref(value)
+        store_ptr(out, 0, value)
+        return 0
+    receiver_slot = stack_alloc(C_POINTER_SIZE)
+    receiver_handle_slot = stack_alloc(C_POINTER_SIZE)
+    store_ptr(receiver_slot, 0, inst)
+    if _instance_prepare_moving_root(receiver_slot, receiver_handle_slot) != 0:
+        _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
+        return -1
+    result_handle = null()
+    backend: int = pcc_gc_backend()
+    if backend == 3 or backend == 4:
+        # Register the empty result root before the transaction stores into it.
+        result_handle = pcc_gc_scheduler_root_register_handle(out)
+        if ptr_is_null(result_handle) != 0:
+            _instance_finish_moving_root(receiver_handle_slot)
+            _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
+            return -1
+    retain_plan = stack_alloc(56)
+    pcc_py_gc_minor_graph_lock()
+    receiver = _instance_reload_moving_root(receiver_slot, receiver_handle_slot)
+    value = pcc_gc_load_ptr(receiver, ptr_add(receiver, offset))
+    value = pcc_gc_retain_plan_prepare_locked(retain_plan, value)
+    store_ptr(out, 0, value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_retain_plan_finish(retain_plan)
+    if ptr_is_null(result_handle) != 0:
+        # GC0/1/2 cannot relocate the retained owner.
+        _instance_finish_moving_root(receiver_handle_slot)
+        return 0
+    # Only the result root's teardown needs a short pin (py_list_get's finish).
+    pcc_py_gc_minor_graph_lock()
+    result = pcc_gc_load_ptr(null(), out)
+    prior_pin: int = 0
+    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
+        prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+        pcc_gc_pin(result)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_scheduler_root_unregister_handle(result_handle)
+    _instance_finish_moving_root(receiver_handle_slot)
+    store_ptr(out, 0, pcc_gc_take_pinned_slot(out, prior_pin))
+    return 0
+
+
+def _instance_field_clear(inst, offset: int) -> int:
+    """Unbind the field at ``offset`` in one graph transaction.
+
+    Returns 1 when it was bound, 0 when it was not, and -1 for a raised
+    error. Two concurrent deletions find it bound once; the displaced value
+    is released once, after the transaction. The receiver stays rooted
+    across acquiring it, which can park.
+    """
+    receiver_slot = stack_alloc(C_POINTER_SIZE)
+    receiver_handle_slot = stack_alloc(C_POINTER_SIZE)
+    store_ptr(receiver_slot, 0, inst)
+    if _instance_prepare_moving_root(receiver_slot, receiver_handle_slot) != 0:
+        _class_require_result(null(), cstr("instance field delete"), cstr("instance field root registration failed"))
+        return -1
+    plan = stack_alloc(128)
+    pcc_gc_store_ptr_plan_init(plan, inst, _gc_backend_selected_fast())
+    pcc_py_gc_minor_graph_lock()
+    receiver = _instance_reload_moving_root(receiver_slot, receiver_handle_slot)
+    slot = ptr_add(receiver, offset)
+    bound: int = 0
+    if ptr_is_null(pcc_gc_load_ptr(receiver, slot)) == 0:
+        bound = pcc_gc_store_ptr_plan_commit_locked(plan, receiver, slot, null())
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_ptr_plan_finish(plan)
+    _instance_finish_moving_root(receiver_handle_slot)
+    return bound
 
 
 def _instance_missing_field_lookup(inst, idx: int, default_only: int = 0):
@@ -3140,12 +3274,15 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
     if ptr_is_null(entry) == 0:
         kind: int = load_i32(entry, 12)
         if kind == _ATTR_RES_FIELD:
-            fields_base_hit = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-            field_hit = pcc_gc_load_ptr(
-                inst, ptr_add(fields_base_hit, load_i64(entry, 16) * C_POINTER_SIZE)
-            )
+            field_hit_out = stack_alloc(C_POINTER_SIZE)
+            if _instance_field_load(
+                inst,
+                PYINSTANCEOBJECT_FIELDS_OFFSET + load_i64(entry, 16) * C_POINTER_SIZE,
+                field_hit_out,
+            ) != 0:
+                return null()
+            field_hit = load_ptr(field_hit_out, 0)
             if ptr_is_null(field_hit) == 0:
-                py_incref(field_hit)
                 return field_hit
             if field_fallback_rooted == 0:
                 return _instance_missing_field_lookup(inst, load_i64(entry, 16), 1)
@@ -3207,10 +3344,15 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
     if idx >= 0:
         # Reached only when no data descriptor shadows the field.
         _attr_res_store(cls, name, _ATTR_RES_FIELD, idx, outcome_epoch)
-        fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-        v = pcc_gc_load_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE))
+        v_out = stack_alloc(C_POINTER_SIZE)
+        if _instance_field_load(
+            inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE, v_out,
+        ) != 0:
+            if field_fallback_rooted == 0:
+                py_decref(class_attr)
+            return null()
+        v = load_ptr(v_out, 0)
         if ptr_is_null(v) == 0:
-            py_incref(v)
             if field_fallback_rooted == 0:
                 py_decref(class_attr)
             return v
@@ -3485,15 +3627,8 @@ def py_instance_delattr(inst, name) -> int:
         n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
         if idx >= n_fields:
             return -1
-        fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-        old = pcc_gc_load_ptr(
-            inst,
-            ptr_add(fields_base, idx * C_POINTER_SIZE),
-        )
-        if ptr_is_null(old) != 0:
+        if _instance_field_clear(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE) != 1:
             return -1
-        store_ptr(fields_base, idx * C_POINTER_SIZE, null())
-        py_decref(old)
         return 0
     dyn_slot = _dynamic_attr_slot(inst)
     if ptr_is_null(dyn_slot) != 0:
@@ -7198,6 +7333,9 @@ pcc_class_namespace_install_slots = extern(
 )
 pcc_gc_store_ptr_plan_init = extern(
     "pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void
+)
+pcc_gc_store_ptr_plan_commit_locked = extern(
+    "pcc_gc_store_ptr_plan_commit_locked", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
 pcc_gc_store_ptr_plan_finish = extern("pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void)
 py_dict_namespace_set_slots = extern(

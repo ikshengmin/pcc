@@ -667,7 +667,10 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         backend = pcc_gc_backend()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend == 0:
+    # With other carriers running, a heap slot is shared: two unlocked
+    # read-modify-writes released one old value twice, and a reader's
+    # retain raced the release. Swap it inside a graph transaction instead.
+    if backend == 0 and pcc_threads_enabled() == 0:
         if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
             pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, owner)
         old = load_ptr(slot, 0)
