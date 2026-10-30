@@ -47,6 +47,13 @@ def test_root_reads_preserve_null_immediates_and_relocation(
         events.append(("resolve", old))
         return 242
 
+    def swap(source, offset, expected, desired, success, failure):
+        events.append(("swap", source, offset, expected, desired))
+        observed = memory[source]
+        if observed == expected:
+            memory[source] = desired
+        return observed
+
     ns = {
         "global_addr": lambda name: name,
         "load_i32": lambda address, offset: memory[address],
@@ -63,15 +70,29 @@ def test_root_reads_preserve_null_immediates_and_relocation(
         "pcc_gc_backend4_slot_needs_resolve": lambda pointer: pointer == 42,
         "pcc_gc_note_load": lambda: events.append(("note",)),
         "pcc_gc_note_relocation_read": resolve,
+        "atomic_cas_i64": swap,
+        "ptr_to_int": lambda pointer: pointer,
+        "py_incref": lambda pointer: events.append(("incref", pointer)),
+        "py_decref": lambda pointer: events.append(("decref", pointer)),
     }
     path = ROOT / "pcc/runtime/py/py_obj.py"
-    node = next(node for node in ast.parse(path.read_text()).body
-                if isinstance(node, ast.FunctionDef) and node.name == name)
-    node.decorator_list = []
-    exec(compile(ast.Module([node], type_ignores=[]), str(path), "exec"), ns)
+    nodes = [node for node in ast.parse(path.read_text()).body
+             if isinstance(node, ast.FunctionDef) and node.name in (name, "_heal_forwarded_field")]
+    assert len(nodes) == 2
+    for node in nodes:
+        node.decorator_list = []
+    exec(compile(ast.Module(nodes, type_ignores=[]), str(path), "exec"), ns)
     result = ns[name](200, slot)
     if not slot:
         assert result == 0 and events == []
+    elif barrier and forwarding and value == 42 and backend == 3:
+        # A GC3 field (owner 200) moves its reference from the shell to the
+        # copy as collector promotion does (test_gc3_forwarded_field_heal.py).
+        assert result == 242 and memory[slot] == 242
+        assert events == [
+            ("read", slot, 0), ("note",), ("resolve", value),
+            ("incref", 242), ("swap", slot, 0, value, 242), ("decref", value),
+        ]
     elif barrier and forwarding and value == 42:
         assert result == 242 and memory[slot] == 242
         assert events == [
