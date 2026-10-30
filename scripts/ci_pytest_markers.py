@@ -87,6 +87,7 @@ def run_guarded(directory, marker, env, platform_id, *, partition="all", timeout
                   "requested_rss_limit": 17179869184, "requested_timeout": timeout,
                   "outer_performance_lock": False}
         save(directory / "result.json", record)
+        started = time.monotonic()
         try:
             result = run(command, cwd=ROOT,
                          env=dict(env, PCC_WORKER_TREE_BUDGET_BYTES="17179869184"),
@@ -98,7 +99,9 @@ def run_guarded(directory, marker, env, platform_id, *, partition="all", timeout
             record.update(result, status="COMPLETE", returncode=0,
                           return_contract="normal return after child exit 0 and Job cleanup/final wait")
         except BaseException as error:
-            record.update(status="FAIL", error=type(error).__name__ + ": " + str(error))
+            # A raising guard returns no result; include its cleanup/final wait.
+            record.update(status="FAIL", error=type(error).__name__ + ": " + str(error),
+                          seconds=time.monotonic() - started)
             raise
         finally:
             save(directory / "result.json", record)
