@@ -130,8 +130,8 @@ def test_pcc_python_ports_mirror_gc_store_ptr_paths():
             "ptr_add(entries, slot_off + 8),\n                    dummy,",
         ],
         RUNTIME_PY / "py_class.py": [
-            "pcc_gc_store_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)",
-            "pcc_gc_store_ptr(inst, dyn_slot, dyn)",
+            "pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)",
+            "pcc_gc_store_field_ptr(inst, dyn_slot, dyn)",
         ],
         RUNTIME_PY / "py_func.py": [
             "pcc_gc_store_ptr(fn, ptr_add(fn, 64), captures)",

@@ -11,10 +11,12 @@ from tests.python.test_explicit_machine_arithmetic_boundaries import _run_native
 def test_append_reuses_stable_parameter_roots_and_keeps_address_leases():
     body = _probe_function(_emit("def probe(value, item):\n    value.append(item)\n"))
     leases = _calls(body, "pcc_gc_borrowed_lease_acquire")
-    # Type guard and generic getattr still need a receiver address lease.
-    # The exact-list runtime helper consumes authoritative slot addresses,
-    # so it protects/reloads both inputs itself instead of leasing raw args.
-    assert len(leases) == 2
+    # The generic getattr still needs a receiver address lease. The exact-list
+    # type guard reads the tag at once through one borrowed load (no gate runs
+    # before it finishes), and the exact-list runtime helper consumes
+    # authoritative slot addresses, protecting/reloading both inputs itself.
+    assert len(leases) == 1
+    assert _calls(body, "pcc_gc_load_borrowed_ptr") and _calls(body, "py_obj_type_tag")
     assert all("value.addr" in call for call in leases)
     assert not any("item.addr" in call for call in leases)
     assert re.search(r"@py_list_append_from_slots\(ptr %value.addr[^,]*, "
