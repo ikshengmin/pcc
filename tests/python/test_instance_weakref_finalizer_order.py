@@ -20,6 +20,8 @@ class DeallocationModel(FinalizerModel):
         super().__init__(backend, resurrect=resurrect, pending=pending)
         self.tag = tag
         self.store(1000, 8, tag)
+        # The process holds weakrefs, so a death walks the weakref list.
+        self.store("py_weakref_head", 0, 1)
         # The instance owns one reference to its class (py_instance_new);
         # py_instance_dealloc releases it after the instance's own slots.
         self.store(2000, 0, 1)
