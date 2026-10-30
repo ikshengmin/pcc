@@ -901,6 +901,8 @@ class CallObjectLoweringMixin:
             return self._emit_slot_call_sequence(expr.elems, label, isinstance(expr, TupleExpr))
         if isinstance(expr, DictExpr):
             return self._emit_slot_call_dict(expr.pairs, expr.span, label)
+        if isinstance(expr, Slice):
+            return self._emit_slot_call_slice(expr, label)
         if isinstance(expr, Attr):
             return self._emit_slot_call_attribute(expr, label)
         if (isinstance(expr, Subscript)
@@ -2256,6 +2258,38 @@ class CallObjectLoweringMixin:
                 roots = [output]
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
+
+    def _emit_slot_call_slice(self, expr, label):
+        """A slice object operand (``a[:, k]`` keys), built into its own root.
+
+        As a direct slice key in _emit_slot_call_subscript: each bound is a
+        rooted operand and py_slice_new publishes into the output root.
+        """
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            bounds = []
+            for part in (expr.lo, expr.hi, expr.step):
+                if part is None:
+                    part = NoneLit(span=expr.span, ty=NoneType(name="None"))
+                bound = self._emit_slot_call_operand(part, label + ".bound")
+                bounds.append(bound)
+                roots.append(bound)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_slice_new", tuple(bounds), result_slot=output, span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(roots[1:]))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy

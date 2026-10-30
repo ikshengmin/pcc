@@ -681,11 +681,21 @@ class MethodCallExpressionLoweringMixin:
                 expr.args[1],
                 "object.getattribute.name",
             )
-            return self.builder.call(
+            result = self.builder.call(
                 self.runtime["py_obj_getattr_default"],
                 [obj_val, name_ptr],
                 name=self._fresh("object.getattribute"),
             )
+            # A NEW reference, or NULL with AttributeError set. An operand
+            # root waiting for it takes it before the error check can park.
+            sink = self._slot_call_result_sink(expr)
+            if sink is not None:
+                self._publish_slot_call_owned(sink, result, label="object.__getattribute__")
+            self._emit_post_call_err_check(self._expr_span_or_none(expr))
+            if sink is not None:
+                return self.builder.load(sink, name=self._fresh("object.getattribute.current"))
+            self._note_owned_dynamic_call_value(result)
+            return result
 
         # Path A scaffold dispatch (Issue 1). ON mode routes
         # ``self.builder.X(...)`` and similar IRBuilder method calls
