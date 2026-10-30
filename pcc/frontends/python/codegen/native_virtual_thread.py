@@ -1612,6 +1612,10 @@ class NativeVirtualThreadLoweringMixin:
                 [fd, generation, max_bytes, output_status],
                 name=self._fresh("vthread.tcp.recv.result"),
             )
+            # NULL while the read would block; a later observation publishes
+            # into the same, still empty root.
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread TCP recv")
             self._emit_post_call_err_check(call_expr.span)
             would_block = self.builder.icmp_unsigned(
                 "==",
@@ -1646,7 +1650,7 @@ class NativeVirtualThreadLoweringMixin:
 
             self.builder.position_at_end(done_bb)
             self._emit_virtual_thread_tcp_clear_state(frame_root)
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.tcp.recv.result.current")
         finally:
             self._try_err_block = previous_error
 
@@ -2193,6 +2197,27 @@ class NativeVirtualThreadLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
 
+    def _vthread_publish_owned_result(self, call_expr, result, label):
+        """Hand this call's new reference to the root an operand consumer registered.
+
+        Tuple unpacking and method, subscript and call operands register an
+        empty root for the call and expect its producer to store into it
+        before any release or error check that follows can park or collect.
+        NULL (a raised error) is published too: the check that follows
+        raises and the consumer's cleanup releases the root. Returns that
+        root, or None when no consumer registered one.
+        """
+        sink = self._slot_call_result_sink(call_expr) if call_expr is not None else None
+        if sink is not None:
+            self._publish_slot_call_owned(sink, result, label=label)
+        return sink
+
+    def _vthread_owned_result_value(self, sink, result, name):
+        """The published result, reloaded from its root after the cleanup."""
+        if sink is None:
+            return result
+        return self.builder.load(sink, name=self._fresh(name))
+
     def _emit_native_virtual_thread_value_call(
         self,
         kind: str,
@@ -2218,13 +2243,17 @@ class NativeVirtualThreadLoweringMixin:
                 value = self._emit_as_object(args[0])
                 result = self.builder.call(self.runtime["py_gen_completed"], [value],
                                            name=self._fresh("vthread.completed"))
-                if self._pcc_pointer_source_is_owned(args[0]):
+                sink = self._vthread_publish_owned_result(
+                    call_expr, result, "virtual thread completed")
+                if sink is not None:
+                    self._release_virtual_thread_argument(value, args[0])
+                elif self._pcc_pointer_source_is_owned(args[0]):
                     result_slot = self._enter_container_temp_root(result, "vthread.completed")
                     self._release_virtual_thread_argument(value, args[0])
                     result = self._load_virtual_thread_operand_root((result_slot, False))
                     self._leave_container_temp_root(result_slot)
                 self._emit_post_call_err_check(call_expr.span)
-                return result
+                return self._vthread_owned_result_value(sink, result, "vthread.completed.current")
             if not args or not isinstance(args[0], Name):
                 raise L1CodegenError("continuation() requires a closed-world function name")
             target_name = args[0].ident
@@ -2290,8 +2319,10 @@ class NativeVirtualThreadLoweringMixin:
                 [self._emit_expr_as_i64(args[0])],
                 name=self._fresh("vthread.channel.mpsc"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread channel")
             self._emit_post_call_err_check(call_expr.span)
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.channel.mpsc.current")
         if kind == "pcc.virtual_thread.oneshot":
             if args or call_expr is None:
                 return None
@@ -2300,8 +2331,10 @@ class NativeVirtualThreadLoweringMixin:
                 [],
                 name=self._fresh("vthread.channel.oneshot"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread oneshot channel")
             self._emit_post_call_err_check(call_expr.span)
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.channel.oneshot.current")
         if kind == "pcc.virtual_thread.sender_clone":
             if len(args) != 1 or call_expr is None:
                 return None
@@ -2311,9 +2344,11 @@ class NativeVirtualThreadLoweringMixin:
                 [sender_obj],
                 name=self._fresh("vthread.channel.sender.clone"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread sender clone")
             self._release_virtual_thread_argument(sender_obj, args[0])
             self._emit_post_call_err_check(call_expr.span)
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.channel.sender.clone.current")
         if kind == "pcc.virtual_thread.send":
             if (
                 len(args) != 2
@@ -2463,9 +2498,11 @@ class NativeVirtualThreadLoweringMixin:
                 [resumed],
                 name=self._fresh("vthread.channel.recv.result"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread channel recv result")
             self._gc_release(resumed)
             self._emit_post_call_err_check(call_expr.span)
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.channel.recv.result.current")
         if kind == "pcc.virtual_thread.close_sender":
             if len(args) != 1:
                 return None
@@ -2583,9 +2620,11 @@ class NativeVirtualThreadLoweringMixin:
                 [resumed],
                 name=self._fresh("vthread.channel.select2.result"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread channel select2 result")
             self._gc_release(resumed)
             self._emit_post_call_err_check(call_expr.span)
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.channel.select2.result.current")
         if kind == "pcc.virtual_thread.join":
             if len(args) != 1 or len(self._generator_ctx_stack) == 0:
                 return None
@@ -2647,14 +2686,11 @@ class NativeVirtualThreadLoweringMixin:
             # An operand consumer (``vt.join(t) + 1``) registered a root for
             # this call: the new result enters it before the release and the
             # error check below can park or collect.
-            sink = self._slot_call_result_sink(call_expr) if call_expr is not None else None
-            if sink is not None:
-                self._publish_slot_call_owned(sink, result, label="virtual thread join result")
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread join result")
             self._gc_release(resumed)
             self._emit_post_call_err_check(args[0].span)
-            if sink is not None:
-                return self.builder.load(sink, name=self._fresh("vthread.join.result.current"))
-            return result
+            return self._vthread_owned_result_value(sink, result, "vthread.join.result.current")
         if kind == "pcc.virtual_thread.cancel":
             if len(args) != 1:
                 return None
@@ -2767,8 +2803,13 @@ class NativeVirtualThreadLoweringMixin:
                 [target_obj],
                 name=self._fresh("vthread.result"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread result")
             self._release_virtual_thread_argument(target_obj, args[0])
-            return result
+            if sink is not None:
+                # The consumer takes the published root without checking.
+                self._emit_post_call_err_check(call_expr.span)
+            return self._vthread_owned_result_value(sink, result, "vthread.result.current")
         if kind == "pcc.virtual_thread.exception":
             if len(args) != 1:
                 return None
@@ -2778,8 +2819,13 @@ class NativeVirtualThreadLoweringMixin:
                 [target_obj],
                 name=self._fresh("vthread.exception"),
             )
+            sink = self._vthread_publish_owned_result(
+                call_expr, result, "virtual thread exception")
             self._release_virtual_thread_argument(target_obj, args[0])
-            return result
+            if sink is not None:
+                # The consumer takes the published root without checking.
+                self._emit_post_call_err_check(call_expr.span)
+            return self._vthread_owned_result_value(sink, result, "vthread.exception.current")
         if kind == "pcc.virtual_thread.outcome":
             if len(args) != 1:
                 return None
