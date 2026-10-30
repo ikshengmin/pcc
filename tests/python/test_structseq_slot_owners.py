@@ -111,19 +111,29 @@ def test_structseq_refuses_unsealed_or_non_tuple_field_owners():
     assert memory.error is None
 
 
-@pytest.mark.parametrize('failed_root', (1,7,14))
-def test_structseq_registration_failure_keeps_entry_exception_separate(failed_root):
+def _structseq_registrations():
     memory = StructSeqMemory()
-    prior = memory.exception(2, 'entry exception')
-    memory.error = prior
-    memory.fail_register = failed_root
-    caller = memory.invoke_structseq(range(9), (None, None))
-    result = memory.read(caller, 24)
-    assert result.tag == abi.PY_TYPE_EXC
-    assert result.value[0] == 7
-    assert result is not prior
-    assert memory.error is prior
-    memory.assert_balanced()
+    memory.invoke_structseq(range(9), (None, None))
+    return memory.registrations
+
+
+def test_structseq_registration_failure_keeps_entry_exception_separate():
+    # Fail each root registration the constructor performs; its scratch
+    # roots currently register as one continuation node.
+    registrations = _structseq_registrations()
+    assert registrations >= 1
+    for failed_root in range(1, registrations + 1):
+        memory = StructSeqMemory()
+        prior = memory.exception(2, 'entry exception')
+        memory.error = prior
+        memory.fail_register = failed_root
+        caller = memory.invoke_structseq(range(9), (None, None))
+        result = memory.read(caller, 24)
+        assert result.tag == abi.PY_TYPE_EXC, failed_root
+        assert result.value[0] == 7
+        assert result is not prior
+        assert memory.error is prior
+        memory.assert_balanced()
 
 
 @pytest.mark.parametrize('phase', ('register','copy','acquire','callback','release','drop','frame_enter','frame_leave'))
