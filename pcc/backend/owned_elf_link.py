@@ -81,9 +81,13 @@ pcc_linux_set_thread_pointer:
 
 def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                 archives=(), manifest: str = "", entry: str = "_start",
-                map_path: str = "", coordinator_timing=None) -> None:
+                map_path: str = "", coordinator_timing=None,
+                export_symbols=()) -> None:
     if not (is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target)):
         raise ElfError("unsupported owned ELF target: " + target)
+    if not isinstance(export_symbols, (list, tuple)):
+        raise ElfError("host exports must be an ordered symbol sequence")
+    export_symbols = tuple(export_symbols)
     archives = list(archives)
     if manifest and (assembly or objects):
         raise ElfError("manifest cannot be mixed with direct internal inputs")
@@ -122,7 +126,12 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     if coordinator_timing is not None:
         image_started = coordinator_timing.begin("elf_link_image")
     try:
-        if coordinator_timing is not None:
+        if export_symbols:
+            image = _link_static_executable_image(
+                inputs, entry=entry, archive_selections=selections, _input_store=store,
+                coordinator_timing=coordinator_timing, export_symbols=export_symbols,
+            )
+        elif coordinator_timing is not None:
             image = _link_static_executable_image(
                 inputs, entry=entry, archive_selections=selections, _input_store=store,
                 coordinator_timing=coordinator_timing,
