@@ -12,11 +12,22 @@ from types import SimpleNamespace
 import pytest
 
 from pcc.backend import elf_x86_64 as elf
-from tests.elf_x86_packed_application_reference import _without_native_scalar_writes
+from tests.elf_x86_packed_application_reference import (
+    _without_aarch64_jump26_veneers,
+    _without_native_scalar_writes,
+)
+
+
+def _scalar_owner_source():
+    # Restore the scalar-store stage through the exact later exports/JUMP26
+    # inverses, rather than letting those deltas invalidate this older proof.
+    return _without_aarch64_jump26_veneers(
+        Path(elf.__file__).read_text(encoding="utf-8")
+    )
 
 
 def test_fixture_adapter_restores_exact_original_module():
-    source = Path(elf.__file__).read_text(encoding="utf-8")
+    source = _scalar_owner_source()
     original = _without_native_scalar_writes(source)
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "f2476a2c75257d5a051b5d5af21b82a1d19be53096de28a3267f81cf4680d20f"
@@ -26,7 +37,7 @@ def test_fixture_adapter_restores_exact_original_module():
 
 @pytest.mark.parametrize("change", ["store", "unrelated"])
 def test_fixture_adapter_does_not_accept_other_source_changes(change):
-    source = Path(elf.__file__).read_text(encoding="utf-8")
+    source = _scalar_owner_source()
     if change == "store":
         source = source.replace("and bits in (32, 64)", "and bits in (16, 32, 64)")
     else:

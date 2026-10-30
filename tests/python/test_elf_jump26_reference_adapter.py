@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from pcc.backend import elf_x86_64 as elf
+from tests.elf_host_exports_preimage import without_host_exports
 from tests.elf_x86_packed_application_reference import (
     _AARCH64_JUMP26_REVERSE_EDITS,
     _without_aarch64_jump26_veneers,
@@ -16,7 +17,8 @@ from tests.elf_x86_packed_classification_reference import without_x86_packed_cla
 
 
 def _source():
-    return Path(elf.__file__).read_text(encoding="utf-8")
+    # These controls isolate JUMP26 from the separately pinned later exports.
+    return without_host_exports(Path(elf.__file__).read_text(encoding="utf-8"))
 
 
 def _sha(source):

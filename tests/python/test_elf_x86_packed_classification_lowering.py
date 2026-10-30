@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import textwrap
 
+import pytest
+
 from pcc.backend import elf_x86_64 as elf
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline_context import build_closed_world_context
@@ -79,10 +81,17 @@ def _body(text, symbol):
     return match.group(0)
 
 
-def test_exact_packed_generator_and_consumer_lower_with_owned_struct(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inline_frames", [True, False], ids=["default-inline", "legacy-frame"])
+def test_exact_packed_generator_and_consumer_lower_with_owned_struct(tmp_path, monkeypatch, inline_frames):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
+    monkeypatch.delenv("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", raising=False)
+    if inline_frames:
+        # Exercise the production default, not a forced legacy constructor.
+        monkeypatch.delenv("PCC_INLINE_GENERATOR_FRAMES", raising=False)
+    else:
+        monkeypatch.setenv("PCC_INLINE_GENERATOR_FRAMES", "0")
     root = Path(elf.__file__).resolve().parents[2]
     provider_name = "pcc.backend.elf_x86_64"
     provider = tmp_path / "elf_packed_provider.py"
@@ -112,7 +121,31 @@ def test_exact_packed_generator_and_consumer_lower_with_owned_struct(tmp_path, m
     helper = _body(defining, prefix + "_x86_packed_classification_rows")
     resume = _body(defining, prefix + "_x86_packed_classification_rows__gen_resume")
     consumer = _body(defining, prefix + "probe")
-    assert re.search(r"\bcall [^\n]*@py_gen_new\(", helper)
+    frame_factory = "py_gen_inline_frame_new" if inline_frames else "py_gen_frame_new"
+    generator_factory = "py_gen_from_inline_frame" if inline_frames else "py_gen_new"
+    other_frame_factory = "py_gen_frame_new" if inline_frames else "py_gen_inline_frame_new"
+    other_generator_factory = "py_gen_new" if inline_frames else "py_gen_from_inline_frame"
+    # Bind the selected factory to this helper's actual allocated frame and
+    # exact decoder resume function. Merely accepting either constructor name
+    # would miss an unused frame or a generator bound to another continuation.
+    value = r"(%[-a-zA-Z$._0-9]+)"
+    frames = re.findall(
+        value + r" = call ptr \(i64\) @" + frame_factory + r"\(i64 [1-9][0-9]*\)",
+        helper,
+    )
+    resumes = re.findall(
+        value + " = bitcast ptr @" + re.escape(prefix + "_x86_packed_classification_rows__gen_resume")
+        + " to ptr",
+        helper,
+    )
+    assert len(frames) == len(resumes) == 1
+    constructors = re.findall(
+        r"\bcall [^\n]*@" + generator_factory + r"\(ptr " + value + r", ptr " + value + r"\)",
+        helper,
+    )
+    assert constructors == [(resumes[0], frames[0])]
+    for forbidden in (other_frame_factory, other_generator_factory):
+        assert not re.search(r"\bcall [^\n]*@" + forbidden + r"\(", helper)
     assert re.search(r"\bcall [^\n]*@py_tuple_new\(", resume)
     assert re.search(r"\bcall [^\n]*@py_gen_set_state\(", resume)
     assert "@" + prefix + "_x86_packed_classification_rows(" in consumer
