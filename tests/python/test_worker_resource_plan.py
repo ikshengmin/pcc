@@ -142,7 +142,6 @@ allocated = 512 * mib if case == "measured-limit" else 300 * mib
 commands = []
 tasks = []
 for index, allocation in enumerate((allocated, 4 * mib, 4 * mib, 4 * mib)):
-    delay = 6 if case == "stale-state" and index == 0 else 0.3
     code = (
         "import os,time;from pathlib import Path;"
         "from pcc.frontends.python.worker_resource_plan import publish_worker_resource as report;"
@@ -159,8 +158,19 @@ for index, allocation in enumerate((allocated, 4 * mib, 4 * mib, 4 * mib)):
             + "os.kill(int(Path(" + repr(str(peer)) + ").read_text()),0);"
             + "Path(" + repr(str(root / ("overlap" + str(index)))) + ").touch();"
         )
+    if case == "stale-state" and index == 0:
+        # Hold completion until explicitly released. A fixed six-second sleep
+        # races the two-second freshness window plus four-second host recovery.
+        # The existing outer guard bounds a broken scheduler/cleanup path.
+        code += (
+            "Path(" + repr(str(root / "holding0")) + ").touch()\\n"
+            + "while not Path(" + repr(str(root / "release0")) + ").exists():\\n"
+            + " time.sleep(0.005)\\n"
+        )
+    else:
+        code += "time.sleep(0.3);"
     code += (
-        "time.sleep(" + str(delay) + ");report('complete');"
+        "report('complete');"
         + "Path(" + repr(str(root / ("completed" + str(index)))) + ").touch()"
     )
     commands.append(shlex.join([sys.executable, "-B", "-c", code]))
@@ -196,7 +206,8 @@ def start(specs, index):
     pid = original_start(specs, index)
     if index == 0:
         deadline = time.monotonic() + 5
-        while not Path(tasks[index]["report_path"]).exists():
+        while (not Path(tasks[index]["report_path"]).exists()
+               or (case == "stale-state" and not (root / "holding0").exists())):
             assert time.monotonic() < deadline
             time.sleep(0.005)
     return pid
@@ -249,7 +260,12 @@ elif case == "no-state":
 else:
     assert error and "missing, stale, or incompatible" in error, record
     assert any(row[0] == "exclusive" for row in rows), record
+    assert (root / "holding0").exists() and not (root / "release0").exists(), record
+    assert observations == [], record
     assert not (root / "completed0").exists() and not (root / "started1").exists(), record
+    # Owned-child absence was checked above. Releasing only now cannot let a
+    # leaked worker finish naturally and conceal a cleanup failure.
+    (root / "release0").touch()
 print("LIVE_FORECAST_OK " + case)
 ''')
     guard = tmp_path / "guard.json"
