@@ -79,6 +79,7 @@ def validate_pcc_self_link_surface(
     extra_link_args: tuple[str, ...] = (),
     needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
+    native_extension_exports_supported: bool = False,
 ) -> None:
     """Reject unsupported pcc-link semantics before any object is emitted."""
     if selected_mode != "pcc":
@@ -92,7 +93,7 @@ def validate_pcc_self_link_surface(
         raise SelfLinkContractError(
             "pcc self-link mode does not support the libpython link surface"
         )
-    if needs_native_extension_exports:
+    if needs_native_extension_exports and not native_extension_exports_supported:
         raise SelfLinkContractError(
             "pcc self-link mode does not support native-extension export anchors"
         )

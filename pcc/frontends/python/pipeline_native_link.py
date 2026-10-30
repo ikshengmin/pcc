@@ -36,9 +36,12 @@ def capi_export_anchor_symbols(
     archive_requires_provenance,
     archive_bundle_valid,
     host_python_command,
+    require_verified_inventory: bool = False,
 ) -> list[str]:
     sidecar = runtime_archive + ".capi_syms"
-    requires_verified_inventory = archive_requires_provenance(runtime_archive)
+    requires_verified_inventory = (
+        require_verified_inventory or archive_requires_provenance(runtime_archive)
+    )
     if requires_verified_inventory and not archive_bundle_valid(runtime_archive):
         raise NativeLinkError(
             "pcc-Python runtime archive has an invalid C-API inventory bundle: "
@@ -111,6 +114,24 @@ def capi_export_anchor_symbols(
         seen.add(symbol)
         anchors.append(symbol)
     return anchors
+
+
+def runtime_archive_link_args_for_owner(
+    runtime_archive: str,
+    needs_native_extension_exports: bool = False,
+    *,
+    owned_link: bool,
+    reference_link_args,
+) -> list[str]:
+    """Do not resolve reference-linker anchors for an unused owned command.
+
+    Preserve the existing callback path when no new export surface is needed.
+    The owned linker receives its verified inventory through a separate typed
+    argument, never through host linker flags or a symbol-list subprocess.
+    """
+    if owned_link and needs_native_extension_exports:
+        return [runtime_archive]
+    return reference_link_args(runtime_archive, needs_native_extension_exports)
 
 
 def libpython_capi_isolation_link_flags(

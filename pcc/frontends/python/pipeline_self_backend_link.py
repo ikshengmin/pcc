@@ -11,6 +11,7 @@ import time
 import traceback
 
 from pcc.frontends.python.pipeline_modes import failed_process_detail
+from pcc.frontends.python.pipeline_native_link import runtime_archive_link_args_for_owner
 from typing import Optional
 
 
@@ -19,6 +20,13 @@ class SelfBackendLinkError(RuntimeError):
 
 
 _failed_process_detail = failed_process_detail
+
+
+def native_extension_exports_supported(target_triple: str) -> bool:
+    """The admitted export image format, not a host-tool fallback policy."""
+    from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple
+
+    return is_aarch64_darwin_triple(target_triple)
 
 
 def validate_object_inputs(object_inputs, *, out_path, target_triple):
@@ -217,6 +225,7 @@ def _owned_macho_link_in_process(
     link_profile_path=None,
     pcc_internal_input_manifest=None,
     coordinator_timing=None,
+    export_symbols=(),
 ) -> None:
     """Link with pcc's owned Mach-O toolchain in this process.
 
@@ -252,6 +261,8 @@ def _owned_macho_link_in_process(
             compact_budget = host_compact_stackmap_budget()
             if phase_events is not None:
                 phase_events("host_budget_available" if compact_budget is not None else "host_budget_unavailable")
+        if export_symbols and compact_budget is not None:
+            raise SelfBackendLinkError("native-extension exports do not support compact owned output")
         started = time.monotonic()
         phases = {"assemble_pool": 0.0, "decode_pco": 0.0, "prepare_link": 0.0,
                   "sign": 0.0, "validate": 0.0, "write": 0.0}
@@ -334,7 +345,18 @@ def _owned_macho_link_in_process(
                 prepare_started = coordinator_timing.begin("macho_prepare_inputs")
             # These inputs are private to this link invocation. Transfer them so
             # the merge can retire decoded graphs before constructing its result.
-            if compact_budget is None:
+            if export_symbols:
+                if coordinator_timing is None:
+                    pending = [prepare_executable_object(
+                        objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        required_symbols=export_symbols,
+                    )]
+                else:
+                    pending = [prepare_executable_object(
+                        objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        required_symbols=export_symbols, coordinator_timing=coordinator_timing,
+                    )]
+            elif compact_budget is None:
                 if coordinator_timing is None:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
@@ -400,7 +422,18 @@ def _owned_macho_link_in_process(
             if execution_runtime.implementation.name == "cpython":
                 if phase_events is not None:
                     phase_events("reference_link_begin")
-        if not owned_output and compact_budget is None:
+        if export_symbols:
+            if coordinator_timing is None:
+                image = link_prepared_executable(
+                    pending.pop(), entry="_main", phase_callback=link_phase,
+                    export_symbols=export_symbols,
+                )
+            else:
+                image = link_prepared_executable(
+                    pending.pop(), entry="_main", phase_callback=link_phase,
+                    export_symbols=export_symbols, coordinator_timing=coordinator_timing,
+                )
+        elif not owned_output and compact_budget is None:
             if coordinator_timing is None:
                 image = link_prepared_executable(
                     pending.pop(), entry="_main", phase_callback=link_phase,
@@ -557,6 +590,7 @@ def run_link_command(
     link_profile_path: Optional[str] = None,
     target_triple: Optional[str] = None,
     coordinator_timing=None,
+    verified_capi_export_symbols=None,
     resolve_self_link_mode,
     validate_pcc_self_link_surface,
     repo_root_for_link,
@@ -584,13 +618,38 @@ def run_link_command(
         subprocess.run(cmd, check=True)
         return
 
+    export_symbols = ()
+    if needs_native_extension_exports:
+        if not native_extension_exports_supported(selected_target):
+            raise SelfBackendLinkError("native-extension exports require the owned Darwin arm64 linker")
+        if semantic_layout_policy:
+            raise SelfBackendLinkError("native-extension exports do not support semantic layout")
+        if not runtime_archive:
+            raise SelfBackendLinkError("native-extension exports require a verified runtime archive")
+        if verified_capi_export_symbols is None:
+            raise SelfBackendLinkError("native-extension exports require a verified C-API inventory reader")
+        if not _owned_macho_link_covers_surface(
+            asm_path=asm_path,
+            pcc_asm_inputs=pcc_asm_inputs,
+            pcc_native_object_inputs=pcc_native_object_inputs,
+            pcc_internal_input_manifest=pcc_internal_input_manifest,
+            semantic_layout_policy=semantic_layout_policy,
+            link_profile_path=link_profile_path,
+        ):
+            raise SelfBackendLinkError("native-extension exports require the in-process owned link surface")
+
     validate_pcc_self_link_surface(
         extra_link_args=extra_link_args,
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
     )
+    if needs_native_extension_exports:
+        export_symbols = tuple(verified_capi_export_symbols(str(runtime_archive)))
+        if not export_symbols:
+            raise SelfBackendLinkError("verified C-API export inventory is empty")
     from pcc.frontends.python.pipeline_targets import host_target_triple
-    selected_target = target_triple or host_target_triple()
+    if not needs_native_extension_exports:
+        selected_target = target_triple or host_target_triple()
     from pcc.backend.self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple, is_x86_64_windows_triple
     linux_elf = is_aarch64_linux_triple(selected_target) or is_x86_64_linux_triple(selected_target)
     windows_pe = is_x86_64_windows_triple(selected_target)
@@ -637,7 +696,20 @@ def run_link_command(
         link_profile_path=link_profile_path,
     ):
         log(verbose, "pcc link (in-process owned Mach-O): " + str(tmp_out_path))
-        if coordinator_timing is None:
+        if export_symbols:
+            _owned_macho_link_in_process(
+                asm_path=asm_path,
+                pcc_asm_inputs=tuple(str(path) for path in pcc_asm_inputs),
+                pcc_native_object_inputs=tuple(str(path) for path in pcc_native_object_inputs),
+                runtime_archive=str(runtime_archive),
+                extra_link_inputs=tuple(str(path) for path in (extra_link_inputs or ())),
+                tmp_out_path=str(tmp_out_path),
+                link_profile_path=link_profile_path,
+                pcc_internal_input_manifest=pcc_internal_input_manifest,
+                coordinator_timing=coordinator_timing,
+                export_symbols=export_symbols,
+            )
+        elif coordinator_timing is None:
             _owned_macho_link_in_process(
                 asm_path=asm_path,
                 pcc_asm_inputs=tuple(str(path) for path in pcc_asm_inputs),
@@ -677,6 +749,8 @@ def run_link_command(
                 "owned in-process link produced no executable output"
             )
         return
+    if needs_native_extension_exports:
+        raise SelfBackendLinkError("native-extension exports cannot fall back to a host link driver")
     if sys.implementation.name == "pcc":
         raise SelfBackendLinkError(
             "native self-link does not implement the requested link surface; "
@@ -795,6 +869,11 @@ def link_ir_texts_run(
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_args=extra_link_args,
     ) == "pcc"
+    if signature_owned_by_pcc and needs_native_extension_exports:
+        if not native_extension_exports_supported(selected_target):
+            raise SelfBackendLinkError("native-extension exports require the owned Darwin arm64 linker")
+        if semantic_layout_enabled():
+            raise SelfBackendLinkError("native-extension exports do not support semantic layout")
     # Owned Darwin and Linux links consume internal assembly.  Their drivers
     # encode directly into Mach-O/ELF objects; external object inputs remain an
     # explicit, separately labelled boundary.
@@ -873,7 +952,10 @@ def link_ir_texts_run(
         tmp_out_path = out_path + ".tmp"
         cmd = [cc] + obj_paths + list(extra_link_inputs)
         if runtime_archive is not None:
-            cmd.extend(runtime_archive_link_args(runtime_archive, export_pcc_capi))
+            cmd.extend(runtime_archive_link_args_for_owner(
+                runtime_archive, export_pcc_capi, owned_link=signature_owned_by_pcc,
+                reference_link_args=runtime_archive_link_args,
+            ))
         cmd.extend(["-o", tmp_out_path, "-lm"])
         cmd.extend(extra_link_args)
         cmd.extend(native_extension_export_flags(export_pcc_capi))
@@ -965,7 +1047,10 @@ def link_ir_texts_run(
         cmd.append("-Wl,-dead_strip")
     cmd.extend(platform_link_flags())
     if runtime_archive is not None:
-        cmd[2:2] = runtime_archive_link_args(runtime_archive, export_pcc_capi)
+        cmd[2:2] = runtime_archive_link_args_for_owner(
+            runtime_archive, export_pcc_capi, owned_link=signature_owned_by_pcc,
+            reference_link_args=runtime_archive_link_args,
+        )
     cmd.extend(libpython_isolation_flags(runtime_archive, needs_libpython))
     if needs_libpython:
         append_libpython_link_flags(cmd)

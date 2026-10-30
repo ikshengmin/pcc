@@ -985,8 +985,21 @@ _native_extension_export_link_flags = (
 )
 
 
-def _capi_export_anchor_symbols(runtime_archive: str) -> list[str]:
+def _capi_export_anchor_symbols(
+    runtime_archive: str, *, require_verified_inventory: bool = False,
+) -> list[str]:
     try:
+        if require_verified_inventory:
+            return _pipeline_native_link.capi_export_anchor_symbols(
+                runtime_archive,
+                archive_requires_provenance=_runtime_archive_requires_provenance,
+                archive_bundle_valid=lambda archive: (
+                    _runtime_archive_wheel_stamp_matches(archive)
+                    or _runtime_archive_provenance_valid(archive)
+                ),
+                host_python_command=_host_python_command,
+                require_verified_inventory=True,
+            )
         return _pipeline_native_link.capi_export_anchor_symbols(
             runtime_archive,
             archive_requires_provenance=_runtime_archive_requires_provenance,
@@ -998,6 +1011,10 @@ def _capi_export_anchor_symbols(runtime_archive: str) -> list[str]:
         )
     except _pipeline_native_link.NativeLinkError as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
+
+
+def _verified_capi_export_anchor_symbols(runtime_archive: str) -> list[str]:
+    return _capi_export_anchor_symbols(runtime_archive, require_verified_inventory=True)
 
 
 def _libpython_capi_isolation_link_flags(
@@ -1607,8 +1624,8 @@ def _resolve_self_link_mode(
     """Return the owned default or an explicit CPython reference oracle.
 
     Compatibility requirements never change the execution owner. The owned
-    surface validator reports unsupported link flags, libpython and extension
-    exports before emission. Only explicit PCC_SELF_LINK=cc selects the host
+    surface validator reports unsupported link flags, libpython and unqualified
+    extension exports before emission. Only explicit PCC_SELF_LINK=cc selects the host
     toolchain, and native pcc1 rejects that reference route.
     """
     value = os.environ.get("PCC_SELF_LINK", "")
@@ -1637,13 +1654,30 @@ def _validate_pcc_self_link_surface(
     """Validate the finite owned platform linker surface before emission.
 
     The in-repo driver currently owns ordinary assembly/object inputs, extra
-    object inputs, and one runtime archive.  It does not implement arbitrary
-    driver/linker flags, libpython linkage, or the export-anchor/isolation
-    semantics required by native extensions.  Reject those modes before even
-    producing temporary assembly/objects; the subprocess seam remains the
+    object inputs, and one runtime archive. Darwin arm64 additionally owns
+    explicit C-API exports; the execution owner validates its inventory and
+    finite input surface again. Arbitrary flags and libpython remain rejected
+    before producing temporary assembly/objects; the subprocess seam remains the
     second fail-closed boundary for direct/internal callers.
     """
     try:
+        if needs_native_extension_exports:
+            _pipeline_self_link.validate_pcc_self_link_surface(
+                _resolve_self_link_mode(
+                    needs_libpython=needs_libpython,
+                    needs_native_extension_exports=needs_native_extension_exports,
+                    extra_link_args=extra_link_args,
+                ),
+                extra_link_args=extra_link_args,
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                native_extension_exports_supported=(
+                    _pipeline_self_backend_link.native_extension_exports_supported(
+                        _pipeline_targets.host_target_triple()
+                    )
+                ),
+            )
+            return
         _pipeline_self_link.validate_pcc_self_link_surface(
             _resolve_self_link_mode(
                 needs_libpython=needs_libpython,
@@ -1709,7 +1743,34 @@ def _run_self_link_command(
     coordinator_timing=None,
 ) -> None:
     try:
-        if coordinator_timing is None:
+        if needs_native_extension_exports:
+            _pipeline_self_backend_link.run_link_command(
+                cmd,
+                asm_path,
+                tmp_out_path,
+                runtime_archive,
+                extra_link_inputs,
+                verbose,
+                extra_link_args=extra_link_args,
+                needs_libpython=needs_libpython,
+                needs_native_extension_exports=needs_native_extension_exports,
+                pcc_asm_inputs=pcc_asm_inputs,
+                pcc_native_object_inputs=pcc_native_object_inputs,
+                pcc_internal_input_manifest=pcc_internal_input_manifest,
+                semantic_layout_policy=semantic_layout_policy,
+                link_profile_path=link_profile_path,
+                target_triple=target_triple,
+                resolve_self_link_mode=_resolve_self_link_mode,
+                validate_pcc_self_link_surface=_validate_pcc_self_link_surface,
+                repo_root_for_link=_repo_root_for_link,
+                host_python_command=_host_python_command,
+                build_pcc_link_command=_pipeline_self_link.build_pcc_link_command,
+                log=_log,
+                join_strings=_join_strings,
+                coordinator_timing=coordinator_timing,
+                verified_capi_export_symbols=_verified_capi_export_anchor_symbols,
+            )
+        elif coordinator_timing is None:
             _pipeline_self_backend_link.run_link_command(
                 cmd,
                 asm_path,
@@ -1952,9 +2013,11 @@ def _link_with_self_backend_assembly_texts(
         cmd = [cc] + asm_paths + list(extra_link_inputs)
         if runtime_archive is not None:
             cmd.extend(
-                _runtime_archive_link_args_for_native_extensions(
+                _pipeline_native_link.runtime_archive_link_args_for_owner(
                     runtime_archive,
                     export_pcc_capi,
+                    owned_link=signature_owned_by_pcc,
+                    reference_link_args=_runtime_archive_link_args_for_native_extensions,
                 )
             )
         cmd.extend(["-o", tmp_out_path, "-lm"])
@@ -2054,6 +2117,10 @@ def _link_with_self_backend_direct_artifacts(
     coordinator_timing=None,
 ) -> None:
     """Link ordered worker-owned ASM/PCO paths without coordinator copies."""
+    if needs_native_extension_exports and str(
+        os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
+    ).strip():
+        raise PyPipelineError("native-extension exports are not represented by deferred self-link plan v1")
     if _macho_semantic_layout_enabled():
         raise PyPipelineError(
             "direct indexed artifact publication does not yet own semantic layout"
