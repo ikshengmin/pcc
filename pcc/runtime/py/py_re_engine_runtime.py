@@ -54,6 +54,7 @@ py_class_new_builtin = extern(
     "py_class_new_builtin", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr
 )
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
+pcc_re_match_instance_guarded = extern("pcc_re_match_instance_guarded", (), c_ptr)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
@@ -85,7 +86,6 @@ pcc_re_engine_group_names_flags = extern(
 )
 
 
-define_global_ptr_null("pcc_re_match_class")
 define_global_ptr_null("pcc_re_pattern_class")
 
 
@@ -151,16 +151,6 @@ def _raise_engine_status(status: int) -> None:
         py_raise_owned(
             py_exc_new(7, cstr("pcc re: native regex engine unexpected status"))
         )
-
-
-def _match_class():
-    cls = global_load_ptr("pcc_re_match_class")
-    if ptr_is_null(cls) != 0:
-        cls = py_class_new_builtin(cstr("re.Match"), null(), 0, null(), 0)
-        if ptr_is_null(cls) == 0:
-            store_i32(cls, 12, load_i32(cls, 12) | 1)
-            global_store_ptr("pcc_re_match_class", cls)
-    return cls
 
 
 def _pattern_class():
@@ -358,10 +348,9 @@ def _add_match_method(instance, name, text, spans, names, kind: int) -> None:
 
 def _new_match(pattern, text, caps, ngroups: int, flags: int):
     none = _none()
-    cls = _match_class()
-    if ptr_is_null(cls) != 0:
-        return none
-    instance = py_instance_new(cls)
+    # The shared producer leases the class until instance creation and transfers
+    # a pinned NEW instance. Legacy argument/callback roots are separate work.
+    instance = pcc_re_match_instance_guarded()
     if ptr_is_null(instance) != 0:
         return none
     spans = py_tuple_new((ngroups + 1) * 2)
