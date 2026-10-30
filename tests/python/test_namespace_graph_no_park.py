@@ -71,6 +71,11 @@ class GraphPollModel:
 
     def load(self,filename,names):
         path=ROOT/filename;tree=ast.parse(path.read_text())
+        # The bodies read the module's graph-queue layout constants.
+        for node in tree.body:
+            if (isinstance(node,ast.AnnAssign) and isinstance(node.target,ast.Name)
+                    and node.target.id.startswith('_GRAPH_') and isinstance(node.value,ast.Constant)):
+                self.env[node.target.id]=node.value.value
         nodes=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in names]
         assert {node.name for node in nodes}==names
         for node in nodes:node.decorator_list=[]
