@@ -473,15 +473,21 @@ def pcc_dealloc_with_trash(o, tag: int) -> None:
             # recycled/reset under it.
             if _trash_enqueue(o, tag):
                 return
-    if depth == 0:
+    # Only GC4's zpage recycling reads the active-cascade count. Counting
+    # every outermost death on the other collectors cost two acq_rel adds
+    # on one line all carriers share; a cascade counts itself when it
+    # starts under GC4 and uncounts exactly what it counted.
+    counted: int = 0
+    if depth == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
         atomic_rmw_i64("add", global_addr("pcc_dealloc_cascades_active"), 0, 1, "acq_rel")
+        counted = 1
     store_i32(depth_slot, 0, depth + 1)
     _dealloc_dispatch(o, tag)
     depth_after: int = load_i32(depth_slot, 0)
     if depth_after == 1:
         _trash_drain()
     store_i32(depth_slot, 0, depth_after - 1)
-    if depth_after == 1:
+    if depth_after == 1 and counted != 0:
         # The last thread to leave a cascade completes the deferred page
         # recycles; the sweep rechecks under the graph lock that no cascade
         # began meanwhile (that thread then completes them instead).

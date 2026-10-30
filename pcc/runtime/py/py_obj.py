@@ -471,15 +471,21 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     store_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
     store_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET, type_tag)
     store_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, stored_flags)
-    pcc_debug_note_alloc_size(obj, size)
+    # The size note runs only with PCC_DEBUG_RUNTIME (cache 1) or before
+    # its cache is filled (-1).
+    if load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) != 0:
+        pcc_debug_note_alloc_size(obj, size)
     # Exact provenance is visible before the tracking layer can publish the
     # object.  Backend-0 objects and graph leaves intentionally stay here.
     if pcc_gc_pointer_register(obj) < 0:
         return null()
-    pcc_gc_note_object_allocated_sized(obj, size)
+    # The tracing collectors index the new object; GC0 keeps no index.
+    if backend != 0:
+        pcc_gc_note_object_allocated_sized(obj, size)
     # Tracking may rehash the object index, which is read without the lock;
     # with one thread the replaced table can go now.
-    pcc_gc_reclaim_retired_index_tables_if_alone()
+    if ptr_is_null(global_load_ptr("pcc_py_gc_index_retired_tables")) == 0:
+        pcc_gc_reclaim_retired_index_tables_if_alone()
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(1, 2, size, type_tag, obj)
     return obj
@@ -2183,7 +2189,9 @@ def _py_decref_finish(prepared) -> None:
     # Native instances finalize while their weakrefs still identify them.
     # Their deallocator invalidates only after resurrection has been ruled
     # out. C-extension objects keep their existing generic dealloc boundary.
-    if delay_instance_metadata == 0 or pcc_capi_is_cext_type_tag(tag_dbg) != 0:
+    # Invalidation walks the process's weakref list; an empty list has
+    # nothing to clear, and no weakref to a dead object can appear.
+    if (delay_instance_metadata == 0 or pcc_capi_is_cext_type_tag(tag_dbg) != 0) and ptr_is_null(global_load_ptr("py_weakref_head")) == 0:
         py_weakref_invalidate(o)
     if delay_zpage_freeing_note == 0 and delay_instance_metadata == 0:
         pcc_gc_note_object_freeing(o)

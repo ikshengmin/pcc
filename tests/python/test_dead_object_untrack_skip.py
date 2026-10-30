@@ -26,7 +26,7 @@ from pcc.runtime.py import py_abi_constants as abi
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_obj.py"
 
 
-def finish(flags, tag=abi.PY_TYPE_LIST):
+def finish(flags, tag=abi.PY_TYPE_LIST, weakrefs=True):
     events = []
     obj = {abi.PYOBJECTHEADER_FLAGS_OFFSET: flags}
     tree = ast.parse(RUNTIME.read_text())
@@ -47,6 +47,8 @@ def finish(flags, tag=abi.PY_TYPE_LIST):
         "pcc_dealloc_with_trash": lambda o, tag: events.append("dealloc"),
         "pcc_capi_is_cext_type_tag": lambda tag: 0,
         "py_gen_finalize_from_dealloc": lambda o: 0,
+        "ptr_is_null": lambda value: int(value is None),
+        "global_load_ptr": lambda name: "weakref" if weakrefs and name == "py_weakref_head" else None,
     })
     code = compile(ast.Module([node], type_ignores=[]), str(RUNTIME), "exec")
     for const in code.co_consts:
@@ -83,6 +85,7 @@ def test_the_flag_is_read_at_death_not_from_the_prepared_snapshot():
         "py_gc_untrack": lambda o: events.append("untrack"),
         "pcc_dealloc_with_trash": lambda o, tag: None, "pcc_capi_is_cext_type_tag": lambda tag: 0,
         "py_gen_finalize_from_dealloc": lambda o: 0,
+        "ptr_is_null": lambda value: int(value is None), "global_load_ptr": lambda name: None,
     })
     code = compile(ast.Module([node], type_ignores=[]), str(RUNTIME), "exec")
     for const in code.co_consts:
@@ -90,6 +93,10 @@ def test_the_flag_is_read_at_death_not_from_the_prepared_snapshot():
             namespace[const.co_name] = types.FunctionType(const, namespace)
     namespace["_py_decref_finish"]({0: obj, 8: abi.PY_TYPE_DICT, 16: 0, 24: 0, 32: 0, 40: 1, 48: 0})
     assert events == ["untrack"]
+
+
+def test_a_death_with_no_weakref_in_the_process_skips_invalidation():
+    assert finish(0, weakrefs=False) == ["forget", "note", "dealloc"]
 
 
 @pytest.mark.parametrize("tag", (abi.PY_TYPE_INSTANCE, abi.PY_TYPE_USER_CLASS_START))
