@@ -196,9 +196,12 @@ def test_default_compatibility_requests_keep_owned_mode_and_fail_before_commands
     calls = []
     monkeypatch.setattr(pipeline.subprocess, "run", lambda *args, **kwargs: calls.append(args))
     assert pipeline._resolve_self_link_mode(**options) == "pcc"
-    with pytest.raises(pipeline.PyPipelineError, match="pcc self-link mode does not support"):
+    message = ("require a verified runtime archive" if options.get("needs_native_extension_exports")
+               else "pcc self-link mode does not support")
+    with pytest.raises(pipeline.PyPipelineError, match=message):
         pipeline._run_self_link_command(["cc", "input.s", "-o", str(tmp_path / "output")],
-                                        "input.s", str(tmp_path / "output"), None, (), False, **options)
+                                        "input.s", str(tmp_path / "output"), None, (), False,
+                                        target_triple="x86_64-unknown-linux-gnu", **options)
     assert calls == []
     assert not (tmp_path / "output").exists()
 
@@ -229,9 +232,14 @@ def test_explicit_host_cc_mode_is_labelled_as_reference_oracle(monkeypatch, caps
     ("win32", "AMD64", "x86_64-pc-windows-msvc", ".intel_syntax noprefix\n.text\n.globl pcc_windows_start\npcc_windows_start:\n sub rsp, 40\n mov ecx, 37\n call ExitProcess\n ret\n"),
 ])
 def test_default_route_links_real_small_objects_without_host_tools(tmp_path, monkeypatch, host_platform, machine, target, assembly):
+    import sysconfig
     from pcc.backend.macho_codesign import parse_signature
     from pcc.backend.elf_x86_64 import parse_static_executable
 
+    # Freeze the executing interpreter's real build configuration before the
+    # target-selector simulation changes sys.platform. Keep budget selection
+    # real rather than importing nonexistent cross-host sysconfigdata lazily.
+    sysconfig.get_config_var("Py_GIL_DISABLED")
     native_darwin = sys.platform == "darwin" and platform.machine() == "arm64"
     original_run = subprocess.run
     asm = tmp_path / "input.s"
@@ -339,34 +347,57 @@ def test_frontend_semantic_layout_policy_is_explicit_and_reaches_owned_driver(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Observe the host orchestration seam only; never execute its helper."""
     calls: list[list[str]] = []
     output = tmp_path / "output"
     policy = tmp_path / "semantic-policy.json"
     policy.write_text("{}\n", encoding="utf-8")
+    assembly = tmp_path / "input.s"
+    assembly.write_text(
+        ".section __TEXT,__text,regular,pure_instructions\n"
+        ".globl _main\n_main:\n mov x0, #0\n ret\n", encoding="utf-8",
+    )
+    build_command = pipeline._pipeline_self_link.build_pcc_link_command
 
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        assert kwargs == {"check": True}
-        output.write_bytes(b"owned-link")
-        output.chmod(0o755)
-        return subprocess.CompletedProcess(command, 0)
+    class CommandObserved(Exception):
+        pass
+
+    def observe_command(**kwargs):
+        calls.append(build_command(**kwargs))
+        raise CommandObserved
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("semantic-layout test attempted an external command")
+
+    def request_link():
+        pipeline._run_self_link_command(
+            ["cc", str(assembly), "-o", str(output)], str(assembly),
+            str(output), None, (), False,
+            semantic_layout_policy=str(policy), target_triple="arm64-apple-darwin",
+        )
 
     monkeypatch.setenv("PCC_SELF_LINK", "pcc")
     monkeypatch.setenv("PCC_HOST_PYTHON", "/host/python")
-    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    monkeypatch.setattr(pipeline._pipeline_self_link, "build_pcc_link_command", observe_command)
+    monkeypatch.setattr(pipeline.subprocess, "run", forbidden)
+    monkeypatch.setattr(pipeline.subprocess, "Popen", forbidden)
+    with pytest.raises(CommandObserved):
+        request_link()
 
-    pipeline._run_self_link_command(
-        ["cc", "input.s", "-o", str(output)],
-        "input.s",
-        str(output),
-        None,
-        (),
-        False,
-        semantic_layout_policy=str(policy),
-    )
-
+    assert len(calls) == 1
     command = calls[0]
+    assert command[0] == "/host/python"
+    assert Path(command[1]).name == "pcc_link_macho.py"
+    assert command[command.index("--asm") + 1] == str(assembly)
     assert command[command.index("--semantic-layout-policy") + 1] == str(policy)
+    # Command construction is not evidence of native ownership: native pcc
+    # must refuse this still-unimplemented surface before reaching that seam.
+    with monkeypatch.context() as native:
+        native.setattr(sys.implementation, "name", "pcc")
+        with pytest.raises(pipeline.PyPipelineError, match="host Python fallback is forbidden"):
+            request_link()
+    assert len(calls) == 1
+    assert not output.exists()
 
 
 def test_frontend_semantic_layout_policy_records_linkage_attributes_and_roots(
@@ -501,9 +532,9 @@ def test_pcc_self_link_rejects_unimplemented_link_arguments(
             "libpython link surface",
         ),
         (
-            ['target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @single() { ret i64 1 }"],
+            ['target triple = "x86_64-unknown-linux-gnu"\n' "define i64 @single() { ret i64 1 }"],
             {"needs_native_extension_exports": True},
-            "native-extension export anchors",
+            "native-extension imports require",
         ),
     ],
 )
@@ -558,76 +589,127 @@ def test_pcc_self_link_accepts_object_only_multi_module_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The object-emission branch must reach the pcc linker subprocess too."""
+    """Object-only inputs reach the real owned ELF linker, not a subprocess."""
+    import struct
+    from pcc.backend import elf_x86_64 as elf, owned_elf_link
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    from tests.test_elf_host_export_link import _file_offset
 
     monkeypatch.setenv("PCC_SELF_LINK", "pcc")
     first = tmp_path / "first.o"
     second = tmp_path / "second.o"
-    calls: list[list[str]] = []
+    output = tmp_path / "output"
+    first.write_bytes(elf.emit_relocatable(assemble_file(
+        ".intel_syntax noprefix\n.text\n.globl _start\n_start:\n"
+        " call helper\n mov edi, eax\n mov eax, 60\n syscall\n"
+    )))
+    second.write_bytes(elf.emit_relocatable(assemble_file(
+        ".intel_syntax noprefix\n.text\n.globl helper\nhelper:\n"
+        " mov eax, 42\n ret\n"
+    )))
+    inputs_before = (first.read_bytes(), second.read_bytes())
+    calls: list[dict] = []
+    link_inputs = owned_elf_link.link_inputs
 
-    def fake_run(command, **kwargs):
-        calls.append(list(command))
-        assert kwargs == {"check": True}
-        produced = Path(command[command.index("--out") + 1])
-        produced.write_bytes(b"pcc-link-output")
-        produced.chmod(0o755)
-        return subprocess.CompletedProcess(command, 0)
+    def owned_link(**kwargs):
+        calls.append(kwargs)
+        return link_inputs(**kwargs)
 
-    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("owned object-only link attempted an external command")
+
+    monkeypatch.setattr(owned_elf_link, "link_inputs", owned_link)
+    monkeypatch.setattr(pipeline.subprocess, "run", forbidden)
+    monkeypatch.setattr(pipeline.subprocess, "Popen", forbidden)
     pipeline._run_self_link_command(
-        ["cc", str(first), str(second), "-o", str(tmp_path / "output")],
+        ["cc", str(first), str(second), "-o", str(output)],
         None,
-        str(tmp_path / "output"),
+        str(output),
         None,
         (str(first), str(second)),
         False,
+        target_triple="x86_64-unknown-linux-gnu",
     )
 
     assert len(calls) == 1
-    command = calls[0]
-    assert "--asm" not in command
-    assert [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "--object"
-    ] == [str(first), str(second)]
+    assert calls[0]["assembly"] == []
+    assert calls[0]["objects"] == [str(first), str(second)]
+    assert calls[0]["archives"] == []
+    image = output.read_bytes()
+    entry = elf.parse_static_executable(image)["entry"]
+    offset = _file_offset(image, entry, 5)
+    assert image[offset] == 0xE8
+    helper = entry + 5 + struct.unpack_from("<i", image, offset + 1)[0]
+    assert image[_file_offset(image, helper, 6):][:6] == b"\xb8\x2a\0\0\0\xc3"
+    assert output.stat().st_mode & 0o111
+    assert (first.read_bytes(), second.read_bytes()) == inputs_before
 
 
 def test_pcc_self_link_accepts_indexed_internal_asm_inputs_separately(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import struct
+    from pcc.backend import elf_x86_64 as elf, owned_elf_link
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    from tests.test_elf_host_export_link import _file_offset
+
     monkeypatch.setenv("PCC_SELF_LINK", "pcc")
     first = tmp_path / "first.s"
     second = tmp_path / "second.s"
     external = tmp_path / "external.o"
+    output = tmp_path / "out"
+    first.write_text(
+        ".intel_syntax noprefix\n.text\n.globl _start\n_start:\n"
+        " call internal_helper\n mov edi, eax\n mov eax, 60\n syscall\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        ".intel_syntax noprefix\n.text\n.globl internal_helper\ninternal_helper:\n"
+        " call external_value\n ret\n", encoding="utf-8",
+    )
+    external.write_bytes(elf.emit_relocatable(assemble_file(
+        ".intel_syntax noprefix\n.text\n.globl external_value\nexternal_value:\n"
+        " mov eax, 37\n ret\n"
+    )))
     calls: list[dict] = []
-    from pcc.frontends.python import pipeline_self_backend_link
+    link_inputs = owned_elf_link.link_inputs
 
     def owned_link(**kwargs):
         calls.append(kwargs)
-        produced = Path(kwargs["tmp_out_path"])
-        produced.write_bytes(b"pcc-link-output")
-        produced.chmod(0o755)
+        return link_inputs(**kwargs)
 
-    monkeypatch.setattr(
-        pipeline_self_backend_link, "_owned_macho_link_in_process", owned_link
-    )
+    def forbidden(*args, **kwargs):
+        raise AssertionError("owned mixed-input link attempted an external command")
+
+    monkeypatch.setattr(owned_elf_link, "link_inputs", owned_link)
+    monkeypatch.setattr(pipeline.subprocess, "run", forbidden)
+    monkeypatch.setattr(pipeline.subprocess, "Popen", forbidden)
     pipeline._run_self_link_command(
-        ["cc", str(first), str(second), str(external), "-o", str(tmp_path / "out")],
+        ["cc", str(first), str(second), str(external), "-o", str(output)],
         None,
-        str(tmp_path / "out"),
+        str(output),
         None,
         (str(external),),
         False,
         pcc_asm_inputs=(str(first), str(second)),
+        target_triple="x86_64-unknown-linux-gnu",
     )
 
     # Internal assembly and caller objects reach the in-process owned link as
     # separate, ordered inputs.
-    assert calls[0]["asm_path"] is None
-    assert calls[0]["pcc_asm_inputs"] == (str(first), str(second))
-    assert calls[0]["extra_link_inputs"] == (str(external),)
+    assert len(calls) == 1
+    assert calls[0]["assembly"] == [str(first), str(second)]
+    assert calls[0]["objects"] == [str(external)]
+    assert calls[0]["archives"] == []
+    image = output.read_bytes()
+    entry = elf.parse_static_executable(image)["entry"]
+    for _ in range(2):
+        offset = _file_offset(image, entry, 5)
+        assert image[offset] == 0xE8
+        entry += 5 + struct.unpack_from("<i", image, offset + 1)[0]
+    assert image[_file_offset(image, entry, 6):][:6] == b"\xb8\x25\0\0\0\xc3"
+    assert output.stat().st_mode & 0o111
 
 
 def test_pcc_self_link_passes_the_stable_output_as_incremental_patch_base(
@@ -945,7 +1027,7 @@ def test_pcc_owned_signature_is_published_without_external_codesign(
         ({"needs_libpython": True}, "libpython link surface"),
         (
             {"needs_native_extension_exports": True},
-            "native-extension export anchors",
+            "require a verified runtime archive",
         ),
     ],
 )
@@ -964,6 +1046,7 @@ def test_pcc_self_link_rejects_unimplemented_implied_link_surfaces(
             None,
             (),
             False,
+            target_triple="x86_64-unknown-linux-gnu",
             **options,
         )
 

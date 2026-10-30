@@ -1013,7 +1013,21 @@ def _capi_export_anchor_symbols(
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
 
-def _verified_capi_export_anchor_symbols(runtime_archive: str) -> list[str]:
+def _verified_capi_export_anchor_symbols(
+    runtime_archive: str, *, target_triple: Optional[str] = None,
+    expected_archive_sha256: Optional[str] = None,
+) -> list[str]:
+    if target_triple is not None:
+        if expected_archive_sha256 is None:
+            raise PyPipelineError("verified C-API inventory requires the selected archive snapshot")
+        try:
+            return _pipeline_runtime_archive.verified_export_inventory(
+                runtime_archive, runtime_dir=_PY_RUNTIME_DIR,
+                target_triple=target_triple,
+                expected_archive_sha256=expected_archive_sha256,
+            )
+        except _pipeline_runtime_archive.RuntimeArchiveError as exc:
+            raise PyPipelineError(str(exc) or type(exc).__name__) from exc
     return _capi_export_anchor_symbols(runtime_archive, require_verified_inventory=True)
 
 
@@ -1650,18 +1664,31 @@ def _validate_pcc_self_link_surface(
     extra_link_args: tuple[str, ...] = (),
     needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
+    target_triple: Optional[str] = None,
+    export_table_only: bool = False,
 ) -> None:
     """Validate the finite owned platform linker surface before emission.
 
     The in-repo driver currently owns ordinary assembly/object inputs, extra
-    object inputs, and one runtime archive. Darwin arm64 additionally owns
-    explicit C-API exports; the execution owner validates its inventory and
-    finite input surface again. Arbitrary flags and libpython remain rejected
+    object inputs, and one runtime archive. Only the lower explicit link owner
+    selects export_table_only: Linux x86-64 can emit a C-API table but its public
+    native-extension loader is not admitted. The execution owner validates the
+    inventory and finite input surface again. Arbitrary flags and libpython remain
+    rejected
     before producing temporary assembly/objects; the subprocess seam remains the
     second fail-closed boundary for direct/internal callers.
     """
     try:
         if needs_native_extension_exports:
+            selected_target = target_triple or _pipeline_targets.host_target_triple()
+            if export_table_only:
+                supported = _pipeline_self_backend_link.native_extension_export_table_supported(
+                    selected_target,
+                )
+            else:
+                supported = _pipeline_self_backend_link.native_extension_exports_supported(
+                    selected_target,
+                )
             _pipeline_self_link.validate_pcc_self_link_surface(
                 _resolve_self_link_mode(
                     needs_libpython=needs_libpython,
@@ -1671,11 +1698,7 @@ def _validate_pcc_self_link_surface(
                 extra_link_args=extra_link_args,
                 needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
-                native_extension_exports_supported=(
-                    _pipeline_self_backend_link.native_extension_exports_supported(
-                        _pipeline_targets.host_target_triple()
-                    )
-                ),
+                native_extension_exports_supported=supported,
             )
             return
         _pipeline_self_link.validate_pcc_self_link_surface(
@@ -1968,6 +1991,7 @@ def _link_with_self_backend_assembly_texts(
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
     profile: Optional[dict] = None,
+    target_triple: Optional[str] = None,
 ) -> None:
     """Link deterministically ordered assembly already emitted by workers."""
     if _macho_semantic_layout_enabled():
@@ -1978,6 +2002,7 @@ def _link_with_self_backend_assembly_texts(
         extra_link_args=extra_link_args,
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
+        target_triple=target_triple,
     )
     signature_owned_by_pcc = _resolve_self_link_mode(
         needs_libpython=needs_libpython,
@@ -2050,6 +2075,7 @@ def _link_with_self_backend_assembly_texts(
                 tuple(asm_paths) if signature_owned_by_pcc else ()
             ),
             link_profile_path=link_profile_path,
+            target_triple=target_triple,
         )
         _profile_end(profile, "link_self_direct_asm_driver", started)
         if link_profile_path is not None:
@@ -2115,6 +2141,7 @@ def _link_with_self_backend_direct_artifacts(
     extra_link_args: tuple[str, ...] = (),
     profile: Optional[dict] = None,
     coordinator_timing=None,
+    target_triple: Optional[str] = None,
 ) -> None:
     """Link ordered worker-owned ASM/PCO paths without coordinator copies."""
     if needs_native_extension_exports and str(
@@ -2129,6 +2156,7 @@ def _link_with_self_backend_direct_artifacts(
         extra_link_args=extra_link_args,
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
+        target_triple=target_triple,
     )
     if _resolve_self_link_mode() != "pcc":
         raise PyPipelineError(
@@ -2151,6 +2179,8 @@ def _link_with_self_backend_direct_artifacts(
         os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
     ).strip()
     if deferred_plan:
+        if target_triple and target_triple != _pipeline_targets.host_target_triple():
+            raise PyPipelineError("cross-target artifacts are not represented by deferred self-link plan v1")
         deferred_plan = os.path.abspath(deferred_plan)
         input_manifest = deferred_plan + ".inputs"
         profile_path = deferred_plan + ".profile.json"
@@ -2196,6 +2226,7 @@ def _link_with_self_backend_direct_artifacts(
                 needs_native_extension_exports=needs_native_extension_exports,
                 pcc_internal_input_manifest=input_manifest,
                 link_profile_path=link_profile_path,
+                target_triple=target_triple,
             )
         else:
             _run_self_link_command(
@@ -2211,6 +2242,7 @@ def _link_with_self_backend_direct_artifacts(
                 pcc_internal_input_manifest=input_manifest,
                 link_profile_path=link_profile_path,
                 coordinator_timing=coordinator_timing,
+                target_triple=target_triple,
             )
         all_native = all(kind == "PCO" for kind, _path in ordered)
         _profile_end(
@@ -2248,6 +2280,7 @@ def _link_with_self_backend_native_objects(
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
     profile: Optional[dict] = None,
+    target_triple: Optional[str] = None,
 ) -> None:
     _link_with_self_backend_direct_artifacts(
         [(module_name, "PCO", path) for module_name, path in native_objects],
@@ -2259,6 +2292,7 @@ def _link_with_self_backend_native_objects(
         extra_link_inputs=extra_link_inputs,
         extra_link_args=extra_link_args,
         profile=profile,
+        target_triple=target_triple,
     )
 
 
@@ -4306,6 +4340,7 @@ def compile_python_multi(
                     extra_link_inputs=object_inputs,
                     extra_link_args=tuple(link_args),
                     profile=profile,
+                    target_triple=target_triple,
                 )
             else:
                 _link_with_self_backend_direct_artifacts(
@@ -4321,6 +4356,7 @@ def compile_python_multi(
                     extra_link_args=tuple(link_args),
                     profile=profile,
                     coordinator_timing=coordinator_timing,
+                    target_triple=target_triple,
                 )
             if coordinator_timing is not None:
                 coordinator_timing.complete("artifact_link", link_started)
@@ -4390,6 +4426,7 @@ def compile_python_multi(
                 extra_link_inputs=object_inputs,
                 extra_link_args=tuple(link_args),
                 profile=profile,
+                target_triple=target_triple,
             )
         finally:
             _remove_direct_native_object_dir(direct_native_object_dir)
@@ -4455,6 +4492,7 @@ def compile_python_multi(
             extra_link_inputs=object_inputs,
             extra_link_args=tuple(link_args),
             profile=profile,
+            target_triple=target_triple,
         )
         _profile_end(profile, "compile_python_multi_total", total_start)
         return

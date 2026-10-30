@@ -740,11 +740,12 @@ def _elf_image_timing_skeleton():
     # unchanged return. Every complete linker region is replaced by one fake.
     function = _source_function("pcc/backend/elf_x86_64.py", "_link_static_executable_image")
     args = function.args
-    assert args.kwonlyargs[-1].arg == "coordinator_timing"
-    assert isinstance(args.kw_defaults[-1], ast.Constant) and args.kw_defaults[-1].value is None
+    assert args.kwonlyargs[-2].arg == "coordinator_timing"
+    assert isinstance(args.kw_defaults[-2], ast.Constant) and args.kw_defaults[-2].value is None
+    assert isinstance(args.kw_defaults[-1], ast.Tuple) and args.kw_defaults[-1].elts == []
     assert [arg.arg for arg in args.kwonlyargs] == [
         "archives", "entry", "base_address", "archive_selections",
-        "compact_archive_relocations", "_input_store", "coordinator_timing",
+        "compact_archive_relocations", "_input_store", "coordinator_timing", "export_symbols",
     ]
     assert isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant)
     assert ast.unparse(function.body[1]) == "image_phase_started = 0"
@@ -1059,7 +1060,8 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
     def link(*args, **kwargs):
         assert args == (artifacts, "out", runtime, False)
         expected = dict(needs_libpython=False, needs_native_extension_exports=False,
-                        extra_link_inputs=object_inputs, extra_link_args=("flag",), profile=None)
+                        extra_link_inputs=object_inputs, extra_link_args=("flag",), profile=None,
+                        target_triple=None)
         if enabled:
             expected["coordinator_timing"] = timer
         assert kwargs == expected
@@ -1226,7 +1228,8 @@ def test_mock_result_reader_completes_only_after_valid_ordered_result(monkeypatc
 @pytest.mark.parametrize("enabled", (False, True))
 @pytest.mark.parametrize("failure", (None, "link", "publish"))
 @pytest.mark.parametrize("error_type", (ValueError, DiagnosticAbort))
-def test_mock_executable_publication_keeps_calls_and_failed_boundary(monkeypatch, enabled, failure, error_type):
+@pytest.mark.parametrize("target", (None, "x86_64-unknown-linux-gnu"))
+def test_mock_executable_publication_keeps_calls_and_failed_boundary(monkeypatch, enabled, failure, error_type, target):
     function = _source_function("pcc/frontends/python/pipeline.py", "_link_with_self_backend_direct_artifacts")
     timer = Probe() if enabled else None
     error = error_type("operation failed")
@@ -1247,7 +1250,8 @@ def test_mock_executable_publication_keeps_calls_and_failed_boundary(monkeypatch
         assert args == (["cc", "object", "extra.o", "-o", "out.tmp"], None, "out.tmp", "runtime", ("extra.o",), False)
         expected = dict(extra_link_args=("flag",), needs_libpython=False,
                         needs_native_extension_exports=False,
-                        pcc_internal_input_manifest="temporary/internal-inputs.txt", link_profile_path=None)
+                        pcc_internal_input_manifest="temporary/internal-inputs.txt", link_profile_path=None,
+                        target_triple=target)
         if enabled:
             expected["coordinator_timing"] = timer
         assert kwargs == expected
@@ -1267,6 +1271,7 @@ def test_mock_executable_publication_keeps_calls_and_failed_boundary(monkeypatch
         artifacts=[("sample", "PCO", "object")], out_path="out", runtime_archive="runtime",
         verbose=False, needs_libpython=False, needs_native_extension_exports=False,
         extra_link_inputs=("extra.o",), extra_link_args=("flag",), profile=None, coordinator_timing=timer,
+        target_triple=target,
         _macho_semantic_layout_enabled=lambda: False, _validate_pcc_self_link_surface=lambda **kwargs: None,
         _resolve_self_link_mode=lambda: "pcc", PyPipelineError=ValueError,
         _write_direct_input_manifest=lambda *args: operations.append("manifest"),

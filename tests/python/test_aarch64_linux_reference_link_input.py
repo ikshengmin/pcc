@@ -82,7 +82,8 @@ def _batch(texts, directory, *, internal_link=False, emitter=_native):
     )
 
 
-def _link(texts, directory, observe, *, mode="cc", emitter=_native, consume=False):
+def _link(texts, directory, observe, *, mode="cc", emitter=_native, consume=False,
+          exports=True):
     def objects(inputs, tmp, cc, **kw):
         assert cc == "reference-cc"
         assert kw['split_large_modules'] is False
@@ -90,7 +91,7 @@ def _link(texts, directory, observe, *, mode="cc", emitter=_native, consume=Fals
 
     return link.link_ir_texts_run(
         texts, str(directory / "output"), "runtime.a", False,
-        needs_libpython=False, needs_native_extension_exports=True,
+        needs_libpython=False, needs_native_extension_exports=exports,
         extra_link_inputs=("external.o",), extra_link_args=("-explicit-flag",),
         tmp=str(directory), profile=None, consume_ir_texts=consume,
         resolve_self_link_mode=lambda **_: mode,
@@ -188,8 +189,19 @@ def test_other_single_reference_targets_keep_assembly(tmp_path, monkeypatch, tar
 def test_owned_link_never_calls_reference_conversion(tmp_path, monkeypatch, target):
     monkeypatch.setenv("CC", "reference-cc"); monkeypatch.setattr(emit, "write_aarch64_linux_reference_object", _unexpected)
     monkeypatch.setattr(emit.subprocess, "run", _unexpected); calls = []
-    _link([_ir(target)], tmp_path, lambda *a, **kw: calls.append((a, kw)), mode="pcc")
+    _link([_ir(target)], tmp_path, lambda *a, **kw: calls.append((a, kw)),
+          mode="pcc", exports=False)
     assert len(calls) == 1
+    assert calls[0][1]["needs_native_extension_exports"] is False
+
+
+@pytest.mark.parametrize("target", [TARGET, "x86_64-unknown-linux-gnu"])
+def test_owned_linux_import_request_fails_before_reference_conversion(tmp_path, monkeypatch, target):
+    monkeypatch.setattr(emit, "write_aarch64_linux_reference_object", _unexpected)
+    monkeypatch.setattr(emit.subprocess, "run", _unexpected)
+    with pytest.raises(link.SelfBackendLinkError, match="native-extension imports require"):
+        _link([_ir(target)], tmp_path, _unexpected, mode="pcc", emitter=_unexpected)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_mixed_targets_rejected_before_emission_or_link(tmp_path, monkeypatch):

@@ -12,12 +12,15 @@ from pcc.frontends.python import pipeline_self_backend_link as self_link
 from pcc.frontends.python import pipeline_self_link as link_contract
 
 
-def _profiled_packed_native_image(tmp_path, monkeypatch, manifest_input, sync):
+def _profiled_packed_native_image(tmp_path, monkeypatch, manifest_input, sync, *, compact=None):
     import json
-    from pcc.backend import macho_exec, macho_spec
+    import weakref
+    from pcc.backend import macho_codesign, macho_exec, macho_spec
+    from pcc.backend import macho_host_output, macho_host_prepare, stackmap_host_budget
     from pcc.backend.arm64_asm_driver import assemble_file
     from pcc.backend.macho_codesign import build_signature, parse_signature
-    from pcc.backend.native_object import encode_native_object_from_sections
+    from pcc.backend.native_object import OwnedMergedSourceView, encode_native_object_from_sections
+    from tests.python.test_macho_windowed_prepare import _budget
 
     sections, undefined = assemble_file(".section __TEXT,__text,regular,pure_instructions\n.globl _main\n_main:\n  movz x0, #42\n  ret\n")
     packed = tmp_path / "main.pco"
@@ -30,17 +33,54 @@ def _profiled_packed_native_image(tmp_path, monkeypatch, manifest_input, sync):
         pytest.fail("profiled owned link attempted external delegation")
 
     prepare = macho_exec.prepare_executable_object
+    prepare_paths = macho_host_prepare.prepare_executable_from_paths
     transferred = []
+    source_refs = []
+    backing_files = []
+    retired_before_sign = []
+
+    def observe_source(result):
+        assert type(result) is OwnedMergedSourceView
+        source_refs.append(weakref.ref(result))
+        for attribute in ("_host_row_store", "_host_payload_store"):
+            store = getattr(result, attribute, None)
+            if store is not None:
+                backing_files.append(store.stream)
 
     def checked_prepare(objects, **kwargs):
         assert kwargs.get("_consume_inputs") is True, "private CLI link kept the borrowed-input path"
         result = prepare(objects, **kwargs)
         assert objects == [], "transferred input list remained live after merge"
-        transferred.append(True)
+        observe_source(result)
+        transferred.append("objects")
         return result
 
+    def checked_prepare_paths(paths, **kwargs):
+        assert paths == [str(packed)]
+        assert kwargs["archive_paths"] == ()
+        assert kwargs["compact_budget"] is not None
+        result = prepare_paths(paths, **kwargs)
+        assert result._source_sections == (), "windowed source retained eager sections"
+        observe_source(result)
+        transferred.append("paths")
+        return result
+
+    def checked_signature(*args, **kwargs):
+        if transferred == ["paths"] and macho_host_output._owned_output_supported():
+            assert all(reference() is None for reference in source_refs)
+            assert all(stream.closed for stream in backing_files)
+            retired_before_sign.append(True)
+        return build_signature(*args, **kwargs)
+
     with monkeypatch.context() as patch:
+        if compact is not None:
+            # Deterministic owner coverage with the existing small unit model;
+            # the outer process-tree guard remains the actual memory ceiling.
+            budget = _budget() if compact else None
+            patch.setattr(stackmap_host_budget, "host_compact_stackmap_budget", lambda: budget)
         patch.setattr(macho_exec, "prepare_executable_object", checked_prepare)
+        patch.setattr(macho_host_prepare, "prepare_executable_from_paths", checked_prepare_paths)
+        patch.setattr(macho_codesign, "build_signature", checked_signature)
         patch.setattr(self_link.subprocess, "run", forbidden)
         self_link.run_link_command(
             [], None, str(output), None, (), False,
@@ -73,7 +113,13 @@ def _profiled_packed_native_image(tmp_path, monkeypatch, manifest_input, sync):
         exec_seg_limit=signature.exec_seg_limit,
         exec_seg_flags=signature.exec_seg_flags,
     )
-    assert transferred == [True]
+    assert transferred in (["objects"], ["paths"])
+    if compact is not None:
+        assert transferred == (["paths"] if compact else ["objects"])
+    assert len(source_refs) == 1 and source_refs[0]() is None
+    assert all(stream.closed for stream in backing_files)
+    if transferred == ["paths"] and macho_host_output._owned_output_supported():
+        assert retired_before_sign
     receipt = json.loads(profile.read_text())
     assert receipt["inputs"] == {"asm": 0, "native_object": 1, "object": 0, "archive": 0}
     assert receipt["phases_ms"]["prepare_link"] > 0
@@ -90,6 +136,17 @@ def test_profiled_packed_native_link_publishes_owned_macho_without_a_host_interp
 ):
     """Cross-target owned link/publication evidence; does not execute Mach-O."""
     _profiled_packed_native_image(tmp_path, monkeypatch, manifest_input, sync)
+
+
+@pytest.mark.parametrize("manifest_input", [False, True])
+@pytest.mark.parametrize("compact", [False, True])
+def test_profiled_packed_native_link_retires_each_input_owner(
+    tmp_path, monkeypatch, manifest_input, compact,
+):
+    """Both preparation owners retain the same publication/retirement contract."""
+    _profiled_packed_native_image(
+        tmp_path, monkeypatch, manifest_input, False, compact=compact,
+    )
 
 
 @pytest.mark.parametrize("manifest_input", [False, True])

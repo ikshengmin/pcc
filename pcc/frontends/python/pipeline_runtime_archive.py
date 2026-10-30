@@ -226,6 +226,49 @@ def provenance_codegen_stale(
         return True
 
 
+def verified_export_inventory(
+    archive: str,
+    *,
+    runtime_dir: str,
+    target_triple: str,
+    expected_archive_sha256: str,
+) -> list[str]:
+    """Deep-verify new ELF export admission against current source and target.
+
+    No wheel stamp, archive-adjacent source tree, name heuristic or external
+    symbol inventory substitutes for the configured runtime's source identity.
+    This only reads an existing bundle; it never builds a replacement runtime.
+    """
+    from pcc.tools.runtime_archive_provenance import (
+        manifest_is_stale_for_current_codegen,
+        verify_runtime_archive_manifest,
+    )
+
+    root = str(os.environ.get("PCC_RUNTIME_DIR", "") or "").strip() or runtime_dir
+    anchors = []
+    for attempt in range(2):
+        try:
+            receipt = verify_runtime_archive_manifest(
+                Path(archive), runtime_root=Path(root),
+                expected_archive_sha256=expected_archive_sha256,
+            )
+            if receipt["target_triple"] != target_triple:
+                raise ValueError("runtime export target differs")
+            if manifest_is_stale_for_current_codegen(receipt):
+                raise ValueError("runtime export codegen identity differs")
+        except Exception as exc:
+            message = ("invalid C-API inventory bundle" if attempt == 0
+                       else "C-API inventory changed during link")
+            raise RuntimeArchiveError("pcc-Python runtime " + message + ": " + archive) from exc
+        # Names come from the verified manifest/sidecar snapshot itself, never
+        # from an intervening pathname read that neither pass authenticated.
+        if attempt == 0:
+            anchors = list(receipt["capi_symbols"])
+        elif receipt["capi_symbols"] != anchors:
+            raise RuntimeArchiveError("pcc-Python runtime C-API inventory changed during link: " + archive)
+    return anchors
+
+
 def target_matches(archive: str, expected_target_id: str) -> bool:
     stamp = target_stamp(archive)
     if not os.path.isfile(stamp):

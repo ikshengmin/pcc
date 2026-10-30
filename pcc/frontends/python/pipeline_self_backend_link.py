@@ -23,10 +23,25 @@ _failed_process_detail = failed_process_detail
 
 
 def native_extension_exports_supported(target_triple: str) -> bool:
-    """The admitted export image format, not a host-tool fallback policy."""
+    """Public native-import admission, not just a main-image export table.
+
+    Linux's public loader remains unavailable. Its explicit host table is a
+    prerequisite, not permission to accept Python native-extension imports.
+    """
     from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple
 
     return is_aarch64_darwin_triple(target_triple)
+
+
+def native_extension_export_table_supported(target_triple: str) -> bool:
+    """Whether the owned executable linker accepts a verified C-API table."""
+    from pcc.backend.self_backend_target_match import (
+        is_aarch64_darwin_triple,
+        is_x86_64_linux_triple,
+    )
+
+    return (is_aarch64_darwin_triple(target_triple)
+            or is_x86_64_linux_triple(target_triple))
 
 
 def validate_object_inputs(object_inputs, *, out_path, target_triple):
@@ -619,16 +634,20 @@ def run_link_command(
         return
 
     export_symbols = ()
+    export_archive_identity = ()
     if needs_native_extension_exports:
-        if not native_extension_exports_supported(selected_target):
-            raise SelfBackendLinkError("native-extension exports require the owned Darwin arm64 linker")
+        if not native_extension_export_table_supported(selected_target):
+            raise SelfBackendLinkError(
+                "native-extension export tables require the owned Darwin arm64 "
+                "or Linux x86_64 linker"
+            )
         if semantic_layout_policy:
             raise SelfBackendLinkError("native-extension exports do not support semantic layout")
         if not runtime_archive:
             raise SelfBackendLinkError("native-extension exports require a verified runtime archive")
         if verified_capi_export_symbols is None:
             raise SelfBackendLinkError("native-extension exports require a verified C-API inventory reader")
-        if not _owned_macho_link_covers_surface(
+        if target_os_name(selected_target) == "darwin" and not _owned_macho_link_covers_surface(
             asm_path=asm_path,
             pcc_asm_inputs=pcc_asm_inputs,
             pcc_native_object_inputs=pcc_native_object_inputs,
@@ -638,18 +657,34 @@ def run_link_command(
         ):
             raise SelfBackendLinkError("native-extension exports require the in-process owned link surface")
 
-    validate_pcc_self_link_surface(
-        extra_link_args=extra_link_args,
-        needs_libpython=needs_libpython,
-        needs_native_extension_exports=needs_native_extension_exports,
-    )
     if needs_native_extension_exports:
-        export_symbols = tuple(verified_capi_export_symbols(str(runtime_archive)))
+        validate_pcc_self_link_surface(
+            extra_link_args=extra_link_args,
+            needs_libpython=needs_libpython,
+            needs_native_extension_exports=True,
+            target_triple=selected_target,
+            export_table_only=True,
+        )
+        if target_os_name(selected_target) == "linux":
+            from pcc.backend.owned_elf_inputs import file_sha256
+            try:
+                export_archive_identity = (str(runtime_archive), file_sha256(str(runtime_archive)))
+            except OSError as exc:
+                raise SelfBackendLinkError("cannot read runtime archive for verified C-API inventory") from exc
+            export_symbols = tuple(verified_capi_export_symbols(
+                str(runtime_archive), target_triple=selected_target,
+                expected_archive_sha256=export_archive_identity[1],
+            ))
+        else:
+            export_symbols = tuple(verified_capi_export_symbols(str(runtime_archive)))
         if not export_symbols:
             raise SelfBackendLinkError("verified C-API export inventory is empty")
-    from pcc.frontends.python.pipeline_targets import host_target_triple
-    if not needs_native_extension_exports:
-        selected_target = target_triple or host_target_triple()
+    else:
+        validate_pcc_self_link_surface(
+            extra_link_args=extra_link_args,
+            needs_libpython=needs_libpython,
+            needs_native_extension_exports=False,
+        )
     from pcc.backend.self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple, is_x86_64_windows_triple
     linux_elf = is_aarch64_linux_triple(selected_target) or is_x86_64_linux_triple(selected_target)
     windows_pe = is_x86_64_windows_triple(selected_target)
@@ -673,7 +708,14 @@ def run_link_command(
                 (assembly if kind == "ASM" else object_paths).append(path)
             pcc_internal_input_manifest = None
         if linux_elf:
-            if coordinator_timing is None:
+            if export_symbols:
+                link_elf_inputs(target=selected_target, output=str(tmp_out_path),
+                                assembly=assembly, objects=object_paths, archives=archive_paths,
+                                manifest=pcc_internal_input_manifest or "",
+                                export_symbols=export_symbols,
+                                expected_archive_identity=export_archive_identity,
+                                coordinator_timing=coordinator_timing)
+            elif coordinator_timing is None:
                 link_elf_inputs(target=selected_target, output=str(tmp_out_path),
                                 assembly=assembly, objects=object_paths, archives=archive_paths,
                                 manifest=pcc_internal_input_manifest or "")
@@ -871,7 +913,10 @@ def link_ir_texts_run(
     ) == "pcc"
     if signature_owned_by_pcc and needs_native_extension_exports:
         if not native_extension_exports_supported(selected_target):
-            raise SelfBackendLinkError("native-extension exports require the owned Darwin arm64 linker")
+            raise SelfBackendLinkError(
+                "native-extension imports require the owned Darwin arm64 loader; "
+                "an export table alone does not enable imports"
+            )
         if semantic_layout_enabled():
             raise SelfBackendLinkError("native-extension exports do not support semantic layout")
     # Owned Darwin and Linux links consume internal assembly.  Their drivers
@@ -884,6 +929,7 @@ def link_ir_texts_run(
         extra_link_args=extra_link_args,
         needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
+        target_triple=selected_target,
     )
     export_pcc_capi = needs_native_extension_exports and not needs_libpython
     asm_modules: list[str] = []

@@ -82,13 +82,22 @@ pcc_linux_set_thread_pointer:
 def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                 archives=(), manifest: str = "", entry: str = "_start",
                 map_path: str = "", coordinator_timing=None,
-                export_symbols=()) -> None:
+                export_symbols=(), expected_archive_identity=()) -> None:
     if not (is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target)):
         raise ElfError("unsupported owned ELF target: " + target)
     if not isinstance(export_symbols, (list, tuple)):
         raise ElfError("host exports must be an ordered symbol sequence")
     export_symbols = tuple(export_symbols)
     archives = list(archives)
+    if expected_archive_identity != ():
+        if (not isinstance(expected_archive_identity, tuple)
+                or len(expected_archive_identity) != 2
+                or not isinstance(expected_archive_identity[0], str)
+                or not isinstance(expected_archive_identity[1], str)
+                or expected_archive_identity[0] not in archives
+                or len(expected_archive_identity[1]) != 64
+                or any(char not in "0123456789abcdef" for char in expected_archive_identity[1])):
+            raise ElfError("invalid expected ELF archive identity")
     if manifest and (assembly or objects):
         raise ElfError("manifest cannot be mixed with direct internal inputs")
     manifest_hash = file_sha256(manifest) if manifest else ""
@@ -148,6 +157,15 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
             verify_started = coordinator_timing.begin("elf_verify_inputs")
         store.clear()
     store.verify()
+    if expected_archive_identity:
+        expected_path, expected_hash = expected_archive_identity
+        # The inventory verifier ran before staging. Bind that verified archive
+        # to the exact bytes consumed, not only to the pathname it once occupied.
+        if len(store.archive_hashes) != len(archives):
+            raise ElfError("verified ELF archive was not staged")
+        for path, digest in zip(archives, store.archive_hashes):
+            if path == expected_path and digest != expected_hash:
+                raise ElfError("verified ELF archive identity changed before staging: " + path)
     if manifest and file_sha256(manifest) != manifest_hash:
         raise ElfError("staged ELF manifest identity changed: " + manifest)
     parse_static_executable(image)

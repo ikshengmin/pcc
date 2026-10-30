@@ -56,6 +56,8 @@ def _files(tmp_path):
 
 
 def _validate(**kwargs):
+    kwargs.pop("target_triple", None)
+    kwargs.pop("export_table_only", None)
     contract.validate_pcc_self_link_surface(
         "pcc", native_extension_exports_supported=True, **kwargs,
     )

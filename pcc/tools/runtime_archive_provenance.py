@@ -493,13 +493,21 @@ def _archive_members(archive_path: Path, *, ar: str) -> list[str]:
     return list(_extract_archive_members(archive_path, ar=ar))
 
 
-def _extract_archive_members(archive_path: Path, *, ar: str) -> dict[str, bytes]:
+def _extract_archive_members(
+    archive_path: Path, *, ar: str, expected_archive_sha256: str | None = None,
+) -> dict[str, bytes]:
     # Keep the former tool-selection argument source-compatible while callers
     # migrate. Archive verification always uses the owned parser in process.
     del ar
     _require_regular_archive(archive_path)
     try:
-        members = read_members(archive_path.read_bytes())
+        archive_bytes = archive_path.read_bytes()
+        if expected_archive_sha256 is not None:
+            if (not _is_sha256(expected_archive_sha256)
+                    or _sha256_bytes(archive_bytes) != expected_archive_sha256):
+                raise ProvenanceError("runtime archive differs from its expected verified snapshot")
+        members = read_members(archive_bytes)
+        del archive_bytes
     except ArchiveFormatError as exc:
         raise ProvenanceError(str(exc)) from exc
     extracted: dict[str, bytes] = {}
@@ -679,6 +687,7 @@ def verify_runtime_archive_manifest(
     manifest_path: Path | None = None,
     capi_inventory_path: Path | None = None,
     ar: str = "ar",
+    expected_archive_sha256: str | None = None,
 ) -> dict[str, object]:
     """Verify a production archive against its adjacent provenance manifest."""
 
@@ -720,7 +729,12 @@ def verify_runtime_archive_manifest(
     typed_records: list[dict[str, object]] = list(records)
     if not typed_records:
         raise ProvenanceError("production runtime archive requires at least one member")
-    extracted = _extract_archive_members(archive_path, ar=ar)
+    if expected_archive_sha256 is None:
+        extracted = _extract_archive_members(archive_path, ar=ar)
+    else:
+        extracted = _extract_archive_members(
+            archive_path, ar=ar, expected_archive_sha256=expected_archive_sha256,
+        )
     members = list(extracted)
     expected = [str(record.get("member", "")) for record in typed_records]
     if members != expected:
