@@ -108,6 +108,9 @@ py_user_eq_dispatch = extern("py_user_eq_dispatch", (c_ptr, c_ptr),             
 py_user_order_dispatch = extern("py_user_order_dispatch", (c_ptr, c_ptr, c_int64), c_int64)
 
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr),              c_ptr)
+pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr),      c_ptr)
+pcc_gc_retain        = extern("pcc_gc_retain",        (c_ptr,),                    c_ptr)
+pcc_gc_release       = extern("pcc_gc_release",       (c_ptr,),                    c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_scheduler_root_register_handle = extern(
     "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
@@ -2811,6 +2814,30 @@ def py_obj_sorted(x):
 
 
 # ---- Membership -----------------------------------------------------
+
+@c_abi_export("py_obj_contains_borrowed")
+def py_obj_contains_borrowed(container_slot, needle) -> int:
+    """``needle in container`` for a stable borrowed parameter's slot.
+
+    The needle is permanent image storage (a literal). A str container
+    searched for a str runs no user code, gate or callback, and collectors
+    relocate only at gates, so one borrowed read-barrier load serves with no
+    retain or pin. Any other container keeps the retain and pin the generic
+    membership lowering places around py_obj_contains.
+    """
+    container = pcc_gc_load_borrowed_ptr(null(), container_slot)
+    if (ptr_is_null(container) == 0 and is_tagged_int(container) == 0
+            and is_tagged_int(needle) == 0
+            and load_i32(container, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR
+            and load_i32(needle, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR):
+        return 1 if py_str_contains(container, needle) != 0 else 0
+    held = pcc_gc_retain(container)
+    pcc_gc_pin(held)
+    result: int = py_obj_contains(held, needle)
+    pcc_gc_unpin(held)
+    pcc_gc_release(held)
+    return result
+
 
 @c_abi_export("py_obj_contains")
 def py_obj_contains(container, item) -> int:

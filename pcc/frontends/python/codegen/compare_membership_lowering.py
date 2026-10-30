@@ -1623,6 +1623,36 @@ class CompareMembershipLoweringMixin:
                 lhs = self._gc_retain(lhs, name=self._fresh("membership.lhs.retain"))
             self._gc_pin(lhs)
             pcc_live = ((lhs, True),)
+        borrowed_container = None
+        if (not lhs_is_cpy and self._strict_no_libpython
+                and isinstance(expr.lhs, StrLit)
+                and self._value_is_never_gc_object(lhs)
+                and weak_dict_kind != "value"
+                and not isinstance(container_ty, (ListType, DictType))):
+            from pcc.frontends.python.codegen.call_object_lowering import (
+                stable_parameter_operand_source,
+            )
+            borrowed_container = stable_parameter_operand_source(self, expr.rhs)
+        if borrowed_container is not None:
+            # A literal searched in an unchanged borrowed parameter: the
+            # runtime reads the slot itself and protects the container only
+            # when the search can run user code (not for a str in a str).
+            status = self.builder.call(
+                self.runtime["py_obj_contains_borrowed"],
+                [self._as_gc_ptr(borrowed_container), lhs],
+                name=self._fresh("native.contains"),
+            )
+            self._emit_post_call_err_check(
+                getattr(expr, "span", None), pinned_release_on_error=pcc_live,
+            )
+            self._gc_unpin(lhs)
+            self._gc_release(lhs)
+            contains = self.builder.icmp_signed(
+                "!=", status, ir.Constant(status.type, 0), name=self._fresh("in.i1"),
+            )
+            if expr.op == "not in":
+                return self.builder.not_(contains, name=self._fresh("not_in"))
+            return contains
         rhs_raw = self._emit_expr_with_cpy_operand_cleanup(
             expr.rhs, cpy_live, pinned_pcc=pcc_live,
         )

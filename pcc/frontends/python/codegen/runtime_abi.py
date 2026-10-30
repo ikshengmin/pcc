@@ -892,6 +892,8 @@ def _runtime_signatures_part_19():
     return {
     "py_obj_len": (_I64, [_PYOBJ], False),
     "py_obj_contains": (_I64, [_PYOBJ, _PYOBJ], False),
+    # ``literal in parameter``: the container's borrowed slot, a permanent needle.
+    "py_obj_contains_borrowed": (_I64, [_PTR, _PYOBJ], False),
     "py_obj_sorted": (_PYOBJ, [_PYOBJ], False),
     "py_obj_sorted_slots": (_I64, [_PTR, _PTR, _PTR, _I64, _PTR], False),
     "py_obj_sorted_reverse_slots": (_I64, [_PTR, _PTR, _PTR, _PTR, _PTR], False),
