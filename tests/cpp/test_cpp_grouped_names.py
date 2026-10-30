@@ -111,14 +111,14 @@ def test_grouped_parameters_keep_type_identity_and_parameter_scope():
 @pytest.mark.parametrize(
     "source,code",
     (
-        ("int (*function)();", "cpp.unsupported.pointers"),
+        ("int (*function)();", "cpp.unsupported.function-pointers"),
         ("int (&function)();", "cpp.unsupported.references"),
         ("int (&&function)();", "cpp.unsupported.references"),
         ("int Scope::function();", "cpp.unsupported.qualified-names"),
         ("int (::function)();", "cpp.unsupported.qualified-names"),
-        ("int function(int (*value));", "cpp.unsupported.pointers"),
+        ("int function(int (**value));", "cpp.unsupported.multilevel-pointers"),
         ("int function(int (&value));", "cpp.unsupported.references"),
-        ("typedef int (*Pointer);", "cpp.unsupported.pointers"),
+        ("typedef int (**Pointer);", "cpp.unsupported.multilevel-pointers"),
         ("typedef int (&Reference);", "cpp.unsupported.references"),
         ("using T=int; int function(int ((T)), T value);", "cpp.not-a-type"),
         ("int function(int ((value)), int (value));", "cpp.redeclaration"),

@@ -6,7 +6,7 @@ misparse C++ declaration/expression ambiguities.
 """
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
-from pcc.frontends.cpp.types import mangle_function
+from pcc.frontends.cpp.types import mangle_function, pointer_type, unqualified
 from pcc.frontends.cpp.templates import (
     deduce, mangle_instance, same_type, signature_key, substitute,
 )
@@ -101,7 +101,7 @@ class Scope:
         return symbol
 
 
-def resolve_overload(group, arguments, types, coord):
+def resolve_overload(group, arguments, types, coord, null_constants=None):
     """Select a unique best viable candidate, using a per-argument partial order.
 
     Summing conversion costs is wrong: better on one argument and worse on
@@ -109,6 +109,14 @@ def resolve_overload(group, arguments, types, coord):
     richer reference/template/user-defined rules must be added before those
     forms are admitted by the parser.
     """
+    arguments = [unqualified(argument) for argument in arguments]
+    if null_constants is None:
+        null_constants = [False] * len(arguments)
+    if (any(pointer_type(t) or t == "nullptr" for t in arguments)
+            and any(candidate.template_parameters and len(candidate.parameters) == len(arguments)
+                    for candidate in group.overloads)):
+        raise CppDiagnostic("cpp.unsupported.pointer-templates",
+                            "pointer-involving template overload sets are not implemented", coord)
     viable = []
     for candidate in group.overloads:
         if len(candidate.parameters) != len(arguments):
@@ -127,8 +135,8 @@ def resolve_overload(group, arguments, types, coord):
                 candidate.template_origin = origin
                 candidate.template_arguments = bindings
         ranks = []
-        for source, destination in zip(arguments, candidate.parameters):
-            rank = types.conversion_rank(source, destination)
+        for source, destination, null in zip(arguments, candidate.parameters, null_constants):
+            rank = types.conversion_rank(source, destination, null)
             if rank is None:
                 break
             ranks.append(rank)
@@ -143,8 +151,11 @@ def resolve_overload(group, arguments, types, coord):
         for other, other_ranks in viable:
             if other is candidate:
                 continue
-            no_worse = all(a <= b for a, b in zip(ranks, other_ranks))
-            better = any(a < b for a, b in zip(ranks, other_ranks))
+            comparisons = [types.compare_conversions(source, first, second, null)
+                           for source, first, second, null in zip(
+                               arguments, candidate.parameters, other.parameters, null_constants)]
+            no_worse = all(value <= 0 for value in comparisons)
+            better = any(value < 0 for value in comparisons)
             non_template_preferred = (candidate.template_origin is None
                                       and other.template_origin is not None)
             if not (no_worse and (better or non_template_preferred)):

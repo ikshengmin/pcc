@@ -23,6 +23,9 @@ CASES = [
     ("overload", "int pick(int x){return x+1;} int pick(double x){return 9;} int main(){return pick(41);}", 42),
     ("template-loop", "template<typename T> T count(T x){T n=0;while(x>0){x=x-1;if(x==2)continue;n=n+1;}return n;} int main(){return count(8);}", 7),
     ("bool", "bool truth(double x){return bool(x);} int main(){return int(truth(0.5))+int(truth(-0.0))*2;}", 1),
+    ("pointer", "int *id(int *p){return p;} int main(){int x=4;int *p=&x;*id(p)=42;return x;}", 42),
+    ("pointer-qualification", "int pick(const int *p){return *p;}int pick(void *p){return 9;}"
+     "int main(){int x=42;int *const p=&x;return pick(p);}", 42),
     ("fallthrough", "int main(){}", 0),
 ]
 

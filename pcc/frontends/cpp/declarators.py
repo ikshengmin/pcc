@@ -5,8 +5,10 @@ chunks, whereas ``(*f)()`` has pointer/function chunks. Sema can apply them in
 reverse to a resolved base type. They are not CppTypes, and parsing a chunk
 does not authorize lowering it as a C pointer, reference, array or function.
 
-The public frontend currently uses only ``parse_plain_name``. Rich declarators
-remain syntax-only until lookup, conversion, lifetime and ABI rules exist.
+The public frontend applies a separate semantic gate to builtin pointer and
+free-function chunks. Other rich declarators remain syntax-only until lookup,
+conversion, lifetime and ABI rules exist; ``parse_plain_name`` remains a strict
+reader for callers that require the scalar-name-only subset.
 Parameter and array callbacks must retain their semantic payloads; this module
 neither rewrites source text nor evaluates or discards those expressions.
 """

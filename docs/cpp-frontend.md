@@ -56,14 +56,15 @@ Named declarators now share a recursive syntax component. The public frontend
 admits redundant grouping around scalar, function, parameter and typedef names,
 without changing lookup or overload identity. The richer syntax model retains
 pointer/reference/array/function chunks, per-level cv qualifiers, qualified-name
-segments and callback payloads. Those are syntax records, **not** implemented
-pointer/reference/lifetime semantics: the public `parse_plain_name` capability
-gate still rejects them before C AST output. Six grouped-name programs, including
+segments and callback payloads. Those are syntax records, **not** permission to
+erase reference/array/lifetime semantics. The public semantic gate now admits
+single-level builtin object pointers and free-function chunks; the separate
+`parse_plain_name` reader remains scalar-name-only. Six grouped-name programs, including
 a two-translation-unit case, have host-owned emitted execution and separate
 G++17 byte-oracle tests; this is not a native C++ driver qualification.
 
-Currently accepted semantics are deliberately narrow: arithmetic free functions,
-arithmetic/void aliases, prototypes, single-object block declarations, nested lexical
+Currently accepted semantics are deliberately narrow: arithmetic/builtin-pointer free functions,
+arithmetic/void/pointer aliases, prototypes, single-object block declarations, nested lexical
 blocks, scalar arithmetic/comparison/logical operators, direct calls, returns,
 if/else and while with break/continue. Types keep canonical C++ identity
 and rank, even when `long` and `long long` have the same storage width. Target
@@ -71,8 +72,35 @@ width/signedness and ordinary integer-literal candidates reuse the owned C ABI.
 By-value arithmetic overloads use per-argument standard-conversion ranks, not a
 sum of costs; unresolved or ambiguous calls fail before lowering. Selected calls,
 initializers, assignments, returns and arithmetic operands carry explicit C AST
-conversions. Pointer/reference, user-defined and full template overload rules remain
-unimplemented, not silently approximated by this arithmetic slice.
+conversions. The builtin-pointer increment below adds its own conversion and
+qualification rules. Reference, user-defined and full template overload rules
+remain unimplemented, not silently approximated by the arithmetic/pointer slice.
+
+Single-level pointers to the implemented arithmetic types or cv void now retain
+structural pointee identity. `const` on the object and `const` on its pointee are
+separate: assignments cannot write through a const pointee or reseat a const
+pointer. Top-level parameter const is ignored for function identity but retained
+inside the function body. Address-of and indirection preserve lvalue type;
+pointer initialization, assignment, parameters and returns use checked C AST
+pointer types and explicit conversions. `nullptr` and zero-valued integer
+**literals** are null pointer constants; arbitrary zero-valued expressions and
+`false` are not. Contextual/direct-initialization of bool from nullptr remains
+distinct from disallowed implicit copy-initialization and argument conversion.
+Pointer equality, object-to-void conversions, const addition and pointer-to-bool
+are supported; const removal and implicit void-to-object conversions diagnose.
+Overload ordering retains qualification and pointer-to-bool tie-breaks, not just
+numeric conversion ranks. Null conversions to differently qualified pointer
+types remain indistinguishable. Repeated pointer parameter types use Itanium
+substitutions, checked independently against G++17's exported names.
+
+C++17 assignment sequences the RHS before the LHS. Computed lvalues lower to an
+owned statement-expression containing one converted RHS temporary and one LHS
+evaluation; C's existing assignment policy is unchanged. Assignment result
+values are supported, while uses requiring the result's C++ lvalue category,
+compound assignment, pointer arithmetic/order, multilevel/function/member
+pointers, volatile access, references, arrays, pointer type-pattern/deduction
+overload sets and object lifetime/allocation features still fail explicitly.
+These are boundaries of the increment, not a reduced C++17 goal.
 
 The function-template increment admits deduced, by-value arithmetic type
 parameters. A template retains `TypeParameter` identities, a structured `Pattern`
@@ -135,7 +163,7 @@ particular, none of these are implemented merely by accepting their syntax:
 
 | Area | Required work before admission |
 | --- | --- |
-| Types and names | Remaining fundamental types/literals, extended long-double values/call ABI, cv qualifiers, pointers/references, recursive declarators, namespaces, qualified/dependent lookup, using declarations, ADL and access checks |
+| Types and names | Remaining fundamental types/literals, extended long-double values/call ABI, volatile, multilevel pointers/references/arrays, remaining recursive declarators, namespaces, qualified/dependent lookup, using declarations, ADL and access checks |
 | Expressions | Value categories, conversions and sequencing, full Pratt/operator coverage, casts, constant evaluation and constexpr |
 | Functions | Remaining overload conversions and tie-breaks, defaults, operators, function/member pointers, linkage and complete target ABI |
 | Templates | Remaining dependent types/lookup, ADL, explicit/default arguments, parameter packs, NTTPs, template-template parameters, SFINAE, partial ordering, class/variable templates, specialization and complete ODR/COMDAT publication |
@@ -151,6 +179,28 @@ to the existing C AST/IR/backend. They must not be implemented by deleting
 tokens or borrowing Python garbage collection semantics.
 
 ## Evidence and reference discipline
+
+`test_cpp_pointers.py` checks pointer identity, diagnostics and C AST lowering;
+`test_cpp_pointer_execution.py` executes 25 pointer/const/sequencing programs
+and one separate-translation-unit program twice through the host-owned
+C++ frontend, C generator, self object emitter and ELF linker, comparing exact
+stdout bytes, status and stderr against an explicit G++17 oracle. Ordinary
+checks compare repeated IR/object/executable bytes and prevent unsupported
+semantics from reaching object emission. A separate ABI test compares owned
+object exports with G++17 assembly exports, and two public-driver cases execute
+the actual `--emit-obj` artifacts. This is not native pcc1, bootstrap fixed-point,
+standard-library or NumPy build qualification.
+
+One deliberately separate owned execution test covers `!nullptr`. N4659
+[`[expr.unary.op]/9`](https://timsong-cpp.github.io/cppwp/n4659/expr.unary.op),
+[`[conv]/4`](https://timsong-cpp.github.io/cppwp/n4659/conv) and
+[`[conv.bool]/1`](https://timsong-cpp.github.io/cppwp/n4659/conv.bool) require
+contextual bool conversion, tested as direct-initialization. G++14.2 with
+`-std=c++17 -pedantic-errors -O0` instead rejects unary `!nullptr` while accepting
+`if(nullptr)`, `bool(nullptr)` and `nullptr || false`; GCC's
+[PR c++/123087 fix](https://gcc.gnu.org/pipermail/gcc-patches/2026-March/711221.html)
+documents that discrepancy. This owned-only case is not counted as G++ agreement
+and the target semantics are not weakened to copy that diagnostic.
 
 `tests/cpp/test_cpp_frontend.py`, `test_cpp_overload.py` and
 `test_cpp_templates.py` are host-development parser/Sema/C-lowering tests.

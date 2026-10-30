@@ -7,6 +7,24 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Owned C++17: builtin-pointer increment, complete language still open
+
+The pointer increment over `f3f8a345c65c1d5ed7b49915d35e69c2c81a35a9` adds
+single-level builtin/void pointers, const identity, address/dereference lvalues,
+checked conversions/calls and C++17 RHS-before-LHS assignment sequencing.
+The host-owned route passes 466 ordinary C++ tests plus 49 subtests, and 44
+pointer/public-driver integration tests. The shared-shape execution corpus uses
+an explicit G++17 oracle; `!nullptr` is an independently checked standards-based
+owned test with a documented G++14.2 diagnostic discrepancy. Full scope and
+remaining failures are in [cpp-frontend.md](cpp-frontend.md). No native pcc1,
+bootstrap fixed-point, full C++17/runtime or NumPy build claim is made.
+
+Frozen source/test manifests, exact watchdog commands, logs and resource receipts:
+`/workspace/scratch/ce254c0a0910/pcc-cpp-pointer-f3f/evidence/`.
+Reproduce ordinary checks with `uv run python -m pytest -x -vv --tb=short tests/cpp`;
+select the executed pointer/public-driver checks with `-m integration
+tests/cpp/test_cpp_pointer_execution.py tests/cpp/test_cpp_public_driver_execution.py`.
+
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
 The maintainer requires Python compatibility and native performance together:

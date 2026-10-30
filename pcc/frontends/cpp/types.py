@@ -1,4 +1,4 @@
-"""C++ arithmetic type identity over PCC's existing target-owned C ABI.
+"""C++ arithmetic/builtin-pointer identity over PCC's target-owned C ABI.
 
 Equal storage widths do not make distinct C++ types equal (long and long long
 are a common example). Keep language identity/rank until Sema inserts explicit
@@ -49,10 +49,70 @@ def c_type_names(name):
     return ["_Bool"] if name == "bool" else name.split()
 
 
+class ConstType:
+    """Top-level const is distinct from const on a pointer's pointee."""
+
+    def __init__(self, base):
+        self.base = base
+
+    def __eq__(self, other):
+        return isinstance(other, ConstType) and self.base == other.base
+
+    def __hash__(self):
+        return hash(("const", self.base))
+
+
+class PointerType:
+    def __init__(self, pointee):
+        self.pointee = pointee
+
+    def __eq__(self, other):
+        return isinstance(other, PointerType) and self.pointee == other.pointee
+
+    def __hash__(self):
+        return hash(("pointer", self.pointee))
+
+
+def unqualified(dtype):
+    return dtype.base if isinstance(dtype, ConstType) else dtype
+
+
+def qualify_const(dtype):
+    return dtype if isinstance(dtype, ConstType) else ConstType(dtype)
+
+
+def pointer_type(dtype):
+    return isinstance(unqualified(dtype), PointerType)
+
+
+def _mangle_type(dtype, substitutions):
+    if dtype in substitutions:
+        index = substitutions.index(dtype)
+        if index == 0:
+            return "S_"
+        digits, number = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", ""
+        index -= 1
+        while True:
+            number = digits[index % 36] + number
+            index //= 36
+            if index == 0:
+                return "S" + number + "_"
+    if isinstance(dtype, ConstType):
+        encoded = "K" + _mangle_type(dtype.base, substitutions)
+    elif isinstance(dtype, PointerType):
+        encoded = "P" + _mangle_type(dtype.pointee, substitutions)
+    else:
+        return _CODES[dtype]
+    substitutions.append(dtype)
+    return encoded
+
+
 def mangle_function(name, parameters):
     if name == "main":
         return name
-    return "_Z" + str(len(name)) + name + ("".join(_CODES[p] for p in parameters) or "v")
+    substitutions = []
+    return "_Z" + str(len(name)) + name + (
+        "".join(_mangle_type(unqualified(p), substitutions) for p in parameters) or "v")
 
 
 def scalar_mangling_code(name):
@@ -64,35 +124,54 @@ class ArithmeticTypes:
         self.target_triple = c_target_triple(target_triple)
 
     def width(self, name):
+        name = unqualified(name)
         return builtin_scalar_layout(c_type_names(name), self.target_triple).size * 8
 
     def unsigned(self, name):
+        name = unqualified(name)
         return name == "bool" or builtin_integer_is_unsigned(
             c_type_names(name), self.target_triple
         )
 
     def integral(self, name):
-        return name in _RANKS
+        return unqualified(name) in _RANKS
 
     def value_lowering_supported(self, name):
         # The owned backend has extended-float storage, not value/call ABI
         # lowering. Do not pretend those C++ operations lower to binary64.
+        name = unqualified(name)
         return name != "long double" or long_double_width(self.target_triple) == 64
 
     def promote(self, name):
+        name = unqualified(name)
         if self.integral(name) and _RANKS[name] < _RANKS["int"]:
             if self.width(name) < self.width("int") or not self.unsigned(name):
                 return "int"
             return "unsigned int"
         return name
 
-    def conversion_rank(self, source, destination):
-        # This is the arithmetic, by-value standard-conversion slice only.
-        # No pointer/reference/user-defined conversion is silently ranked here.
+    def conversion_rank(self, source, destination, null_pointer=False):
+        source, destination = unqualified(source), unqualified(destination)
         if source == "void" or destination == "void":
             return None
         if source == destination:
             return 0
+        if isinstance(destination, PointerType):
+            if null_pointer or source == "nullptr":
+                return 2
+            if isinstance(source, PointerType):
+                # This boundary admits only one pointer level and const. A
+                # qualification conversion never removes pointee const.
+                if (isinstance(source.pointee, ConstType)
+                        and not isinstance(destination.pointee, ConstType)):
+                    return None
+                if unqualified(source.pointee) == unqualified(destination.pointee):
+                    return 0
+                if unqualified(destination.pointee) == "void":
+                    return 2
+            return None
+        if isinstance(source, PointerType):
+            return 2 if destination == "bool" else None
         if source not in _CODES or destination not in _CODES:
             return None
         if (self.integral(source) and self.promote(source) == destination
@@ -100,8 +179,31 @@ class ArithmeticTypes:
             return 1
         return 2
 
+    def compare_conversions(self, source, first, second, null_pointer=False):
+        """-1/0/1 means better/indistinguishable/worse for one argument.
+
+        Conversion rank is not the complete ordering: qualification signatures
+        and pointer-to-bool have C++ tie-breaks. Null pointer conversions do not
+        acquire a qualification step merely because their target is const.
+        """
+        a = self.conversion_rank(source, first, null_pointer)
+        b = self.conversion_rank(source, second, null_pointer)
+        if a != b:
+            return -1 if a < b else 1
+        source, first, second = map(unqualified, (source, first, second))
+        if isinstance(source, PointerType):
+            if (first == "bool") != (second == "bool"):
+                return 1 if first == "bool" else -1
+            if (isinstance(first, PointerType) and isinstance(second, PointerType)
+                    and unqualified(first.pointee) == unqualified(second.pointee)):
+                a, b = isinstance(first.pointee, ConstType), isinstance(second.pointee, ConstType)
+                if a != b:
+                    return 1 if a else -1
+        return 0
+
     def common(self, lhs, rhs):
         """Usual arithmetic conversions, preserving type rank and signedness."""
+        lhs, rhs = unqualified(lhs), unqualified(rhs)
         if lhs in _FLOAT_RANKS or rhs in _FLOAT_RANKS:
             return lhs if _FLOAT_RANKS.get(lhs, 0) >= _FLOAT_RANKS.get(rhs, 0) else rhs
         lhs, rhs = self.promote(lhs), self.promote(rhs)

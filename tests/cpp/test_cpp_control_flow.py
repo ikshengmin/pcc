@@ -74,7 +74,7 @@ class ScalarControlFlowTests(unittest.TestCase):
     def test_alternative_operator_tokens_have_identical_semantics(self):
         ast = self.parse("bool run(){return not false and (3 bitand 1) not_eq 0 or false;}")
         self.assertEqual(ast.ext[0].body.block_items[0].expr.expr.op, "||")
-        self.diagnostic("int and(){return 0;}", "cpp.unsupported.references")
+        self.diagnostic("int and(){return 0;}", "cpp.unsupported.syntax")
         self.diagnostic("int run(){int not=0;return 0;}", "cpp.unsupported.syntax")
 
     def test_if_else_condition_is_contextually_converted_to_bool(self):

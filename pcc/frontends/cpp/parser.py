@@ -1,7 +1,7 @@
 """Handwritten C++ parser with semantic lookup and reversible lookahead.
 
-This increment accepts arithmetic free functions with arithmetic/void results,
-deduced arithmetic function templates and scalar control-flow statements. It builds the existing C AST only *after*
+This increment accepts arithmetic/builtin-pointer free functions, deduced
+arithmetic function templates and scalar control-flow statements. It builds the existing C AST only *after*
 resolving names and checking supported semantics. It does not rewrite source
 text, invoke the C parser, or discard missing lifetime/exception/template
 semantics. Unimplemented features remain explicit errors.
@@ -11,10 +11,11 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
-from pcc.frontends.cpp.declarators import parse_plain_name
+from pcc.frontends.cpp.declarators import DeclaratorParser, parse_cv_qualifiers
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
 from pcc.frontends.cpp.types import (
-    ArithmeticTypes, TYPE_WORDS, canonical_type, c_type_names,
+    ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
+    pointer_type, qualify_const, unqualified,
 )
 from pcc.frontends.cpp.templates import (
     Pattern, TypeParameter, dependent, same_type, substitute,
@@ -96,11 +97,14 @@ class TentativeParse:
 
 
 class Expression:
-    def __init__(self, node, dtype="int", lvalue=False, symbol=None):
+    def __init__(self, node, dtype="int", lvalue=False, symbol=None, null_pointer=False,
+                 assignment_result=False):
         self.node = node
         self.dtype = dtype
         self.lvalue = lvalue
         self.symbol = symbol
+        self.null_pointer = null_pointer
+        self.assignment_result = assignment_result
 
 
 class CppParser:
@@ -111,8 +115,10 @@ class CppParser:
         self.scope = Scope()
         self.return_type = None
         self.template_function = None
+        self.parsing_template = False
         self.pending_instances = []
         self.loop_depth = 0
+        self.assignment_index = 0
         self.cursor = TokenCursor(self._tokenize(text, filename))
         declarations = []
         while self._peek().kind != "EOF":
@@ -196,9 +202,13 @@ class CppParser:
         return self.cursor.take()
 
     def _is_type(self, token):
-        return token.value in TYPE_WORDS or self.scope.is_type_name(token.value)
+        return (token.value in TYPE_WORDS or token.value in ("const", "volatile")
+                or self.scope.is_type_name(token.value))
 
     def _check_value_type(self, dtype, token):
+        if self.parsing_template and (pointer_type(dtype) or isinstance(dtype, ConstType)):
+            raise CppDiagnostic("cpp.unsupported.pointer-templates",
+                                "pointer/cv template types are not implemented", token.coord)
         if dependent(dtype):
             return dtype
         if not self.types.value_lowering_supported(dtype):
@@ -214,17 +224,31 @@ class CppParser:
                 raise CppDiagnostic("cpp.not-a-type", f"'{token.value}' does not name a type",
                                     token.coord)
             self._unsupported(token, "expected an implemented arithmetic type")
-        if token.value not in TYPE_WORDS:
-            self.cursor.take()
-            dtype = self.scope.lookup(token.value).dtype
-            return self._check_value_type(dtype, token) if check_lowering else dtype
         words = []
-        while self._peek().value in TYPE_WORDS:
-            words.append(self.cursor.take().value)
-        try:
-            dtype = canonical_type(words)
-        except ValueError as error:
-            raise CppDiagnostic("cpp.invalid-type", str(error), token.coord)
+        qualifiers = []
+        dtype = None
+        while True:
+            value = self._peek().value
+            if value in ("const", "volatile"):
+                qualifier = self.cursor.take()
+                if value == "volatile":
+                    raise CppDiagnostic("cpp.unsupported.volatile", "volatile access lowering is not implemented", qualifier.coord)
+                if value in qualifiers:
+                    raise CppDiagnostic("cpp.duplicate-cv-qualifier", "duplicate const qualifier", qualifier.coord)
+                qualifiers.append(value)
+            elif value in TYPE_WORDS and dtype is None:
+                words.append(self.cursor.take().value)
+            elif not words and dtype is None and self.scope.is_type_name(value):
+                dtype = self.scope.lookup(self.cursor.take().value).dtype
+            else:
+                break
+        if dtype is None:
+            try:
+                dtype = canonical_type(words)
+            except ValueError as error:
+                raise CppDiagnostic("cpp.invalid-type", str(error), token.coord)
+        if qualifiers:
+            dtype = qualify_const(dtype)
         return self._check_value_type(dtype, token) if check_lowering else dtype
 
     def _alias(self):
@@ -232,35 +256,83 @@ class CppParser:
         if keyword.value == "using":
             name = self._identifier()
             self._expect("=")
-            dtype = self._type()
+            dtype = self._abstract_pointer_type(self._type())
         else:
             dtype = self._type()
-            name = self._declarator_name()
+            name, dtype = self._declarator(dtype)
         self._expect(";")
         self.scope.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
 
-    def _declarator_name(self):
-        return parse_plain_name(self.cursor, self._identifier)
+    def _pointer(self, dtype, token, qualifiers=()):
+        if self.parsing_template:
+            raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
+        if pointer_type(dtype):
+            raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "multilevel pointer semantics are not implemented", token.coord)
+        if "volatile" in qualifiers:
+            raise CppDiagnostic("cpp.unsupported.volatile", "volatile access lowering is not implemented", token.coord)
+        result = PointerType(dtype)
+        return qualify_const(result) if "const" in qualifiers else result
+
+    def _abstract_pointer_type(self, dtype):
+        while self._peek().value == "*":
+            token = self.cursor.take()
+            dtype = self._pointer(dtype, token, parse_cv_qualifiers(self.cursor))
+        return dtype
+
+    def _apply_declarator(self, declaration, dtype, function=False):
+        name = declaration.name
+        if name.global_scope or len(name.parts) != 1:
+            raise CppDiagnostic("cpp.unsupported.qualified-names", "qualified name lookup is not implemented", name.coord)
+        chunks = list(declaration.chunks)
+        if function:
+            if not chunks or chunks[0].kind != "function":
+                feature = "references" if chunks and "reference" in chunks[0].kind else "function-pointers"
+                raise CppDiagnostic("cpp.unsupported." + feature, "only free function declarations are implemented", declaration.coord)
+            clause = chunks.pop(0)
+            if clause.qualifiers or clause.ref_qualifier:
+                raise CppDiagnostic("cpp.unsupported.function-declarators", "function cv/ref qualifiers are not implemented", clause.coord)
+        for chunk in reversed(chunks):
+            if chunk.kind != "pointer":
+                feature = "references" if "reference" in chunk.kind else (
+                    "arrays-or-lambdas" if chunk.kind == "array" else "function-pointers")
+                raise CppDiagnostic("cpp.unsupported." + feature, "declarator semantics are not implemented", chunk.coord)
+            dtype = self._pointer(dtype, chunk.token, chunk.qualifiers)
+        return name.identifier, dtype
+
+    def _declarator(self, dtype):
+        declaration = DeclaratorParser(self.cursor, self._identifier).parse(parse_suffixes=False)
+        return self._apply_declarator(declaration, dtype)
 
     def _is_declaration(self):
         if not self._is_type(self._peek()):
             return False
         with self.cursor.tentative():
             try:
-                self._type(check_lowering=False)
-                self._declarator_name()
+                dtype = self._type(check_lowering=False)
             except CppDiagnostic:
-                return False
+                return True
+            pointer_prefix = self._peek().value in ("*", "&", "&&")
+            try:
+                self._declarator(dtype)
+            except CppDiagnostic:
+                # A type followed by a failed declarator is not permission to
+                # reinterpret unsupported pointer/reference syntax as a value.
+                return pointer_prefix
             return self._peek().value in (";", "=", "(", ",", "[")
 
     @staticmethod
     def _scalar_type(name, dtype, coord):
-        return c_ast.TypeDecl(name, [], c_ast.IdentifierType(c_type_names(dtype), coord), coord)
+        qualifiers = ["const"] if isinstance(dtype, ConstType) else []
+        dtype = unqualified(dtype)
+        if isinstance(dtype, PointerType):
+            return c_ast.PtrDecl(qualifiers, CppParser._scalar_type(name, dtype.pointee, coord), coord)
+        return c_ast.TypeDecl(name, qualifiers, c_ast.IdentifierType(c_type_names(dtype), coord), coord)
 
     def _decl(self, name, dtype, coord, init=None):
         return c_ast.Decl(name, [], [], [], self._scalar_type(name, dtype, coord), init, None, coord)
 
-    def _convert(self, expression, dtype, coord, force=False):
+    def _convert(self, expression, dtype, coord, force=False, contextual=False):
+        dtype = unqualified(dtype)
         # Only an explicit conversion may discard an arithmetic result. Return
         # statements perform their own void check and preserve their expression.
         if dtype == "void" and force:
@@ -272,12 +344,13 @@ class CppParser:
         self._require_value(expression)
         if self.template_function is not None:
             if not dependent(expression.dtype) and not dependent(dtype):
-                if self.types.conversion_rank(expression.dtype, dtype) is None:
+                if self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None:
                     raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
             if same_type(expression.dtype, dtype) and not force:
                 return expression.node
             return Pattern("cast", coord, dtype, [expression])
-        if self.types.conversion_rank(expression.dtype, dtype) is None:
+        nullptr_bool = expression.dtype == "nullptr" and dtype == "bool" and (force or contextual)
+        if self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None and not nullptr_bool:
             raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
         if expression.dtype == dtype and not force:
             return expression.node
@@ -289,6 +362,7 @@ class CppParser:
         self._expect("<")
         parent = self.scope
         self.scope = Scope(parent)
+        self.parsing_template = True
         parameters = []
         try:
             while True:
@@ -307,36 +381,39 @@ class CppParser:
             self._function(template_parameters=tuple(parameters), declaration_scope=parent)
         finally:
             self.scope = parent
+            self.parsing_template = False
 
     def _function(self, template_parameters=(), declaration_scope=None):
         result_type = self._type()
-        name = self._declarator_name()
-        if self.scope.lookup(name.value) is not None and self.scope.lookup(name.value).kind == "template-type":
-            raise CppDiagnostic("cpp.template-parameter-shadowing",
-                                "function name shadows a template parameter", name.coord)
-        self._expect("(")
         params = []
         parameter_symbols = []
         parent = self.scope
         parameter_scope = Scope(parent)
         self.scope = parameter_scope
-        try:
-            if not self._accept(")"):
+
+        def parameter_clause():
+            if self._peek().value != ")":
                 while True:
                     dtype_token = self._peek()
                     dtype = self._type()
                     # Exactly one unnamed void parameter denotes an empty
                     # parameter list, including a typedef naming void. A named
                     # or additional void parameter is never silently removed.
-                    if dtype == "void":
-                        if not params and self._accept(")"):
-                            break
+                    if dtype == "void" and self._peek().value == ")" and not params:
+                        break
+                    param = None
+                    with self.cursor.tentative():
+                        self._abstract_pointer_type(dtype)
+                        unnamed = self._peek().value in (",", ")")
+                    if unnamed:
+                        dtype = self._abstract_pointer_type(dtype)
+                    else:
+                        param, dtype = self._declarator(dtype)
+                    if unqualified(dtype) == "void":
                         raise CppDiagnostic("cpp.invalid-parameter",
                                             "void must be the sole unnamed parameter",
                                             dtype_token.coord)
-                    param = None
-                    if self._peek().value not in (",", ")"):
-                        param = self._declarator_name()
+                    if param is not None:
                         # A preceding parameter can hide an outer type in a
                         # later parameter declaration, including prototypes.
                         parameter_symbols.append(self.scope.declare(
@@ -344,11 +421,19 @@ class CppParser:
                     else:
                         parameter_symbols.append(None)
                     params.append((param, dtype))
-                    if self._accept(")"):
+                    if self._peek().value == ")":
                         break
                     self._expect(",")
+            return tuple(params)
+
+        try:
+            declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause).parse()
+            name, result_type = self._apply_declarator(declarator, result_type, function=True)
         finally:
             self.scope = parent
+        if self.scope.lookup(name.value) is not None and self.scope.lookup(name.value).kind == "template-type":
+            raise CppDiagnostic("cpp.template-parameter-shadowing",
+                                "function name shadows a template parameter", name.coord)
         definition = self._peek().value == "{"
         if name.value == "main" and params:
             self._unsupported(name, "main parameters are not implemented")
@@ -357,7 +442,7 @@ class CppParser:
         if name.value == "main" and template_parameters:
             raise CppDiagnostic("cpp.main-template", "main cannot be a template", name.coord)
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
-                            parameters=tuple(dtype for param, dtype in params))
+                            parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.template_parameters = template_parameters
         registry = self.scope if declaration_scope is None else declaration_scope
         symbol = registry.declare_function(new_symbol, definition)
@@ -471,7 +556,7 @@ class CppParser:
             return self._return_statement(expression, token.coord)
         if self._is_declaration():
             dtype = self._type()
-            name = self._declarator_name()
+            name, dtype = self._declarator(dtype)
             self._check_object_type(dtype, name.coord)
             # The point of declaration precedes the initializer.
             symbol = self.scope.declare(Symbol(name.value, "value", name.coord, dtype=dtype))
@@ -487,9 +572,11 @@ class CppParser:
                     self._unsupported(self._peek(), "block function declarations")
                 expression = self._expression()
                 self._require_value(expression)
-                init = self._convert(expression, dtype, name.coord)
+                init = self._convert(expression, dtype, name.coord, contextual=True)
                 initializer = expression
                 self._expect(")")
+            if isinstance(dtype, ConstType) and initializer is None:
+                raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", name.coord)
             self._expect(";")
             if self.template_function is not None:
                 return Pattern("decl", name.coord, symbol,
@@ -508,7 +595,7 @@ class CppParser:
                                 self._peek().coord)
         expression = self._expression()
         self._expect(")")
-        return Expression(self._convert(expression, "bool", expression.node.coord), "bool")
+        return Expression(self._convert(expression, "bool", expression.node.coord, contextual=True), "bool")
 
     def _substatement(self):
         # C++ selection/iteration substatements have block scope even without
@@ -525,21 +612,22 @@ class CppParser:
         return statement
 
     def _check_object_type(self, dtype, coord):
-        if dtype == "void":
+        if unqualified(dtype) == "void":
             raise CppDiagnostic("cpp.invalid-object-type", "an object cannot have type void", coord)
 
     def _return_statement(self, expression, coord):
+        result_type = unqualified(self.return_type)
         if expression is None:
-            if not dependent(self.return_type) and self.return_type != "void":
+            if not dependent(result_type) and result_type != "void":
                 raise CppDiagnostic("cpp.return-value-required",
                                     "non-void function requires a return expression", coord)
         else:
             self._require_value(expression, allow_void=True)
-            if not dependent(self.return_type) and not dependent(expression.dtype):
-                if self.return_type == "void" and expression.dtype != "void":
+            if not dependent(result_type) and not dependent(expression.dtype):
+                if result_type == "void" and unqualified(expression.dtype) != "void":
                     raise CppDiagnostic("cpp.return-value-in-void",
                                         "void function cannot return a non-void expression", coord)
-                if self.return_type != "void" and expression.dtype == "void":
+                if result_type != "void" and unqualified(expression.dtype) == "void":
                     raise CppDiagnostic("cpp.return-void-expression",
                                         "non-void function cannot return a void expression", coord)
         if self.template_function is not None:
@@ -548,20 +636,24 @@ class CppParser:
             return Pattern("return", coord, children=[] if expression is None else [expression])
         if expression is None:
             return c_ast.Return(None, coord)
-        if self.return_type == "void":
+        if result_type == "void":
             # Existing C lowering evaluates node.expr before ret void. Keep the
             # checked void expression intact so calls and other effects survive.
             return c_ast.Return(expression.node, coord)
         return c_ast.Return(self._convert(expression, self.return_type, coord), coord)
 
     def _require_value(self, expression, allow_void=False):
-        if expression.dtype == "void" and not allow_void:
+        if unqualified(expression.dtype) == "void" and not allow_void:
             raise CppDiagnostic("cpp.void-value", "void expression has no value", expression.node.coord)
         if expression.symbol is not None and expression.symbol.kind == "function":
             self._unsupported(self._peek(), "function-to-pointer conversion")
 
     def _expression(self):
         lhs = self._binary(1)
+        if self._peek().value in ("+=", "-=", "*=", "/=", "%=", "<<=", ">>=",
+                                  "&=", "^=", "|=", "and_eq", "or_eq", "xor_eq"):
+            raise CppDiagnostic("cpp.unsupported.compound-assignment",
+                                "compound assignment semantics are not implemented", self._peek().coord)
         assignment = self._accept("=")
         if assignment:
             rhs = self._expression()
@@ -569,17 +661,32 @@ class CppParser:
         return lhs
 
     def _assignment_expression(self, lhs, rhs, coord):
-        if (isinstance(lhs.node, c_ast.Assignment)
-                or isinstance(lhs.node, Pattern) and lhs.node.kind == "assignment"):
+        if lhs.assignment_result:
             raise CppDiagnostic("cpp.unsupported.syntax", "assignment-result lvalue lowering", coord)
         if not lhs.lvalue:
             raise CppDiagnostic("cpp.not-lvalue", "assignment requires an lvalue", coord)
+        if isinstance(lhs.dtype, ConstType):
+            raise CppDiagnostic("cpp.const-assignment", "assignment requires a modifiable lvalue", coord)
         converted = self._convert(rhs, lhs.dtype, coord)
         # Assignment is an lvalue in C++; uses requiring that C difference
         # remain explicitly rejected, including within template patterns.
         if self.template_function is not None:
-            return Expression(Pattern("assignment", coord, children=[lhs, rhs]), lhs.dtype)
-        return Expression(c_ast.Assignment("=", lhs.node, converted, coord), lhs.dtype)
+            return Expression(Pattern("assignment", coord, children=[lhs, rhs]), lhs.dtype,
+                              assignment_result=True)
+        if not isinstance(lhs.node, c_ast.ID):
+            # C++17 sequences RHS before LHS; the shared C Assignment emitter
+            # is allowed to evaluate its LHS first. Materialize the converted
+            # RHS once in an owned statement-expression scope, then evaluate
+            # the lvalue exactly once. This does not alter C's policy or inject
+            # a runtime helper. Only builtin scalar/pointer values enter here.
+            name = "__pcc_cpp_assignment_" + str(self.assignment_index)
+            self.assignment_index += 1
+            temporary = self._decl(name, lhs.dtype, coord, converted)
+            assignment = c_ast.Assignment("=", lhs.node, c_ast.ID(name, coord), coord)
+            node = c_ast.StmtExpr(c_ast.Compound([temporary, assignment], coord), coord)
+        else:
+            node = c_ast.Assignment("=", lhs.node, converted, coord)
+        return Expression(node, lhs.dtype, assignment_result=True)
 
     def _binary(self, minimum):
         lhs = self._unary()
@@ -597,6 +704,15 @@ class CppParser:
         logical = operator in ("&&", "||")
         comparison = operator in _COMPARISONS
         shift = operator in ("<<", ">>")
+        pointer_operands = any(pointer_type(e.dtype) or e.dtype == "nullptr" for e in (lhs, rhs))
+        if pointer_operands and not logical:
+            if operator not in ("==", "!="):
+                raise CppDiagnostic("cpp.unsupported.pointer-operators",
+                                    "pointer arithmetic and ordering are not implemented", coord)
+            operand_type = self._composite_pointer_type(lhs, rhs, coord)
+            node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord),
+                                  self._convert(rhs, operand_type, coord), coord)
+            return Expression(self._convert(Expression(node, "int"), "bool", coord), "bool")
         if not dependent(lhs.dtype) and not dependent(rhs.dtype):
             if operator in ("%", "&", "|", "^", "<<", ">>") and not (
                     self.types.integral(lhs.dtype) and self.types.integral(rhs.dtype)):
@@ -611,17 +727,34 @@ class CppParser:
         if self.template_function is not None:
             return Expression(Pattern("binary", coord, operator, [lhs, rhs]), dtype)
         rhs_type = self.types.promote(rhs.dtype) if shift else operand_type
-        node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord),
-                              self._convert(rhs, rhs_type, coord), coord)
+        node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord, contextual=logical),
+                              self._convert(rhs, rhs_type, coord, contextual=logical), coord)
         if logical or comparison:
             # C comparisons/logical operators yield int; C++ yields bool. Keep
             # the bool projection explicit for overloads and following C ops.
             node = self._convert(Expression(node, "int"), "bool", coord)
         return Expression(node, dtype)
 
+    def _composite_pointer_type(self, lhs, rhs, coord):
+        first, second = unqualified(lhs.dtype), unqualified(rhs.dtype)
+        if isinstance(first, PointerType) and rhs.null_pointer:
+            return first
+        if isinstance(second, PointerType) and lhs.null_pointer:
+            return second
+        if lhs.null_pointer and rhs.null_pointer:
+            return PointerType("void")
+        if isinstance(first, PointerType) and isinstance(second, PointerType):
+            a, b = unqualified(first.pointee), unqualified(second.pointee)
+            if a == b or "void" in (a, b):
+                pointee = "void" if "void" in (a, b) else a
+                if isinstance(first.pointee, ConstType) or isinstance(second.pointee, ConstType):
+                    pointee = qualify_const(pointee)
+                return PointerType(pointee)
+        raise CppDiagnostic("cpp.invalid-operands", "incompatible operands for pointer equality", coord)
+
     def _unary(self):
         token = self._peek()
-        if token.value in ("+", "-", "~", "!"):
+        if token.value in ("+", "-", "~", "!", "&", "*"):
             self.cursor.take()
             expression = self._unary()
             return self._unary_expression(token.value, expression, token.coord)
@@ -629,25 +762,49 @@ class CppParser:
 
     def _unary_expression(self, operator, expression, coord):
         self._require_value(expression)
+        if operator in ("&", "*"):
+            if self.parsing_template:
+                raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template expressions are not implemented", coord)
+            if operator == "&":
+                if expression.assignment_result:
+                    raise CppDiagnostic("cpp.unsupported.syntax", "assignment-result lvalue lowering", coord)
+                if not expression.lvalue:
+                    raise CppDiagnostic("cpp.not-lvalue", "address-of requires an object lvalue", coord)
+                if pointer_type(expression.dtype):
+                    raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "multilevel pointer semantics are not implemented", coord)
+                dtype = PointerType(expression.dtype)
+            else:
+                pointer = unqualified(expression.dtype)
+                if not isinstance(pointer, PointerType) or unqualified(pointer.pointee) == "void":
+                    raise CppDiagnostic("cpp.invalid-dereference", "dereference requires a pointer to an object", coord)
+                dtype = pointer.pointee
+            # Do not emit a load through the pointee merely to take its address.
+            if operator == "&" and isinstance(expression.node, c_ast.UnaryOp) and expression.node.op == "*":
+                return Expression(expression.node.expr, dtype)
+            return Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*")
         dtype = None
         if not dependent(expression.dtype):
+            if (pointer_type(expression.dtype) or expression.dtype == "nullptr") and operator != "!":
+                raise CppDiagnostic("cpp.unsupported.pointer-operators", "unary pointer operator is not implemented", coord)
             if operator == "~" and not self.types.integral(expression.dtype):
                 raise CppDiagnostic("cpp.invalid-operands", "operator requires an integral operand", coord)
             dtype = "bool" if operator == "!" else self.types.promote(expression.dtype)
         if self.template_function is not None:
             return Expression(Pattern("unary", coord, operator, [expression]), dtype)
-        node = c_ast.UnaryOp(operator, self._convert(expression, dtype, coord), coord)
+        node = c_ast.UnaryOp(operator, self._convert(expression, dtype, coord, contextual=operator == "!"), coord)
         if operator == "!":
             node = self._convert(Expression(node, "int"), "bool", coord)
         return Expression(node, dtype)
 
     def _literal(self, kind, value, dtype, coord):
+        null_pointer = dtype == "nullptr" or kind == "int" and value.rstrip("uUlL") == "0"
         if self.template_function is not None:
-            return Expression(Pattern("literal", coord, (kind, value, dtype)), dtype)
-        return Expression(c_ast.Constant(kind, value, coord), dtype)
+            return Expression(Pattern("literal", coord, (kind, value, dtype)), dtype, null_pointer=null_pointer)
+        return Expression(c_ast.Constant(kind, value, coord), dtype, null_pointer=null_pointer)
 
     def _call_expression(self, group, arguments, coord):
         argument_types = [arg.dtype for arg in arguments]
+        null_constants = [arg.null_pointer for arg in arguments]
         if self.template_function is not None:
             # A later overload declaration must not mutate the definition-point
             # candidate set of an unqualified dependent call (ADL still absent).
@@ -655,9 +812,9 @@ class CppParser:
             snapshot.overloads = list(group.overloads)
             dtype = None
             if not any(dependent(t) for t in argument_types):
-                dtype = resolve_overload(snapshot, argument_types, self.types, coord).dtype
+                dtype = resolve_overload(snapshot, argument_types, self.types, coord, null_constants).dtype
             return Expression(Pattern("call", coord, snapshot, arguments), dtype)
-        selected = resolve_overload(group, argument_types, self.types, coord)
+        selected = resolve_overload(group, argument_types, self.types, coord, null_constants)
         if selected.template_origin is not None:
             origin = selected.template_origin
             cached = origin.instances.get(selected.template_arguments)
@@ -669,10 +826,14 @@ class CppParser:
         converted = [self._convert(arg, dtype, coord)
                      for arg, dtype in zip(arguments, selected.parameters)]
         return Expression(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
-                                          c_ast.ExprList(converted, coord), coord), selected.dtype)
+                                          c_ast.ExprList(converted, coord), coord), unqualified(selected.dtype))
 
     def _primary(self):
         token = self.cursor.take()
+        if token.value == "nullptr":
+            if self.parsing_template:
+                raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
+            return self._literal("int", "0", "nullptr", token.coord)
         if token.value == "(":
             expression = self._expression()
             self._expect(")")
@@ -700,6 +861,8 @@ class CppParser:
                                  "bool", token.coord)
             return Expression(node, "bool")
         if self._is_type(token):
+            if token.value in ("const", "volatile"):
+                self._unsupported(token, "qualified functional cast type")
             dtype = (canonical_type([token.value]) if token.value in TYPE_WORDS
                      else self.scope.lookup(token.value).dtype)
             self._expect("(")
