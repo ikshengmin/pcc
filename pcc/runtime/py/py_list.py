@@ -766,13 +766,63 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
     if length >= capacity:
+        full_items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
         pcc_py_gc_minor_graph_unlock()
-        return 0
+        return _append_grow_gc0(list_slot, item_slot, full_items, capacity)
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     result: int = pcc_gc_try_init_ptr_locked(ptr_add(items, length * C_POINTER_SIZE), item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
     pcc_py_gc_minor_graph_unlock()
+    return result
+
+
+def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
+    """Double a full GC0 list's owner array and take the append with it.
+
+    The general route was a lease and four more graph transactions. The new
+    array is allocated outside the lock; the commit rechecks that the list
+    still owns the same array and capacity, copies the owners as raw words
+    (as _grow_if_needed does on GC0), publishes the array and retains the
+    item into the first free position. Any change in between, or a failed
+    retain, leaves the general path, which finds the room or grows again.
+    """
+    if ptr_is_null(old_items) != 0 or old_capacity <= 0 or old_capacity > 67108864:
+        return 0
+    new_capacity: int = old_capacity * 2
+    new_items = malloc(new_capacity * C_POINTER_SIZE)
+    if ptr_is_null(new_items) != 0:
+        return 0
+    pcc_py_gc_minor_graph_lock()
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
+            or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
+            or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+        pcc_py_gc_minor_graph_unlock()
+        free(new_items)
+        return 0
+    lst = load_ptr(list_slot, 0)
+    if not _list_is_sane(lst, -101):
+        pcc_py_gc_minor_graph_unlock()
+        free(new_items)
+        return -2
+    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+    if ((load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) != 0
+            or ptr_eq(load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET), old_items) == 0
+            or load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET) != old_capacity
+            or length < 0 or length > old_capacity):
+        pcc_py_gc_minor_graph_unlock()
+        free(new_items)
+        return 0
+    memmove(new_items, old_items, length * C_POINTER_SIZE)
+    memset(ptr_add(new_items, length * C_POINTER_SIZE), 0, (new_capacity - length) * C_POINTER_SIZE)
+    store_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET, new_items)
+    store_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET, new_capacity)
+    result: int = pcc_gc_try_init_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
+    if result != 0:
+        store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
+    pcc_py_gc_minor_graph_unlock()
+    free(old_items)
     return result
 
 
