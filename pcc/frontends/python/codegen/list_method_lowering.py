@@ -97,7 +97,19 @@ def _stable_parameter_exact_list_guard(host, receiver, span):
     # query so a mutation during a callback cannot validate an older result.
     host.builder.store(ir.Constant(_I1, 0), ready)
     host.builder.store(current_epoch, epoch)
-    tag = host._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=span)
+    # As builtin isinstance does: the tag is read at once, with no gate or
+    # callback before it finishes, and collectors relocate only at gates, so
+    # one borrowed read-barrier load needs no address lease. A tag read
+    # raises nothing to check for.
+    current = host.builder.call(
+        host.runtime["pcc_gc_load_borrowed_ptr"],
+        [ir.Constant(_CSTR, None), host._as_gc_ptr(receiver)],
+        name=host._fresh("list.parameter.guard.current"),
+    )
+    tag = host.builder.call(
+        host.runtime["py_obj_type_tag"], [current],
+        name=host._fresh("list.parameter.guard.tag"),
+    )
     exact = host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST))
     host.builder.store(exact, value)
     host.builder.store(ir.Constant(_I1, 1), ready)

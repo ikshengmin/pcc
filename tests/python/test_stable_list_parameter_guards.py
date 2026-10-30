@@ -109,3 +109,24 @@ def test_stable_list_guards_preserve_dynamic_semantics_five_gc(tmp_path, pcc_run
         assert (result.returncode, result.stdout, result.stderr) == (
             0, reference.stdout, "",
         ), gc
+
+
+def test_guard_query_reads_the_parameter_tag_without_a_lease(monkeypatch):
+    # Like builtin isinstance: the tag is read at once with no gate or
+    # callback before it finishes, so one borrowed read-barrier load needs
+    # no address lease, and a tag read raises nothing to check for.
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    typed = infer_module(parse_and_lift(PROGRAM, "list_guards.py", "list_guards"))
+    generator = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+    generator._strict_no_libpython = True
+    generator._prefer_native_callable_values = True
+    text = str(generator.generate(typed))
+    for function in ("exercise", "pair", "recursive"):
+        body = re.search(r"^define [^\n]*@user_list_guards_" + function + r"\(.*?^}",
+                         text, re.M | re.S).group(0)
+        queries = re.findall(r"^list\.parameter\.guard\.query[\w.]*:\n(.*?)(?=^[\w.$-]+:\n|^})",
+                             body, re.M | re.S)
+        assert queries, function
+        for query in queries:
+            assert "@pcc_gc_load_borrowed_ptr(" in query and "@py_obj_type_tag(" in query
+            assert "lease" not in query and "@py_err_occurred(" not in query
