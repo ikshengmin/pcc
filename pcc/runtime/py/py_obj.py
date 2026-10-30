@@ -765,6 +765,38 @@ def pcc_gc_store_field_ptr(owner, slot, value) -> None:
     pcc_gc_store_ptr_plan_finish(plan)
 
 
+@c_abi_export("pcc_gc_store_field_ptr_if_empty")
+def pcc_gc_store_field_ptr_if_empty(owner, slot, value) -> int:
+    """pcc_gc_store_field_ptr for an unbound (NULL) field only.
+
+    Returns 1 when ``value`` was stored (the field retains it) and 0 when
+    the field was already bound and is left unchanged. The test and the
+    store share one transaction, so concurrent first stores (a lazily
+    created instance __dict__) install exactly one value.
+    """
+    if ptr_is_null(slot):
+        return 0
+    if pcc_threads_enabled() == 0:
+        if ptr_is_null(load_ptr(slot, 0)) == 0:
+            return 0
+        pcc_gc_store_ptr(owner, slot, value)
+        return 1
+    backend: int = 0
+    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
+        backend = pcc_gc_backend()
+    else:
+        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    plan = stack_alloc(128)
+    pcc_gc_store_ptr_plan_init(plan, owner, backend)
+    stored: int = 0
+    pcc_py_gc_minor_graph_lock()
+    if ptr_is_null(pcc_gc_load_ptr(owner, slot)) != 0:
+        stored = pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_ptr_plan_finish(plan)
+    return stored
+
+
 @c_abi_export("pcc_gc_store_ptr_fresh_native_instance")
 def pcc_gc_store_ptr_fresh_native_instance(owner, slot, value) -> None:
     if ptr_is_null(slot):

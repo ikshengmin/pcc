@@ -265,6 +265,9 @@ py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_field_ptr = extern("pcc_gc_store_field_ptr", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_gc_store_field_ptr_if_empty = extern(
+    "pcc_gc_store_field_ptr_if_empty", (c_ptr, c_ptr, c_ptr), c_int64
+)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
@@ -1492,6 +1495,35 @@ def _dynamic_attr_slot(inst):
     return _instance_reserved_owner_slot(inst, cls)
 
 
+def _instance_dynamic_dict(inst, create: int):
+    """The instance's attribute dict (borrowed), or NULL.
+
+    With ``create`` a missing dict is made and stored only if the slot is
+    still empty; a dict another mutator stored first is used instead. Two
+    threads that each stored their own dict lost the other's attributes,
+    and the dict they replaced was freed under the thread still inserting
+    into it. The slot is otherwise written only for a private instance
+    (construction, copy) and at deallocation, so a dict read from it stays
+    valid while the caller holds the instance.
+    """
+    dyn_slot = _dynamic_attr_slot(inst)
+    if ptr_is_null(dyn_slot) != 0:
+        return null()
+    dyn = pcc_gc_load_ptr(inst, dyn_slot)
+    if ptr_is_null(dyn) == 0 or create == 0:
+        return dyn
+    fresh = py_dict_new()
+    if ptr_is_null(fresh) != 0:
+        return null()
+    # The allocation can move the instance on a relocating collector; the
+    # interior slot address is derived again from the reloaded instance.
+    dyn_slot = _dynamic_attr_slot(inst)
+    pcc_gc_store_field_ptr_if_empty(inst, dyn_slot, fresh)
+    # The field retained ``fresh`` if it stored it; a losing dict dies here.
+    py_decref(fresh)
+    return pcc_gc_load_ptr(inst, dyn_slot)
+
+
 def _copy_instance_reserved_owner(obj, dst, cls) -> None:
     # The surrounding legacy replace entry still owns its raw object-entry
     # contract. Within this physical copy, heal the owning source and publish
@@ -1578,11 +1610,9 @@ def py_instance_vars(inst):
                 py_dict_set(out, key, value)
                 py_decref(key)
         i = i + 1
-    dyn_slot = _dynamic_attr_slot(inst)
-    if ptr_is_null(dyn_slot) == 0:
-        dyn = pcc_gc_load_ptr(inst, dyn_slot)
-        if ptr_is_null(dyn) == 0:
-            py_dict_update(out, dyn)
+    dyn = _instance_dynamic_dict(inst, 0)
+    if ptr_is_null(dyn) == 0:
+        py_dict_update(out, dyn)
     return out
 
 
@@ -3331,21 +3361,9 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
             py_incref(cls)
         return cls
     if _cstr_is_dunder_dict(name) != 0:
-        dyn_slot = _dynamic_attr_slot(inst)
-        if ptr_is_null(dyn_slot) != 0:
-            return null()
-        dyn = pcc_gc_load_ptr(inst, dyn_slot)
-        if ptr_is_null(dyn) != 0:
-            dyn = py_dict_new()
-            if ptr_is_null(dyn) != 0:
-                return null()
-            dyn = _instance_lookup_hold(slots, pins, 2, dyn, 0)
-            pcc_gc_store_field_ptr(inst, dyn_slot, dyn)
-            if field_fallback_rooted == 0:
-                py_decref(dyn)
-        else:
-            dyn = _instance_lookup_hold(slots, pins, 2, dyn, 1)
-        py_incref(dyn)
+        dyn = _instance_dynamic_dict(inst, 1)
+        if ptr_is_null(dyn) == 0:
+            py_incref(dyn)
         return dyn
     class_attr = _instance_lookup_hold(
         slots, pins, 1, _class_attr_lookup_in_mro(cls, name), 0,
@@ -3390,29 +3408,27 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         # A later direct slot store must immediately shadow a callable class
         # default; a cached method outcome cannot observe that store.
         method_cacheable = 0
-    dyn_slot = _dynamic_attr_slot(inst)
-    if ptr_is_null(dyn_slot) == 0:
-        dyn = pcc_gc_load_ptr(inst, dyn_slot)
-        if ptr_is_null(dyn) == 0:
-            method_cacheable = 0
-            dyn = _instance_lookup_hold(slots, pins, 2, dyn, 1)
-            key = _instance_lookup_hold(slots, pins, 3, py_str_new(name, strlen(name)), 0)
-            if ptr_is_null(key) != 0:
-                return _class_require_result(null(), cstr("py_str_new"),
-                                             cstr("instance attribute key allocation failed"))
-            got = py_dict_get(dyn, key)
+    dyn = _instance_dynamic_dict(inst, 0)
+    if ptr_is_null(dyn) == 0:
+        method_cacheable = 0
+        dyn = _instance_lookup_hold(slots, pins, 2, dyn, 1)
+        key = _instance_lookup_hold(slots, pins, 3, py_str_new(name, strlen(name)), 0)
+        if ptr_is_null(key) != 0:
+            return _class_require_result(null(), cstr("py_str_new"),
+                                         cstr("instance attribute key allocation failed"))
+        got = py_dict_get(dyn, key)
+        if field_fallback_rooted == 0:
+            py_decref(key)
+        if ptr_is_null(got) == 0:
+            if ptr_is_null(class_attr) != 0 and idx < 0:
+                _attr_res_store_dict_only(cls, name, outcome_epoch)
             if field_fallback_rooted == 0:
-                py_decref(key)
-            if ptr_is_null(got) == 0:
-                if ptr_is_null(class_attr) != 0 and idx < 0:
-                    _attr_res_store_dict_only(cls, name, outcome_epoch)
-                if field_fallback_rooted == 0:
-                    py_decref(class_attr)
-                return got
-            if py_err_occurred() != 0:
-                if field_fallback_rooted == 0:
-                    py_decref(class_attr)
-                return null()
+                py_decref(class_attr)
+            return got
+        if py_err_occurred() != 0:
+            if field_fallback_rooted == 0:
+                py_decref(class_attr)
+            return null()
     if ptr_is_null(class_attr) == 0:
         if is_tagged_int(class_attr) == 0:
             if load_i32(class_attr, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
@@ -3618,16 +3634,9 @@ def py_instance_setattr(inst, name, value) -> int:
         return 0
     if ptr_is_null(value) != 0:
         return -1
-    dyn_slot = _dynamic_attr_slot(inst)
-    if ptr_is_null(dyn_slot) != 0:
-        return -1
-    dyn = pcc_gc_load_ptr(inst, dyn_slot)
+    dyn = _instance_dynamic_dict(inst, 1)
     if ptr_is_null(dyn) != 0:
-        dyn = py_dict_new()
-        if ptr_is_null(dyn) != 0:
-            return -1
-        pcc_gc_store_field_ptr(inst, dyn_slot, dyn)
-        py_decref(dyn)
+        return -1
     key = py_str_new(name, strlen(name))
     py_dict_set(dyn, key, value)
     py_decref(key)
@@ -3658,10 +3667,7 @@ def py_instance_delattr(inst, name) -> int:
         if _instance_field_clear(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + idx * C_POINTER_SIZE) != 1:
             return -1
         return 0
-    dyn_slot = _dynamic_attr_slot(inst)
-    if ptr_is_null(dyn_slot) != 0:
-        return -1
-    dyn = pcc_gc_load_ptr(inst, dyn_slot)
+    dyn = _instance_dynamic_dict(inst, 0)
     if ptr_is_null(dyn) != 0:
         return -1
     key = py_str_new(name, strlen(name))

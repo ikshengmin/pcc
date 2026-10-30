@@ -132,7 +132,7 @@ def test_pcc_python_ports_mirror_gc_store_ptr_paths():
         ],
         RUNTIME_PY / "py_class.py": [
             "pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)",
-            "pcc_gc_store_field_ptr(inst, dyn_slot, dyn)",
+            "pcc_gc_store_field_ptr_if_empty(inst, dyn_slot, fresh)",
         ],
         RUNTIME_PY / "py_func.py": [
             "pcc_gc_store_ptr(fn, ptr_add(fn, 64), captures)",
