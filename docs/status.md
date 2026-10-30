@@ -333,6 +333,34 @@ of the sync payload (list and dict deallocation), pin/unpin cost two atomics
 each (4.7%), and an exact-list parameter guard query checks the TLS
 exception twice around `py_obj_type_tag`, which cannot raise.
 
+Fixed afterwards (2026-10-30, on the squashed history `93f1a039f`): shared
+instance fields rebound by one carrier while others read them failed on all
+five collectors (GC0 aborted `[BAD_INCREF]` 5/5, GC4 readers saw reused
+objects 5/5); readers now load and retain inside a graph transaction, GC0
+`pcc_gc_store_ptr` takes the store-plan transaction with threads enabled,
+and delattr clears inside one (`5797d612f`). A str subclass hashes its
+payload, so dict and set keys agree with an equal str, and a class with
+`__eq__` but no `__hash__` raises CPython's unhashable TypeError
+(`236c9d2df`). sorted(), list.sort() and py_obj_sorted run one port of
+CPython 3.15.0's listsort, so NaNs land where CPython puts them
+(`909160712`). Still open, with repros: module globals and class
+attributes rebound while other carriers read them crash or misread like
+the fields did (`tests/python/test_shared_slot_concurrent_access.py` has
+the `global` and `class` shapes; a reader loads `@.modvar` raw and retains
+after, and its borrowed value can cross a safepoint, so the fix needs owned
+reads of rebindable globals in codegen, not a writer-side change only);
+the GC3 `[DEBUG-dict-slot]` abort under
+PCC_GC_MINOR_HEAP_SIZE=4096 PCC_GC_MINOR_ALLOC_MAX=128 is a forwarding
+target reference released early or twice relative to the dict slot that
+names its shell or copy, not a plain unhealed slot (both runs recorded in
+the README's `open-gc3-dict-slot/NOTE.md`); int, float, bytes and frozenset
+subclasses keep no builtin payload (`I(5) == 5` is False); `random.Random(5)`
+and `random.seed` produce a different stream from CPython's MT19937;
+unhashable dict and set keys raise hash()'s message instead of 3.14's
+"cannot use 'X' as a dict key (...)"; `{}.pop([], 0)` raises instead of
+returning the default; `set().add([])` inside a lambda fails to compile
+("slot-call operand has no authoritative source or owned result: Call").
+
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
 Current route, at the user's explicit request: **arm1:8084 first, us1:8089
