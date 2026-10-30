@@ -18,6 +18,12 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+# Raw library functions require explicit C-ABI declarations, including helpers.
+# The current decorator emits external linkage, so implementation-only helpers
+# use the pcc_linux_elf_image__ namespace, like freestanding_re_engine's core
+# helpers. These are not additional caller-facing image operations or host-table
+# exports: callers use only pcc_linux_elf_image_{open,symbol,close} below.
+
 # Private image record. All addresses refer to raw owned storage, never to a
 # second Python object heap. The file copy owns symbol/name metadata too.
 _FILE = 0
@@ -49,20 +55,24 @@ IMAGE_SYSTEM = 5
 IMAGE_RELOCATION = 6
 
 
+@c_abi_export("pcc_linux_elf_image__u16")
 def _u16(data: c_ptr, offset: i64) -> i64:
     return (load_i8(data, offset) & 255) | ((load_i8(data, offset + 1) & 255) << 8)
 
 
+@c_abi_export("pcc_linux_elf_image__u32")
 def _u32(data: c_ptr, offset: i64) -> i64:
     return load_i32(data, offset) & 4294967295
 
 
+@c_abi_export("pcc_linux_elf_image__span")
 def _span(offset: i64, length: i64, size: i64) -> i64:
     if offset < 0 or length < 0 or offset > size or length > size - offset:
         return 0
     return 1
 
 
+@c_abi_export("pcc_linux_elf_image__same")
 def _same(left: c_ptr, right: c_ptr) -> i64:
     index: i64 = 0
     while load_i8(left, index) == load_i8(right, index):
@@ -72,6 +82,7 @@ def _same(left: c_ptr, right: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__name_length")
 def _name_length(table: c_ptr, size: i64, offset: i64, ascii_only: i64) -> i64:
     if offset < 0 or offset >= size:
         return -1
@@ -86,6 +97,7 @@ def _name_length(table: c_ptr, size: i64, offset: i64, ascii_only: i64) -> i64:
     return -1
 
 
+@c_abi_export("pcc_linux_elf_image__contains")
 def _contains(name: c_ptr, pattern: c_ptr) -> i64:
     start: i64 = 0
     while load_i8(name, start) != 0:
@@ -100,6 +112,7 @@ def _contains(name: c_ptr, pattern: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__unsupported_section_name")
 def _unsupported_section_name(name: c_ptr, length: i64) -> i64:
     if length >= 5:
         tail = ptr_add(name, length - 5)
@@ -113,14 +126,17 @@ def _unsupported_section_name(name: c_ptr, length: i64) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__section")
 def _section(image: c_ptr, index: i64) -> c_ptr:
     return ptr_add(load_ptr(image, _SECTIONS), index * 64)
 
 
+@c_abi_export("pcc_linux_elf_image__symbol")
 def _symbol(image: c_ptr, index: i64) -> c_ptr:
     return ptr_add(load_ptr(image, _SYMBOLS), index * 24)
 
 
+@c_abi_export("pcc_linux_elf_image__host_address")
 def _host_address(hosts: c_ptr, name: c_ptr) -> c_ptr:
     count: i64 = load_i64(hosts, 8)
     index: i64 = 0
@@ -132,6 +148,7 @@ def _host_address(hosts: c_ptr, name: c_ptr) -> c_ptr:
     return null()
 
 
+@c_abi_export("pcc_linux_elf_image__validate_headers")
 def _validate_headers(image: c_ptr) -> i64:
     data = load_ptr(image, _FILE)
     size: i64 = load_i64(image, _FILE_SIZE)
@@ -255,6 +272,7 @@ def _validate_headers(image: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__validate_note_and_symbols")
 def _validate_note_and_symbols(image: c_ptr, hosts: c_ptr) -> i64:
     section = _section(image, load_i64(image, _NOTE_INDEX))
     note = ptr_add(load_ptr(image, _FILE), load_i64(section, 24))
@@ -343,6 +361,7 @@ def _validate_note_and_symbols(image: c_ptr, hosts: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__relocation_width")
 def _relocation_width(kind: i64) -> i64:
     if kind == 0:
         return 0
@@ -353,6 +372,7 @@ def _relocation_width(kind: i64) -> i64:
     return -1
 
 
+@c_abi_export("pcc_linux_elf_image__validate_relocations")
 def _validate_relocations(image: c_ptr) -> i64:
     index: i64 = load_i64(image, _NOTE_INDEX) + 1
     while index < load_i64(image, _SYMTAB_INDEX):
@@ -397,6 +417,7 @@ def _validate_relocations(image: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__dispose")
 def _dispose(image: c_ptr) -> i64:
     # The size, not pointer truthiness, records a successful mmap: address zero
     # is still an owned mapping when the range check rejects it.
@@ -410,6 +431,7 @@ def _dispose(image: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__map_sections")
 def _map_sections(image: c_ptr) -> i64:
     count: i64 = load_i64(image, _SECTION_COUNT)
     addresses = calloc(count, 8)
@@ -454,6 +476,7 @@ def _map_sections(image: c_ptr) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__resolve_symbols")
 def _resolve_symbols(image: c_ptr, hosts: c_ptr) -> None:
     index: i64 = 1
     while index < load_i64(image, _SYMBOL_COUNT):
@@ -468,6 +491,7 @@ def _resolve_symbols(image: c_ptr, hosts: c_ptr) -> None:
         index = index + 1
 
 
+@c_abi_export("pcc_linux_elf_image__apply_one")
 def _apply_one(patch: c_ptr, target: i64, addend: i64, kind: i64) -> i64:
     if kind == 0:
         return 0
@@ -500,6 +524,7 @@ def _apply_one(patch: c_ptr, target: i64, addend: i64, kind: i64) -> i64:
     return 0
 
 
+@c_abi_export("pcc_linux_elf_image__relocate_and_protect")
 def _relocate_and_protect(image: c_ptr) -> i64:
     index: i64 = load_i64(image, _NOTE_INDEX) + 1
     while index < load_i64(image, _SYMTAB_INDEX):
