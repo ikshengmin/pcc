@@ -405,7 +405,7 @@ int main(void) {
     PyObject *field_got = py_instance_get_field(inst, 0);
     printf("%d\\n", field_got == g_sentinel);
 
-    /* class: borrowed bases/mro + update-only method and __del__
+    /* class: borrowed bases + update-only MRO, method and __del__
      * metadata + owned attrs and metaclass (a retaining relation since
      * f3a043008, stored through its public setter) */
     PyClassObject *base_cls = py_class_new("Base", NULL, 0, NULL, 0);
@@ -432,7 +432,7 @@ int main(void) {
     klass->attrs = py_dict_new();
     py_class_set_metaclass(klass, meta_cls);
     g_rewrite_target = klass->attrs;
-    printf("%d\\n", visit_expect((PyObject *)klass, 2, 2, 2));
+    printf("%d\\n", visit_expect((PyObject *)klass, 2, 1, 3));
     printf("%d\\n", klass->attrs == g_sentinel);
     return 0;
 }
