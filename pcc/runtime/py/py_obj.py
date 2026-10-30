@@ -2187,7 +2187,12 @@ def _py_decref_finish(prepared) -> None:
         py_weakref_invalidate(o)
     if delay_zpage_freeing_note == 0 and delay_instance_metadata == 0:
         pcc_gc_note_object_freeing(o)
-    if delay_instance_metadata == 0:
+    # untrack takes the tracked-shard lock before it reads TRACKED. The count
+    # that reached zero was acquire-release and nothing tracks an object no
+    # one else references, so a death that was never tracked skips it. Read
+    # the flag now: another owner may have tracked the object after
+    # ``flags`` was sampled (a dict that gained a container value).
+    if delay_instance_metadata == 0 and (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_TRACKED) != 0:
         py_gc_untrack(o)
     watch = stack_alloc(GC_FREE_WATCH_BYTES)
     watched: int = 0
