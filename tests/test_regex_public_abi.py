@@ -19,6 +19,7 @@ PUBLIC = {
     "pcc_re_engine_supported": ("ptr",),
     "pcc_re_engine_supported_flags": ("ptr", "i64"),
     "pcc_re_engine_run_flags": ("ptr", "i64", "ptr", "i64", "i64", "i32", "ptr", "i32", "ptr"),
+    "pcc_re_engine_fullmatch_flags": ("ptr", "i64", "ptr", "i64", "i64", "ptr", "i32", "ptr"),
     "pcc_re_engine_run_from": ("ptr", "ptr", "i64", "i64", "i32", "ptr", "i32", "ptr"),
     "pcc_re_engine_run": ("ptr", "ptr", "i64", "i32", "ptr", "i32", "ptr"),
     "pcc_re_engine_group_names_flags": ("ptr", "i64", "ptr", "i32"),
@@ -63,7 +64,13 @@ def test_bridge_declaration_matches_provider_widths(name):
 
 def test_capacity_and_status_guards_remain_exact():
     functions = _core_functions()
-    run = functions["_run_flags"]
+    run = functions["_run_mode_flags"]
+    wrapper = functions["_run_flags"]
+    assert len(wrapper.body) == 1 and isinstance(wrapper.body[0], ast.Return)
+    call = wrapper.body[0].value
+    assert isinstance(call, ast.Call) and call.func.id == "_run_mode_flags"
+    assert [arg.id for arg in call.args[:-1]] == [arg.arg for arg in wrapper.args.args]
+    assert ast.literal_eval(call.args[-1]) == 0
     expected = ast.dump(ast.parse("caps_length < needed", mode="eval").body)
     guards = [node for node in ast.walk(run) if isinstance(node, ast.If)
               and ast.dump(node.test) == expected]
@@ -125,7 +132,7 @@ def test_real_export_ir_and_elf_have_matching_public_widths(tmp_path, monkeypatc
     defined = {symbol.name for symbol in obj.symbols if symbol.section_index != SHN_UNDEF}
     assert set(PUBLIC) <= defined
     undefined = {symbol.name for symbol in obj.symbols if symbol.section_index == SHN_UNDEF and symbol.name}
-    providers = {"pcc_re_core__run_flags", "pcc_re_core__compiled_program",
+    providers = {"pcc_re_core__run_flags", "pcc_re_core__run_mode_flags", "pcc_re_core__compiled_program",
                  "pcc_re_core__cstrlen", "pcc_re_core__copy_bytes"}
     assert providers <= defined
     assert providers.isdisjoint(undefined)

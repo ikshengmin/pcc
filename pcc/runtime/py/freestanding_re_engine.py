@@ -1296,7 +1296,9 @@ def _compiled_program(pattern, flags: i64, scratch, program_out) -> i64:
 
 
 # Matcher context is 176 raw bytes: program/text/caps pointers, lengths,
-# sixteen empty-loop guard slots, recursion depth, and a limit flag.
+# a fullmatch requirement at offset 36, sixteen empty-loop guard slots,
+# recursion depth, and a limit flag. The requirement belongs to each run,
+# never to the cached program shared by match/search/fullmatch.
 
 
 @c_abi_export("pcc_re_core__fold_byte")
@@ -1625,6 +1627,12 @@ def _match(context, pc: i64, position: i64) -> i64:
             pc = load_i32(instruction, 24)
             continue
         if kind == 11:
+            # Reject a short alternative while its backtracking choices are
+            # still live. A post-check of caps[1] would lose those choices.
+            # Assertion success (kind 20) intentionally has no end constraint.
+            if load_i32(context, 36) != 0 and position != length:
+                store_i32(context, 168, load_i32(context, 168) - 1)
+                return 0
             caps = load_ptr(context, 24)
             store_i64(caps, 8, position)
             store_i32(context, 168, load_i32(context, 168) - 1)
@@ -1633,8 +1641,8 @@ def _match(context, pc: i64, position: i64) -> i64:
         return 0
 
 
-@c_abi_export("pcc_re_core__run_flags")
-def _run_flags(
+@c_abi_export("pcc_re_core__run_mode_flags")
+def _run_mode_flags(
     pattern,
     flags: i64,
     text,
@@ -1644,6 +1652,7 @@ def _run_flags(
     caps,
     caps_length: i64,
     groups_out,
+    fullmatch: i64,
 ) -> i64:
     if (
         ptr_is_null(pattern) != 0
@@ -1678,9 +1687,12 @@ def _run_flags(
     store_i64(context, 16, text_length)
     store_ptr(context, 24, caps)
     store_i32(context, 32, needed)
+    store_i32(context, 36, fullmatch)
     position: i64 = start
     last_position: i64 = start
     if search != 0:
+        last_position = text_length
+    if fullmatch != 0 and start > text_length:
         last_position = text_length
     while position <= last_position:
         index: i64 = 0
@@ -1705,6 +1717,24 @@ def _run_flags(
         store_i64(caps, index * 8, -1)
         index = index + 1
     return 0
+
+
+@c_abi_export("pcc_re_core__run_flags")
+def _run_flags(
+    pattern,
+    flags: i64,
+    text,
+    text_length: i64,
+    start: i64,
+    search: i64,
+    caps,
+    caps_length: i64,
+    groups_out,
+) -> i64:
+    return _run_mode_flags(
+        pattern, flags, text, text_length, start, search,
+        caps, caps_length, groups_out, 0,
+    )
 
 
 # Public regex ABI uses C int status/search/capacity fields. Keep internal
@@ -1758,6 +1788,33 @@ def pcc_re_engine_run_flags(
         caps,
         caps_length,
         groups_out,
+    )
+
+
+@c_abi_typed_export("pcc_re_engine_fullmatch_flags", "i32", ("ptr", "i64", "ptr", "i64", "i64", "ptr", "i32", "ptr"))
+def pcc_re_engine_fullmatch_flags(
+    pattern,
+    flags: i64,
+    text,
+    text_length: i64,
+    start: i64,
+    caps,
+    caps_length: i64,
+    groups_out,
+) -> i64:
+    # text_length is the effective endpos, while text keeps its original
+    # beginning so anchors and capture offsets retain their ordinary meaning.
+    return _run_mode_flags(
+        pattern,
+        flags,
+        text,
+        text_length,
+        start,
+        0,
+        caps,
+        caps_length,
+        groups_out,
+        1,
     )
 
 

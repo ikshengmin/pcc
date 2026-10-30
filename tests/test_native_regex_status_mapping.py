@@ -133,7 +133,7 @@ def test_error_mapping_uses_only_literal_messages_and_owned_raise():
     ],
 )
 def test_low_level_source_status_contract(condition, status):
-    function = _function(CORE, "_run_flags")
+    function = _function(CORE, "_run_mode_flags")
     expected = ast.dump(ast.parse(condition, mode="eval").body)
     branches = [
         node
