@@ -11,6 +11,10 @@ released the same old value twice.
 Writers now swap a shared slot inside a graph transaction and release the old
 value after it; readers load and retain inside one. Closure cells (a list
 item) already did. Every shape runs on four carriers and five collectors.
+
+On GC0 a field read takes no transaction when the field holds NULL, a tagged
+int or a static singleton: no writer can free those. The mixed shape rebinds
+a field between such values and lists while readers check every value.
 """
 
 from __future__ import annotations
@@ -60,6 +64,18 @@ def store(seed, step):
     global glob
     if SHAPE == "field":
         box.value = [seed, step]
+    elif SHAPE == "mixed":
+        kind = step % 5
+        if kind == 0:
+            box.value = step
+        elif kind == 1:
+            box.value = None
+        elif kind == 2:
+            box.value = True
+        elif kind == 3:
+            box.value = False
+        else:
+            box.value = [seed, step]
     elif SHAPE == "global":
         glob = [seed, step]
     elif SHAPE == "cell":
@@ -69,7 +85,7 @@ def store(seed, step):
 
 
 def load():
-    if SHAPE == "field":
+    if SHAPE == "field" or SHAPE == "mixed":
         return box.value
     if SHAPE == "global":
         return glob
@@ -88,11 +104,19 @@ def writer(seed):
     return seed
 
 
+def valid(value):
+    if value is None or value is True or value is False:
+        return SHAPE == "mixed"
+    if isinstance(value, list):
+        return len(value) == 2
+    return SHAPE == "mixed" and isinstance(value, int) and 0 <= value < 20000
+
+
 def reader(seed):
     bad = 0
     step = 0
     while step < 20000:
-        if len(load()) != 2:
+        if not valid(load()):
             bad += 1
         if step % 500 == 0:
             vt.yield_now()
@@ -124,7 +148,7 @@ def shared_slot_program(tmp_path_factory, threaded_pcc_runtime_archive):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("shape", ("field", "cell"))
+@pytest.mark.parametrize("shape", ("field", "mixed", "cell"))
 def test_shared_slot_rebound_while_read_on_four_carriers(shared_slot_program, shape):
     expected = f"{shape} [0, 1, 2, 0, 0, 0] 2\n"
     for backend in range(5):
