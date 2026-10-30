@@ -118,11 +118,12 @@ class CppParserTests(unittest.TestCase):
     def test_semantic_errors_are_not_forwarded_to_c(self):
         self.diagnostic("int f(int x){int x=3;return x;}", "cpp.redeclaration")
         self.diagnostic("int main(){return missing;}", "cpp.undeclared")
-        self.diagnostic("int f(int x){return x;} int main(){return f();}", "cpp.call-arity")
+        self.diagnostic("int f(int x){return x;} int main(){return f();}", "cpp.no-viable-overload")
         self.diagnostic("int f(){return 1;} int f(){return 2;}", "cpp.redefinition")
 
-    def test_unimplemented_overload_and_templates_are_explicit(self):
-        self.diagnostic("int f(int); int f(int,int);", "cpp.unsupported.overload")
+    def test_arity_overloads_and_unimplemented_templates(self):
+        ast = self.parse("int f(int); int f(int,int); int main(){return f(1,2);}")
+        self.assertEqual(ast.ext[2].body.block_items[0].expr.name.name, "_Z1fii")
         self.diagnostic("template<class T> T f(T x){return x;}", "cpp.unsupported.templates")
 
     def test_lifetimes_and_exceptions_are_never_dropped(self):
@@ -152,8 +153,10 @@ class CppParserTests(unittest.TestCase):
         self.assertEqual(expr.left.value, "16")
         self.assertEqual(expr.right.op, "*")
         self.assertEqual(expr.right.right.value, "3")
-        self.diagnostic("int main(){return 2147483648;}", "cpp.unsupported.syntax")
-        self.diagnostic("int main(){return 1u;}", "cpp.unsupported.syntax")
+        large = self.parse("long f(){return 2147483648;}")
+        self.assertEqual(large.ext[0].body.block_items[0].expr.value, "2147483648l")
+        unsigned = self.parse("unsigned f(){return 1u;}")
+        self.assertEqual(unsigned.ext[0].body.block_items[0].expr.value, "1u")
         self.diagnostic("int main(){return 09;}", "cpp.invalid-literal")
 
 

@@ -1,6 +1,6 @@
 """Handwritten C++ parser with semantic lookup and reversible lookahead.
 
-The first increment accepts int-only free functions and block statements. It
+This increment accepts arithmetic free functions and block statements. It
 builds the existing C AST only *after* resolving names and checking supported
 semantics. It does not rewrite source text, invoke the C parser, or discard C++
 lifetime/exception/template semantics. Those features are explicit errors.
@@ -10,7 +10,10 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
-from pcc.frontends.cpp.sema import Scope, Symbol
+from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
+from pcc.frontends.cpp.types import (
+    ArithmeticTypes, TYPE_WORDS, canonical_type, c_type_names,
+)
 
 
 _KEYWORDS = frozenset(
@@ -82,15 +85,20 @@ class TentativeParse:
 
 
 class Expression:
-    def __init__(self, node, lvalue=False, symbol=None):
+    def __init__(self, node, dtype="int", lvalue=False, symbol=None):
         self.node = node
+        self.dtype = dtype
         self.lvalue = lvalue
         self.symbol = symbol
 
 
 class CppParser:
+    def __init__(self, target_triple=None):
+        self.types = ArithmeticTypes(target_triple)
+
     def parse(self, text, filename=""):
         self.scope = Scope()
+        self.return_type = None
         self.cursor = TokenCursor(self._tokenize(text, filename))
         declarations = []
         while self._peek().kind != "EOF":
@@ -152,28 +160,46 @@ class CppParser:
         return self.cursor.take()
 
     def _is_type(self, token):
-        return token.value == "int" or self.scope.is_type_name(token.value)
+        return token.value in TYPE_WORDS or self.scope.is_type_name(token.value)
 
-    def _type(self):
+    def _check_value_type(self, dtype, token):
+        if not self.types.value_lowering_supported(dtype):
+            raise CppDiagnostic("cpp.unsupported.extended-float",
+                                "target long double value/ABI lowering is not implemented",
+                                token.coord)
+        return dtype
+
+    def _type(self, check_lowering=True):
         token = self._peek()
         if not self._is_type(token):
             if self.scope.lookup(token.value) is not None:
                 raise CppDiagnostic("cpp.not-a-type", f"'{token.value}' does not name a type",
                                     token.coord)
-            self._unsupported(token, "only int and resolved int aliases are implemented")
-        return self.cursor.take()
+            self._unsupported(token, "expected an implemented arithmetic type")
+        if token.value not in TYPE_WORDS:
+            self.cursor.take()
+            dtype = self.scope.lookup(token.value).dtype
+            return self._check_value_type(dtype, token) if check_lowering else dtype
+        words = []
+        while self._peek().value in TYPE_WORDS:
+            words.append(self.cursor.take().value)
+        try:
+            dtype = canonical_type(words)
+        except ValueError as error:
+            raise CppDiagnostic("cpp.invalid-type", str(error), token.coord)
+        return self._check_value_type(dtype, token) if check_lowering else dtype
 
     def _alias(self):
         keyword = self.cursor.take()
         if keyword.value == "using":
             name = self._identifier()
             self._expect("=")
-            self._type()
+            dtype = self._type()
         else:
-            self._type()
+            dtype = self._type()
             name = self._identifier()
         self._expect(";")
-        self.scope.declare(Symbol(name.value, "type", name.coord))
+        self.scope.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
 
     def _declarator_name(self):
         if self._accept("("):
@@ -186,22 +212,31 @@ class CppParser:
         if not self._is_type(self._peek()):
             return False
         with self.cursor.tentative():
-            self.cursor.take()
             try:
+                self._type(check_lowering=False)
                 self._declarator_name()
             except CppDiagnostic:
                 return False
             return self._peek().value in (";", "=", "(", ",", "[")
 
     @staticmethod
-    def _int_type(name, coord):
-        return c_ast.TypeDecl(name, [], c_ast.IdentifierType(["int"], coord), coord)
+    def _scalar_type(name, dtype, coord):
+        return c_ast.TypeDecl(name, [], c_ast.IdentifierType(c_type_names(dtype), coord), coord)
 
-    def _decl(self, name, coord, init=None):
-        return c_ast.Decl(name, [], [], [], self._int_type(name, coord), init, None, coord)
+    def _decl(self, name, dtype, coord, init=None):
+        return c_ast.Decl(name, [], [], [], self._scalar_type(name, dtype, coord), init, None, coord)
+
+    def _convert(self, expression, dtype, coord, force=False):
+        self._require_value(expression)
+        if self.types.conversion_rank(expression.dtype, dtype) is None:
+            raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
+        if expression.dtype == dtype and not force:
+            return expression.node
+        typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
+        return c_ast.Cast(typename, expression.node, coord)
 
     def _function(self):
-        self._type()
+        result_type = self._type()
         name = self._identifier()
         self._expect("(")
         params = []
@@ -213,46 +248,47 @@ class CppParser:
                 self._expect(")")
             elif not self._accept(")"):
                 while True:
-                    self._type()
+                    dtype = self._type()
                     param = None
                     if self._peek().value not in (",", ")"):
                         param = self._identifier()
                         # A preceding parameter can hide an outer type in a
                         # later parameter declaration, including prototypes.
-                        self.scope.declare(Symbol(param.value, "value", param.coord))
-                    params.append(param)
+                        self.scope.declare(Symbol(param.value, "value", param.coord, dtype=dtype))
+                    params.append((param, dtype))
                     if self._accept(")"):
                         break
                     self._expect(",")
         finally:
             self.scope = parent
         definition = self._peek().value == "{"
-        # This small fundamental signature has the standard Itanium encoding.
-        # No claim of complete C++ ABI support (in particular not MSVC) is made.
-        c_name = name.value if name.value == "main" else (
-            "_Z" + str(len(name.value)) + name.value + ("i" * len(params) or "v")
-        )
         if name.value == "main" and params:
             self._unsupported(name, "main parameters are not implemented")
+        if name.value == "main" and result_type != "int":
+            raise CppDiagnostic("cpp.main-return-type", "main must return int", name.coord)
         symbol = self.scope.declare_function(
-            Symbol(name.value, "function", name.coord, c_name, len(params)), definition
+            Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
+                   parameters=tuple(dtype for param, dtype in params)), definition
         )
-        param_decls = [self._decl(p.value if p else None, p.coord if p else name.coord)
-                       for p in params]
-        declaration = self._decl(symbol.c_name, name.coord)
+        param_decls = [self._decl(p.value if p else None, dtype, p.coord if p else name.coord)
+                       for p, dtype in params]
+        declaration = self._decl(symbol.c_name, result_type, name.coord)
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(param_decls, name.coord),
                                           declaration.type, name.coord)
         if not definition:
             self._expect(";")
             return declaration
         self.scope = parameter_scope
+        previous_return_type = self.return_type
+        self.return_type = result_type
         try:
-            for param in params:
+            for param, dtype in params:
                 if param is None:
                     self._unsupported(name, "unnamed definition parameters")
             body = self._block(new_scope=False)
         finally:
             self.scope = parent
+            self.return_type = previous_return_type
         if name.value == "main":
             # Reaching the end of main is a C++ return of zero, not C's general
             # fallthrough behavior. Appending after a return is harmless AST.
@@ -290,26 +326,26 @@ class CppParser:
             expression = self._expression()
             self._require_value(expression)
             self._expect(";")
-            return c_ast.Return(expression.node, token.coord)
+            return c_ast.Return(self._convert(expression, self.return_type, token.coord), token.coord)
         if self._is_declaration():
-            self._type()
+            dtype = self._type()
             name = self._declarator_name()
             # The point of declaration precedes the initializer.
-            self.scope.declare(Symbol(name.value, "value", name.coord))
+            self.scope.declare(Symbol(name.value, "value", name.coord, dtype=dtype))
             init = None
             if self._accept("="):
                 expression = self._expression()
                 self._require_value(expression)
-                init = expression.node
+                init = self._convert(expression, dtype, name.coord)
             elif self._accept("("):
                 if self._peek().value == ")" or self._is_type(self._peek()):
                     self._unsupported(self._peek(), "block function declarations")
                 expression = self._expression()
                 self._require_value(expression)
-                init = expression.node
+                init = self._convert(expression, dtype, name.coord)
                 self._expect(")")
             self._expect(";")
-            return self._decl(name.value, name.coord, init)
+            return self._decl(name.value, dtype, name.coord, init)
         expression = self._expression()
         self._require_value(expression)
         self._expect(";")
@@ -332,7 +368,9 @@ class CppParser:
             self._require_value(rhs)
             # Assignment is itself an lvalue in C++, unlike C. Nested uses
             # requiring that difference are rejected until explicitly lowered.
-            return Expression(c_ast.Assignment("=", lhs.node, rhs.node, assignment.coord))
+            return Expression(c_ast.Assignment("=", lhs.node,
+                                               self._convert(rhs, lhs.dtype, assignment.coord),
+                                               assignment.coord), lhs.dtype)
         return lhs
 
     def _binary(self, minimum):
@@ -342,7 +380,13 @@ class CppParser:
             rhs = self._binary(_BINARY_PRECEDENCE[token.value] + 1)
             self._require_value(lhs)
             self._require_value(rhs)
-            lhs = Expression(c_ast.BinaryOp(token.value, lhs.node, rhs.node, token.coord))
+            if token.value in ("%", "&", "|", "^") and not (
+                    self.types.integral(lhs.dtype) and self.types.integral(rhs.dtype)):
+                raise CppDiagnostic("cpp.invalid-operands", "operator requires integral operands",
+                                    token.coord)
+            dtype = self.types.common(lhs.dtype, rhs.dtype)
+            lhs = Expression(c_ast.BinaryOp(token.value, self._convert(lhs, dtype, token.coord),
+                                             self._convert(rhs, dtype, token.coord), token.coord), dtype)
         return lhs
 
     def _unary(self):
@@ -351,7 +395,12 @@ class CppParser:
             self.cursor.take()
             expression = self._unary()
             self._require_value(expression)
-            return Expression(c_ast.UnaryOp(token.value, expression.node, token.coord))
+            if token.value == "~" and not self.types.integral(expression.dtype):
+                raise CppDiagnostic("cpp.invalid-operands", "operator requires an integral operand",
+                                    token.coord)
+            dtype = self.types.promote(expression.dtype)
+            return Expression(c_ast.UnaryOp(token.value, self._convert(expression, dtype, token.coord),
+                                            token.coord), dtype)
         return self._primary()
 
     def _primary(self):
@@ -366,23 +415,33 @@ class CppParser:
                 raise CppDiagnostic("cpp.invalid-literal", "invalid octal integer literal",
                                     token.coord)
             try:
-                base = {"INT_CONST_DEC": 10, "INT_CONST_OCT": 8,
-                        "INT_CONST_HEX": 16, "INT_CONST_BIN": 2}[token.kind]
-                value = int(token.value, base)
-            except ValueError:
-                self._unsupported(token, "integer suffixes and user-defined literals")
-            if value > 2147483647:
-                self._unsupported(token, "literal requires a type wider than int")
-            return Expression(c_ast.Constant("int", str(value), token.coord))
+                dtype, value = self.types.integer_literal(token.value)
+            except ValueError as error:
+                raise CppDiagnostic("cpp.invalid-literal", str(error), token.coord)
+            return Expression(c_ast.Constant("int", value, token.coord), dtype)
+        if token.kind in ("FLOAT_CONST", "HEX_FLOAT_CONST"):
+            try:
+                dtype = self.types.floating_literal_type(token.value)
+            except ValueError as error:
+                raise CppDiagnostic("cpp.invalid-literal", str(error), token.coord)
+            self._check_value_type(dtype, token)
+            return Expression(c_ast.Constant("float", token.value, token.coord), dtype)
+        if token.value in ("true", "false"):
+            value = "1" if token.value == "true" else "0"
+            node = self._convert(Expression(c_ast.Constant("int", value, token.coord)),
+                                 "bool", token.coord)
+            return Expression(node, "bool")
         if self._is_type(token):
+            dtype = (canonical_type([token.value]) if token.value in TYPE_WORDS
+                     else self.scope.lookup(token.value).dtype)
             self._expect("(")
             if self._accept(")"):
-                return Expression(c_ast.Constant("int", "0", token.coord))
+                zero = Expression(c_ast.Constant("int", "0", token.coord))
+                return Expression(self._convert(zero, dtype, token.coord, force=True), dtype)
             expression = self._expression()
             self._require_value(expression)
             self._expect(")")
-            typename = c_ast.Typename(None, [], self._int_type(None, token.coord), token.coord)
-            return Expression(c_ast.Cast(typename, expression.node, token.coord))
+            return Expression(self._convert(expression, dtype, token.coord, force=True), dtype)
         if token.kind != "ID" or token.value in _KEYWORDS:
             self._unsupported(token)
         symbol = self.scope.lookup(token.value)
@@ -398,13 +457,15 @@ class CppParser:
                 while True:
                     expression = self._expression()
                     self._require_value(expression)
-                    arguments.append(expression.node)
+                    arguments.append(expression)
                     if self._accept(")"):
                         break
                     self._expect(",")
-            if len(arguments) != symbol.arity:
-                raise CppDiagnostic("cpp.call-arity", "argument count does not match declaration",
-                                    token.coord)
-            return Expression(c_ast.FuncCall(c_ast.ID(symbol.c_name, token.coord),
-                                              c_ast.ExprList(arguments, token.coord), token.coord))
-        return Expression(c_ast.ID(symbol.c_name, token.coord), symbol.kind == "value", symbol)
+            selected = resolve_overload(symbol, [arg.dtype for arg in arguments], self.types, token.coord)
+            converted = [self._convert(arg, dtype, token.coord)
+                         for arg, dtype in zip(arguments, selected.parameters)]
+            return Expression(c_ast.FuncCall(c_ast.ID(selected.c_name, token.coord),
+                                              c_ast.ExprList(converted, token.coord), token.coord),
+                              selected.dtype)
+        return Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
+                          symbol.kind == "value", symbol)
