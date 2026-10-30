@@ -34,6 +34,7 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_note_frame_leave_lifo",
 }
 INTERNAL_SYMBOLS = {
+    "pcc_gc_note_frame_enter_checked",
     "pcc_gc_frame_node_alloc",
     "pcc_gc_frame_node_bucket",
     "pcc_gc_frame_node_create",
@@ -76,6 +77,8 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     # Whether a mapped frame's slots lie on this thread's walked stack.
     "pcc_gc_stackmap_roots_mode",
     "pcc_thread_stack_high",
+    "pcc_thread_no_park_depth",
+    "pcc_platform_abort",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend0_frame_roots_enabled",

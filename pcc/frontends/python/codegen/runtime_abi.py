@@ -2153,6 +2153,7 @@ def _cross_object_signatures_part_0():
     "pcc_gc_frame_root_slot_count": ((), "c_int64"),
     "pcc_gc_coroutine_root_score": ((), "c_int64"),
     "pcc_gc_cycle_requested_store_release": (("c_int64",), "c_void"),
+    "pcc_gc_note_frame_enter_checked": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_frame_index_find": (("c_ptr",), "c_ptr"),
     "pcc_gc_frame_index_insert": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_frame_index_plan_capacity": (("c_int64",), "c_int64"),

@@ -44,6 +44,8 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_cycle_requested_store_release = extern("pcc_gc_cycle_requested_store_release", (c_int64,), c_void)
 
 pcc_gc_root_slot_count_from_map = extern("pcc_gc_root_slot_count_from_map", (c_ptr,), c_int64)
@@ -386,6 +388,59 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
             free(prepared)
         pcc_thread_no_park_exit()
         return
+
+
+@c_abi_export("pcc_gc_note_frame_enter_checked")
+def pcc_gc_note_frame_enter_checked(frame_map, slots) -> i64:
+    """Register fresh raw slots before the caller releases its no-park guard.
+
+    Return 1 for a registered frame (or deliberately disabled frame tracking),
+    0 for invalid input, duplicate slots, or registration failure, and -1 when
+    the caller did not protect its unpublished inputs with an outer guard.
+    The caller must hold no graph, container, or scheduler lock: registration
+    may allocate and acquire the graph lock beneath the plain no-park guard.
+    Slots belong exclusively to this activation; slots and immutable map storage
+    stay valid until a successful entry is paired with leave. Failure adds no
+    frame: in particular, duplicate failure must not retire the previous frame.
+    No Python exception is allocated here. The caller owns failure cleanup and
+    must not release that guard with unprotected live values. Legacy entry and
+    generated-code ABI remain unchanged.
+    """
+    if pcc_thread_no_park_depth() <= 0:
+        return -1
+    if ptr_is_null(frame_map) != 0 or ptr_is_null(slots) != 0:
+        return 0
+    root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
+    if root_count <= 0:
+        return 0
+    if pcc_gc_frame_roots_disabled_fast() != 0:
+        return 1
+    gc_backend_current()
+    if pcc_gc_should_track_frame_roots() == 0:
+        return 1
+    # Reject re-entry: an older indexed frame must never mask failure to
+    # register this new activation. Its caller keeps these stack slots private.
+    pcc_py_gc_minor_graph_lock()
+    previous = pcc_gc_frame_index_find(slots)
+    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(previous) == 0:
+        return 0
+    pcc_gc_note_frame_enter(frame_map, slots)
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_frame_index_find(slots)
+    registered: i64 = 0
+    if ptr_is_null(current) == 0:
+        if (ptr_eq(load_ptr(current, 0), frame_map) != 0
+                and ptr_eq(load_ptr(current, 8), slots) != 0
+                and load_i64(current, 40) == root_count):
+            registered = 1
+    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(current) == 0 and registered == 0:
+        # These private activation slots cannot legitimately acquire another
+        # node between checks. Do not let cleanup retire an unrelated frame.
+        pcc_platform_abort()
+        return -1
+    return registered
 
 
 @c_abi_export("pcc_gc_note_frame_enter_lifo")
