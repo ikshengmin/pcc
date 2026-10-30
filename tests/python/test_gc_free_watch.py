@@ -173,7 +173,7 @@ def _caller(rt, caller, deallocate, delayed):
 
     ns.update({
         "GC_FREE_WATCH_BYTES": 24, "PYOBJECTHEADER_REFCOUNT_OFFSET": 0,
-        "PYOBJECTHEADER_FLAGS_OFFSET": 12, "PY_TYPE_GEN": 10,
+        "PYOBJECTHEADER_FLAGS_OFFSET": 12, "PY_TYPE_GEN": 10, "PY_FLAG_GC_TRACKED": 2,
         "PY_TYPE_INSTANCE": 20, "PY_TYPE_USER_CLASS_START": 100,
         "PY_TYPE_VALUEBOX": PY_TYPE_VALUEBOX,
         "pcc_refcount_forget": lambda o: None, "py_gc_untrack": lambda o: None,

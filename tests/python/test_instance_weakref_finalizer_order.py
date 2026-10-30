@@ -37,6 +37,7 @@ class DeallocationModel(FinalizerModel):
             pcc_gc_free_watch_begin=self.watch_begin,
             pcc_gc_free_watch_end=self.watch_end,
             py_gc_untrack=lambda value: self.lifecycle.append('untrack'),
+            PY_FLAG_GC_TRACKED=2,
             py_gc_track=self.tracked.append,
             pcc_dealloc_with_trash=self.dispatch,
             _gc_backend_selected_fast=lambda: backend,
