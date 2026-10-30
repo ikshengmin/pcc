@@ -269,9 +269,11 @@ class _FieldMemory(_GetterMemory):
         self.record.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = self.item
         self.original = self.record
         self.globals = {name: _Slots(8) for name in
-                        ("pcc_gc_read_barrier_enabled", "pcc_gc_backend_selected")}
+                        ("pcc_gc_read_barrier_enabled", "pcc_gc_backend_selected",
+                         "pcc_gc_config_initialized")}
         self.globals["pcc_gc_read_barrier_enabled"].fields[0] = int(backend in (3, 4))
         self.globals["pcc_gc_backend_selected"].fields[0] = backend
+        self.globals["pcc_gc_config_initialized"].fields[0] = 1
         self.namespace.update({"global_addr": self.globals.__getitem__,
                                "pcc_gc_note_relocation_read": self.resolve})
         self.load("pcc/runtime/py/py_class.py")
