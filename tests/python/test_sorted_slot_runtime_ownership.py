@@ -1,8 +1,22 @@
 """Production sorted slot transaction under relocation, aliasing and callbacks."""
+import ast
 from pathlib import Path
 import pytest
 from tests.python.test_list_extend_iterator_ownership import _ExtensionModel
 from tests.python.test_foreign_address_leases import _functions
+
+COMPARE_PORT = Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_obj_ops_compare.py'
+
+
+def _listsort_layout():
+    """The port's listsort state layout and helper names, read from source."""
+    tree = ast.parse(COMPARE_PORT.read_text())
+    layout = {node.targets[0].id: node.value.value for node in tree.body
+              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+              and node.targets[0].id.startswith('_TIM_')}
+    helpers = {node.name for node in tree.body
+               if isinstance(node, ast.FunctionDef) and node.name.startswith('_tim_')}
+    return layout, helpers
 
 
 class SortModel(_ExtensionModel):
@@ -54,12 +68,22 @@ class SortModel(_ExtensionModel):
             # This model is the general protocol; the GC0 plain-order
             # path is test_sorted_gc0_plain_order's.
             '_sorted_gc0': lambda source_slot, reverse, result_slot: 0,
+            'memmove': self.move_words,
         })
-        _functions(Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_obj_ops_compare.py',
+        layout, helpers = _listsort_layout()
+        self.ns.update(layout)
+        _functions(COMPARE_PORT,
                    {'_sorted_error', '_sorted_drop', '_sorted_adopt', '_sorted_copy',
                     '_sorted_arguments', '_sorted_prepare_keys', '_sorted_less',
                     '_sorted_merge_indices', '_sorted_reorder_values',
-                    '_sorted_slots_body', 'py_obj_sorted_slots'}, self.ns)
+                    '_sorted_slots_body', 'py_obj_sorted_slots'} | helpers, self.ns)
+
+    def move_words(self, destination, source, size):
+        # The listsort port moves whole index words; overlap reads first.
+        words = [self.load(source, offset) for offset in range(0, size, 8)]
+        for offset, word in zip(range(0, size, 8), words):
+            self.store(destination, offset, word)
+        return destination
 
     def alloc(self, size):
         # Frames, payloads and index buffers must never overlap.
