@@ -1021,7 +1021,7 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
     evidence = macos.split("      - name: Preserve macOS bootstrap evidence\n", 1)[1]
     evidence = evidence.split("      - name:", 1)[0]
     assert "if: always()" in evidence
-    assert "uses: actions/upload-artifact@v4" in evidence
+    assert "uses: actions/upload-artifact@v6" in evidence
     paths = evidence.split("          path: |\n", 1)[1].splitlines()
     assert [path.strip() for path in paths if path.strip()] == [
         "build/bootstrap/stage*.process.*/result.json",
@@ -1029,6 +1029,7 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
         "build/bootstrap/stage*.process.*/target.stdout",
         "build/bootstrap/stage*.process.*/target.stderr",
         "build/bootstrap/stage*.process.*/result.json.worker-rss.tsv",
+        "build/bootstrap/stage*.process.*/result.json.process-rss.jsonl",
         "build/bootstrap/stage*.json",
         # Size-prior gate receipts are text only; objects and binaries stay out.
         "build/worker-prior-gate/**/*.json",

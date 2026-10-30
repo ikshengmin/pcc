@@ -18,17 +18,26 @@ __pcc_freestanding__ = True
 
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+# GC0 registrations change the scheduler-root list under its own word only.
+pcc_gc_scheduler_root_list_acquire = extern(
+    "pcc_gc_scheduler_root_list_acquire", (), c_void
+)
+pcc_gc_scheduler_root_list_release = extern(
+    "pcc_gc_scheduler_root_list_release", (), c_void
+)
 
 
 @c_abi_export("pcc_gc_scheduler_root_count")
 def pcc_gc_scheduler_root_count() -> i64:
     gc_backend_current()
     pcc_py_gc_minor_graph_lock()
+    pcc_gc_scheduler_root_list_acquire()
     node = global_load_ptr("pcc_gc_scheduler_root_head")
     count: i64 = 0
     while ptr_is_null(node) == 0:
         count = count + 1
         node = load_ptr(node, 8)
+    pcc_gc_scheduler_root_list_release()
     pcc_py_gc_minor_graph_unlock()
     return count
 
@@ -98,11 +107,13 @@ def pcc_gc_slot_is_runtime_root(slot) -> i64:
             pcc_py_gc_minor_graph_unlock()
             return 1
         node = load_ptr(node, 16)
+    found: i64 = 0
+    pcc_gc_scheduler_root_list_acquire()
     node = global_load_ptr("pcc_gc_scheduler_root_head")
-    while ptr_is_null(node) == 0:
+    while ptr_is_null(node) == 0 and found == 0:
         if ptr_eq(load_ptr(node, 0), slot) != 0:
-            pcc_py_gc_minor_graph_unlock()
-            return 1
+            found = 1
         node = load_ptr(node, 8)
+    pcc_gc_scheduler_root_list_release()
     pcc_py_gc_minor_graph_unlock()
-    return 0
+    return found

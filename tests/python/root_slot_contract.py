@@ -7,6 +7,14 @@ not a replacement for the production verifier or a model of GC execution.
 """
 
 
+_MAPPED_FRAME_ENTRIES = frozenset((
+    "pcc_gc_frame_enter_mapped",
+    "pcc_gc_frame_leave_mapped",
+    "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_leave_lifo_mapped",
+))
+
+
 class RootSlotContract:
     POINTER_BYTES = 8
 
@@ -65,7 +73,15 @@ class RootSlotContract:
 
     @staticmethod
     def called(ins, name):
-        return ins.kind == "call" and ins.data[2] == name
+        # A frame of code with precise stack-map records enters and leaves
+        # through the ``_mapped`` entry of the same protocol: it registers
+        # the same slots unless the stack walk roots them.
+        if ins.kind != "call":
+            return False
+        callee = ins.data[2]
+        if callee in _MAPPED_FRAME_ENTRIES:
+            callee = callee[:-len("_mapped")]
+        return callee == name
 
     @staticmethod
     def args(ins):

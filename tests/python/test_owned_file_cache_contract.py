@@ -1,6 +1,5 @@
 """Registered temporary type caches and descriptor-adoption failure boundaries."""
 import errno
-import fcntl
 import os
 
 import pytest
@@ -79,6 +78,8 @@ def test_type_initialization_error_prevents_publication_and_preserves_first_exce
 
 @pytest.mark.parametrize('failure',('stream','buffer','registry','custom_buffer','set_append'))
 def test_append_failure_leaves_descriptor_flags_position_and_ownership_unchanged(tmp_path,failure):
+    import fcntl
+
     runtime=FileRuntime();path=tmp_path/'file';path.write_bytes(b'keep')
     fd=os.open(path,os.O_RDWR);os.lseek(fd,2,os.SEEK_SET)
     before_flags=fcntl.fcntl(fd,fcntl.F_GETFL);original=runtime.ns['malloc'];calls=[]

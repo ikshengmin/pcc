@@ -114,15 +114,25 @@ def initialize_veneer_pool(image: bytearray, start: int, count: int) -> None:
 def apply_call26_with_veneer(image: bytearray, offset: int,
                              target: int, place: int,
                              veneer_offsets: tuple[int, ...]) -> None:
-    """Relax only a proven STT_FUNC CALL26 into a pre-reserved boundary slot.
+    """Keep the existing CALL26 helper contract and validation order."""
+    apply_branch26_with_veneer(image, offset, R_AARCH64_CALL26,
+                              target, place, veneer_offsets)
+
+
+def apply_branch26_with_veneer(image: bytearray, offset: int, kind: int,
+                             target: int, place: int,
+                             veneer_offsets: tuple[int, ...]) -> None:
+    """Relax a proven, defined STT_FUNC CALL26/JUMP26 into a reserved slot.
 
     The linker supplies the resolved symbol-type proof. AAELF64 5.7.7 and
     AAPCS64 6.5.1 allow IP0/x16 clobber here. BR, rather than BLR, preserves
-    the original call's LR=P+4. No layout or allocation changes happen here.
+    the original BL's LR=P+4 and a B tail jump's incoming LR. No layout or allocation changes happen here.
     """
+    if kind not in (R_AARCH64_CALL26, R_AARCH64_JUMP26):
+        raise ValueError("unsupported AArch64 branch veneer relocation")
     delta = target - place
     if -(1 << 27) <= delta < (1 << 27):
-        apply_relocation(image, offset, R_AARCH64_CALL26, target, place)
+        apply_relocation(image, offset, kind, target, place)
         return
     # Do not convert malformed original instructions or targets into success.
     if offset < 0 or offset + 4 > len(image):
@@ -134,8 +144,11 @@ def apply_call26_with_veneer(image: bytearray, offset: int,
     if target < 0 or target >= 1 << 64 or place < 0 or place >= 1 << 64:
         raise ValueError("AArch64 branch address outside unsigned 64-bit range")
     word = struct.unpack_from("<I", image, offset)[0]
-    if word & 0xFC000000 != 0x94000000:
-        raise ValueError("AArch64 CALL26 relocation requires a BL instruction")
+    opcode = 0x94000000 if kind == R_AARCH64_CALL26 else 0x14000000
+    if word & 0xFC000000 != opcode:
+        if kind == R_AARCH64_CALL26:
+            raise ValueError("AArch64 CALL26 relocation requires a BL instruction")
+        raise ValueError("AArch64 JUMP26 relocation requires a B instruction")
     for veneer_offset in veneer_offsets:
         veneer_address = place - offset + veneer_offset
         # Test the actual slot address, not its pool's beginning.
@@ -145,13 +158,13 @@ def apply_call26_with_veneer(image: bytearray, offset: int,
                 or veneer_offset & 7 or veneer_address & 7
                 or veneer_address < 0 or veneer_address >= 1 << 64):
             raise ValueError("invalid AArch64 reserved veneer slot")
-        apply_relocation(image, offset, R_AARCH64_CALL26, veneer_address, place)
+        apply_relocation(image, offset, kind, veneer_address, place)
         # LDR x16, [PC, #8]; BR x16; full-width absolute S+A literal.
         struct.pack_into("<IIQ", image, veneer_offset, 0x58000050, 0xD61F0200, target)
         return
     # Giant input sections are kept continuous. Fail only when this actual
-    # overflowing call cannot reach either of its exact reserved slots.
-    apply_relocation(image, offset, R_AARCH64_CALL26, target, place)
+    # overflowing branch cannot reach either of its exact reserved slots.
+    apply_relocation(image, offset, kind, target, place)
 
 
 def apply_relocation(image: bytearray, offset: int, kind: int,

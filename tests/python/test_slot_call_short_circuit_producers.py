@@ -5,6 +5,7 @@ import textwrap
 
 import pytest
 
+from tests.python.root_copy_ir import root_copy_calls
 from tests.python.test_slot_call_operand_roots import _calls, _emit, _probe_function
 from tests.python.test_shared_call_binding import _emit as _emit_binding
 from tests.python.owned_regression_support import assert_owned_program, explicit_owned_runtime
@@ -25,7 +26,10 @@ def test_short_circuit_moves_owner_without_retesting_selected_operand(expression
                                 '    return slot_operand_probe(' + expression + ')\n'))
     assert len(_calls(text, 'py_obj_truthy')) == tests
     assert len(_calls(text, 'pcc_gc_root_move')) == moves
-    assert _calls(text, 'pcc_gc_root_copy_borrowed_lease')
+    copies = root_copy_calls(text, local=True, borrowed=True)
+    assert copies
+    assert all(copy.source.startswith(('%left.addr', '%middle.addr', '%right.addr'))
+               for copy in copies)
     assert _calls(text, 'pcc_gc_foreign_lease_acquire')
     assert 'call.slot.bool.rhs' in text and 'call.slot.bool.short' in text
     assert 'phi ptr' not in text

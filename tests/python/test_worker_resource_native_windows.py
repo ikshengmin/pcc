@@ -456,8 +456,9 @@ def test_rss_replace_runtime_module_has_verified_raw_ir(tmp_path, monkeypatch, t
         assert re.search(r"^define external i64 @pcc_worker_resource_replace_detailed\(ptr \S+, ptr \S+, i64 \S+\)", body)
         raw_address = re.search(r"(%[\w.]+) = inttoptr i64 %diagnostic_address to ptr", body)
         assert raw_address
-        assert re.search(r"@memset\(ptr " + re.escape(raw_address.group(1))
-                         + r", i32 (?:0|%[\w.]+), i64 24\)", body)
+        assert re.match(r"\n  call void \(ptr, i8, i64, i1\) @llvm\.memset\.p0\.i64\(ptr "
+                        + re.escape(raw_address.group(1)) + r", i8 0, i64 24, i1 0\)",
+                        body[raw_address.end():])
         assert "thread_local" not in text
         assert not re.search(r"\bcall[^\n]*@(?:pcc_gc_|py_)", text)
         if "windows" in target:

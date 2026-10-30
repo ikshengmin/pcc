@@ -6,7 +6,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
+from tests.python._gc_substrate_common import _runtime_variant
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
@@ -78,22 +78,22 @@ def _build_threaded_runtime(
     cc: str,
     tsan: bool = False,
     pcc_python: bool = False,
-) -> Path:
-    """Return the threaded pcc-Python runtime (``libpy_runtime_pcc_py.a``).
+) -> tuple[Path, Path]:
+    """Return current headers and the verified threaded pcc-Python archive.
 
     pcc-emitted runtime code carries no ThreadSanitizer instrumentation, so
     the ``tsan`` probes instrument only their C harness; they still drive the
     runtime's concurrent paths and check results.
     """
     del tmp_path, cc, tsan, pcc_python
-    return cached_threaded_pcc_python_runtime()
+    return _runtime_variant("pcc_python", threaded=True)
 
 
 @pytest.mark.pcc_gate(probe="tsan")
 def test_pthread_stw_threadsanitizer_smoke_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "tsan_smoke.c"
     exe = tmp_path / "tsan_smoke.out"
@@ -126,7 +126,7 @@ def test_pthread_stw_threadsanitizer_smoke_or_skip(tmp_path):
         cc, "-DPCC_WITH_THREADS=1", "-std=c11", "-pthread", "-fsanitize=thread",
         f"-I{work_runtime / 'include'}",
         f"-I{work_runtime / 'src'}",
-        str(src), str(work_runtime / "libpy_runtime_pcc_py.a"), "-lm", "-o", str(exe),
+        str(src), str(runtime_archive), "-lm", "-o", str(exe),
     ]
     build = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if build.returncode != 0:
@@ -142,7 +142,7 @@ def test_pthread_stw_threadsanitizer_smoke_or_skip(tmp_path):
 def test_cms_worker_threadsanitizer_stress_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "cms_tsan_probe.c"
     exe = tmp_path / "cms_tsan_probe.out"
@@ -220,7 +220,7 @@ def test_cms_worker_threadsanitizer_stress_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -253,7 +253,7 @@ def test_cms_worker_threadsanitizer_stress_or_skip(tmp_path):
 
 def test_backend4_thread_medium_buffer_flushes_across_mutators(tmp_path):
     cc = os.environ.get("CC", "cc")
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc)
 
     src = tmp_path / "backend4_thread_medium_flush.c"
     exe = tmp_path / "backend4_thread_medium_flush.out"
@@ -369,7 +369,7 @@ def test_backend4_thread_medium_buffer_flushes_across_mutators(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -388,7 +388,7 @@ def test_backend4_thread_medium_buffer_flushes_across_mutators(tmp_path):
 def test_cms_collect_threadsanitizer_sweep_allocation_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "cms_sweep_alloc_tsan_probe.c"
     exe = tmp_path / "cms_sweep_alloc_tsan_probe.out"
@@ -497,7 +497,7 @@ def test_cms_collect_threadsanitizer_sweep_allocation_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -533,7 +533,7 @@ def test_cms_collect_threadsanitizer_sweep_allocation_or_skip(tmp_path):
 def test_generational_minor_threadsanitizer_alloc_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "gen_minor_tsan_probe.c"
     exe = tmp_path / "gen_minor_tsan_probe.out"
@@ -611,7 +611,7 @@ def test_generational_minor_threadsanitizer_alloc_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -653,7 +653,7 @@ def test_generational_minor_threadsanitizer_alloc_or_skip(tmp_path):
 def test_generational_scheduler_root_registry_threadsanitizer_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "gen_scheduler_roots_tsan_probe.c"
     exe = tmp_path / "gen_scheduler_roots_tsan_probe.out"
@@ -738,7 +738,7 @@ def test_generational_scheduler_root_registry_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -769,7 +769,7 @@ def test_generational_scheduler_root_registry_threadsanitizer_or_skip(tmp_path):
 def test_generational_scheduler_queue_threadsanitizer_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "gen_scheduler_queue_tsan_probe.c"
     exe = tmp_path / "gen_scheduler_queue_tsan_probe.out"
@@ -904,7 +904,7 @@ def test_generational_scheduler_queue_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -935,7 +935,7 @@ def test_generational_scheduler_queue_threadsanitizer_or_skip(tmp_path):
 def test_colored_relocating_forwarding_table_threadsanitizer_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "backend4_forwarding_table_tsan_probe.c"
     exe = tmp_path / "backend4_forwarding_table_tsan_probe.out"
@@ -1093,7 +1093,7 @@ def test_colored_relocating_forwarding_table_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -1116,7 +1116,7 @@ def test_colored_relocating_forwarding_table_threadsanitizer_or_skip(tmp_path):
 def test_colored_relocating_step_allocation_threadsanitizer_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "backend4_step_allocation_tsan_probe.c"
     exe = tmp_path / "backend4_step_allocation_tsan_probe.out"
@@ -1234,7 +1234,7 @@ def test_colored_relocating_step_allocation_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -1257,7 +1257,7 @@ def test_colored_relocating_step_allocation_threadsanitizer_or_skip(tmp_path):
 def test_colored_relocating_free_hook_threadsanitizer_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
+    work_runtime, runtime_archive = _build_threaded_runtime(tmp_path, cc=cc, tsan=True)
 
     src = tmp_path / "backend4_free_hook_tsan_probe.c"
     exe = tmp_path / "backend4_free_hook_tsan_probe.out"
@@ -1390,7 +1390,7 @@ def test_colored_relocating_free_hook_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],
@@ -1421,7 +1421,7 @@ def test_colored_relocating_free_hook_threadsanitizer_or_skip(tmp_path):
 def test_pcc_python_runtime_object_graph_threadsanitizer_or_skip(tmp_path):
     cc = os.environ.get("CC", "clang")
     _require_thread_sanitizer_runtime(tmp_path, cc)
-    work_runtime = _build_threaded_runtime(
+    work_runtime, runtime_archive = _build_threaded_runtime(
         tmp_path,
         cc=cc,
         tsan=True,
@@ -1505,7 +1505,7 @@ def test_pcc_python_runtime_object_graph_threadsanitizer_or_skip(tmp_path):
             f"-I{work_runtime / 'include'}",
             f"-I{work_runtime / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-o",
             str(exe),
         ],

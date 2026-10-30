@@ -19,6 +19,7 @@ def forbid_external_compilers(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("external compiler process")
     monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
 
@@ -38,8 +39,14 @@ def _emit(body):
     ("add", "add"), ("sub", "sub"), ("and", "and"),
     ("or", "orr"), ("xchg", "mov"),
 ])
-@pytest.mark.parametrize("ordering", ["monotonic", "acquire", "release", "acq_rel", "seq_cst"])
-def test_narrow_rmw_preserves_access_width(width, suffix, op, instruction, ordering):
+@pytest.mark.parametrize("ordering, load_op, store_op", [
+    ("monotonic", "ldxr", "stxr"),
+    ("acquire", "ldaxr", "stxr"),
+    ("release", "ldxr", "stlxr"),
+    ("acq_rel", "ldaxr", "stlxr"),
+    ("seq_cst", "ldaxr", "stlxr"),
+])
+def test_narrow_rmw_preserves_access_width(width, suffix, op, instruction, ordering, load_op, store_op):
     assembly = _emit(f"""
 define i{width} @probe(ptr %address) {{
 entry:
@@ -47,11 +54,13 @@ entry:
   ret i{width} %prior
 }}
 """)
-    assert f"  ldaxr{suffix} w11, [x9]" in assembly
-    assert f"  stlxr{suffix} w13, w12, [x9]" in assembly
+    # Each ordering keeps its own exclusive pair (see
+    # test_aarch64_atomic_ordering_lowering.py); width is the contract here.
+    assert f"  {load_op}{suffix} w11, [x0]" in assembly
+    assert f"  {store_op}{suffix} w13, w12, [x0]" in assembly
     assert f"  {instruction} w12," in assembly
     assert "  cbnz w13, Lat_" in assembly
-    assert "  ldaxr w11, [x9]" not in assembly
+    assert "  ldaxr w11, [x0]" not in assembly
     assert re.search(r"movz w10, #" + str((1 << width) - 5) + r"\b", assembly)
 
 
@@ -66,8 +75,8 @@ entry:
   ret {{i{width}, i1}} %pair
 }}
 """)
-    assert f"  ldaxr{suffix} w12, [x9]" in assembly
-    assert f"  stlxr{suffix} w13, w11, [x9]" in assembly
+    assert f"  ldaxr{suffix} w12, [x0]" in assembly
+    assert f"  stlxr{suffix} w13, w11, [x0]" in assembly
     assert f"  str{suffix} w12, [x15]" in assembly
     assert f"  strb w14, [x15, #{flag_offset}]" in assembly
     assert "  str w12, [x15]" not in assembly

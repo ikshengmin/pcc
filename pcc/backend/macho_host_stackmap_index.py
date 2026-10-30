@@ -244,7 +244,18 @@ class _SourceIndex:
         capacity = len(self.buffer) // _SOURCE.size
         mask = capacity - 1
         slot = _mix64(key) & mask
-        for depth in range(1, capacity + 1):
+        # A first-slot hit or miss needs no collision iterator. Allocate
+        # one only after a collision; still charge before every row read.
+        # This reads the current table, never a memoized source mapping.
+        if capacity:
+            self.work.probe(1)
+            existing, destination = _SOURCE.unpack_from(self.buffer, slot * _SOURCE.size)
+            if existing == 0:
+                return -1, slot
+            if existing == key:
+                return destination, slot
+            slot = (slot + 1) & mask
+        for depth in range(2, capacity + 1):
             self.work.probe(depth)
             existing, destination = _SOURCE.unpack_from(self.buffer, slot * _SOURCE.size)
             if existing == 0:

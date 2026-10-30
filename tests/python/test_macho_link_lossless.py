@@ -25,7 +25,7 @@ from pcc.backend import macho_spec as spec
 from pcc.backend.macho_archive import read_archive, select_members
 from pcc.backend.macho_link import link_relocatable
 
-_IS_ARM64_DARWIN = os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+_IS_ARM64_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 _GATE = None if _IS_ARM64_DARWIN else "needs Darwin arm64"
 
 pytestmark = pytest.mark.pcc_gate(unavailable=_GATE)

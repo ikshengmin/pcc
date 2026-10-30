@@ -28,6 +28,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_generational_oldify_supported_tag",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_gray_count_increment_acq_rel",
+    "pcc_gc_gray_count_decrement_acq_rel",
+    "pcc_gc_set_mark_color",
     "pcc_gc_object_is_address_pinned",
     "free",
     "malloc",
@@ -59,7 +62,9 @@ RAW_FUNCTION_IMPORTS = {
     "py_decref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_mark_active",
     "pcc_gc_backend_selected",
+    "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_live_bytes",
 }
 

@@ -135,7 +135,16 @@ def test_zpage_mechanics_has_exact_strict_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    expected = (RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS) - {"memset"}
+    # The explicit zero-fill intrinsic can lower to either libc spelling in
+    # the external LLVM oracle. Keep all other dependencies exact; owned
+    # lowering retains memset for the dynamic-size operation.
+    zero_helpers = undefined & {"memset", "bzero"}
+    assert undefined - zero_helpers == expected
+    if emitter == "self":
+        assert zero_helpers == {"memset"}
+    else:
+        assert zero_helpers in ({"memset"}, {"bzero"}, {"memset", "bzero"})
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30

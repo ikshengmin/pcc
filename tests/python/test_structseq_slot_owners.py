@@ -36,7 +36,7 @@ class StructSeqMemory(TupleMemory):
                 node.decorator_list = []
                 body.append(node)
         exec(compile(ast.Module(body=body, type_ignores=[]), str(PORT), 'exec'), self.ns)
-        self.cls.fields[12] = 2
+        self.cls.fields[12] = abi.PY_FLAG_CLASS_SLOTS_ONLY
         self.ns['py_class_mark_structseq'](self.cls)
         assert self.error is None
 
@@ -103,7 +103,7 @@ def test_structseq_instance_allocation_failure_returns_original_exception():
 
 def test_structseq_refuses_unsealed_or_non_tuple_field_owners():
     memory = StructSeqMemory()
-    memory.cls.fields[12] = 2
+    memory.cls.fields[12] = abi.PY_FLAG_CLASS_SLOTS_ONLY
     caller = memory.invoke_structseq(range(9), (None, None))
     result = memory.read(caller, 24)
     assert result.tag == abi.PY_TYPE_EXC

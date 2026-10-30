@@ -91,6 +91,9 @@ def compile_time_isinstance_impl(
     # subclass-aware runtime predicates below.
     if isinstance(ty, DynType) or (class_ident in ("str", "tuple") and isinstance(ty, ClassType)):
         return None
+    # bool is a subclass of int.
+    if class_ident == "int" and isinstance(ty, BoolType):
+        return ir.Constant(_I1, 1)
     return ir.Constant(_I1, 1 if isinstance(ty, matcher) else 0)
 
 
@@ -131,12 +134,20 @@ def emit_builtin_runtime_isinstance_impl(
     # own operand and retires it after all members have inspected it.
     if evaluated_operand:
         host._gc_release_if_owned(obj_val, obj_expr)
-    return host.builder.icmp_signed(
+    matched = host.builder.icmp_signed(
         "==",
         actual,
         ir.Constant(_I64, tag),
         name=host._fresh("builtin.isinstance"),
     )
+    if class_ident == "int":
+        # bool is a subclass of int.
+        is_bool = host.builder.icmp_signed(
+            "==", actual, ir.Constant(_I64, PY_TYPE_BOOL),
+            name=host._fresh("builtin.isinstance.bool"),
+        )
+        matched = host.builder.or_(matched, is_bool, name=host._fresh("builtin.isinstance.int"))
+    return matched
 
 
 def ir_scaffold_class_symbol_impl(host, expr: Expr) -> Optional[str]:
@@ -304,6 +315,36 @@ def _name_is_declared_class_in_module(host, ident: str) -> bool:
     return False
 
 
+def _name_has_runtime_binding(host, element: Expr) -> bool:
+    return isinstance(element, Name) and (
+        element.ident in host.env
+        or element.ident in getattr(host, "_module_globals", {})
+        or element.ident in getattr(host, "_native_builtin_value_aliases", {})
+        or _name_is_imported_into_module(host, element.ident)
+        or _name_is_declared_class_in_module(host, element.ident)
+    )
+
+
+def _classinfo_reads_only_builtin_tags(host, class_arg: Expr) -> bool:
+    """Every member is an unshadowed builtin type name tested by its tag.
+
+    Such a test evaluates nothing and calls back into nothing: the operand
+    is read once and inspected at once. ``type`` is excluded (its test
+    materializes a class object), as is any name bound in this program.
+    """
+    elems = class_arg.elems if isinstance(class_arg, TupleExpr) else (class_arg,)
+    if not elems:
+        return False
+    for element in elems:
+        if not isinstance(element, Name) or _name_has_runtime_binding(host, element):
+            return False
+        name = host._resolve_class_alias(element.ident)
+        if (name == "type" or name not in _BUILTIN_TYPE_TAGS
+                or name in host.class_lowering.classes):
+            return False
+    return True
+
+
 def emit_isinstance_call_impl(
     host,
     expr: Call,
@@ -313,8 +354,48 @@ def emit_isinstance_call_impl(
     # cache misses can allocate before the predicate consumes it.
     operand_root = [None]
     operand_owned = [False]
+    borrowed_view = [None]
+    saved_cpy_cleanup = host._cpy_operand_cleanup_block
+    tag_reads_only = len(expr.args) == 2 and _classinfo_reads_only_builtin_tags(
+        host, _isinstance_classinfo_as_tuple(expr.args[1]),
+    )
 
     def current_operand():
+        if operand_root[0] is None and borrowed_view[0] is None:
+            from pcc.frontends.python.codegen.call_object_lowering import (
+                stable_parameter_operand_source,
+            )
+            source = stable_parameter_operand_source(host, expr.args[0])
+            if source is not None and tag_reads_only:
+                # Builtin tag tests read the operand at once, with no gate,
+                # evaluation or callback before they finish: collectors
+                # relocate only at gates, so one borrowed read-barrier load
+                # needs no address lease.
+                return host.builder.call(
+                    host.runtime["pcc_gc_load_borrowed_ptr"],
+                    [ir.Constant(_CSTR, None), host._as_gc_ptr(source)],
+                    name=host._fresh("isinstance.operand.current"),
+                )
+            if source is not None:
+                # This physical parameter slot cannot be rebound or captured.
+                # Keep an address lease across classinfo evaluation/callbacks;
+                # the existing caller/parameter roots retain the owner.
+                token = host.builder.call(
+                    host.runtime["pcc_gc_borrowed_lease_acquire"],
+                    [host._as_gc_ptr(source)],
+                    name=host._fresh("isinstance.operand.lease"),
+                )
+                host._slot_call_check_status(token, "isinstance operand lease", expr.span)
+                borrowed_view[0] = (source, token)
+                target = previous_error if previous_error is not None else host._ensure_fn_err_exit()
+                host._try_err_block = host._slot_call_cleanup_block(
+                    (), target, (borrowed_view[0],),
+                )
+                host._cpy_operand_cleanup_block = host._try_err_block
+        if borrowed_view[0] is not None:
+            return host.builder.load(
+                borrowed_view[0][0], name=host._fresh("isinstance.operand.current"),
+            )
         if operand_root[0] is None:
             value = host._emit_as_object(expr.args[0])
             operand_owned[0] = (
@@ -340,6 +421,15 @@ def emit_isinstance_call_impl(
         return _emit_isinstance_call_body_impl(host, expr, current_operand)
     finally:
         host._try_err_block = previous_error
+        host._cpy_operand_cleanup_block = saved_cpy_cleanup
+        if borrowed_view[0] is not None:
+            source, token = borrowed_view[0]
+            released = host.builder.call(
+                host.runtime["pcc_gc_foreign_lease_release"],
+                [host._as_gc_ptr(source), token],
+                name=host._fresh("isinstance.operand.release"),
+            )
+            host._slot_call_check_status(released, "isinstance operand lease release", expr.span)
         if operand_root[0] is not None:
             host._release_rooted_pcc_lifetimes(((operand_root[0], operand_owned[0]),))
 
@@ -474,13 +564,7 @@ def _emit_isinstance_call_body_impl(host, expr: Call, current_operand) -> ir.Val
         )
 
     def name_has_runtime_binding(element: Expr) -> bool:
-        return isinstance(element, Name) and (
-            element.ident in host.env
-            or element.ident in getattr(host, "_module_globals", {})
-            or element.ident in getattr(host, "_native_builtin_value_aliases", {})
-            or _name_is_imported_into_module(host, element.ident)
-            or _name_is_declared_class_in_module(host, element.ident)
-        )
+        return _name_has_runtime_binding(host, element)
 
     # Keep proven class identities on the existing static routes. A tuple
     # containing a value read must first evaluate *all* its members, left to

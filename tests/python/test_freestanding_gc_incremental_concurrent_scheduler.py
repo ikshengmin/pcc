@@ -44,6 +44,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_maybe_auto_step",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_reclaim_retired_index_tables",
     "pcc_gc_is_cms_worker",
     # pcc_gc_backend4_maybe_auto_step: refused inside no-park or graph-lock
     # scopes, then a GC4 step.
@@ -61,6 +62,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_load_acquire",
     "pcc_gc_maybe_start_cms_worker",
+    # Allocation counts go to the caller's statistics shard.
+    "pcc_gc_metric_shard",
     "pcc_gc_seed_roots",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_tracing_finish_claim_clear_unlocked",
@@ -79,6 +82,7 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_cms_sweep_pending",
     # pcc_gc_backend4_maybe_auto_step's admission and reseed ownership.
     "pcc_gc_backend4_auto_step_pending",
     "pcc_gc_backend4_relocation_reset_owner",
@@ -103,7 +107,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_debt_threshold_override",
     "pcc_gc_in_auto_step",
     "pcc_gc_mark_active",
-    "pcc_gc_metric_alloc",
+    "pcc_gc_metric_shards",
     "pcc_gc_metric_max_pause_us",
     "pcc_gc_metric_pause_count",
     "pcc_gc_metric_pause_hist0",
@@ -288,12 +292,11 @@ def test_incremental_concurrent_scheduler_preserves_bounded_policy_order() -> No
         step.index("pcc_gc_tracing_record_pause(")
     )
 
-    # GC1 and GC2 hand allocation debt to the collector thread (d58306406):
-    # an allocating mutator no longer runs GC1's automatic step itself. GC4
-    # records the debt atomically and flags its automatic step.
+    # Every tracing backend hands allocation debt to its marker. GC4 also
+    # requests mutator-owned moving work without blocking concurrent marking.
     note_alloc = _export_body(strict, "pcc_gc_note_alloc")
-    assert note_alloc.index('global_addr("pcc_gc_metric_alloc")') < note_alloc.index(
-        "if backend == 1 or backend == 2:"
+    assert note_alloc.index('global_addr("pcc_gc_metric_shards")') < note_alloc.index(
+        "if backend >= 1 and backend <= 4:"
     )
     assert note_alloc.index("pcc_gc_maybe_start_cms_worker()") < note_alloc.index(
         "pcc_gc_cms_note_alloc(bytes)"

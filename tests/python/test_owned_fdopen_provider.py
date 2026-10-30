@@ -1,7 +1,6 @@
 """Execute the actual owned fdopen/FILE bodies over a bounded host ABI model."""
 import ast
 import errno
-import fcntl
 import os
 import sys
 from pathlib import Path
@@ -216,6 +215,8 @@ class FileRuntime(Runtime):
         return 0 if t==0 else super().release_lease(s,t)
 
     def fd_control(self,fd,command,value):
+        import fcntl
+
         try:return fcntl.fcntl(fd,command,value)
         except OSError as error:return -error.errno
 

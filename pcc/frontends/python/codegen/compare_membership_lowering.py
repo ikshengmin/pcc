@@ -326,6 +326,10 @@ class CompareMembershipLoweringMixin:
             and expr.op in ("==", "!=", "<", "<=", ">", ">=")
             and isinstance(expr.lhs.ty, (IntType, BoolType))
             and isinstance(expr.rhs.ty, (IntType, BoolType))
+            # Explicit machine operands must reach the primitive comparison
+            # below. Boxing them here also loses u64's unsigned interpretation.
+            and expr.lhs.ty.name not in ("pcc.i64", "pcc.u64")
+            and expr.rhs.ty.name not in ("pcc.i64", "pcc.u64")
         ):
             lhs = self._emit_expr(expr.lhs)
             lhs_owned = (

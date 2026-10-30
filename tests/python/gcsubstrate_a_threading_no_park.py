@@ -46,15 +46,31 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     py_resume = py_src.split("def pcc_resume_world() -> int:", 1)[1].split(
         '@c_abi_export("pcc_thread_unregister_current")', 1
     )[0]
-    assert '''atomic_store_i32(
-        global_addr("pcc_thread_stop_requested"), 0, 1, "release"
+    # Two flags publish a stop with release stores. The stopped-world epoch
+    # (pcc_thread_world_stop_py) is set by the request and cleared by the
+    # resume. The poll flag (pcc_thread_stop_requested) is set by the
+    # request and cleared once every other mutator is parked or exited,
+    # after the wait for them, and again by the resume.
+    for flag in ("pcc_thread_world_stop_py", "pcc_thread_stop_requested"):
+        assert '''atomic_store_i32(
+        global_addr("''' + flag + '''"), 0, 1, "release"
     )''' in py_stop
-    assert '''atomic_store_i32(
-        global_addr("pcc_thread_stop_requested"), 0, 0, "release"
+        assert '''atomic_store_i32(
+        global_addr("''' + flag + '''"), 0, 0, "release"
     )''' in py_resume
+    poll_clear = '''atomic_store_i32(
+        global_addr("pcc_thread_stop_requested"), 0, 0, "release"
+    )'''
+    assert py_stop.index("pthread_cond_wait(cond, lock)\n    # Every other mutator") < py_stop.index(
+        poll_clear
+    )
     assert py_src.count(
         '''atomic_store_i32(
         global_addr("pcc_thread_stop_requested")'''
+    ) == 3
+    assert py_src.count(
+        '''atomic_store_i32(
+        global_addr("pcc_thread_world_stop_py")'''
     ) == 2
     py_world_init = py_src.split("def _world_init() -> int:", 1)[1].split(
         '@c_abi_export("pcc_threads_enabled")', 1
@@ -63,7 +79,7 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     py_safepoint = py_src.split('def pcc_thread_safepoint() -> None:', 1)[1].split(
         '@c_abi_export("pcc_thread_owns_stopped_world")', 1
     )[0]
-    assert py_safepoint.index("pcc_tls_no_park_depth_py") < py_safepoint.index(
+    assert py_safepoint.index("pcc_tls_thread_state_py") < py_safepoint.index(
         "_world_init()"
     )
     py_safepoint_init_failure = py_safepoint.split(
@@ -124,14 +140,23 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     )[0]
     assert "pcc_platform_abort()" in init_failure
     assert "return 0" in init_failure
+    # The outermost no-park entry registers the thread and fails closed on
+    # an id of zero before it raises the depth; the graph-lock acquisition
+    # registers before it takes the word, and raises the no-park depth (with
+    # its own depth, in the same state word) after.
     py_enter = py_src.split(
         '@c_abi_export("pcc_thread_no_park_enter")', 1
-    )[1].split('@c_abi_export("pcc_thread_no_park_exit")', 1)[0]
-    assert py_enter.index('pcc_current_thread_id()') < py_enter.index(
-        '_tls_i64(global_addr("pcc_tls_thread_id_py")) == 0'
-    ) < py_enter.rindex(
-        'store_i32(global_addr("pcc_tls_no_park_depth_py"), 0, depth + 1)'
-    )
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_acquire")', 1)[0]
+    registers = py_enter.index("if pcc_current_thread_id() == 0:")
+    assert registers < py_enter.index(
+        "pcc_platform_abort()", registers
+    ) < py_enter.rindex("store_i64(state_slot, 0, load_i64(state_slot, 0) + 1)")
+    py_graph_enter = py_src.split(
+        '@c_abi_export("pcc_thread_graph_lock_acquire")', 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_release")', 1)[0]
+    assert py_graph_enter.index("pcc_current_thread_id()") < py_graph_enter.index(
+        "atomic_cas_i32(lock_word"
+    ) < py_graph_enter.rindex("store_i64(state_slot, 0, state + 16777217)")
     py_trampoline = py_src.split("def _thread_trampoline(start):", 1)[1].split(
         '@c_abi_export("pcc_thread_start")', 1
     )[0]
@@ -173,7 +198,7 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     # kernel is the only one, and a one-thread program's no-park and stop
     # contract is the probe in the next test.
     assert not THREAD_KERNEL.exists()
-    assert 'define_thread_local_i32("pcc_tls_no_park_depth_py", 0)' in py_src
+    assert 'define_thread_local_ptr_null("pcc_tls_thread_state_py")' in py_src
 
 
 @pytest.mark.parametrize("kind", ["pcc_python"])

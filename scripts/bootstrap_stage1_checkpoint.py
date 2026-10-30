@@ -15,7 +15,12 @@ import math
 import os
 from pathlib import Path
 import platform
-import resource
+try:
+    import resource
+except ModuleNotFoundError as exc:
+    if exc.name != "resource":
+        raise
+    resource = None
 import shutil
 import struct
 import subprocess
@@ -105,6 +110,8 @@ def read_json(path: Path):
 
 
 def _fsync_directory(path: Path) -> None:
+    if not hasattr(os, "O_DIRECTORY"):
+        raise CheckpointError("checkpoint durability requires POSIX directory fsync")
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)
@@ -218,11 +225,15 @@ def fresh_bytecode_environment(environment: dict[str, str], prefix: Path) -> dic
     return result
 
 
-def validate_route(options, command: list[str], environment: dict[str, str]) -> None:
-    resolve_hash_seed(environment)
+def _require_supported_host() -> None:
     if (sys.implementation.name != "cpython" or sys.platform != "linux"
             or platform.machine().lower() not in ("x86_64", "amd64")):
         raise CheckpointError("Stage1 checkpoint requires host CPython on x86_64 Linux")
+
+
+def validate_route(options, command: list[str], environment: dict[str, str]) -> None:
+    resolve_hash_seed(environment)
+    _require_supported_host()
     if options.backend != "self" or options.python_libpython != "off":
         raise CheckpointError("Stage1 checkpoint requires self backend and --python-libpython off")
     if options.runtime_cc != "pcc" or options.runtime_high != "py":
@@ -474,6 +485,8 @@ def _cpu() -> tuple[float, float]:
     Killed/orphaned descendants may never be charged to RUSAGE_CHILDREN.
     A terminal watchdog receipt alone does not establish complete CPU accounting.
     """
+    if resource is None:
+        raise CheckpointError("checkpoint CPU accounting requires POSIX resource.getrusage")
     own = resource.getrusage(resource.RUSAGE_SELF)
     children = resource.getrusage(resource.RUSAGE_CHILDREN)
     return own.ru_utime + children.ru_utime, own.ru_stime + children.ru_stime
@@ -666,6 +679,8 @@ def _module_summary(root: Path, identity: str, attempt_id: str) -> dict:
 
 
 def run_checkpointed_stage(stage, output, command, options, run_stage_impl) -> None:
+    # Reject unsupported native execution before creating the store or taking a lock.
+    _require_supported_host()
     from scripts import bootstrap
     from scripts.file_lock import exclusive_file_lock
     root = Path(options.stage1_checkpoint).expanduser().resolve()

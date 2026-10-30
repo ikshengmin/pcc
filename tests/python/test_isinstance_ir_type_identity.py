@@ -169,15 +169,23 @@ def test_local_class_named_function_type_wins_over_the_builtin(tuple_form):
 
 
 @pytest.mark.parametrize("classinfo", ("Exception", "(ValueError, Exception)", "(types.FunctionType, Exception)"))
-def test_classinfo_cache_creation_keeps_and_reloads_the_operand(tmp_path, classinfo):
+@pytest.mark.parametrize("borrowed", (False, True))
+def test_classinfo_cache_creation_keeps_and_reloads_the_operand(tmp_path, classinfo, borrowed):
     target = "arm64-apple-darwin"
-    text = _generate("import types\ndef check(value):\n    return isinstance(value, " + classinfo + ")\n", {"types": {}}, target=target)
+    operand = "value" if borrowed else "value.item"
+    text = _generate("import types\ndef check(value):\n    return isinstance(" + operand + ", " + classinfo + ")\n", {"types": {}}, target=target)
     body = _body(text, "check")
     cache = body.index("@py_exc_builtin_class(")
     predicate = body.index("@py_obj_isinstance(", cache)
-    assert body.index("@pcc_gc_store_root(") < cache
-    assert "@pcc_gc_load_ptr(" in body[cache:predicate]
-    assert "@pcc_gc_frame_leave_lifo(" in body[predicate:]
+    if borrowed:
+        assert body.index("@pcc_gc_borrowed_lease_acquire(") < cache
+        assert re.search(r"load ptr, ptr %value.addr", body[cache:predicate])
+        assert "@pcc_gc_foreign_lease_release(" in body[predicate:]
+    else:
+        assert body.index("@pcc_gc_store_root(") < cache
+        assert "@pcc_gc_load_ptr(" in body[cache:predicate]
+        assert "@pcc_gc_unpin(" in body[predicate:]
+        assert re.search(r"@pcc_gc_frame_leave(?:_lifo)?(?:_mapped)?\(", body[predicate:])
     output = tmp_path / "lease.o"
     output.write_bytes(emit_owned_object(text, target))
 

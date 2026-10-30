@@ -25,7 +25,12 @@ import netrc as host_netrc
 import ntpath as host_ntpath
 import posixpath as host_posixpath
 import pprint as host_pprint
-import pwd as host_pwd
+import sys
+
+if sys.platform.startswith(("darwin", "linux")):
+    import pwd as host_pwd
+else:
+    host_pwd = None
 import runpy as host_runpy
 import signal as host_signal
 import stat as host_stat
@@ -50,7 +55,10 @@ from pcc.stdlib import posixpath as port_posixpath
 from pcc.stdlib import pprint as port_pprint
 from pcc.stdlib import pwd as port_pwd
 from pcc.stdlib import runpy as port_runpy
-from pcc.stdlib import signal as port_signal
+if sys.platform.startswith(("darwin", "linux")):
+    from pcc.stdlib import signal as port_signal
+else:
+    port_signal = None
 from pcc.stdlib import stat as port_stat
 from pcc.stdlib import sysconfig as port_sysconfig
 from pcc.stdlib import textwrap as port_textwrap
@@ -988,7 +996,17 @@ def test_sysconfig_unowned_cpython_build_metadata_fails_closed():
         port_sysconfig.is_python_build(check_home=True)
 
 
+def _assert_signal_target_unsupported():
+    import importlib
+
+    with pytest.raises(NotImplementedError, match="only Darwin and Linux ABIs"):
+        importlib.import_module("pcc.stdlib.signal")
+
+
 def test_signal_constants_names_and_valid_set_match_cpython():
+    if port_signal is None:
+        _assert_signal_target_unsupported()
+        return
     names = ("SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV")
     for name in names:
         port_value = getattr(port_signal, name)
@@ -1004,6 +1022,9 @@ def test_signal_constants_names_and_valid_set_match_cpython():
 
 
 def test_signal_unowned_python_callback_boundary_fails_closed():
+    if port_signal is None:
+        _assert_signal_target_unsupported()
+        return
     def callback(signalnum, frame):
         return None
 
@@ -1025,6 +1046,27 @@ def test_runpy_dynamic_execution_boundary_fails_closed():
 
 
 def test_pwd_struct_passwd_sequence_surface_matches_cpython():
+    if host_pwd is None:
+        # Record fixture data exercises a sequence type, not a fabricated NSS
+        # account or a substitute Windows UID lookup.
+        values = ("record-name", "record-password", 17, 23,
+                  "record-gecos", "record-home", "record-shell")
+        record = port_pwd.struct_passwd(values)
+        names = ("pw_name", "pw_passwd", "pw_uid", "pw_gid",
+                 "pw_gecos", "pw_dir", "pw_shell")
+        assert len(record) == 7
+        assert tuple(record) == values and record == values
+        assert record == port_pwd.struct_passwd(values)
+        assert hash(record) == hash(values)
+        assert repr(record) == "pwd.struct_passwd(" + ", ".join(
+            name + "=" + repr(value) for name, value in zip(names, values)
+        ) + ")"
+        assert (record.n_fields, record.n_sequence_fields, record.n_unnamed_fields) == (7, 7, 0)
+        for name, value in zip(names, values):
+            assert getattr(record, name) == value
+        with pytest.raises(AttributeError):
+            record.pw_dir = "/changed"
+        return
     host_record = host_pwd.getpwuid(os.getuid())
     port_record = port_pwd.struct_passwd(tuple(host_record))
     assert len(port_record) == len(host_record)
@@ -1060,7 +1102,7 @@ def test_pwd_process_global_enumeration_fails_closed():
 
 
 def test_pwd_lookup_input_validation_matches_cpython():
-    for module in (port_pwd, host_pwd):
+    for module in ((port_pwd, host_pwd) if host_pwd is not None else (port_pwd,)):
         with pytest.raises(TypeError):
             module.getpwnam(b"root")
         with pytest.raises(ValueError):
@@ -1332,6 +1374,19 @@ print("runpy-api", runpy.__all__)
 '''
 
 
+def _build_tool_probe_for_target():
+    # POSIX provider native target behavior is checked separately by
+    # test_owned_native_posix_provider_target_contract; this remains the
+    # common build-tool closure, not a claim of Windows NSS support.
+    if host_pwd is not None:
+        return _COMPILED_PROBE
+    _assert_signal_target_unsupported()
+    probe = _COMPILED_PROBE.replace("import pwd\n", "").replace("import signal\n", "")
+    start = probe.index('print(\n    "signal",')
+    end = probe.index('print("runpy-api", runpy.__all__)')
+    return probe[:start] + probe[end:]
+
+
 @pytest.mark.integration
 def test_build_tool_stdlib_modules_compile_and_match_cpython(tmp_path):
     import subprocess
@@ -1353,8 +1408,8 @@ def test_build_tool_stdlib_modules_compile_and_match_cpython(tmp_path):
     config_path.write_text("[disk]\nvalue = from-file\n", encoding="utf-8")
     missing_config_path = tmp_path / "missing.ini"
     written_config_path = tmp_path / "written.ini"
-    host_passwd = host_pwd.getpwuid(os.getuid())
-    probe = _COMPILED_PROBE + (
+    host_passwd = host_pwd.getpwuid(os.getuid()) if host_pwd is not None else None
+    probe = _build_tool_probe_for_target() + (
         'print("filecmp", filecmp.cmp('
         + repr(str(cmp_left))
         + ", "
@@ -1385,18 +1440,21 @@ def test_build_tool_stdlib_modules_compile_and_match_cpython(tmp_path):
         + repr(str(written_config_path))
         + ', encoding="utf-8")\n'
         + 'print("configparser-write", written_config.get("disk", "value"))\n'
-        + "passwd_by_uid = pwd.getpwuid("
-        + str(host_passwd.pw_uid)
-        + ")\n"
-        + "passwd_by_name = pwd.getpwnam("
-        + repr(host_passwd.pw_name)
-        + ")\n"
-        + 'print("pwd", passwd_by_uid.pw_name, passwd_by_uid.pw_uid, '
-        + "passwd_by_uid.pw_gid, passwd_by_uid.pw_dir, "
-        + "passwd_by_uid.pw_shell, "
-        + "passwd_by_name.pw_uid == passwd_by_uid.pw_uid, "
-        + "passwd_by_name.pw_dir == passwd_by_uid.pw_dir)\n"
     )
+    if host_passwd is not None:
+        probe += (
+            "passwd_by_uid = pwd.getpwuid("
+            + str(host_passwd.pw_uid)
+            + ")\n"
+            + "passwd_by_name = pwd.getpwnam("
+            + repr(host_passwd.pw_name)
+            + ")\n"
+            + 'print("pwd", passwd_by_uid.pw_name, passwd_by_uid.pw_uid, '
+            + "passwd_by_uid.pw_gid, passwd_by_uid.pw_dir, "
+            + "passwd_by_uid.pw_shell, "
+            + "passwd_by_name.pw_uid == passwd_by_uid.pw_uid, "
+            + "passwd_by_name.pw_dir == passwd_by_uid.pw_dir)\n"
+        )
     src = tmp_path / "probe.py"
     src.write_text(probe, encoding="utf-8")
     exe = tmp_path / "probe_bin"

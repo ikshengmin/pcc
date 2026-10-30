@@ -115,6 +115,7 @@ class Layer1InitMixin:
         # object identity (never value-name strings, whose uniquification
         # timing differs between host and self-hosted stages).
         self._fn_gc_root_slot_registry: dict[str, list] = {}
+        self._function_root_groups: dict = {}
         self._fn_err_exit_gc_root_slots: dict[str, list] = {}
         self._fn_err_exit_owned_slots: dict[str, list] = {}
         self._fn_err_exit_finish_blocks: dict[str, ir.Block] = {}
@@ -122,6 +123,8 @@ class Layer1InitMixin:
         self._fn_valueclass_payload_root_slots: dict[str, list] = {}
         self._slot_call_root_records: list = []
         self._slot_call_root_record_index: dict = {}
+        self._slot_call_borrowed_operands: dict = {}
+        self._exact_list_parameter_guards: dict = {}
         self._slot_call_cleanup_function: Optional[ir.Function] = None
         self._slot_call_cleanup_blocks: dict[tuple, tuple] = {}
         self._slot_call_result_sinks: list = []

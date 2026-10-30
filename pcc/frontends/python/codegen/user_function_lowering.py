@@ -43,6 +43,12 @@ from pcc.frontends.python.py_ast import (
     While,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.call_object_lowering import (
+    direct_call_argument_is_gate_free,
+    direct_call_argument_is_managed,
+    direct_call_argument_reads_stable_root,
+    pin_rooted_direct_call_arguments,
+)
 from pcc.frontends.python.codegen.errors import CPythonValueRequired, L1CodegenError
 from pcc.frontends.python.codegen.generator_lowering import (
     emit_function_auto_park_role,
@@ -1439,6 +1445,12 @@ class UserFunctionLoweringMixin:
             param_index = 0
             runtime_arg_count = len(runtime_args)
             fn_arg_count = len(fn_arg_types)
+            from pcc.frontends.python.codegen.frame_root_groups import (
+                allocate_function_root,
+                begin_function_root_groups,
+            )
+            if auto_root_borrowed_params:
+                begin_function_root_groups(self, runtime_arg_count)
             if debug_codegen:
                 _func_codegen_log(
                     self,
@@ -1507,7 +1519,14 @@ class UserFunctionLoweringMixin:
                     bind_ty,
                 ):
                     continue
-                slot = self._alloca_in_entry(ir_ty, name=f"{ast_arg.name}.addr")
+                slot = None
+                if auto_root_borrowed_params and ir_ty == _CSTR and (
+                    self._is_object(bind_ty)
+                    or (isinstance(bind_ty, IntType) and bind_ty.name == "int")
+                ):
+                    slot = allocate_function_root(self, f"{ast_arg.name}.addr", True)
+                if slot is None:
+                    slot = self._alloca_in_entry(ir_ty, name=f"{ast_arg.name}.addr")
                 self.builder.store(ir_arg, slot)
                 if debug_codegen:
                     try:
@@ -2572,9 +2591,9 @@ class UserFunctionLoweringMixin:
                     value = self._emit_slot_call_operand(expr, label + ".outer")
                     self._try_err_block = self._slot_call_cleanup_block((value,), output_cleanup)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    status = self.builder.call(
-                        self.runtime["pcc_gc_root_move"],
-                        [self._as_gc_ptr(output), self._as_gc_ptr(value)],
+                    status = self._emit_root_slot_move(
+                        output,
+                        value,
                     )
                     self._slot_call_check_status(status, "class name fallback move", expr.span)
                     self._release_slot_call_roots((value,))
@@ -3767,6 +3786,9 @@ class UserFunctionLoweringMixin:
         runtime_formals = [a for a in ast_func_def.args if a.name != ""]
         args_ir: list[ir.Value] = []
         pinned_arg_temps: list[tuple[ir.Value, bool]] = []
+        # Arguments read from stable roots of this activation, not pinned.
+        rooted_arg_values: list[ir.Value] = []
+        may_park_callee = id(ast_func_def) in getattr(self, "_vthread_may_park_func_ids", set())
         for index, (ast_arg, arg_def, ir_arg) in enumerate(
             zip(resolved_args, runtime_formals, fn.args)
         ):
@@ -3781,22 +3803,23 @@ class UserFunctionLoweringMixin:
                 # The resolved callee's defining module owns this manual
                 # pointer ABI. This is a call view, never managed storage.
                 target_ty = ast_arg.ty
+            if (rooted_arg_values
+                    and not direct_call_argument_is_gate_free(self, ast_arg, target_ty)):
+                pin_rooted_direct_call_arguments(self, rooted_arg_values, pinned_arg_temps)
             v = self._emit_arg_for_abi_param_with_cleanup(
                 ast_arg,
                 target_ty,
                 param_ir_ty,
                 tuple(pinned_arg_temps),
             )
-            if (
-                not getattr(self, "_freestanding_module", False)
-                and not getattr(self, "_module_has_c_abi_export", False)
-                and not isinstance(target_ty, RawPointerType)
-                and isinstance(v.type, ir.PointerType)
-                and v not in getattr(self, "_cpy_values", ())
-            ):
+            if direct_call_argument_is_managed(self, ast_arg, v, target_ty):
                 owned = getattr(self, "_last_call_arg_owned_temp", False)
-                self._gc_pin(v)
-                pinned_arg_temps.append((v, owned))
+                if (not owned and not may_park_callee
+                        and direct_call_argument_reads_stable_root(self, ast_arg, target_ty)):
+                    rooted_arg_values.append(v)
+                else:
+                    self._gc_pin(v)
+                    pinned_arg_temps.append((v, owned))
             args_ir.append(v)
         call_name = (
             ""

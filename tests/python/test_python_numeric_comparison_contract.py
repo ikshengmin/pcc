@@ -10,12 +10,11 @@ import sys
 import pytest
 
 from pcc.frontends.python.pipeline import compile_python
-from tests.runtime_build_cache import cached_pcc_python_runtime
 
 
 @pytest.fixture(scope="module")
-def numeric_c_runtime():
-    return cached_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
+def numeric_c_runtime(pcc_runtime_archive):
+    return pcc_runtime_archive
 
 
 def native_matches_python(tmp_path, monkeypatch, numeric_c_runtime, source, reference_source=None):
@@ -177,7 +176,10 @@ def test_python_port_float_truth_matches_ieee_values():
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "py_obj_truthy")
     function.decorator_list = []
-    globals_by_name = {name: object() for name in ("py_None", "py_False", "py_True")}
+    globals_by_name = {
+        name: object()
+        for name in ("py_None", "py_False", "py_True", "py_NotImplemented")
+    }
     namespace = {
         "ptr_is_null": lambda value: int(value is None),
         "ptr_eq": lambda left, right: int(left is right),

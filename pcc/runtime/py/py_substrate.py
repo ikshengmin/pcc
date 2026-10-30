@@ -53,6 +53,7 @@ from pcc.unsafe import (
     define_global_header,
     define_global_i8,
     define_global_i32,
+    define_global_i64,
     define_global_i32_array,
     define_global_null_ptr_array,
     define_global_ptr_array,
@@ -329,6 +330,8 @@ define_global_i32("py_next_user_tag", PY_TYPE_USER_CLASS_START)
 define_global_ptr_null("py_weakref_head")
 define_global_ptr_null("py_object_root_cache")
 define_global_i32("py_class_attr_cache_epoch", 0)
+# Native type-predicate caches are invalidated by supported C object retyping.
+define_global_i64("pcc_object_type_epoch", 0)
 define_thread_local_ptr_null("py_tls_current_exc_storage")
 define_thread_local_ptr_null("py_tls_current_exc_root_handle")
 
@@ -419,6 +422,16 @@ def py_tls_exc_get():
     return global_load_ptr("py_tls_current_exc_storage")
 
 
+@c_abi_export("py_err_occurred")
+def py_err_occurred() -> int:
+    # Compiled code asks this after nearly every call. The slot is this
+    # module's thread-local, so test it here for NULL, without calling
+    # py_tls_exc_get; it is never healed (py_current_exception heals).
+    if ptr_is_null(global_load_ptr("py_tls_current_exc_storage")):
+        return 0
+    return 1
+
+
 @c_abi_export("py_tls_exc_set")
 def py_tls_exc_set(exc) -> None:
     handle = global_load_ptr("py_tls_current_exc_root_handle")
@@ -454,6 +467,15 @@ def py_tls_exc_set(exc) -> None:
 def py_tls_exc_swap_slot(slot) -> None:
     """Exchange two owned roots without exposing a displaced raw reference."""
     handle = global_load_ptr("py_tls_current_exc_root_handle")
+    # Both roots empty and no handle registered: the exchange would store NULL
+    # over NULL on each side, with nothing to barrier, register or unregister.
+    # NULL needs no read barrier, and no collector writes into an empty root.
+    if (
+        ptr_is_null(handle) != 0
+        and ptr_is_null(load_ptr(slot, 0)) != 0
+        and ptr_is_null(global_load_ptr("py_tls_current_exc_storage")) != 0
+    ):
+        return
     if ptr_is_null(pcc_gc_load_ptr(null(), slot)) == 0 and ptr_is_null(handle):
         handle = pcc_gc_scheduler_root_register_handle(global_addr("py_tls_current_exc_storage"))
         if ptr_is_null(handle):

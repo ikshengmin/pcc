@@ -21,6 +21,7 @@ from pcc.runtime.py.py_abi_constants import (
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.unsafe import (
     atomic_rmw_i32,
+    atomic_rmw_i64,
     call_void_ptr1,
     call_ptr1,
     cstr,
@@ -573,6 +574,9 @@ def py_user_del_dispatch(o) -> None:
         return
     tag: int = load_i32(o, 8)
     if tag == PY_TYPE_GEN:
+        # Closing a generator runs its finally blocks: user code a tracing
+        # sweep must recheck reachability after.
+        atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
         py_gen_finalize(o)
         return
     if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
@@ -609,6 +613,7 @@ def py_user_del_dispatch(o) -> None:
         pcc_gc_pin(saved_exc)
         py_tls_exc_set(null())
     pcc_diagnostics_runtime_log_event_code(5, 2, tag, 0, o)
+    atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
     _call_user_unary_method_void(func, o)
     pcc_diagnostics_runtime_log_event_code(5, 3, tag, 0, o)
     py_clear_exception()

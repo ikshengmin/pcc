@@ -23,36 +23,67 @@ def _functions(path, names, namespace):
 
 
 class Model:
-    def __init__(self, backend=3):
-        self.memory = {("pcc_gc_backend_selected", 0): backend}
+    def __init__(self, backend=3, *, initialized=True):
+        self.memory = {
+            ("pcc_gc_backend_selected", 0): backend,
+            ("pcc_gc_config_initialized", 0): int(initialized),
+        }
         self.nodes = {}
         self.proven = set()
         self.depth = 0
         self.on_lock = None
         self.on_unlock = None
+        self.on_compare_exchange = None
         self.events = []
         self.ns = dict(i64=int, PYOBJECTHEADER_FLAGS_OFFSET=12, PY_FLAG_GC_PINNED=64,
+            MODE_LEASE_SHARD_COUNT=32, MODE_LEASE_SHARD_STRIDE=128,
+            ptr_to_int=lambda value:value,
             ptr_is_null=lambda p: int(p == 0), is_tagged_int=lambda p: int(isinstance(p, int) and p & 1),
             null=lambda: 0, ptr_eq=lambda a,b: int(a == b), global_addr=lambda p:p,
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
+            atomic_load_i64=lambda base,offset,order:self.load(base,offset),
+            atomic_store_i64=lambda base,offset,value,order:self.store(base,offset,value),
+            atomic_cas_i64=self.compare_exchange,
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
             global_load_ptr=lambda p:self.load(p,0), global_store_ptr=lambda p,v:self.store(p,0,v),
-            pcc_gc_config_ensure=lambda:self.load("pcc_gc_backend_selected",0),
+            pcc_gc_config_ensure=self.ensure_config,
             pcc_gc_resolve_root_slot_unlocked=self.resolve,
             pcc_gc_object_index_find=lambda p:self.nodes.get(p,0),
-            pcc_gc_granule_is_object_start=lambda p:int(p in self.proven),
+            pcc_gc_forwarding_index_find=lambda p:0,
+            pcc_gc_granule_is_object_start=lambda p:1 if p in self.proven else -1,
             pcc_gc_managed_pointer_index_contains=lambda p:0,
+            pcc_gc_managed_pointer_index_seen=lambda p:0,
+            pcc_gc_static_literal_contains=lambda p:0,
             pcc_py_gc_minor_graph_lock=self.lock, pcc_py_gc_minor_graph_unlock=self.unlock)
         self.ns.update({name: value for name, value in vars(abi).items()
                         if name.startswith("PY_TYPE_")})
         _functions(RUNTIME / "freestanding_gc_root_operations.py", {
-            "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}, self.ns)
+            "pcc_gc_foreign_lease_acquire", "pcc_gc_borrowed_lease_acquire",
+            "_foreign_lease_acquire", "pcc_gc_foreign_lease_release",
+            "pcc_gc_object_is_address_pinned",
+            "_mode_lease_shard_index", "_mode_lease_reserve_shard",
+            "_mode_lease_release_shard", "pcc_gc_mode_leases_freeze",
+            "pcc_gc_mode_leases_thaw", "pcc_gc_foreign_lease_count_quiescent"}, self.ns)
 
     def load(self, base, offset=0):
         return self.memory.get((base,offset),0)
 
     def store(self, base, offset, value):
         self.memory[base,offset] = value
+
+    def ensure_config(self):
+        self.store("pcc_gc_config_initialized", 0, 1)
+        return self.load("pcc_gc_backend_selected", 0)
+
+    def compare_exchange(self, base, offset, expected, desired, success, failure):
+        if self.on_compare_exchange:
+            hook, self.on_compare_exchange = self.on_compare_exchange, None
+            hook(base, offset, expected, desired)
+        observed = self.load(base, offset)
+        if observed == expected:
+            self.store(base, offset, desired)
+        self.events.append(("cas", base, expected, desired, observed))
+        return observed
 
     def resolve(self, slot, offset):
         assert self.depth > 0
@@ -95,7 +126,9 @@ class Model:
         return self.load(self.nodes[obj],80)
 
     def active(self):
-        return self.load("pcc_gc_foreign_lease_active",0)
+        # Model interleavings are paused here: this includes every physical
+        # counter, but does not promise a concurrent linearizable snapshot.
+        return self.ns["pcc_gc_foreign_lease_count_quiescent"]()
 
     def pinned(self, obj=1000):
         return self.ns["pcc_gc_object_is_address_pinned"](obj)
@@ -156,12 +189,28 @@ def test_unknown_or_potentially_moving_no_node_fails_closed(flags,tag,proven):
     assert m.acquire(slot) == -1 and m.active() == 0
 
 
-def test_noop_token_never_decrements_a_later_node():
-    m=Model(); slot=m.object(node=False,flags=1,proven=False)
+@pytest.mark.parametrize("backend", range(5))
+def test_noop_token_never_decrements_a_later_node(backend):
+    m=Model(backend); slot=m.object(node=False,flags=1,proven=False)
     assert m.acquire(slot) == 0
     m.object(flags=0); assert m.acquire(slot) == 1
     assert m.release(slot,0) == 0 and m.count() == 1 and m.active() == 1
     assert m.release(slot,1) == 0
+
+
+@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("value", ["null", "tagged", "static_immortal"])
+def test_intrinsic_values_keep_noop_token_without_mode_guard(backend, value):
+    m = Model(backend)
+    slot = m.object(node=False, flags=1, proven=False)
+    if value != "static_immortal":
+        m.store(slot, 0, 0 if value == "null" else 7)
+    assert m.acquire(slot) == 0
+    assert m.active() == 0
+    assert _mode_setter(m)((backend + 1) % 5) == 0
+    before = dict(m.memory)
+    assert m.release(slot, 0) == 0
+    assert m.memory == before
 
 
 @pytest.mark.parametrize("counter",["node","active"])
@@ -192,7 +241,9 @@ def test_legacy_pin_is_independent_of_count():
 def _mode_setter(model):
     ns=model.ns
     # One live mutator: switching into GC3/GC4 is refused only when others run.
-    ns.update(_init_config=lambda:model.load("pcc_gc_backend_selected",0),
+    ns.update(_init_config=model.ensure_config,
+        _mode_leases_freeze=ns["pcc_gc_mode_leases_freeze"],
+        _mode_leases_thaw=ns["pcc_gc_mode_leases_thaw"],
         pcc_threads_enabled=lambda:0, pcc_thread_live_count=lambda:1,
         _object_graph_lock=model.lock, _object_graph_unlock=model.unlock,
         _forwarding_head=lambda:0, _object_head=lambda:0,
@@ -215,29 +266,72 @@ def _mode_setter(model):
 
 @pytest.mark.parametrize("before",range(5))
 @pytest.mark.parametrize("after",range(5))
-def test_mode_change_and_same_mode_reset_refuse_live_leases(before,after):
-    m=Model(before); slot=m.object(node=before != 0,flags=262144)
+@pytest.mark.parametrize("initialized", [False, True])
+def test_mode_change_and_same_mode_reset_refuse_live_leases(before,after,initialized):
+    m=Model(before, initialized=initialized); slot=m.object(node=before != 0,flags=262144)
+    assert m.load("pcc_gc_config_initialized", 0) == int(initialized)
     token=m.acquire(slot)
-    assert token > 0
+    assert token == (2 if before == 0 else 1)
+    assert m.load("pcc_gc_config_initialized", 0) == 1
+    # First-use initialization must not turn later leases into uncounted
+    # no-ops, even though GC0/1/2 do not currently move objects.
+    second=m.acquire(slot)
+    assert second == token and m.active() == 2
     setter=_mode_setter(m)
     m.ns["pending_exception"]=object(); error=m.ns["pending_exception"]
     assert setter(after) == -1
     assert m.load("pcc_gc_backend_selected",0) == before
     assert m.ns["pending_exception"] is error
-    assert m.active() == 1
+    assert m.active() == 2
     assert m.release(slot,token) == 0
+    assert m.active() == 1
+    assert setter(after) == -1
+    assert m.load("pcc_gc_backend_selected",0) == before
+    assert m.release(slot,second) == 0
+    assert m.active() == 0
     assert setter(after) == 0
     assert m.load("pcc_gc_backend_selected",0) == after
 
 
-def test_backend_teardown_gap_rejects_new_acquisition():
+@pytest.mark.parametrize("after", range(5))
+def test_backend_teardown_gap_rejects_new_acquisition(after):
     m=Model(4); slot=m.object(node=False,flags=262144)
     setter=_mode_setter(m); observed=[]
-    m.on_unlock=lambda:observed.append(m.acquire(slot))
-    assert setter(0) == 0
-    assert observed == [-1]
-    assert ("clear_nodes",-1) in m.events
+    m.on_unlock=lambda:observed.append((
+        m.load("pcc_gc_backend_selected",0), m.active(), m.acquire(slot)))
+    assert setter(after) == 0
+    assert observed == [(after, -1, -1)]
+    if after == 0:
+        assert ("clear_nodes",-1) in m.events
     assert m.active() == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_lease_free_same_mode_reset_keeps_collector_in_no_park_scope(backend):
+    m = Model(backend)
+    setter = _mode_setter(m)
+    lifecycle = []
+
+    def unexpected_pause():
+        raise AssertionError("same-mode GC1/2 reset must not pause the collector")
+
+    m.ns.update(
+        pcc_threads_enabled=lambda: 1,
+        pcc_py_gc_minor_graph_lock_depth=lambda: 0,
+        pcc_thread_no_park_depth=lambda: 1,
+        pcc_thread_owns_stopped_world=lambda: 0,
+        _stop_cms_worker=unexpected_pause,
+        _release_cms_worker_pause=unexpected_pause,
+        _maybe_start_cms_worker=lambda: lifecycle.append("ensure_started"),
+    )
+    assert setter(backend) == 0
+    assert m.load("pcc_gc_backend_selected", 0) == backend
+    assert m.load("pcc_gc_cycle_requested", 0) == 1 and m.active() == 0
+    assert lifecycle == ["ensure_started"]
+    # A different collector still requires a legal lifecycle pause.
+    before = dict(m.memory)
+    assert setter(3 - backend) == -1
+    assert m.memory == before and lifecycle == ["ensure_started"]
 
 
 def _node_functions(model):
@@ -601,7 +695,10 @@ def test_direct_free_and_note_freeing_leave_lease_metadata_untouched():
         _object_graph_lock=m.lock,_object_graph_unlock=m.unlock,
         stack_alloc=lambda n:90000)
     m.store("pcc_gc_config_initialized",0,1)
-    _functions(RUNTIME / "py_gc_backend.py", {"pcc_gc_free_object_memory","pcc_gc_note_object_freeing"},m.ns)
+    _functions(RUNTIME / "py_gc_backend.py", {
+        "pcc_gc_free_object_memory", "pcc_gc_note_object_freeing",
+        "_gc0_terminal_free_has_no_metadata",
+    }, m.ns)
     m.ns["pcc_gc_note_object_freeing"](1000)
     m.ns["pcc_gc_free_object_memory"](1000)
     assert m.count() == 1 and m.nodes[1000] == 11000
@@ -623,3 +720,141 @@ def test_allocated_immortal_no_node_needs_mode_guard():
     assert m.active() == 1
     assert _mode_setter(m)(4) == -1
     assert m.release(slot,2) == 0
+
+
+def _atomic_mode_model():
+    model = Model(0)
+    model.store('pcc_gc_refcount_atomic', 0, 1)
+    return model
+
+
+def test_threaded_nonmoving_leases_keep_independent_mode_guards_without_graph_lock():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    tokens = [model.acquire(slot), model.acquire(slot)]
+    assert tokens == [2, 2] and model.active() == 2
+    assert not any(event[0] == 'lock' for event in model.events)
+    assert _mode_setter(model)(4) == -1
+    assert model.release(slot, tokens[0]) == 0
+    assert model.active() == 1 and _mode_setter(model)(0) == -1
+    assert model.release(slot, tokens[1]) == 0
+    assert model.active() == 0 and _mode_setter(model)(4) == 0
+
+
+def test_completed_transition_between_gate_and_reservation_reloads_new_owner():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    setter = _mode_setter(model)
+
+    def switch_and_replace(base, offset, expected, desired):
+        assert (base, offset, expected, desired) == (
+            'pcc_gc_mode_lease_shards',
+            model.ns['_mode_lease_shard_index'](1000) * 128, 0, 1)
+        assert setter(4) == 0
+        model.object(obj=2000)
+        model.store(slot, 0, 2000)
+
+    model.on_compare_exchange = switch_and_replace
+    assert model.acquire(slot) == 1
+    assert model.active() == 1 and model.count(2000) == 1
+    assert ('reload', slot) in model.events
+    assert model.release(slot, 1) == 0 and model.active() == 0
+
+
+def test_lease_entering_after_mode_check_prevents_transition_publication():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    setter = _mode_setter(model)
+
+    def enter(base, offset, expected, desired):
+        assert (base, expected, desired) == ('pcc_gc_foreign_lease_active', 0, -1)
+        assert model.acquire(slot) == 2
+
+    model.on_compare_exchange = enter
+    assert setter(4) == -1
+    assert model.load('pcc_gc_backend_selected') == 0 and model.active() == 1
+    assert model.release(slot, 2) == 0
+    assert setter(4) == 0 and model.active() == 0
+
+
+def test_mode_lease_release_preserves_a_concurrent_acquisition():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    assert model.acquire(slot) == 2
+
+    def enter(base, offset, expected, desired):
+        assert (expected, desired) == (1, 0)
+        assert model.acquire(slot) == 2
+
+    model.on_compare_exchange = enter
+    assert model.release(slot, 2) == 0 and model.active() == 1
+    assert _mode_setter(model)(4) == -1
+    assert model.release(slot, 2) == 0 and model.active() == 0
+
+
+def test_indexed_lease_count_preserves_a_concurrent_mode_only_lease():
+    model = Model(3)
+    indexed = model.object()
+    leaf = model.object(obj=2000, node=False, flags=262144)
+
+    def enter(base, offset, expected, desired):
+        assert (expected, desired) == (0, 1)
+        assert model.acquire(leaf) == 2
+
+    model.on_compare_exchange = enter
+    assert model.acquire(indexed) == 1
+    assert model.active() == 2 and model.count() == 1
+    assert model.release(leaf, 2) == 0 and model.active() == 1
+    assert model.release(indexed, 1) == 0 and model.active() == 0
+
+
+def test_atomic_mode_reservation_retries_overflow_without_wrapping():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144)
+    model.store('pcc_gc_mode_lease_shards',
+                model.ns['_mode_lease_shard_index'](1000) * 128, 2**63 - 2)
+
+    def fill(base, offset, expected, desired):
+        model.store(base, offset, 2**63 - 1)
+
+    model.on_compare_exchange = fill
+    assert model.acquire(slot) == -2 and model.active() == 2**63 - 1
+
+
+def test_failed_epoch_advance_releases_transition_reservation():
+    model = _atomic_mode_model()
+    setter = _mode_setter(model)
+    model.ns['_tracing_cycle_epoch_advance_unlocked'] = lambda: 0
+    assert setter(4) == -1
+    assert model.active() == 0 and model.load('pcc_gc_backend_selected') == 0
+    slot = model.object(node=False, flags=262144)
+    assert model.acquire(slot) == 2
+    assert model.release(slot, 2) == 0 and model.active() == 0
+
+
+def test_atomic_nonmoving_path_preserves_unknown_pointer_rejection():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144, proven=False)
+    assert model.acquire(slot) == -1 and model.active() == 0
+
+
+@pytest.mark.parametrize('flags', (1, 524288))
+def test_atomic_nonmoving_path_preserves_special_header_validation(flags):
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=flags, proven=False)
+    expected = 0 if flags == 1 else -1
+    assert model.acquire(slot) == expected and model.active() == 0
+
+
+def test_uncertain_non_granule_lease_checks_current_index_under_graph_lock():
+    model = _atomic_mode_model()
+    slot = model.object(node=False, flags=262144, proven=False)
+
+    def contains(value):
+        assert model.depth > 0
+        return int(value == 1000)
+
+    model.ns['pcc_gc_managed_pointer_index_contains'] = contains
+    assert model.acquire(slot) == 2 and model.active() == 1
+    assert any(event[0] == 'lock' for event in model.events)
+    assert model.release(slot, 2) == 0 and model.active() == 0

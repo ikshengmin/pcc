@@ -14,6 +14,7 @@ not belong in this prose because the generator cannot update them.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.runtime.py.py_abi_constants import (
     PYLISTOBJECT_ITEMS_OFFSET,
@@ -55,6 +56,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_TUPLE,
     PY_TYPE_USER,
     PY_TYPE_USER_CLASS_START,
+    PY_TYPE_VALUEBOX,
     PY_TYPE_VIRTUAL_THREAD,
     PY_TYPE_VTHREAD_CHANNEL,
     PY_TYPE_WEAKREF,
@@ -267,6 +269,12 @@ pcc_gc_precise_stack_diff_if_requested = extern(
     "pcc_gc_precise_stack_diff_if_requested", (), c_void
 )
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_reclaim_retired_index_tables = extern(
+    "pcc_gc_reclaim_retired_index_tables", (), c_int64
+)
+pcc_gc_reclaim_retired_index_tables_if_alone = extern(
+    "pcc_gc_reclaim_retired_index_tables_if_alone", (), c_void
+)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
@@ -468,6 +476,9 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     if pcc_gc_pointer_register(obj) < 0:
         return null()
     pcc_gc_note_object_allocated_sized(obj, size)
+    # Tracking may rehash the object index, which is read without the lock;
+    # with one thread the replaced table can go now.
+    pcc_gc_reclaim_retired_index_tables_if_alone()
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(1, 2, size, type_tag, obj)
     return obj
@@ -625,7 +636,10 @@ def _gc_incref_fresh_native_instance(o) -> None:
     backend: int = _gc_backend_fast()
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (backend == 1 or backend == 2) and flags == 0:
-        return
+        # GC0's untracked values can have no collector bits after a switch.
+        # Exact allocation provenance still admits their live owner counts.
+        if pcc_gc_pointer_is_managed(o) == 0:
+            return
     if backend == 4 and _gc_forwarding_population() > 0 and (flags & 2048) != 0:
         resolved = pcc_gc_note_relocation_read(o)
         if ptr_is_null(resolved) == 0 and ptr_eq(resolved, o) == 0:
@@ -715,12 +729,20 @@ def pcc_gc_store_ptr_plan_init(plan, owner, backend: int) -> None:
 def _gc4_old_slot_is_releasable(value) -> int:
     if pcc_gc_object_is_known_no_lock(value) != 0:
         return 1
+    # GC0 objects predate the tracing index after a collector-mode switch.
+    # Exact managed provenance covers both slabs and large direct allocations.
+    # A live, nonforwarded positive owner remains releasable even when it is
+    # a container rather than a leaf. Never dereference unknown addresses.
+    if pcc_gc_pointer_is_managed(value) == 0:
+        return 0
+    flags: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET)
+    if (flags & (524288 | 2048)) == 0:
+        if load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET) > 0:
+            return 1
     # Graph leaves intentionally have no tracing-index node. Allocation
     # provenance still proves their header is live; their slot owner must
     # reach the ordinary decref checks just like a tracked object's owner.
-    # Keep unknown/stale pointers and unregistered graph objects excluded.
-    if pcc_gc_pointer_is_managed(value) == 0:
-        return 0
+    # Preserve the existing checked leaf path for terminal headers.
     return _gc_graph_leaf_tag(load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET))
 
 
@@ -959,9 +981,78 @@ def pcc_gc_store_root_take(slot, value) -> None:
     # retains the stored value), then release the caller's reference through
     # the slot so a relocated address is never touched.
     pcc_gc_store_root(slot, value)
+    # An empty input transfers no owner. The checked root store has already
+    # retired the old reference, and a fresh slot reload may be nonempty if
+    # that finalizer reentered and repopulated it. Do not release that value.
+    if ptr_is_null(value) != 0:
+        return
     stored = pcc_gc_load_ptr(null(), slot)
     if is_tagged_int(stored) == 0 and ptr_is_null(stored) == 0:
         py_decref(stored)
+
+
+@c_abi_export("pcc_gc_store_root_known")
+def pcc_gc_store_root_known(slot, value) -> None:
+    """Retaining store for compiler-owned roots containing initialized objects.
+
+    Both the new value and the previous root owner must be managed objects,
+    tagged values or NULL. Raw/foreign slots use the checked root ABI.
+    Tracing, relocation, verification and logging keep the original route.
+    """
+    if ptr_is_null(slot) != 0:
+        return
+    if _gc_backend_fast() != 0 or _known_ref_checks() != 0 or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_gc_store_root(slot, value)
+        return
+    old = load_ptr(slot, 0)
+    if ptr_eq(old, value) != 0:
+        return
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        pcc_gc_retain_known(value)
+    store_ptr(slot, 0, value)
+    if ptr_is_null(old) == 0 and is_tagged_int(old) == 0:
+        pcc_gc_release_known(old)
+
+
+@c_abi_export("pcc_gc_store_root_take_known")
+def pcc_gc_store_root_take_known(slot, value) -> None:
+    """Transfer an initialized object's owner into a compiler-owned root."""
+    if ptr_is_null(slot) != 0:
+        return
+    if _gc_backend_fast() != 0 or _known_ref_checks() != 0 or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_gc_store_root_take(slot, value)
+        return
+    old = load_ptr(slot, 0)
+    store_ptr(slot, 0, value)
+    if ptr_is_null(old) == 0 and is_tagged_int(old) == 0:
+        pcc_gc_release_known(old)
+
+
+@c_abi_export("pcc_gc_publish_owned_root")
+def pcc_gc_publish_owned_root(slot) -> int:
+    """Publish the fresh owner already stored in a registered private root.
+
+    The producer's result is stored before any call or safepoint. The slot
+    already owns that reference; this operation neither retains it nor
+    exports a raw address. GC0 has no root write barrier, so it needs no
+    address lease just to call that barrier. A backend transition sees the
+    already published root. Tracing/moving modes keep the full lease and
+    authoritative reload protocol, including its failure status.
+    """
+    if ptr_is_null(slot) != 0:
+        return -1
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+    ):
+        return 0
+    token: int = pcc_gc_foreign_lease_acquire(slot)
+    if token < 0:
+        return token
+    value = load_ptr(slot, 0)
+    pcc_gc_note_slot_write_barrier(null(), slot, value)
+    return pcc_gc_foreign_lease_release(slot, token)
 
 
 @c_abi_export("pcc_gc_root_copy_lease")
@@ -1047,6 +1138,20 @@ def pcc_gc_root_move(destination, source) -> int:
         return -1
     if ptr_eq(destination, source) != 0:
         return -1
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+    ):
+        # As in pcc_gc_root_copy_borrowed_lease: GC0 neither moves nor traces
+        # roots concurrently (its cycle collection stops the world) and roots
+        # have no barrier, so the move is two plain stores. No graph lock, so
+        # concurrent threads do not serialize here.
+        if ptr_is_null(load_ptr(destination, 0)) == 0:
+            return -4
+        store_ptr(destination, 0, load_ptr(source, 0))
+        store_ptr(source, 0, null())
+        return 0
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     if ptr_is_null(load_ptr(destination, 0)) == 0:
@@ -1114,6 +1219,87 @@ def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
     pcc_gc_store_root_plan_finish(plan)
     pcc_gc_store_root_plan_finish(rollback)
     return token
+
+
+@c_abi_export("pcc_gc_root_copy_owned_prepare_locked")
+def pcc_gc_root_copy_owned_prepare_locked(destination, source, plan) -> int:
+    """Retain a source into an empty traced owner without exporting an address.
+
+    The caller holds the graph lock and keeps both slot addresses valid.
+    Source is an owning root or an owned heap field whose payload is protected.
+    Destination stays registered until consumed; a later raw-address consumer
+    must acquire its own lease. Finish plan128 after the outermost unlock.
+    """
+    pcc_gc_store_root_plan_init(plan, _gc_backend_fast())
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        return -4
+    value = pcc_gc_resolve_root_slot_unlocked(source, 0)
+    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+        # Keep the address-lease path's rejection of terminal objects. The
+        # copied owner does not reserve an address or a backend transition.
+        if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 524288) != 0:
+            return -1
+    if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
+        return -4
+    return 0
+
+
+@c_abi_export("pcc_gc_root_copy_local")
+def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
+    """Copy between registered private roots without exporting an address.
+
+    Both slots belong to this activation; neither is a shared global or heap
+    field. The source owner stays live and its binding is not concurrently
+    changed. Destination is distinct and empty. Success adds one destination
+    owner, returns zero, and creates no address lease. A later raw consumer
+    must acquire its own lease. Borrowed sources must not transfer references
+    when relocation heals their slot.
+    """
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    if source_borrowed != 0 and source_borrowed != 1:
+        return -1
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+    ):
+        # The existing borrowed-root GC0 copy has the same nonmoving proof.
+        # Private owning roots need no resolver or address transaction either.
+        if ptr_is_null(load_ptr(destination, 0)) == 0:
+            return -4
+        value = load_ptr(source, 0)
+        if is_tagged_int(value) == 0 and ptr_is_null(value) == 0:
+            py_incref(value)
+        store_ptr(destination, 0, value)
+        return 0
+    plan = stack_alloc(128)
+    _gc_backend_fast()
+    pcc_py_gc_minor_graph_lock()
+    status: int = -4
+    if source_borrowed == 0:
+        status = pcc_gc_root_copy_owned_prepare_locked(destination, source, plan)
+    else:
+        pcc_gc_store_root_plan_init(plan, _gc_backend_fast())
+        if ptr_is_null(load_ptr(destination, 0)) != 0:
+            value = pcc_gc_load_borrowed_ptr(null(), source)
+            valid: int = 1
+            if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+                if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 524288) != 0:
+                    valid = 0
+                    status = -1
+            if valid != 0:
+                if pcc_gc_store_root_plan_commit_locked(plan, destination, value) != 0:
+                    status = 0
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_root_plan_finish(plan)
+    return status
 
 
 @c_abi_export("pcc_gc_root_copy_lease_prepare_locked")
@@ -1287,6 +1473,7 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
+    pcc_gc_reclaim_retired_index_tables()
     pcc_gc_begin_explicit_tracing_collect()
     collected: int = 0
     idle_rounds: int = 0
@@ -1341,7 +1528,7 @@ def _gc_maybe_auto_collect() -> None:
     atomic_store_i64(
         global_addr("pcc_gc_tracked_after_collect"),
         0,
-        load_i32(global_addr("py_gc_tracked_count"), 0),
+        atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire"),
         "relaxed",
     )
 
@@ -1355,9 +1542,13 @@ def _gc4_maybe_auto_step() -> None:
             global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release"
         )
         return
-    commits: int = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
     pcc_gc_backend4_maybe_auto_step()
-    if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits:
+    # The background marker may have finished before this gate was entered.
+    # Its completed sweep must not depend on this mutator finishing a cycle.
+    if (
+        atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") == 0
+        and pcc_gc_sweep_owed() == 0
+    ):
         return
     if pcc_thread_no_park_depth() != 0 or pcc_py_gc_minor_graph_lock_depth() != 0:
         return
@@ -1528,6 +1719,7 @@ def pcc_gc_collect(reason: int) -> int:
         while stw != 0:
             pcc_thread_safepoint()
             stw = pcc_stop_the_world()
+        pcc_gc_reclaim_retired_index_tables()
         if backend == 3 or backend == 4:
             # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
             # compare the stopped stack's mapped roots with the registered ones.
@@ -1637,7 +1829,8 @@ def _py_incref_prepare(o, prepared) -> None:
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (backend == 1 or backend == 2) and flags == 0:
-        return
+        if pcc_gc_pointer_is_managed(o) == 0:
+            return
     if (
         backend == 4
         and _gc_forwarding_population() > 0
@@ -1727,10 +1920,20 @@ def py_incref(o) -> None:
             or atomic_tag == PY_TYPE_CPY_HANDLE
             or (atomic_tag >= PY_TYPE_USER and atomic_tag < PY_TYPE_CEXT_TAG_BASE)
         ):
-            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
-                    atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
-                    return
+            # The existing admission already proves the no-probe/no-log GC0
+            # path and an accepted tag. Immortals also need no count change;
+            # do not send them through the full configuration/provenance tail.
+            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                return
+            if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
+                atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
+                return
+    _py_incref_checked_tail(o)
+
+
+def _py_incref_checked_tail(o) -> None:
+    # Keep prepared records and the checked/moving paths out of the common
+    # reference-update frame. This body retains the original validation order.
     # Backend 0, no probe, one thread, no logging: an ordinary object that is
     # neither immortal nor dying takes a plain increment -- what the path
     # below does for it after its configuration loads, a dozen tag compares
@@ -1798,7 +2001,8 @@ def _py_decref_prepare(o, prepared) -> None:
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (backend == 1 or backend == 2) and flags == 0:
-        return
+        if pcc_gc_pointer_is_managed(o) == 0:
+            return
     if (
         backend == 4
         and _gc_forwarding_population() > 0
@@ -1877,7 +2081,11 @@ def _py_decref_finish(prepared) -> None:
     if backend == 4 and (flags & 65536) != 0:
         delay_zpage_freeing_note = 1
     delay_instance_metadata: int = 0
-    if tag_dbg == PY_TYPE_INSTANCE or tag_dbg >= PY_TYPE_USER_CLASS_START:
+    if (
+        tag_dbg == PY_TYPE_INSTANCE
+        or tag_dbg == PY_TYPE_VALUEBOX
+        or tag_dbg >= PY_TYPE_USER_CLASS_START
+    ):
         delay_instance_metadata = 1
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(3, 2, new_rc, tag_dbg, o)
@@ -1910,28 +2118,6 @@ def _py_decref_finish(prepared) -> None:
                 pcc_gc_note_object_freeing(o)
 
 
-def _decref_above_one_atomic(o) -> int:
-    """Drop one reference while the count stays positive; 1 when done.
-
-    A count that would reach zero is left untouched for the full release
-    path (deallocation, weakrefs, resurrection). Release ordering publishes
-    this thread's writes before another thread can free the object.
-    """
-    count: int = atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed")
-    trying: int = 1
-    while trying != 0:
-        if count <= 1:
-            trying = 0
-        else:
-            observed: int = atomic_cas_i64(
-                o, PYOBJECTHEADER_REFCOUNT_OFFSET, count, count - 1, "release", "relaxed"
-            )
-            if observed == count:
-                return 1
-            count = observed
-    return 0
-
-
 @c_abi_export("py_decref")
 def py_decref(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
@@ -1946,9 +2132,24 @@ def py_decref(o) -> None:
             or atomic_tag == PY_TYPE_CPY_HANDLE
             or (atomic_tag >= PY_TYPE_USER and atomic_tag < PY_TYPE_CEXT_TAG_BASE)
         ):
-            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                if _decref_above_one_atomic(o) != 0:
+            if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                return
+            # Inline the nonterminal drop so a positive count does not enter
+            # a second polled frame. Retry polls remain on the loop backedge.
+            count: i64 = i64(atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed"))
+            while count > 1:
+                observed: i64 = i64(atomic_cas_i64(
+                    o, PYOBJECTHEADER_REFCOUNT_OFFSET, count, count - 1, "release", "relaxed"
+                ))
+                if observed == count:
                     return
+                count = observed
+    _py_decref_checked_tail(o)
+
+
+def _py_decref_checked_tail(o) -> None:
+    # Terminal counts, tracing/moving collectors and diagnostic modes retain
+    # their complete prepare/finish and finalization paths.
     # As in py_incref; a count that would reach zero keeps the full path, so
     # deallocation, weakrefs and resurrection are untouched.
     if (

@@ -366,12 +366,18 @@ class UnaryCallLoweringMixin:
         pinned_arg_temps: tuple[tuple[ir.Value, bool], ...] = (),
         result_slot=None,
         aggregate_result_ty=None,
+        null_signals_error: bool = False,
     ) -> ir.Value:
         """Call a user function; after the call, check py_err_occurred()
         and branch to the active error-propagation block if a Python
         exception is pending. When we're inside a try block that block
         is the except-dispatch (self._try_err_block); otherwise it is
         the enclosing function's err-exit epilogue.
+
+        ``null_signals_error``: the callee returns NULL exactly when it
+        raises (a compiled Python function). The check then tests the
+        result itself, so no call can park between the return and its
+        consumer and the result needs no root across the check.
 
         This replaces an earlier Itanium-ABI design that used `invoke`
         + landingpad to route exceptions via libc++abi. Return-code
@@ -441,6 +447,21 @@ class UnaryCallLoweringMixin:
                 self._slot_call_note_published(field_slot)
         root_slot = None
         root_ptr = None
+        null_checked = (
+            null_signals_error
+            and result_slot is None
+            and aggregate_output is None
+            and isinstance(result.type, ir.PointerType)
+        )
+        if null_checked:
+            self._emit_post_call_err_check(
+                span,
+                pinned_release_on_error=pinned_arg_temps,
+                error_value=result,
+            )
+            if root_result and not getattr(self, "_suppress_borrowed_return_retain", False):
+                self._note_owned_object_value(result)
+            return result
         if result_slot is not None and isinstance(result.type, ir.PointerType):
             # The expression consumer registered this empty owning output
             # before any operand evaluation. Publish at the actual return
@@ -782,7 +803,7 @@ class UnaryCallLoweringMixin:
         if builtin_name not in _CPY_BUILTIN_TYPE_NAMES:
             return None
         if (builtin_name == "str"
-                and attr.name in ("count", "startswith", "endswith")
+                and attr.name in ("count", "startswith", "endswith", "find", "__len__")
                 and self._name_returns_native_builtin_callable_value(builtin_name)):
             # These descriptors belong to the canonical native str namespace.
             # Resolve the callable before evaluating operands and preserve the

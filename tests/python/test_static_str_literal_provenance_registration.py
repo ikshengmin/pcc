@@ -81,11 +81,11 @@ def test_every_pooled_literal_is_registered_once_before_module_code(tmp_path):
     m = re.search(r"define [^\n]*@_pcc_py_static_literals_[A-Za-z0-9_]*\(\)[^{]*\{\n(.*?)\n\}", ll, re.S)
     assert m, "static literal init function missing"
     body = m.group(1)
-    calls = re.findall(r"@pcc_gc_pointer_register\(", body)
+    calls = re.findall(r"@pcc_gc_pointer_register_static_literal\(", body)
     # Each registration names its literal directly or through an identity alias.
     aliases = dict(re.findall(r"(%[\w.]+) = bitcast ptr (@\.pystr\.obj\.\d+) to ptr", body))
     registered = [aliases.get(argument, argument)
-                  for argument in re.findall(r"@pcc_gc_pointer_register\(ptr ([%@][\w.]+)", body)]
+                  for argument in re.findall(r"@pcc_gc_pointer_register_static_literal\(ptr ([%@][\w.]+)", body)]
     assert len(calls) == len(pooled), (len(calls), len(pooled))
     assert set(registered) == {name.split(" ")[0] for name in pooled}, (registered, pooled)
     # Guarded: a second call must not re-register.
@@ -136,6 +136,8 @@ def literal_marker(value: str) -> bool:
     compile_python(str(source), str(output), backend="self", libpython_mode="off",
                    emit_llvm_only=True, python_library=True, target_triple=target)
     text = output.read_text()
+    assert re.search(r"call i64(?: \(ptr\))? @pcc_gc_pointer_register\(", text)
+    assert not re.search(r"call i64(?: \(ptr\))? @pcc_gc_pointer_register_static_literal\(", text)
     has_ctor = "@llvm.global_ctors = appending global" in text
     assert has_ctor
     ctor = re.search(r"^@llvm\.global_ctors = .*", text, re.M)
@@ -145,6 +147,19 @@ def literal_marker(value: str) -> bool:
     retained_init = "define internal void @_pcc_py_static_literals_literal_library()" in optimized
     assert retained_init
     assert emit_owned_object(optimized, target)
+
+
+def test_importable_library_keeps_counted_literal_registration(tmp_path):
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = tmp_path / "importable_literals.py"
+    output = tmp_path / "importable_literals.ll"
+    source.write_text('def marker():\n    return "unloadable literal"\n')
+    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+                   emit_llvm_only=True, python_library=True)
+    text = output.read_text()
+    assert re.search(r"call i64(?: \(ptr\))? @pcc_gc_pointer_register\(", text)
+    assert not re.search(r"call i64(?: \(ptr\))? @pcc_gc_pointer_register_static_literal\(", text)
 
 
 @pytest.mark.integration

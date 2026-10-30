@@ -74,12 +74,17 @@ class _Memory:
             "_backend4_remembered_set_add": lambda owner, slot: None,
         }
         _load_functions(INDEX, self.namespace, {
+            "_index_published_cell", "_index_table_publish", "_index_table_release",
             "pcc_gc_index_py_hash_ptr", "pcc_gc_index_py_next_pow2",
             "pcc_gc_index_py_rehash_capacity", "pcc_gc_index_py_find_slot",
             "pcc_gc_index_py_rehash_slots", "pcc_gc_index_py_insert",
             "pcc_gc_index_py_remove",
             *("pcc_gc_store_buffer_member_" + suffix for suffix in
               ("note", "taint", "maybe", "forget", "owner_count", "clear")),
+            "pcc_gc_store_buffer_index_taint", "pcc_gc_store_buffer_owner_entries",
+            "pcc_gc_store_buffer_slot_pending", "pcc_gc_store_buffer_entry_note",
+            "pcc_gc_store_buffer_entry_forget", "pcc_gc_store_buffer_slot_move",
+            "pcc_gc_store_buffer_index_clear",
         })
         _load_functions(BACKEND, self.namespace, {
             "_store_buffer_head", "_set_store_buffer_head",
@@ -95,6 +100,7 @@ class _Memory:
             "_backend4_store_buffer_max_owner_fanout", "_backend4_reset_store_buffer_epoch_state",
         })
         _load_functions(SCHEDULER, self.namespace, {
+            "_backend4_drain_remembered_batch",
             "pcc_gc_backend4_step_remembered_roots",
         })
 
@@ -258,7 +264,8 @@ def test_partial_batch_retains_owner_until_last_entry_without_index_allocation(q
         if queues == "global" or (queues == "both" and index == 4):
             memory.flush()
     slots = memory.read(MEMBERS + "slots", 0)
-    assert memory.drain(20) == 8
+    # A budget below the queue length drains a partial batch.
+    assert memory.drain(8) == 8
     assert memory.owners() == {owner: 2}
     assert memory.count() == memory.maybe(owner) == 1
     assert memory.read(owner, 12) & 512
@@ -310,7 +317,8 @@ def test_cleanup_reenqueue_preserves_new_membership_after_drained_epoch():
         memory.enqueue(owner)
 
     memory.cleanup_callback = reenqueue
-    assert memory.drain() == 1
+    # A one-entry budget stops after the batch whose cleanup re-enqueued.
+    assert memory.drain(1) == 1
     assert memory.owners() == {owner: 1}
     assert memory.count() == memory.maybe(owner) == 1
     assert memory.read(owner, 12) & 512

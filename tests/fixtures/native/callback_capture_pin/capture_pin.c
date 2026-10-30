@@ -2,7 +2,7 @@
  * py_runtime.h exposes PyObjectHeader.flags and the constructors/call APIs.
  * It does not define the two flag names below. The harness verifies these
  * fixture values against py/py_abi_constants.py before compiling this file.
- * The existing exported i32 metric is a read-only diagnostic, never reset.
+ * The exported pin balance is a read-only diagnostic, never reset here.
  */
 #include "py_runtime.h"
 #include <stdint.h>
@@ -13,7 +13,8 @@ enum {
     PROBE_PINNED = 64,
     PROBE_CONTINUATION_FACTORY = 67108864
 };
-extern int32_t pcc_gc_metric_pin;
+/* The pin balance is summed from the runtime's statistics shards. */
+extern int64_t pcc_gc_metric_pin_balance(void);
 static int32_t capture_frame_map[1] = {4};
 
 static PyObject *return_captures(PyObject *captures, PyObject *args) {
@@ -58,10 +59,10 @@ int main(int argc, char **argv) {
     }
     if (prior_pin) pcc_gc_pin(roots[0]);
     int before_pin = ((PyObjectHeader *)roots[0])->flags & PROBE_PINNED;
-    int before_metric = pcc_gc_metric_pin;
+    int64_t before_metric = pcc_gc_metric_pin_balance();
     value = py_func_call_kwargs(roots[2], roots[1], NULL);
     /* No helper, allocation, poll or new pin between the call and snapshot. */
-    int after_metric = pcc_gc_metric_pin;
+    int64_t after_metric = pcc_gc_metric_pin_balance();
     int same = value == roots[0];
     int after_pin = value == NULL ? -1 : (((PyObjectHeader *)value)->flags & PROBE_PINNED);
     int metric_delta = after_metric - before_metric;

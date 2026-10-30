@@ -6,7 +6,7 @@
 ; 5 missing field layout, 6 lease acquisition, 7 lease release, 8 tuple setup.
 @lookup_cleanup_roots = internal constant i32 {{ROOT_SLOT_COUNT}}
 @lookup_cleanup_name = internal constant [8 x i8] c"missing\00"
-@pcc_gc_metric_pin = external global i32
+declare i64 @pcc_gc_metric_pin_balance()
 
 declare void @pcc_gc_frame_enter(ptr, ptr)
 declare void @pcc_gc_frame_leave(ptr)
@@ -125,7 +125,7 @@ before_call:
   ; Counted leases keep the address stable while testing both legacy pin bits.
   store i32 %test_flags, ptr %flags_slot
   %references_before = load i64, ptr %refcount_slot
-  %pins_before = load i32, ptr @pcc_gc_metric_pin
+  %pins_before = call i64 @pcc_gc_metric_pin_balance()
   br i1 %is_metaclass, label %call_metaclass, label %choose_instance
 call_metaclass:
   %current_args = call ptr @pcc_gc_load_ptr(ptr null, ptr %args_slot)
@@ -153,8 +153,8 @@ inspect:
   call void @py_clear_exception()
   %references_after = load i64, ptr %refcount_slot
   %references_ok = icmp eq i64 %references_after, %references_before
-  %pins_after = load i32, ptr @pcc_gc_metric_pin
-  %pins_ok = icmp eq i32 %pins_after, %pins_before
+  %pins_after = call i64 @pcc_gc_metric_pin_balance()
+  %pins_ok = icmp eq i64 %pins_after, %pins_before
   %metric_status = select i1 %pins_ok, i64 0, i64 4
   %reference_status = select i1 %references_ok, i64 %metric_status, i64 2
   %pin_status = select i1 %pin_ok, i64 %reference_status, i64 3

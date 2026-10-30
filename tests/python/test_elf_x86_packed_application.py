@@ -11,6 +11,7 @@ import pytest
 from pcc.backend import elf_x86_64 as elf
 from pcc.backend.owned_elf_inputs import ElfInputStore
 from tests.elf_x86_packed_application_reference import (
+    _without_aarch64_jump26_veneers,
     original_linker,
     without_x86_packed_application,
 )
@@ -293,6 +294,10 @@ def test_application_source_keeps_generic_body_and_x86_operation_order():
             "_write_int(image, patch, symbol_address + addend, 64, False)",
             "_write_int(image, patch, symbol_address - addend, 64, False)", 1,
         ))
+
+    # Compare the unchanged x86 operation/body contract after exactly undoing
+    # the separately pinned JUMP26 owner delta, not arbitrary ARM edits.
+    source = _without_aarch64_jump26_veneers(source)
 
     def application(text):
         owner = next(node for node in ast.parse(text).body

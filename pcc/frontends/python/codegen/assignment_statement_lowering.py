@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.codegen.attr_store_lowering import (
+    rooted_attribute_store,
+)
 from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_expr_binding,
     live_import_name_slot,
 )
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_SET
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_LIST,
+    PY_TYPE_SET,
+    PY_TYPE_TUPLE,
+)
 
 import sys
 import os
@@ -49,11 +56,28 @@ from pcc.frontends.python.py_ast import (
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.local_bound_lowering import is_preplanned_owned_local
 from pcc.frontends.python.py_ast import assignment_storage_annotation
 
 _I1 = ir.IntType(1)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
+# py_obj_inplace_op's operator codes (PyNumber_InPlace* order).
+_INPLACE_OP_CODES = {
+    "+": 0,
+    "-": 1,
+    "*": 2,
+    "/": 3,
+    "//": 4,
+    "%": 5,
+    "|": 6,
+    "&": 7,
+    "^": 8,
+    "<<": 9,
+    ">>": 10,
+    "**": 11,
+    "@": 12,
+}
 
 
 def _assign_has_attr(obj, name: str) -> bool:
@@ -143,6 +167,13 @@ def _assign_is_dyn_type(ty) -> bool:
     return isinstance(ty, DynType) or _assign_type_name(ty) == "dyn"
 
 
+def _assign_unpack_needs_unbox(ty) -> bool:
+    # Container elements already own the exact Python integer. Preserve that
+    # object until the destination requests an explicit machine projection.
+    ordinary_int = isinstance(ty, IntType) and ty.name == "int"
+    return not _assign_is_dyn_type(ty) and not ordinary_int
+
+
 def _assign_is_list_type(ty) -> bool:
     return isinstance(ty, ListType) or (
         _assign_type_name(ty) == "list" and _assign_has_attr(ty, "elem")
@@ -172,23 +203,22 @@ def _assign_list_elem(ty):
         return DynType(name="dyn")
 
 
-def _emit_live_import_augassign(host, stmt, op):
-    """Keep the loaded binding alive across RHS callbacks and replacement."""
-    code = {"+": 0, "-": 1, "*": 2, "/": 3, "//": 4, "%": 5}.get(op)
-    declared = host._module_globals[stmt.target.ident][1]
+def _emit_rooted_name_augassign(host, stmt, op, declared):
+    """Own both operands and replace the binding through the root protocol."""
+    code = _INPLACE_OP_CODES.get(op)
     set_update = (isinstance(declared, SetType)
                   and isinstance(stmt.value.ty, (SetType, DynType))
                   and op in ("|", "&", "-", "^"))
+    if (op == "**" and not isinstance(stmt.target.ty, (FloatType, ComplexType))
+            and not isinstance(stmt.value.ty, (FloatType, ComplexType))):
+        host._guard_integer_power_operand_provenance(stmt.target, stmt.value)
     if code is None and not set_update:
-        if (op == "**" and not isinstance(stmt.target.ty, (FloatType, ComplexType))
-                and not isinstance(stmt.value.ty, (FloatType, ComplexType))):
-            host._guard_integer_power_operand_provenance(stmt.target, stmt.value)
         combined = BinOp(span=stmt.span, ty=DynType(name="dyn"), op=op,
                          lhs=stmt.target, rhs=stmt.value)
-        result = host._emit_slot_call_operand(combined, "import.augassign.result")
+        result = host._emit_slot_call_operand(combined, "augassign.result")
         roots = [result]
     else:
-        result = host._new_slot_call_root("import.augassign.result")
+        result = host._new_slot_call_root("augassign.result")
         roots = [result]
     previous = host._current_try_err_block()
     target = previous if previous is not None else host._ensure_fn_err_exit()
@@ -198,7 +228,7 @@ def _emit_live_import_augassign(host, stmt, op):
         host._cpy_operand_cleanup_block = host._try_err_block
         if code is not None or set_update:
             for expr in (stmt.target, stmt.value):
-                roots.append(host._emit_slot_call_operand(expr, "import.augassign.input"))
+                roots.append(host._emit_slot_call_operand(expr, "augassign.input"))
                 host._try_err_block = host._slot_call_cleanup_block(tuple(roots), target)
                 host._cpy_operand_cleanup_block = host._try_err_block
             if set_update:
@@ -208,8 +238,8 @@ def _emit_live_import_augassign(host, stmt, op):
                     host.builder.icmp_signed("==", tags[0], ir.Constant(_I64, PY_TYPE_SET)),
                     host.builder.icmp_signed("==", tags[1], ir.Constant(_I64, PY_TYPE_SET)),
                 )
-                ready = host.current_function.append_basic_block(host._fresh("import.set.ready"))
-                bad = host.current_function.append_basic_block(host._fresh("import.set.bad"))
+                ready = host.current_function.append_basic_block(host._fresh("augassign.set.ready"))
+                bad = host.current_function.append_basic_block(host._fresh("augassign.set.bad"))
                 host.builder.cbranch(valid, ready, bad)
                 host.builder.position_at_end(bad)
                 host._emit_builtin_exception_and_branch("TypeError", "set binary operator requires set operands", stmt.span)
@@ -230,48 +260,256 @@ def _emit_live_import_augassign(host, stmt, op):
         host._cpy_operand_cleanup_block = saved_cpy
 
 
-def _emit_live_import_sequence_unpack(host, stmt, target):
-    """Own sequence elements before target evaluation can replace bindings."""
-    source = host._emit_slot_call_operand(stmt.value, "import.unpack.source")
-    roots = [source]
+def _assign_uses_owned_unpack(host, rhs):
+    if (getattr(host, "_freestanding_module", False)
+            or getattr(host, "_runtime_port_module", False)
+            or host._expr_looks_cpython(rhs)
+            or host._expr_returns_unsafe_raw_pointer(rhs)):
+        return False
+    function = host.current_function
+    return function is None or not (
+        function.name in getattr(host, "_manual_pointer_abi_functions", ())
+        or function.name in getattr(host, "_c_abi_export_symbols", ())
+    )
+
+
+def _emit_unpack_sequence_size_error(host, expected, actual, span):
+    previous = host._current_try_err_block()
+    saved_cpy = host._cpy_operand_cleanup_block
+    roots = []
+    try:
+        message = StrLit(
+            span=span, ty=StrType(name="str"),
+            value="too many values to unpack (expected " + str(expected) + ", got %d)",
+        )
+        template = host._emit_slot_call_operand(message, "unpack.error.format")
+        roots.append(template)
+        host._iterator_install_cleanup(roots, previous)
+        count = host._new_slot_call_root("unpack.error.count")
+        text = host._new_slot_call_root("unpack.error.text")
+        exception = host._new_slot_call_root("unpack.error.exception")
+        roots.extend((count, text, exception))
+        host._iterator_install_cleanup(roots, previous)
+        host._slot_call_runtime_call(
+            "py_int_from_i64", (), result_slot=count, suffix_args=(actual,), span=span,
+        )
+        host._slot_call_runtime_call(
+            "py_str_mod", (template, count), result_slot=text, span=span,
+        )
+        host._slot_call_runtime_call(
+            "py_exc_new_with_value", (text,), result_slot=exception,
+            suffix_args=(ir.Constant(_I64, 2),), argument_order=(1, 0), span=span,
+        )
+        host._slot_call_runtime_call("py_raise", (exception,), span=span)
+        host.builder.branch(host._current_try_err_block())
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+
+
+def _emit_bounded_tuple_unpack(host, source, items, span, ready):
+    """Extract an exact small tuple under one source-address lease.
+
+    The tuple is immutable and the checked arity bounds this non-callback
+    region. Keep the existing getter, logging, NEW-result publication and
+    error cleanup; only the repeated source leases and unused iterator roots
+    disappear. A mismatch leaves every item empty for the generic protocol.
+    """
+    previous = host._current_try_err_block()
+    saved_cpy = host._cpy_operand_cleanup_block
+    token = host.builder.call(
+        host.runtime["pcc_gc_foreign_lease_acquire"], [host._as_gc_ptr(source)],
+        name=host._fresh("unpack.tuple.lease"),
+    )
+    host._slot_call_check_status(token, "tuple unpack lease", span)
+    try:
+        host._try_err_block = host._slot_call_cleanup_block((), previous, ((source, token),))
+        host._cpy_operand_cleanup_block = host._try_err_block
+        fn = host.current_function
+        shape = fn.append_basic_block(host._fresh("unpack.tuple.shape"))
+        extract = fn.append_basic_block(host._fresh("unpack.tuple.extract"))
+        release = fn.append_basic_block(host._fresh("unpack.tuple.release"))
+        fallback = fn.append_basic_block(host._fresh("unpack.tuple.fallback"))
+        value = host.builder.load(source, name=host._fresh("unpack.tuple.source"))
+        tag = host.builder.call(host.runtime["py_obj_type_tag"], [value])
+        host._emit_post_call_err_check(span)
+        tagged = host.builder._block
+        host.builder.cbranch(
+            host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_TUPLE)),
+            shape, release,
+        )
+        host.builder.position_at_end(shape)
+        value = host.builder.load(source, name=host._fresh("unpack.tuple.source"))
+        size = host.builder.call(host.runtime["py_tuple_len"], [value])
+        host._emit_post_call_err_check(span)
+        sized = host.builder._block
+        host.builder.cbranch(
+            host.builder.icmp_signed("==", size, ir.Constant(_I64, len(items))),
+            extract, release,
+        )
+        host.builder.position_at_end(extract)
+        for index, item in enumerate(items):
+            value = host.builder.load(source, name=host._fresh("unpack.tuple.source"))
+            element = host.builder.call(
+                host.runtime["py_obj_getitem_i64"], [value, ir.Constant(_I64, index)],
+                name=host._fresh("unpack.tuple.item"),
+            )
+            host._publish_slot_call_owned(item, element, label="tuple unpack item")
+            host._emit_post_call_err_check(span)
+        extracted = host.builder._block
+        host.builder.branch(release)
+        host.builder.position_at_end(release)
+        matched = host.builder.phi(_I1, name=host._fresh("unpack.tuple.matched"))
+        matched.add_incoming(ir.Constant(_I1, 0), tagged)
+        matched.add_incoming(ir.Constant(_I1, 0), sized)
+        matched.add_incoming(ir.Constant(_I1, 1), extracted)
+        released = host.builder.call(
+            host.runtime["pcc_gc_foreign_lease_release"], [host._as_gc_ptr(source), token],
+            name=host._fresh("unpack.tuple.unlease"),
+        )
+        # The source lease is consumed on both edges. Never release it again
+        # if the release status or pending Python exception needs cleanup.
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+        host._slot_call_check_status(released, "tuple unpack lease release", span)
+        host._emit_post_call_err_check(span)
+        host.builder.cbranch(matched, ready, fallback)
+        host.builder.position_at_end(fallback)
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+
+
+def _emit_live_import_sequence_unpack(host, stmt, target, source_root=None):
+    """Validate one unpack boundary before publishing any of its targets.
+
+    Exact builtin lists/tuples use checked indexed loads. Other iterables
+    consume at most N+1 items through the ordinary next/exception protocol.
+    """
+    from pcc.frontends.python.codegen.iterator_builtin_lowering import _STOP_ITERATION_TAG
+
     previous = host._current_try_err_block()
     error = previous if previous is not None else host._ensure_fn_err_exit()
     saved_cpy = host._cpy_operand_cleanup_block
+    roots = []
+    items = []
+    count = len(target.elems)
     try:
-        host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
-        host._cpy_operand_cleanup_block = host._try_err_block
-        if isinstance(stmt.value.ty, SetType):
-            count = host._slot_call_runtime_call("py_obj_len", (source,), span=stmt.span)
-            valid = host.builder.icmp_signed("==", count, ir.Constant(_I64, len(target.elems)))
-            ready = host.current_function.append_basic_block(host._fresh("import.unpack.set.ready"))
-            bad = host.current_function.append_basic_block(host._fresh("import.unpack.set.bad"))
-            host.builder.cbranch(valid, ready, bad)
-            host.builder.position_at_end(bad)
-            host._emit_builtin_exception_and_branch("ValueError", "cannot unpack set: arity mismatch", stmt.span)
-            host.builder.position_at_end(ready)
-            sequence = host._new_slot_call_root("import.unpack.set.items")
-            roots.append(sequence)
-            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
-            host._cpy_operand_cleanup_block = host._try_err_block
-            host._slot_call_runtime_call("py_list_new", (), result_slot=sequence,
-                                        suffix_args=(ir.Constant(_I64, 0),), span=stmt.span)
-            host._slot_call_runtime_call("py_list_extend", (sequence, source), span=stmt.span)
-            source = sequence
-        item_start = len(roots)
-        for index in range(len(target.elems)):
-            item = host._new_slot_call_root("import.unpack.item")
+        # Item frames outlive the source/iterator frames. Clear an item's
+        # owner after its store, then leave lexical frames in reverse order.
+        for _index in range(count):
+            item = host._new_slot_call_root("unpack.item")
+            items.append(item)
             roots.append(item)
-            host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
-            host._cpy_operand_cleanup_block = host._try_err_block
+            host._iterator_install_cleanup(roots, error)
+        if source_root is None:
+            source = host._emit_slot_call_operand(stmt.value, "unpack.source")
+        else:
+            source = host._new_slot_call_root("unpack.source")
+        roots.append(source)
+        host._iterator_install_cleanup(roots, error)
+        if source_root is not None:
+            host._slot_call_copy_source(source, source_root, span=stmt.span)
+        fn = host.current_function
+        ready = fn.append_basic_block(host._fresh("unpack.ready"))
+        if count <= 8:
+            tuple_ready = fn.append_basic_block(host._fresh("unpack.tuple.ready"))
+            _emit_bounded_tuple_unpack(host, source, items, stmt.span, tuple_ready)
+            fallback = host.builder._block
+            host.builder.position_at_end(tuple_ready)
+            if source_root is not None:
+                host.builder.call(
+                    host.runtime["pcc_gc_store_root"],
+                    [host._as_gc_ptr(source_root), ir.Constant(_CSTR, None)],
+                )
+            host.builder.branch(ready)
+            host.builder.position_at_end(fallback)
+        iterator = host._new_slot_call_root("unpack.iterator")
+        pending = host._new_slot_call_root("unpack.pending")
+        stop_class = host._new_slot_call_root("unpack.stop.class")
+        extra = host._new_slot_call_root("unpack.extra")
+        controls = (iterator, pending, stop_class, extra)
+        roots.extend(controls)
+        host._iterator_install_cleanup(roots, error)
+        sequence = fn.append_basic_block(host._fresh("unpack.sequence"))
+        indexed = fn.append_basic_block(host._fresh("unpack.indexed"))
+        iterate = fn.append_basic_block(host._fresh("unpack.iterate"))
+        generic_ready = fn.append_basic_block(host._fresh("unpack.generic.ready"))
+        tag = host._slot_call_runtime_call("py_obj_type_tag", (source,), span=stmt.span)
+        exact = host.builder.or_(
+            host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST)),
+            host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_TUPLE)),
+        )
+        host.builder.cbranch(exact, sequence, iterate)
+        host.builder.position_at_end(sequence)
+        size = host._slot_call_runtime_call("py_obj_len", (source,), span=stmt.span)
+        oversized = fn.append_basic_block(host._fresh("unpack.sequence.too.many"))
+        fits = fn.append_basic_block(host._fresh("unpack.sequence.fits"))
+        host.builder.cbranch(
+            host.builder.icmp_signed(">", size, ir.Constant(_I64, count)), oversized, fits,
+        )
+        host.builder.position_at_end(oversized)
+        _emit_unpack_sequence_size_error(host, count, size, stmt.span)
+        host.builder.position_at_end(fits)
+        host.builder.cbranch(
+            host.builder.icmp_signed("==", size, ir.Constant(_I64, count)), indexed, iterate,
+        )
+        host.builder.position_at_end(indexed)
+        for index, item in enumerate(items):
             host._slot_call_runtime_call(
                 "py_obj_getitem_i64", (source,), result_slot=item,
                 suffix_args=(ir.Constant(_I64, index),), span=stmt.span,
             )
+        host.builder.branch(generic_ready)
+        host.builder.position_at_end(iterate)
+        host._slot_call_runtime_call("py_obj_iter", (source,), result_slot=iterator, span=stmt.span)
+        host.builder.call(host.runtime["py_exc_builtin_class"], [ir.Constant(_I64, _STOP_ITERATION_TAG)])
+        host._emit_post_call_err_check(stmt.span)
+        cache = host.builder.call(host.runtime["py_subs_exc_cache_slot"], [ir.Constant(_I64, _STOP_ITERATION_TAG)])
+        host._slot_call_copy_source(stop_class, cache, span=stmt.span)
+        for index, item in enumerate(items):
+            found = fn.append_basic_block(host._fresh("unpack.found"))
+            short = fn.append_basic_block(host._fresh("unpack.short"))
+            host._emit_next_owned_step(
+                iterator, item, pending, stop_class, None, stmt.span, found, short,
+                True,
+            )
+            host.builder.position_at_end(short)
+            host._emit_builtin_exception_and_branch(
+                "ValueError", "not enough values to unpack (expected " + str(count)
+                + ", got " + str(index) + ")", stmt.span,
+            )
+            host.builder.position_at_end(found)
+        too_many = fn.append_basic_block(host._fresh("unpack.too.many"))
+        host._emit_next_owned_step(
+            iterator, extra, pending, stop_class, None, stmt.span, too_many, generic_ready,
+            True,
+        )
+        host.builder.position_at_end(too_many)
+        host.builder.call(host.runtime["pcc_gc_store_root"], [host._as_gc_ptr(extra), ir.Constant(_CSTR, None)])
+        host._emit_builtin_exception_and_branch(
+            "ValueError", "too many values to unpack (expected " + str(count) + ")", stmt.span,
+        )
+        host.builder.position_at_end(generic_ready)
+        if source_root is not None:
+            # The parent retains the lexical frame until its own boundary
+            # exits, but its private container owner is consumed here.
+            host.builder.call(
+                host.runtime["pcc_gc_store_root"],
+                [host._as_gc_ptr(source_root), ir.Constant(_CSTR, None)],
+            )
+        host._release_slot_call_roots(controls)
+        host.builder.branch(ready)
+        host.builder.position_at_end(ready)
+        host._iterator_install_cleanup(tuple(items) + (source,), error)
+        host._release_slot_call_roots((source,))
+        host._iterator_install_cleanup(items, error)
         element_types = _assign_tuple_elems(stmt.value.ty)
         for index, lhs in enumerate(target.elems):
-            element_type = element_types[index] if len(element_types) == len(target.elems) else DynType(name="dyn")
-            host._store_unpack_root_target(lhs, roots[item_start + index], element_type)
-        host._release_slot_call_roots(tuple(roots))
+            element_type = element_types[index] if len(element_types) == count else DynType(name="dyn")
+            host._store_unpack_root_target(lhs, items[index], element_type)
+            host.builder.call(host.runtime["pcc_gc_store_root"], [host._as_gc_ptr(items[index]), ir.Constant(_CSTR, None)])
+        host._release_slot_call_roots(tuple(items))
     finally:
         host._try_err_block = previous
         host._cpy_operand_cleanup_block = saved_cpy
@@ -482,7 +720,10 @@ class AssignmentStatementLoweringMixin:
                     field_cleanup = self._cpy_operand_cleanup_block
                     self._try_err_block = self._slot_call_cleanup_block((source,), field_error)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(destination), self._as_gc_ptr(source)])
+                    status = self._emit_root_slot_move(
+                        destination,
+                        source,
+                    )
                     self._slot_call_check_status(status, "valueclass constructor field move", arg_expr.span)
                     self._slot_call_note_published(destination)
                     self._release_slot_call_roots((source,))
@@ -571,11 +812,63 @@ class AssignmentStatementLoweringMixin:
         )
         self.builder.position_at_end(done_bb)
 
+    def _emit_chained_assign(self, stmt: Assign) -> None:
+        """Evaluate the RHS once, then evaluate and store each target in order."""
+        if not stmt.targets:
+            raise L1CodegenError("assignment requires at least one target")
+        value_type = stmt.value.ty
+        raw = (
+            getattr(self, "_freestanding_module", False)
+            or getattr(self, "_runtime_port_module", False)
+            or self._expr_returns_unsafe_raw_pointer(stmt.value)
+            or self._is_valueclass_payload_type(value_type)
+            or isinstance(value_type, IntType) and value_type.name != "int"
+            or self._expr_looks_cpython(stmt.value)
+        )
+        if raw:
+            # Keep explicit machine/payload projections in their existing
+            # assignment producer. Its target tree visits the right child
+            # first, so build it from the last destination back to the first.
+            function = Name(span=stmt.span, ty=DynType(name="dyn"), ident="_walrus")
+            targets = stmt.targets[0]
+            for target in stmt.targets[1:]:
+                targets = Call(span=stmt.span, ty=value_type, func=function,
+                               args=(target, targets), kwargs=())
+            expression = Call(span=stmt.span, ty=value_type, func=function,
+                              args=(targets, stmt.value), kwargs=())
+            self._emit_expr_stmt(ExprStmt(span=stmt.span, expr=expression))
+            return
+        root = self._emit_slot_call_operand(stmt.value, "assignment.chain")
+        ident = self._fresh("pcc.assignment.chain")
+        source = Name(span=stmt.value.span, ty=DynType(name="dyn"), ident=ident)
+        self.env[ident] = (root, _CSTR, source.ty)
+        # This is a read-only alias. The root itself owns the value; every
+        # destination obtains its own reference through ordinary assignment.
+        self._borrowed_gc_rooted_local_names.add(ident)
+        hint = self._class_hint_for_expr(stmt.value)
+        if hint is not None:
+            self.env_class_hint[ident] = hint
+        previous = self._current_try_err_block()
+        error = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        self._try_err_block = self._slot_call_cleanup_block((root,), error)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        try:
+            for target in stmt.targets:
+                self._emit_stmt(Assign(span=stmt.span, targets=(target,), value=source,
+                                       annotation=stmt.annotation))
+            if not self._builder_block_is_terminated():
+                self._release_slot_call_roots((root,))
+        finally:
+            self.env.pop(ident, None)
+            self._borrowed_gc_rooted_local_names.discard(ident)
+            self.env_class_hint.pop(ident, None)
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_assign_unchecked(self, stmt: Assign) -> None:
         if len(stmt.targets) != 1:
-            raise NotImplementedError(
-                "Layer 1 does not handle tuple-unpacking assignment"
-            )
+            return self._emit_chained_assign(stmt)
         target = stmt.targets[0]
 
         if len(self._generator_ctx_stack) > 0:
@@ -936,12 +1229,16 @@ class AssignmentStatementLoweringMixin:
             target_ty,
         ):
             return
-        forced_exact_int_target = isinstance(target_ty, IntType) and bool(
+        forced_exact_int_target = (
+            isinstance(target_ty, IntType) and target_ty.name == "int"
+        ) and bool(
             getattr(self, "_exact_int_env_flags", {}).get(target.ident, False)
             or target.ident
             in getattr(self, "_planned_exact_int_local_names", set())
         )
-        boxed_int_target = isinstance(target_ty, IntType) and (
+        boxed_int_target = (
+            isinstance(target_ty, IntType) and target_ty.name == "int"
+        ) and (
             self._int_exprs_are_boxed() or forced_exact_int_target
         )
         exact_int_value = None
@@ -1199,10 +1496,10 @@ class AssignmentStatementLoweringMixin:
                     # A prior borrowed binding owns no reference to release.
                     # Clear that alias before the owning root move.
                     self.builder.store(ir.Constant(_CSTR, None), alloca)
-                    status = self.builder.call(
-                        self.runtime["pcc_gc_root_move"],
-                        [self._as_gc_ptr(alloca), self._as_gc_ptr(output)],
-                        name=self._fresh(target.ident + ".scalar.move"),
+                    status = self._emit_root_slot_move(
+                        alloca,
+                        output,
+                        label=target.ident + ".scalar.move",
                     )
                     self._owned_local_names.add(target.ident)
                     self._owned_local_has_value.add(target.ident)
@@ -1245,12 +1542,20 @@ class AssignmentStatementLoweringMixin:
             and isinstance(value.type, ir.PointerType)
             and value not in getattr(self, "_cpy_values", ())
         )
+        operand_root_name_copy = False
+        if isinstance(stmt.value, Name):
+            source_slot = self.env.get(stmt.value.ident)
+            operand_root_name_copy = (
+                source_slot is not None and self._slot_call_root_is_registered(source_slot[0])
+                or self._slot_call_root_is_registered(alloca)
+            )
         if (
             isinstance(stmt.value, Name)
             and (
                 stmt.value.ident in getattr(self, "_owned_local_names", set())
                 or stmt.value.ident in getattr(self, "_except_binding_names", set())
                 or exact_int_name_copy
+                or operand_root_name_copy
             )
             and isinstance(value.type, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
@@ -1260,6 +1565,9 @@ class AssignmentStatementLoweringMixin:
             # not register `e` as a normal owned local because handler cleanup
             # releases it at block exit. A surviving copy (`saved = e`) must
             # take its own ref and then use the normal owned-local root path.
+            # An operand-root alias also loads a borrowed reference whose
+            # temporary owner will be retired, and assignment into an owning
+            # operand root must itself acquire a reference to a named source.
             value = self._gc_retain(
                 value,
                 name=self._fresh(target.ident + ".local.copy.retain"),
@@ -1282,6 +1590,25 @@ class AssignmentStatementLoweringMixin:
             or self._expr_returns_owned_object(stmt.value)
             or exact_int_result_is_owned
         )
+        if (
+            not rhs_returns_owned_object
+            and is_preplanned_owned_local(self, target.ident, alloca)
+            and isinstance(value.type, ir.PointerType)
+            and self._ir_type_matches(ir_ty, _CSTR)
+            and value not in getattr(self, "_cpy_values", ())
+            and not self._expr_returns_unsafe_raw_pointer(stmt.value)
+            and not getattr(self, "_suppress_implicit_gc_roots", False)
+        ):
+            # Entry-planned object locals have an owning frame map on every
+            # edge. A borrowed initial value needs its own reference there,
+            # even when a later conditional unpack is never executed.
+            if not self._value_is_never_gc_object(value):
+                value = self._gc_retain(
+                    value, name=self._fresh(target.ident + ".local.borrowed.retain"),
+                )
+            rhs_local_copy_is_owned = True
+            rhs_is_safe_owned_in_raw = True
+            rhs_returns_owned_object = True
         in_raw_scaffold = self._module_uses_raw_int_scaffold
         # In raw-scaffold mode, only enable owned-local management when the
         # local was already tracked (e.g. previously bound to a tracked
@@ -1528,6 +1855,11 @@ class AssignmentStatementLoweringMixin:
         Anything else (e.g. list RHS, unknown iterable) remains
         unsupported.
         """
+        from pcc.frontends.python.codegen.generator_lowering import (
+            emit_generator_unpack_assignment,
+        )
+        if emit_generator_unpack_assignment(self, stmt, target):
+            return
         star_indices = [
             i for i, lhs in enumerate(target.elems) if self._is_starred_unpack_expr(lhs)
         ]
@@ -1553,6 +1885,9 @@ class AssignmentStatementLoweringMixin:
         if _assign_is_tuple_expr(rhs) and any(
             self._is_starred_unpack_expr(e) for e in rhs.elems
         ):
+            if _assign_uses_owned_unpack(self, rhs):
+                _emit_live_import_sequence_unpack(self, stmt, target)
+                return
             tup_val = self._emit_expr(rhs)
             elem_ty = DynType(name="dyn")
             for i, lhs in enumerate(target.elems):
@@ -1571,6 +1906,9 @@ class AssignmentStatementLoweringMixin:
             return
         if _assign_is_tuple_expr(rhs):
             if len(rhs.elems) != len(target.elems):
+                if _assign_uses_owned_unpack(self, rhs):
+                    _emit_live_import_sequence_unpack(self, stmt, target)
+                    return
                 raise L1CodegenError(
                     f"tuple unpack arity mismatch: {len(target.elems)} "
                     f"targets, {len(rhs.elems)} values"
@@ -1596,7 +1934,8 @@ class AssignmentStatementLoweringMixin:
                     )
                     managed = (
                         (self._is_object(elem.ty) or self._is_valueclass_payload_type(elem.ty) or planned_exact_int
-                         or isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj))
+                         or isinstance(lhs, (Attr, Subscript)) and live_import_expr_binding(self, lhs.obj)
+                         or isinstance(lhs, Attr) and rooted_attribute_store(self, lhs))
                         and not getattr(self, "_freestanding_module", False)
                         and not self._expr_returns_unsafe_raw_pointer(elem)
                         and not self._expr_looks_cpython(elem)
@@ -1629,6 +1968,9 @@ class AssignmentStatementLoweringMixin:
                 self._cpy_operand_cleanup_block = saved_cpy
             return
 
+        if _assign_uses_owned_unpack(self, rhs):
+            _emit_live_import_sequence_unpack(self, stmt, target)
+            return
         rhs_ty = rhs.ty
         rhs_elems = _assign_tuple_elems(rhs_ty)
         if _assign_is_tuple_type(rhs_ty) and len(rhs_elems) == len(target.elems):
@@ -1652,8 +1994,7 @@ class AssignmentStatementLoweringMixin:
                 # checked machine conversion is required; unboxing here
                 # first loses the bignum before an object slot can keep it.
                 native_val = elem_obj
-                ordinary_int = isinstance(elem_ty, IntType) and elem_ty.name == "int"
-                if not _assign_is_dyn_type(elem_ty) and not ordinary_int:
+                if _assign_unpack_needs_unbox(elem_ty):
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,
@@ -1739,7 +2080,7 @@ class AssignmentStatementLoweringMixin:
                     name=self._fresh(f"unpack.set.{i}"),
                 )
                 native_val = elem_obj
-                if not _assign_is_dyn_type(elem_ty):
+                if _assign_unpack_needs_unbox(elem_ty):
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,
@@ -1796,7 +2137,7 @@ class AssignmentStatementLoweringMixin:
                         name=self._fresh(f"unpack.{i}"),
                     )
                 native_val = elem_obj
-                if not _assign_is_dyn_type(elem_ty):
+                if _assign_unpack_needs_unbox(elem_ty):
                     native_val = marshal.marshal_from_object(
                         self.builder,
                         self.module,
@@ -1893,7 +2234,7 @@ class AssignmentStatementLoweringMixin:
                 f"unpack.star.pre.{i}",
             )
             native_val = elem
-            if not isinstance(elem_ty, DynType):
+            if _assign_unpack_needs_unbox(elem_ty):
                 native_val = marshal.marshal_from_object(
                     self.builder,
                     self.module,
@@ -1998,7 +2339,7 @@ class AssignmentStatementLoweringMixin:
             )
             elem = load_elem(src_idx, f"unpack.star.post.{j}")
             native_val = elem
-            if not isinstance(elem_ty, DynType):
+            if _assign_unpack_needs_unbox(elem_ty):
                 native_val = marshal.marshal_from_object(
                     self.builder,
                     self.module,
@@ -2023,7 +2364,9 @@ class AssignmentStatementLoweringMixin:
         op_bare = stmt.op.rstrip("=")
         if isinstance(stmt.target, Name):
             if live_import_name_slot(self, stmt.target.ident) is not None:
-                _emit_live_import_augassign(self, stmt, op_bare)
+                _emit_rooted_name_augassign(
+                    self, stmt, op_bare, self._module_globals[stmt.target.ident][1],
+                )
                 return
             if (
                 isinstance(stmt.target.ty, IntType)
@@ -2067,10 +2410,29 @@ class AssignmentStatementLoweringMixin:
                     f"augassign to undefined name {stmt.target.ident!r}"
                 )
             if module_global_target:
-                cur = self._emit_name(stmt.target)
                 _gv, declared_ty = self._module_globals[stmt.target.ident]
+                storage_ty = _gv.value_type
             else:
-                alloca, _ir_ty, declared_ty = slot
+                alloca, storage_ty, declared_ty = slot
+            combined = BinOp(
+                span=stmt.span, ty=declared_ty, op=op_bare,
+                lhs=stmt.target, rhs=stmt.value,
+            )
+            if (
+                isinstance(storage_ty, ir.PointerType)
+                and self._ir_type_matches(storage_ty, _CSTR)
+                and self._slot_call_binary_runtime(combined, object_boundary=True) is not None
+            ):
+                # Later statements may infer Dyn even when this slot began
+                # as bytes/bytearray. A raw pointer store then loses the old
+                # owner. Root inputs before RHS callbacks, publish the NEW
+                # in-place result, and transfer it through ordinary binding
+                # replacement, including borrowed parameters and aliases.
+                _emit_rooted_name_augassign(self, stmt, op_bare, declared_ty)
+                return
+            if module_global_target:
+                cur = self._emit_name(stmt.target)
+            else:
                 cur = self.builder.load(
                     alloca,
                     name=self._fresh(stmt.target.ident),
@@ -2099,17 +2461,11 @@ class AssignmentStatementLoweringMixin:
             rhs = self._emit_expr(stmt.value)
             # CPython augmented assignment tries type(a).__iop__ FIRST;
             # the plain binop only runs when __iop__ is missing or
-            # returns NotImplemented. Dyn pointer targets route through
-            # py_obj_inplace_op (instances dispatch __iadd__ etc.);
-            # everything else keeps the static binop path.
-            _inplace_code = {
-                "+": 0,
-                "-": 1,
-                "*": 2,
-                "/": 3,
-                "//": 4,
-                "%": 5,
-            }.get(op_bare)
+            # returns NotImplemented. Targets that can hold a mutable
+            # object route through py_obj_inplace_op (instances dispatch
+            # __iadd__ etc., lists extend, dicts and sets update in place);
+            # immutable scalars keep the static binop path.
+            _inplace_code = _INPLACE_OP_CODES.get(op_bare)
             if (
                 isinstance(declared_ty, SetType)
                 and isinstance(stmt.value.ty, (SetType, DynType))
@@ -2131,7 +2487,7 @@ class AssignmentStatementLoweringMixin:
                 self._gc_release_if_owned(rhs_obj, stmt.value)
             elif (
                 _inplace_code is not None
-                and isinstance(declared_ty, (DynType, ClassType, FuncType))
+                and isinstance(declared_ty, (DynType, ClassType, FuncType, ListType, DictType, SetType))
                 and isinstance(cur.type, ir.PointerType)
                 and cur not in getattr(self, "_cpy_values", ())
             ):
@@ -2268,14 +2624,7 @@ class AssignmentStatementLoweringMixin:
                 rhs,
                 stmt.value.ty,
             )
-            _ip_code = {
-                "+": 0,
-                "-": 1,
-                "*": 2,
-                "/": 3,
-                "//": 4,
-                "%": 5,
-            }.get(op_bare)
+            _ip_code = _INPLACE_OP_CODES.get(op_bare)
             if _ip_code is not None:
                 # CPython tries type(cur).__iop__ first (instances);
                 # plain values fall through to the binary dispatchers
@@ -2372,14 +2721,7 @@ class AssignmentStatementLoweringMixin:
                     rhs,
                     stmt.value.ty,
                 )
-                _ip_code = {
-                    "+": 0,
-                    "-": 1,
-                    "*": 2,
-                    "/": 3,
-                    "//": 4,
-                    "%": 5,
-                }.get(op_bare)
+                _ip_code = _INPLACE_OP_CODES.get(op_bare)
                 if _ip_code is not None:
                     result_obj = self.builder.call(
                         self.runtime["py_obj_inplace_op"],
@@ -2428,14 +2770,7 @@ class AssignmentStatementLoweringMixin:
                 rhs,
                 stmt.value.ty,
             )
-            _ip_code = {
-                "+": 0,
-                "-": 1,
-                "*": 2,
-                "/": 3,
-                "//": 4,
-                "%": 5,
-            }.get(op_bare)
+            _ip_code = _INPLACE_OP_CODES.get(op_bare)
             if _ip_code is not None:
                 # CPython tries type(cur).__iop__ first (instances);
                 # plain values fall through to the binary dispatchers

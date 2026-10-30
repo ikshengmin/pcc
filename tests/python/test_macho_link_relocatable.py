@@ -31,7 +31,7 @@ from pcc.backend.arm64_asm_driver import assemble_file
 from pcc.backend.macho_link import LinkError, link_relocatable
 
 _CC = shutil.which(os.environ.get("CC", "cc"))
-_IS_ARM64_DARWIN = os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+_IS_ARM64_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 _GATE = None if (_CC and _IS_ARM64_DARWIN) else "needs cc and Darwin arm64"
 
 pytestmark = pytest.mark.pcc_gate(unavailable=_GATE)

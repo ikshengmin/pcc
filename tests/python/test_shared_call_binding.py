@@ -119,12 +119,18 @@ def target(value):
 def probe():
     return target(**receiver.make())
 """))
+    # The method call publishes its result into the operand slot at the
+    # return instruction (the direct method ABI does it, as the bound call
+    # did), then the outer call merges it as keywords and calls target.
     invocations = list(re.finditer(r"\bcall [^\n]*@py_obj_call_slots\(", body))
     merges = list(re.finditer(r"\bcall [^\n]*@py_call_merge_kwargs_for_call\(", body))
-    assert len(invocations) == 2
+    makes = list(re.finditer(
+        r"(%[\w.]+) = call [^\n]*@user_binding_Holder_make\([^\n]*\n\s*store ptr \1, ptr %", body,
+    ))
+    assert len(invocations) == 1
     assert len(merges) == 1
-    assert invocations[0].start() < merges[0].start() < invocations[1].start()
-    assert not re.search(r"\bcall [^\n]*@user_binding_Holder_make\(", body)
+    assert len(makes) == 1
+    assert makes[0].start() < merges[0].start() < invocations[0].start()
 
 
 def test_imported_operand_publishes_once_before_keyword_merge(tmp_path):

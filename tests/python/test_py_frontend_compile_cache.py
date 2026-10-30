@@ -31,8 +31,12 @@ def _plan(tmp_path, monkeypatch, *, compiler_text="compiler"):
 @pytest.mark.parametrize("codegen_name,codegen_value", [
     ("PCC_PYTHON_TYPED_INT_ABI", "boxed"),
     ("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "1"),
+    ("PCC_INLINE_GENERATOR_FRAMES", "0"),
     ("PCC_KNOWN_OBJECT_REFS", "1"),
+    ("PCC_KNOWN_ROOT_STORES", "1"),
     ("PCC_STATIC_AGGREGATE", "off"),
+    ("PCC_PRECISE_STACKMAP_TABLES", "0"),
+    ("PCC_SELF_LINK", "cc"),
 ])
 def test_frontend_ir_cache_key_is_gc_invariant_but_codegen_sensitive(
     tmp_path, monkeypatch, codegen_name, codegen_value

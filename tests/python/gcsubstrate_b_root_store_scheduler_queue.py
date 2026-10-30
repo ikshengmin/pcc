@@ -4,6 +4,58 @@ Split from ``test_gc_threading_substrate.py``; collected only through
 that facade so pytest node ids stay stable.
 """
 from _gc_substrate_common import *  # noqa: F401,F403
+from pcc.frontends.c.parse.c_lex import CLexer
+
+
+def _c_header_identifiers(source):
+    """Inspect C code, not documentation or diagnostic-string mentions."""
+    def invalid_header(message, line, column):
+        raise AssertionError(f"invalid C header at {line}:{column}: {message}")
+
+    lexer = CLexer(invalid_header, lambda: None, lambda: None, lambda name: False)
+    lexer.input(source)
+    identifiers = set()
+    while True:
+        token = lexer.token()
+        if token is None:
+            return identifiers
+        if token.type == "ID":
+            identifiers.add(token.value)
+
+
+def _assert_no_public_plan_identifiers(source, symbols):
+    identifiers = _c_header_identifiers(source)
+    for symbol in symbols:
+        assert symbol not in identifiers, f"private root-plan identifier exposed: {symbol}"
+
+
+@pytest.mark.parametrize("source", [
+    "/* Finish with pcc_gc_store_root_plan_finish after unlock. */",
+    "// Finish with pcc_gc_store_root_plan_finish after unlock.\n",
+    'const char *message = "pcc_gc_store_root_plan_finish /* documentation */";',
+    "void pcc_gc_store_root_plan_finish_other(void);",
+])
+def test_private_root_plan_header_check_ignores_non_identifier_mentions(source):
+    _assert_no_public_plan_identifiers(source, ["pcc_gc_store_root_plan_finish"])
+
+
+@pytest.mark.parametrize(("symbol", "declaration"), [
+    ("pcc_gc_store_root_plan_init",
+     "void pcc_gc_store_root_plan_init(PccGcStoreRootPlan *plan, int64_t backend);"),
+    ("pcc_gc_store_root_plan_commit_locked",
+     "int64_t\npcc_gc_store_root_plan_commit_locked(\nPccGcStoreRootPlan *plan,\nPyObject **slot, PyObject *value\n);"),
+    ("pcc_gc_store_root_plan_finish",
+     "void /* private declaration is still code */ pcc_gc_store_root_plan_finish(PccGcStoreRootPlan *plan);"),
+])
+def test_private_root_plan_header_check_rejects_injected_public_declaration(symbol, declaration):
+    public_header = RUNTIME_HEADER.read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match=f"private root-plan identifier exposed: {symbol}"):
+        _assert_no_public_plan_identifiers(public_header + "\n" + declaration, [symbol])
+
+
+def test_private_root_plan_header_check_fails_on_invalid_c():
+    with pytest.raises(AssertionError, match="invalid C header.*unterminated block comment"):
+        _assert_no_public_plan_identifiers("/* unterminated", ["pcc_gc_store_root_plan_finish"])
 
 
 def test_root_store_prepares_inside_and_finishes_after_its_own_lock_scope():
@@ -150,9 +202,10 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
         "pcc_gc_store_root_plan_finish",
     ]
     assert "uint64_t opaque[16]" in internal_header
+    internal_identifiers = _c_header_identifiers(internal_header)
+    _assert_no_public_plan_identifiers(public_header, plan_symbols)
     for symbol in plan_symbols:
-        assert symbol in internal_header
-        assert symbol not in public_header
+        assert symbol in internal_identifiers
         assert symbol not in RUNTIME_SIGNATURES
 
     def locked_region(body: str) -> str:
@@ -376,7 +429,7 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
     assert strict_lock_failure.count("return -1") == 1
     strict_root = strict_obj.split(
         '@c_abi_export("pcc_gc_store_root")', 1
-    )[1].split('@c_abi_export("pcc_gc_frame_enter")', 1)[0]
+    )[1].split("\n@c_abi_export(", 1)[0]
     assert strict_root.count("stack_alloc(128)") == 1
     assert strict_free.count("stack_alloc(128)") == 1
     assert strict_release.count("stack_alloc(128)") == 1

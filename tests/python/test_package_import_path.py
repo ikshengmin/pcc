@@ -860,7 +860,7 @@ def test_pcc1_pip_install_wheel_participates_in_import_site(tmp_path):
     main = tmp_path / "main.py"
     _write_import_package_main(main)
     exe = tmp_path / "main_pcc1"
-    subprocess.run(
+    compile_process = subprocess.run(
         [
             str(pcc1),
             "--python-libpython=off",
@@ -869,12 +869,19 @@ def test_pcc1_pip_install_wheel_participates_in_import_site(tmp_path):
             "-o",
             str(exe),
         ],
-        check=True,
+        check=False,
         text=True,
         capture_output=True,
         timeout=300,
         env=env,
     )
+    if compile_process.returncode != 0:
+        pytest.fail(
+            f"pcc1 package import compilation exited {compile_process.returncode}\n"
+            f"--- compiler stdout ---\n{compile_process.stdout}\n"
+            f"--- compiler stderr ---\n{compile_process.stderr}",
+            pytrace=False,
+        )
     proc = subprocess.run(
         [str(exe)],
         check=True,
@@ -884,6 +891,74 @@ def test_pcc1_pip_install_wheel_participates_in_import_site(tmp_path):
         env=env,
     )
     assert proc.stdout.strip() == "43"
+
+
+def test_pcc1_wheel_import_compile_failure_preserves_full_output(
+    tmp_path, monkeypatch,
+):
+    """Exercise the existing gate's failure path without running a compiler."""
+    pcc1 = tmp_path / "pcc1"
+    stdout = "STDOUT-BEGIN\n" + "stdout payload\n" * 1024 + "STDOUT-END\n"
+    stderr = (
+        "STDERR-BEGIN\n"
+        + "first stderr payload\n" * 1024
+        + "STDERR-MIDDLE\n"
+        + "last stderr payload\n" * 1024
+        + "STDERR-END\n"
+    )
+    calls = []
+
+    def installed_wheel(command, **kwargs):
+        site = Path(command[command.index("--target") + 1])
+        package = site / "demo_pkg"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (package / "core.py").write_text(
+            "def answer() -> int:\n    return 42\n", encoding="utf-8"
+        )
+
+    def failed_compile(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 130, stdout, stderr)
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_current_pcc1_or_verdict", lambda reason: pcc1
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "run_process_tree_timeout", installed_wheel
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "current_platform_tag", lambda: "test_platform"
+    )
+    monkeypatch.setattr(subprocess, "run", failed_compile)
+
+    with pytest.raises(pytest.fail.Exception) as failure:
+        test_pcc1_pip_install_wheel_participates_in_import_site(tmp_path)
+
+    assert str(failure.value) == (
+        "pcc1 package import compilation exited 130\n"
+        f"--- compiler stdout ---\n{stdout}\n"
+        f"--- compiler stderr ---\n{stderr}"
+    )
+    assert failure.value.pytrace is False
+    assert len(calls) == 1  # No attempt to execute an unbuilt program.
+    command, options = calls[0]
+    assert command == [
+        str(pcc1),
+        "--python-libpython=off",
+        "--ir-scaffold=on",
+        str(tmp_path / "main.py"),
+        "-o",
+        str(tmp_path / "main_pcc1"),
+    ]
+    assert options["check"] is False
+    assert options["text"] is True
+    assert options["capture_output"] is True
+    assert options["timeout"] == 300
+    assert options["env"]["PCC_HOST_PYTHON"] == "/usr/bin/false"
+    assert options["env"]["PCC_PYTHON_IR_PASSES"] == "off"
+    assert options["env"]["PCC_PLATFORM_TAG"] == "test_platform"
+    assert options["env"]["PCC_PACKAGE_SITE"] == str(tmp_path / "site")
 
 
 def test_pcc1_pip_install_numpy_name_from_find_links_command_shape(tmp_path):

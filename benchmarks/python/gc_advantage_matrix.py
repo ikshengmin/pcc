@@ -80,6 +80,17 @@ def mark_id(x: Any) -> int:
     return pcc_gc_object_id(x)
 
 
+# The longest round a workload observed, in microseconds: the mutator's own
+# view of a collection pause, the same measurement under every backend.
+ROUND_MAX_US = [0]
+
+
+def note_round(start_us: int) -> None:
+    spent = pcc_runtime_monotonic_us() - start_us
+    if spent > ROUND_MAX_US[0]:
+        ROUND_MAX_US[0] = spent
+
+
 def list_churn(n: int, rounds: int, inner: int, collect_every: int) -> int:
     ring = []
     i = 0
@@ -203,6 +214,67 @@ def step_relocating_lists(n: int, rounds: int, inner: int, collect_every: int) -
     return moved + len(roots)
 
 
+def old_heap_cycle_churn(n: int, rounds: int, inner: int, collect_every: int) -> int:
+    """A long-lived graph of n nodes, then rounds of inner short-lived
+    two-node cycles, collected automatically. A collector that scans every
+    tracked object revisits the old graph each time; a generational one scans
+    the young cycles, an incremental or concurrent one spreads the scan."""
+    old = []
+    i = 0
+    while i < n:
+        node = Node(i)
+        if i > 0:
+            node.a = old[i - 1]
+        old.append(node)
+        i = i + 1
+
+    total = 0
+    r = 0
+    while r < rounds:
+        start = pcc_runtime_monotonic_us()
+        j = 0
+        while j < inner:
+            a = Tiny(j)
+            b = Tiny(j + 1)
+            a.next = b
+            b.next = a
+            total = total + a.k
+            j = j + 1
+        note_round(start)
+        if collect_every > 0 and r % collect_every == 0:
+            gc.collect()
+        r = r + 1
+    return total + len(old)
+
+
+def fragment_then_resize(n: int, rounds: int, inner: int, collect_every: int) -> int:
+    """Each round allocates n * inner nodes and keeps one in inner, then
+    n * inner twelve-item lists and keeps one in inner. The survivors pin
+    sparse pages of one size; the next wave needs another size. A moving
+    collector packs the survivors and returns whole pages."""
+    keep = []
+    r = 0
+    while r < rounds:
+        start = pcc_runtime_monotonic_us()
+        i = 0
+        while i < n * inner:
+            node = Node(i)
+            if i % inner == 0:
+                keep.append(node)
+            i = i + 1
+        gc.collect()
+        i = 0
+        while i < n * inner:
+            x = [i, i, i, i, i, i, i, i, i, i, i, i]
+            if i % inner == 0:
+                keep.append(x)
+            i = i + 1
+        gc.collect()
+        note_round(start)
+        r = r + 1
+    return len(keep)
+
+
 def main() -> int:
     mode = sys.argv[1]
     n = int(sys.argv[2])
@@ -223,6 +295,10 @@ def main() -> int:
         result = pointer_mutation(n, rounds, inner, collect_every)
     elif mode == "step_relocating_lists":
         result = step_relocating_lists(n, rounds, inner, collect_every)
+    elif mode == "old_heap_cycle_churn":
+        result = old_heap_cycle_churn(n, rounds, inner, collect_every)
+    elif mode == "fragment_then_resize":
+        result = fragment_then_resize(n, rounds, inner, collect_every)
     else:
         print("error,bad-mode")
         return 2
@@ -231,6 +307,7 @@ def main() -> int:
     print("result," + str(result))
     print("backend," + str(pcc_gc_backend()))
     print("elapsed_us," + str(elapsed_us))
+    print("round_max_us," + str(ROUND_MAX_US[0]))
     print("pause_count," + str(pcc_gc_telemetry(PAUSE_COUNT)))
     print("pause_sum_us," + str(pcc_gc_telemetry(PAUSE_SUM_US)))
     print("max_pause_us," + str(pcc_gc_telemetry(MAX_PAUSE_US)))

@@ -143,7 +143,7 @@ def _assert_exact_slot_protocol(text, slot):
     assert error[2] < error_leaves[0][2]
     assert success_leaves[0][2] < take[2]
     assert error[1] != take[1]
-    # Both lease-copy and lease-release status failures reach this same
+    # Copy and any lease-release status failures reach this same
     # exception-preserving cleanup block, directly or via error synthesis
     # (a shared status reporter may sit between them).
     successors = {label: re.findall(r"label %([\w.]+)", text) for label, text in blocks.items()}
@@ -160,21 +160,40 @@ def _assert_exact_slot_protocol(text, slot):
             pending.extend(successors[label])
         return False
 
-    lease_sites = [call for call in calls if call[0] in (
+    transfer_sites = [call for call in calls if call[0] in (
+        "pcc_gc_root_copy_local",
         "pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease",
         "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release")]
-    assert len(lease_sites) >= 2, (slot, lease_sites)
-    for _name, label, position, _line in lease_sites:
+    local_copies = [call for call in transfer_sites if call[0] == "pcc_gc_root_copy_local"]
+    if local_copies:
+        assert len(transfer_sites) == len(local_copies) == 1
+        assert re.search(r", i64 0\)", local_copies[0][3])
+    else:
+        assert len(transfer_sites) >= 2, (slot, transfer_sites)
+    for _name, label, position, _line in transfer_sites:
         branch = re.search(r"br i1 [^,]+, label %([\w.]+), label %[\w.]+", blocks[label][position:])
         assert branch is not None, (slot, label)
         assert reaches(branch.group(1), error[1]), (slot, label, branch.group(1))
     error_tail = blocks[error[1]][error_leaves[0][2]:]
     assert re.search(r"br label %", error_tail)
     # The exact root is loaded and pinned before its success-side leave;
-    # the owned take remains the final handoff after retirement.
+    # the owned take remains the final handoff after retirement. A tagged
+    # int or empty root has nothing to pin, so the take branches around the
+    # object path that loads and pins it; both paths join at the leave.
     loads = named("pcc_gc_load_ptr")
     assert len(loads) == 1
     loaded = re.search(r"(%[\w.]+) = call", loads[0][3]).group(1)
-    success = blocks[take[1]]
-    pin = re.search(r"call[^\n]*@pcc_gc_pin\(ptr " + re.escape(loaded) + r"\)", success)
-    assert pin and pin.start() < success_leaves[0][2]
+    load_label, load_position = loads[0][1], loads[0][2]
+    pin_pattern = r"call[^\n]*@pcc_gc_pin\(ptr " + re.escape(loaded) + r"\)"
+    pins = [(label, match.start()) for label, block in blocks.items()
+            for match in re.finditer(pin_pattern, block)]
+    assert len(pins) == 1, (slot, pins)
+    pin_label, pin_position = pins[0]
+    if pin_label == load_label:
+        assert load_position < pin_position
+    else:
+        assert reaches(load_label, pin_label), (slot, load_label, pin_label)
+    if pin_label == take[1]:
+        assert pin_position < success_leaves[0][2]
+    else:
+        assert reaches(pin_label, take[1]), (slot, pin_label, take[1])

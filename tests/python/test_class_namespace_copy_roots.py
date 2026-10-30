@@ -42,6 +42,9 @@ class NamespaceMemory(DictMemory):
             'py_class_new_abi': self.class_new,
             '_ptr_is_class': lambda value: isinstance(value, Object) and value.alive and value.tag == abi.PY_TYPE_CLASS,
             '_ptr_can_have_header': lambda value: isinstance(value, Object) and value.alive,
+            # This model is the general slot protocol; the GC0 transaction
+            # is test_dict_materialize_gc0_transaction's.
+            '_dict_gc0_materialize': lambda receiver, kind, output: 0,
         })
         for file, prefixes, names in (
             ('py_protocol_runtime.py', (), {'py_dict_storage_slots'}),
@@ -183,7 +186,9 @@ class NamespaceMemory(DictMemory):
     def source(self, items, subclass):
         if not subclass:
             return self.wrap(items)
-        cls = self.make_class('DictSubclass', flags=6)
+        cls = self.make_class('DictSubclass', flags=(
+            abi.PY_FLAG_CLASS_DICT_SUBCLASS | abi.PY_FLAG_CLASS_SLOTS_ONLY
+        ))
         receiver = self.make('mapping', abi.PY_TYPE_USER_CLASS_START)
         receiver.fields[abi.PYINSTANCEOBJECT_CLS_OFFSET] = cls
         receiver.fields[abi.PYINSTANCEOBJECT_FIELDS_OFFSET] = self.wrap({'\x00pcc.dict.items': items})
@@ -259,11 +264,16 @@ def test_namespace_copy_cleans_partial_input_ownership(failure):
     assert status == -1 and memory.error is not None
 
 
-@pytest.mark.parametrize('registration', (1, 5, 14, 18, 28))
-def test_namespace_copy_cleans_partial_root_registration(registration):
-    memory = NamespaceMemory('register', fail_register=registration)
-    status, _ = memory.apply({'value': 'kept'}, True)
-    assert status == -1 and memory.error is not None
+def test_namespace_copy_cleans_each_failed_root_registration():
+    successful = NamespaceMemory('register')
+    assert successful.apply({'value': 'kept'}, True) == (0, {'value': 'kept'})
+    assert successful.registrations > 0
+    for registration in range(1, successful.registrations + 1):
+        memory = NamespaceMemory('register', fail_register=registration)
+        status, _ = memory.apply({'value': 'kept'}, True)
+        assert memory.registrations >= registration
+        assert status == -1 and memory.error is not None
+        assert not memory.root_groups
 
 
 def test_namespace_copy_preserves_publication_error_across_cleanup_finalizers():

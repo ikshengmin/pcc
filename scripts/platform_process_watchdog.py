@@ -164,8 +164,61 @@ class WindowsJob:
             self.handle = None
 
 
-def linux_sample(root, known):
+def _own_cpu_ticks(stat_fields):
+    """Optional own-process fields; never include waited-child CPU twice."""
+    try:
+        user, system = int(stat_fields[11]), int(stat_fields[12])
+        if user >= 0 and system >= 0:
+            return user, system
+    except (IndexError, TypeError, ValueError):
+        pass
+    return None, None
+
+
+def _stage1_observation(environment, platform):
+    """Bounded supplied-environment claims, not a host-capacity query."""
+    image = {}
+    for name in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion",
+                 "PCC_PY_FRONTEND_JOBS", "PCC_SELF_BACKEND_JOBS"):
+        value = environment.get(name)
+        valid = (type(value) is str and 0 < len(value) <= 128
+                 and all(character.isascii() and
+                         (character.isalnum() or character in "._+-")
+                         for character in value))
+        image[name] = {"value": value if valid else None,
+                       "status": "supplied_environment" if valid else "unavailable"}
+    linux = platform.startswith("linux")
+    tick_frequency = None
+    if linux:
+        try:
+            value = os.sysconf("SC_CLK_TCK")
+            if type(value) is int and value > 0:
+                tick_frequency = value
+        except Exception:
+            # Optional unit metadata cannot become an admission requirement.
+            pass
+    return {
+        "schema": "pcc.stage1-cpu-observation.v1",
+        "cpu_status": "sampled" if linux else "unavailable",
+        "cpu_source": "same_linux_proc_stat_read" if linux else None,
+        "unavailable_reason": None if linux else "recurring_observer_does_not_read_cpu_time",
+        "cpu_columns": ["pid", "start_time_ticks", "own_user_ticks", "own_system_ticks"],
+        "cpu_unit": "clock_ticks",
+        "ticks_per_second": tick_frequency,
+        "tick_frequency_source": "os.sysconf(SC_CLK_TCK)" if tick_frequency is not None else None,
+        "tick_frequency_status": "available" if tick_frequency is not None else "unavailable",
+        "null_cpu_fields": "unavailable_or_malformed_own_cpu_fields",
+        "coverage": "sampled_owned_processes_only_not_complete_tree_cpu",
+        "effective_cpu_quota": None,
+        "affinity_cpu_count": None,
+        "capacity_status": "unavailable_not_observed",
+        "runner_environment": image,
+    }
+
+
+def linux_sample(root, known, *, cpu_observations=None):
     records = {}
+    cpu_records = {} if cpu_observations is not None else None
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
@@ -174,10 +227,15 @@ def linux_sample(root, known):
             for line in (entry / "status").read_text().splitlines():
                 key, _, value = line.partition(":")
                 fields[key] = value.strip()
-            start = (entry / "stat").read_text().rsplit(")", 1)[1].split()[19]
+            stat_fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            start = stat_fields[19]
             records[int(entry.name)] = (int(fields["PPid"]), int(fields.get("VmRSS", "0").split()[0]) * 1024, start)
         except (OSError, KeyError, ValueError):
             continue
+        # Keep optional parsing outside the enforcing RSS/identity try block:
+        # malformed CPU fields must not discard an otherwise valid process.
+        if cpu_records is not None:
+            cpu_records[int(entry.name)] = _own_cpu_ticks(stat_fields)
     owned = {pid for pid, start in known.items() if pid in records and records[pid][2] == start}
     if root in records and (root not in known or records[root][2] == known[root]):
         owned.add(root)
@@ -197,10 +255,13 @@ def linux_sample(root, known):
         except OSError:
             executable = ""
         rows.append((pid, records[pid][1], executable))
+        if cpu_observations is not None:
+            cpu_observations.append((pid, records[pid][2], *cpu_records[pid]))
     return rows
 
 
-def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel=None):
+def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel=None,
+        observe_stage1=False):
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -213,6 +274,8 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel
     if os.name == "nt":
         child_env[WINDOWS_GUARD_ENV] = str(guard_path.absolute())
     launch_command, child_env = _direct_host_launch(command, child_env, native=native)
+    observation = _stage1_observation(child_env, sys.platform) if observe_stage1 and not native else None
+    observation_written = False
     known = {}
     peak = 0
     forbidden = {"python", "python3", "python3.15", "python.exe", "pythonw.exe",
@@ -236,10 +299,20 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel
             while process.poll() is None:
                 if cancel is not None and cancel.is_set():
                     raise RuntimeError("qualification cancelled after a peer failure")
-                rows = job.sample() if job else linux_sample(process.pid, known)
+                cpu_rows = [] if observation is not None and sys.platform.startswith("linux") else None
+                if cpu_rows is None:
+                    rows = job.sample() if job else linux_sample(process.pid, known)
+                else:
+                    rows = linux_sample(process.pid, known, cpu_observations=cpu_rows)
                 rss = sum(row[1] for row in rows)
                 peak = max(peak, rss)
-                samples.write(json.dumps({"elapsed": time.monotonic() - started, "rss": rss, "processes": rows}) + "\n")
+                sample = {"elapsed": time.monotonic() - started, "rss": rss, "processes": rows}
+                if observation is not None:
+                    sample["cpu_time"] = cpu_rows
+                    if not observation_written:
+                        sample["stage1_observation"] = observation
+                        observation_written = True
+                samples.write(json.dumps(sample) + "\n")
                 samples.flush()
                 if native:
                     denied = [row[2] for row in rows if os.path.basename(row[2]).lower() in forbidden]
@@ -274,5 +347,8 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel
             finally:
                 if process is not None:
                     process.wait(timeout=10)
-    return {"seconds": time.monotonic() - started, "peak_tree_rss": peak,
-            "log": str(log_path), "command": list(command), "launched_command": launch_command}
+    result = {"seconds": time.monotonic() - started, "peak_tree_rss": peak,
+              "log": str(log_path), "command": list(command), "launched_command": launch_command}
+    if observation is not None:
+        result["stage1_observation"] = observation
+    return result

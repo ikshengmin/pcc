@@ -46,7 +46,7 @@ Options:
   --sources-from-make GOAL  Collect project sources from `make -nB GOAL`.
   --depends-on SPEC         Add a dependency file or directory.
   --cpp-arg ARG             Repeat to pass raw preprocessor args.
-  --link-arg ARG            Repeat to pass raw linker args.
+  --link-arg ARG            Repeat for linker args or owned .o/.obj inputs.
   --prepare-cmd CMD         Repeat to run shell commands before compile.
   --ensure-make-goal SPEC   Repeat to run `make -C PATH GOAL`.
   -O0..-O3                  Set optimization level (default: -O2).
@@ -147,6 +147,25 @@ def _seed_package_site_for_python_entry(src_path: str) -> None:
 from pcc.driver.cli_shared_paths import _fnv1a_update_bytes_u64, _fnv1a_update_u64, _iter_py_sources_under
 
 
+def _is_python_object_link_input(argument):
+    argument = str(argument)
+    return (not argument.startswith(("-", "@"))
+            and argument.lower().endswith((".o", ".obj")))
+
+
+def _python_link_input_groups(backend, link_args):
+    objects = []
+    forwarded = []
+    owned = (backend == "self"
+             and str(os.environ.get("PCC_SELF_LINK", "")).strip().lower() != "cc")
+    for argument in _copy_seq(link_args):
+        if owned and _is_python_object_link_input(argument):
+            objects.append(argument)
+        else:
+            forwarded.append(argument)
+    return objects, forwarded
+
+
 def _python_run_cache_key(
     src_path: str,
     *,
@@ -156,6 +175,7 @@ def _python_run_cache_key(
     backend: str,
     gpu_backend,
     link_args=(),
+    target_triple=None,
 ):
     roots = _inferred_package_site_roots(src_path)
     _append_unique_path(roots, src_path)
@@ -168,12 +188,27 @@ def _python_run_cache_key(
         str(ir_scaffold or ""),
         str(backend or ""),
         str(gpu_backend or ""),
+        str(target_triple or ""),
+        str(os.environ.get("PCC_SELF_LINK", "") or "pcc").strip().lower(),
         sys.platform,
     ):
         h = _fnv1a_update_u64(h, part)
         h = _fnv1a_update_u64(h, "\0")
     for link_arg in _copy_seq(link_args):
         h = _fnv1a_update_u64(h, "link-arg:" + str(link_arg))
+        if _is_python_object_link_input(link_arg):
+            # Explicit native inputs are outside the Python source walk.
+            # Bind their content, including same-size replacements at the
+            # same path, before deciding to execute a cached program.
+            h = _fnv1a_update_u64(h, os.path.abspath(link_arg))
+            try:
+                with open(link_arg, "rb") as stream:
+                    chunk = stream.read(65536)
+                    while chunk:
+                        h = _fnv1a_update_bytes_u64(h, chunk)
+                        chunk = stream.read(65536)
+            except OSError:
+                h = _fnv1a_update_u64(h, "missing")
         h = _fnv1a_update_u64(h, "\0")
     # Identity, not content -- kept in step with the pcc1 copy in
     # cli_bootstrap.py by hand (the duplication is deliberate: importing the
@@ -219,6 +254,7 @@ def _python_run_cache_path(
     backend: str,
     gpu_backend,
     link_args=(),
+    target_triple=None,
 ):
     if str(os.environ.get("PCC_DISABLE_PY_RUN_CACHE", "")).strip() in (
         "1",
@@ -241,6 +277,7 @@ def _python_run_cache_path(
         backend=backend,
         gpu_backend=gpu_backend,
         link_args=link_args,
+        target_triple=target_triple,
     )
     tag = os.path.basename(src_path)
     if tag.endswith(".py"):
@@ -987,6 +1024,8 @@ def _execute_python_path(
     from pcc.frontends.python.pipeline import PyPipelineError, compile_python
     from pcc.diagnostics.compile_observability import ObservabilityOptions, ObservedCompileError, observed_compile
 
+    object_inputs, forwarded_link_args = _python_link_input_groups(backend, link_args)
+
     def _observed_compile(
         compile_input,
         compile_output,
@@ -1019,7 +1058,8 @@ def _execute_python_path(
                 gpu_backend=compile_gpu_backend,
                 target_triple=target_triple,
                 backend=backend,
-                link_args=_copy_seq(link_args),
+                link_args=forwarded_link_args,
+                object_inputs=object_inputs,
             )
         except ObservedCompileError as exc:
             raise PyPipelineError(exc.formatted) from exc
@@ -1077,6 +1117,7 @@ def _execute_python_path(
         backend=backend,
         gpu_backend=gpu_backend,
         link_args=link_args,
+        target_triple=target_triple,
     )
     if cache_path and os.path.isfile(cache_path):
         try:
@@ -1534,6 +1575,8 @@ def _cli_main_impl(argv=None) -> int:
         from pcc.frontends.python.pipeline import PyPipelineError, compile_python
         from pcc.diagnostics.compile_observability import ObservabilityOptions, ObservedCompileError, observed_compile
 
+        object_inputs, forwarded_link_args = _python_link_input_groups(backend_raw, link_args_raw)
+
         def _observed_compile(
             compile_input,
             compile_output,
@@ -1567,7 +1610,8 @@ def _cli_main_impl(argv=None) -> int:
                     backend=compile_backend,
                     gpu_backend=compile_gpu_backend,
                     target_triple=target_triple_raw,
-                    link_args=_copy_seq(link_args_raw),
+                    link_args=forwarded_link_args,
+                    object_inputs=object_inputs,
                 )
             except ObservedCompileError as exc:
                 raise PyPipelineError(exc.formatted) from exc
@@ -1625,6 +1669,7 @@ def _cli_main_impl(argv=None) -> int:
             backend=backend_raw,
             gpu_backend=gpu_backend_raw,
             link_args=link_args_raw,
+            target_triple=target_triple_raw,
         )
         if cache_path and os.path.isfile(cache_path):
             try:

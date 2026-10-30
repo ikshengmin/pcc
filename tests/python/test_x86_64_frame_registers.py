@@ -8,6 +8,10 @@ instead; the prologue saves and each epilogue restores the r12-r15 it uses.
 """
 from __future__ import annotations
 
+import ast
+import inspect
+import itertools
+import random
 from types import SimpleNamespace
 
 import pytest
@@ -266,3 +270,134 @@ def test_return_without_the_frame_restore_is_left_alone():
     lines = PROLOGUE + body + EPILOGUE
     assert keep_frame_slots_in_registers(
         lines, _func((8, I64), (16, I64)), _plan(), windows=False) == lines
+
+
+class _CountedSuccessors(list):
+    """Count block visits, not elapsed time or native instructions."""
+
+    def __init__(self, successors):
+        super().__init__(successors)
+        self.visits = 0
+
+    def __getitem__(self, index):
+        self.visits += 1
+        return super().__getitem__(index)
+
+
+@pytest.fixture(scope="module")
+def _production_frame_liveness():
+    # Execute the production recurrence without constructing thousands of
+    # unrelated frame/assembly fixtures. Keep the original AST unmodified;
+    # the full-pass tests above and below also exercise its actual caller.
+    tree = ast.parse(inspect.getsource(keep_frame_slots_in_registers))
+    function = tree.body[0]
+    starts = [
+        index for index, statement in enumerate(function.body)
+        if isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance(statement.targets[0], ast.Name)
+        and statement.targets[0].id == "live_in"
+    ]
+    assert len(starts) == 1
+    statements = function.body[starts[0]:starts[0] + 4]
+    assert [statement.targets[0].id for statement in statements[:3]] == [
+        "live_in", "live_out", "changed",
+    ]
+    assert isinstance(statements[3], ast.While)
+    assert isinstance(statements[3].test, ast.Name)
+    assert statements[3].test.id == "changed"
+    code = compile(ast.Module(body=statements, type_ignores=[]),
+                   "<production frame-register liveness>", "exec")
+
+    def solve(successors, uses, kills):
+        counted = _CountedSuccessors(successors)
+        context = dict(block_count=len(successors), successors=counted,
+                       uses=list(uses), kills=list(kills))
+        exec(code, {"__builtins__": {}}, context)
+        return context["live_in"], context["live_out"], counted.visits
+
+    return solve
+
+
+def _full_sweep_liveness_reference(successors, uses, kills):
+    # The original conservative scheduler, independent of the extracted
+    # production code. Do not change this alongside solver optimizations.
+    live_in = [0] * len(successors)
+    live_out = [0] * len(successors)
+    changed = True
+    visits = 0
+    while changed:
+        changed = False
+        for block in range(len(successors) - 1, -1, -1):
+            visits += 1
+            out = 0
+            for successor in successors[block]:
+                out |= live_in[successor]
+            entering = uses[block] | (out & ~kills[block])
+            if out != live_out[block] or entering != live_in[block]:
+                live_out[block] = out
+                live_in[block] = entering
+                changed = True
+    return live_in, live_out, visits
+
+
+def test_frame_liveness_matches_full_sweep_for_all_two_block_two_bit_graphs(
+    _production_frame_liveness,
+):
+    # 16 graphs * 4**4 use/kill choices = 4096 cases. Includes empty edges,
+    # unreachable blocks, self loops, cycles and overlapping use/kill bits.
+    edge_choices = [[], [0], [1], [0, 1]]
+    for successors in itertools.product(edge_choices, repeat=2):
+        for use0, use1, kill0, kill1 in itertools.product(range(4), repeat=4):
+            uses, kills = [use0, use1], [kill0, kill1]
+            actual = _production_frame_liveness(successors, uses, kills)
+            reference = _full_sweep_liveness_reference(successors, uses, kills)
+            assert actual[:2] == reference[:2], (successors, uses, kills)
+            assert reference[2] - actual[2] in (0, len(successors))
+
+
+def test_frame_liveness_matches_full_sweep_for_seeded_multiblock_graphs(
+    _production_frame_liveness,
+):
+    randomizer = random.Random(0xF12A)
+    for _ in range(512):
+        blocks = randomizer.randrange(1, 13)
+        successors = [
+            [randomizer.randrange(blocks) for _ in range(randomizer.randrange(4))]
+            for _ in range(blocks)
+        ]
+        uses = [randomizer.getrandbits(8) for _ in range(blocks)]
+        kills = [randomizer.getrandbits(8) for _ in range(blocks)]
+        actual = _production_frame_liveness(successors, uses, kills)
+        reference = _full_sweep_liveness_reference(successors, uses, kills)
+        assert actual[:2] == reference[:2], (successors, uses, kills)
+        assert reference[2] - actual[2] in (0, blocks)
+
+
+@pytest.mark.parametrize("successors, uses, kills, expected_in, expected_out", [
+    ([[0]], [1], [1], [1], [1]),
+    ([[1], [0]], [1, 0], [0, 1], [1, 0], [0, 1]),
+    ([[1, 1], [0, 0]], [1, 0], [0, 1], [1, 0], [0, 1]),
+    ([[1], [0], [2]], [1, 0, 0], [0, 1, 0], [1, 0, 0], [0, 1, 0]),
+])
+def test_out_only_changes_keep_fresh_live_out_without_an_extra_sweep(
+    _production_frame_liveness, successors, uses, kills, expected_in, expected_out,
+):
+    actual = _production_frame_liveness(successors, uses, kills)
+    reference = _full_sweep_liveness_reference(successors, uses, kills)
+    assert actual == (expected_in, expected_out, 2 * len(successors))
+    assert reference == (expected_in, expected_out, 3 * len(successors))
+
+
+def test_out_only_cycle_preserves_a_store_read_on_the_back_edge():
+    body = [
+        ".Lread:",
+        "  mov rax, QWORD PTR [rbp - 8]",
+        "  jmp .Lwrite",
+        ".Lwrite:",
+        "  mov QWORD PTR [rbp - 8], rdi",
+        "  jmp .Lread",
+    ]
+    # The slot is read at entry, so remains in memory. The write block kills
+    # its incoming bit, but its outgoing bit must still preserve the store.
+    assert _promote(body, (8, I64)) == PROLOGUE + body + EPILOGUE

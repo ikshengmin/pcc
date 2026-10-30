@@ -66,6 +66,50 @@ local link paths. Its semantic-review boundary is recorded in
 
 ## Profiling checks
 
+### Optional process RSS history
+
+`run_process_tree_sample.py --process-rss-history` streams the already sampled
+owned-process rows to `<result>.process-rss.jsonl`. Bootstrap enables it only
+when its existing `PCC_BOOTSTRAP_KEEP_PROCESS_SAMPLES` setting requests retention.
+The live `worker-rss.tsv` mailbox, aggregate `samples.tsv`, admission events,
+memory-limit policy and per-iteration guard decision order are unchanged.
+Synchronous encoding, writing and flushing add overhead and can delay later
+sampling and guard enforcement. No additional process, identity, argv or
+worker-report reads are performed.
+
+Each `pcc.process-rss-history.v1` JSONL frame contains its zero-based
+`sample_index`, the mailbox's `sampled_at_monotonic_s`, the aggregate sample's
+`elapsed_s`, platform, aggregate RSS/count, and process rows. A row retains PID,
+the sampled table's PPID/RSS, and the already obtained kernel session ID, parent
+PID and `process_start_time`. Birth identity is `(Linux start ticks, 0)` or
+`(Darwin calendar-derived start seconds, microseconds)`. Use the platform-specific
+pair with PID as a birth identifier, not as the sample timestamp.
+The sample timestamp uses the same host-monotonic clock as admission events,
+not the elapsed timestamp or UTC. Group PIDs by birth identity, and join tasks
+only within their existing launch/terminal intervals. Missing or ambiguous
+samples are unknown, not zero RSS. The history is neither exact peak RSS nor
+proof that admission consumed a particular snapshot.
+
+Retained output stops before exceeding 32 MiB or 32,768 complete frames. A frame
+is encoded before the byte check, so 32 MiB is not a transient-allocation cap.
+The guard's optional `process_rss_history` receipt records the bounds, samples
+seen/written, fully flushed `complete_bytes`, status and reason. At close,
+`samples_produced` records the aggregate sample count, and `samples_missed`
+counts produced samples that never reached the history recorder; both are null
+until close. `recording` is live; `complete` means all produced samples were
+retained and capture closed, not that the command or Stage1 succeeded.
+`truncated` identifies the first
+byte/sample bound; `write_failed` identifies the failed operation. Otherwise,
+`incomplete` with reason `unrecorded_produced_samples` identifies a sampling-loop
+failure that bypassed history recording. Existing `truncated` or `write_failed`
+statuses take precedence, with any missed samples still counted. These statuses
+warn without replacing the original command exit or guard failure result; they
+do not promise unchanged timing. After an I/O failure, read only the reported
+complete frames/bytes; an incomplete tail may remain.
+Existing files are never overwritten. A created file is linked under the
+guard receipt's optional `artifacts.process_rss_history`; the narrow macOS
+bootstrap artifact export includes this exact sidecar.
+
 For executable commands, report interpretation, failure preservation and bounded
 worker replay, use [Profiling and hotspot diagnosis](knowledge/profiling-hotspots.md).
 `pcc_flamegraph.py report --input-folded PATH --focus SYMBOL --report-json NEW.json`

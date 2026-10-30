@@ -1,0 +1,255 @@
+{
+  "decision": "HOLD: do not publish current candidate as a general performance improvement",
+  "reason": "Large shared actual-planner fixture improves, but small/rootless/all-unique whole-frame-pass controls regress; pair variation is substantial. No production prevalence or Stage1 saving established.",
+  "source_patch_sha256": "97215954ec5453fc95f2fad0041645ad2bbc5ee61b31c6e5d163fc62c2acbb9d",
+  "functional": "44 PASS, original21 + new23, default6/loadgroup; source host only",
+  "performance_status": "COMPLETE, correctness comparisons PASS; not a no-regression acceptance",
+  "interpreter": "3.15.0rc1 (main, Aug 25 2026, 14:02:32) [Clang 22.1.3 ]",
+  "gc_before": [
+    true,
+    [
+      2000,
+      10,
+      10
+    ]
+  ],
+  "gc_after": [
+    true,
+    [
+      2000,
+      10,
+      10
+    ]
+  ],
+  "elapsed_seconds": 63.58495074999519,
+  "peak_tree_rss_bytes": 96002048,
+  "rows": [
+    {
+      "shape": "single_1x1",
+      "mode": "helper",
+      "baseline_median_us_per_call": 0.409291015625,
+      "candidate_median_us_per_call": 3.22614794921875,
+      "paired_ratio_median": 7.9509357835815555,
+      "paired_ratio_min": 2.237173423671147,
+      "paired_ratio_max": 12.69771791497761,
+      "slower_pairs": 9,
+      "pairs": 9,
+      "origin": "actual planner bounded IR",
+      "counts": {
+        "records": 2,
+        "unique_location_tuples": 2,
+        "location_items": 1,
+        "unique_location_items": 1
+      }
+    },
+    {
+      "shape": "single_1x1",
+      "mode": "whole",
+      "baseline_median_us_per_call": 115.7008271484375,
+      "candidate_median_us_per_call": 118.17979638671875,
+      "paired_ratio_median": 1.1022243620463263,
+      "paired_ratio_min": 0.9362709221259993,
+      "paired_ratio_max": 1.1379285915120787,
+      "slower_pairs": 7,
+      "pairs": 9,
+      "origin": "actual planner bounded IR",
+      "counts": {
+        "records": 2,
+        "unique_location_tuples": 2,
+        "location_items": 1,
+        "unique_location_items": 1
+      }
+    },
+    {
+      "shape": "rootless129",
+      "mode": "helper",
+      "baseline_median_us_per_call": 4.1888828125,
+      "candidate_median_us_per_call": 13.261119140625,
+      "paired_ratio_median": 3.9107466016559975,
+      "paired_ratio_min": 2.06343817539408,
+      "paired_ratio_max": 4.554735885559124,
+      "slower_pairs": 9,
+      "pairs": 9,
+      "origin": "synthetic negative control derived from actual planner",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 1,
+        "location_items": 0,
+        "unique_location_items": 0
+      }
+    },
+    {
+      "shape": "rootless129",
+      "mode": "whole",
+      "baseline_median_us_per_call": 2157.64845703125,
+      "candidate_median_us_per_call": 2347.240572265625,
+      "paired_ratio_median": 1.091379287792971,
+      "paired_ratio_min": 0.8993069304961585,
+      "paired_ratio_max": 1.4933697244490218,
+      "slower_pairs": 8,
+      "pairs": 9,
+      "origin": "synthetic negative control derived from actual planner",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 1,
+        "location_items": 0,
+        "unique_location_items": 0
+      }
+    },
+    {
+      "shape": "shared_8x16",
+      "mode": "helper",
+      "baseline_median_us_per_call": 5.9543046875,
+      "candidate_median_us_per_call": 6.462857421875,
+      "paired_ratio_median": 1.0622417814954597,
+      "paired_ratio_min": 0.7615109984960304,
+      "paired_ratio_max": 1.3323585202329082,
+      "slower_pairs": 5,
+      "pairs": 9,
+      "origin": "actual planner bounded IR",
+      "counts": {
+        "records": 17,
+        "unique_location_tuples": 2,
+        "location_items": 128,
+        "unique_location_items": 8
+      }
+    },
+    {
+      "shape": "shared_8x16",
+      "mode": "whole",
+      "baseline_median_us_per_call": 423.088552734375,
+      "candidate_median_us_per_call": 486.7011484375,
+      "paired_ratio_median": 1.1855591618869419,
+      "paired_ratio_min": 0.791463574430069,
+      "paired_ratio_max": 3.3001226692358396,
+      "slower_pairs": 7,
+      "pairs": 9,
+      "origin": "actual planner bounded IR",
+      "counts": {
+        "records": 17,
+        "unique_location_tuples": 2,
+        "location_items": 128,
+        "unique_location_items": 8
+      }
+    },
+    {
+      "shape": "shared_64x128",
+      "mode": "helper",
+      "baseline_median_us_per_call": 684.1635078125,
+      "candidate_median_us_per_call": 60.1735703125,
+      "paired_ratio_median": 0.08209164855286209,
+      "paired_ratio_min": 0.06887590696584081,
+      "paired_ratio_max": 0.13389261133780406,
+      "slower_pairs": 0,
+      "pairs": 9,
+      "origin": "actual planner bounded IR",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 2,
+        "location_items": 8192,
+        "unique_location_items": 64
+      }
+    },
+    {
+      "shape": "shared_64x128",
+      "mode": "whole",
+      "baseline_median_us_per_call": 3083.775671875,
+      "candidate_median_us_per_call": 2687.35396875,
+      "paired_ratio_median": 0.8897997113726165,
+      "paired_ratio_min": 0.2892192448840669,
+      "paired_ratio_max": 0.973933242945287,
+      "slower_pairs": 0,
+      "pairs": 9,
+      "origin": "actual planner bounded IR",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 2,
+        "location_items": 8192,
+        "unique_location_items": 64
+      }
+    },
+    {
+      "shape": "unique_64x128",
+      "mode": "helper",
+      "baseline_median_us_per_call": 575.3706875,
+      "candidate_median_us_per_call": 1124.8756015625,
+      "paired_ratio_median": 2.008640639684879,
+      "paired_ratio_min": 1.758957702122188,
+      "paired_ratio_max": 3.086019026637031,
+      "slower_pairs": 9,
+      "pairs": 9,
+      "origin": "equal-but-distinct synthetic negative control",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 129,
+        "location_items": 8192,
+        "unique_location_items": 8192
+      }
+    },
+    {
+      "shape": "unique_64x128",
+      "mode": "whole",
+      "baseline_median_us_per_call": 2631.1362890625,
+      "candidate_median_us_per_call": 3100.972390625,
+      "paired_ratio_median": 1.156067236128425,
+      "paired_ratio_min": 0.6855994572644402,
+      "paired_ratio_max": 1.3216650324015564,
+      "slower_pairs": 7,
+      "pairs": 9,
+      "origin": "equal-but-distinct synthetic negative control",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 129,
+        "location_items": 8192,
+        "unique_location_items": 8192
+      }
+    },
+    {
+      "shape": "mixed_64x128",
+      "mode": "helper",
+      "baseline_median_us_per_call": 519.2119375,
+      "candidate_median_us_per_call": 608.3256953125,
+      "paired_ratio_median": 1.157339194244077,
+      "paired_ratio_min": 0.4399465055999273,
+      "paired_ratio_max": 12.56058314744868,
+      "slower_pairs": 8,
+      "pairs": 9,
+      "origin": "alternating shared/unique synthetic control",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 66,
+        "location_items": 8192,
+        "unique_location_items": 4160
+      }
+    },
+    {
+      "shape": "mixed_64x128",
+      "mode": "whole",
+      "baseline_median_us_per_call": 2884.8631015625,
+      "candidate_median_us_per_call": 2939.832515625,
+      "paired_ratio_median": 1.0190544272387578,
+      "paired_ratio_min": 0.8237194385282111,
+      "paired_ratio_max": 1.1678955773376207,
+      "slower_pairs": 5,
+      "pairs": 9,
+      "origin": "alternating shared/unique synthetic control",
+      "counts": {
+        "records": 129,
+        "unique_location_tuples": 66,
+        "location_items": 8192,
+        "unique_location_items": 4160
+      }
+    }
+  ],
+  "fresh_head_alignment": {
+    "head": "2a5e18f4941386f325fab58839ae3662f8532077",
+    "functional_read_paths": 178,
+    "expected_overlay_only": true,
+    "benchmark_loaded_paths": 146,
+    "benchmark_additional_paths": []
+  },
+  "scope": "bounded actual-planner IR and synthetic ordinary SysV assembly/control plans; helper and whole pass separately; not production census, Win64/native/Stage1 performance",
+  "cleanup": "terminal rc0, all owned processes reaped, no remaining/uncertainty, independent canonical lock release receipt",
+  "no_further_execution": "No source retuning, rerun or Stage1 run performed.",
+  "status_scope": "These are measured held-v1 results, NOT eligibility-prototype measurements."
+}

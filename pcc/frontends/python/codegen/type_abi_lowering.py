@@ -785,7 +785,10 @@ class TypeAbiLoweringMixin:
                     raise L1CodegenError("Python object cannot implicitly become a raw valueclass pointer")
                 elif isinstance(self._valueclass_field_payload_ir_type(field_ty), ir.PointerType):
                     destination = self._slot_call_valueclass_field_source(output, (index,), False)[0]
-                    status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(destination), self._as_gc_ptr(field)])
+                    status = self._emit_root_slot_move(
+                        destination,
+                        field,
+                    )
                     self._slot_call_check_status(status, "valueclass unbox field move")
                     self._slot_call_note_published(destination)
                 else:
@@ -857,7 +860,10 @@ class TypeAbiLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block((root,), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             try:
-                status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(result_slot), self._as_gc_ptr(root)])
+                status = self._emit_root_slot_move(
+                    result_slot,
+                    root,
+                )
                 self._slot_call_check_status(status, "valueclass boxed result move")
                 self._slot_call_note_published(result_slot)
                 self._release_slot_call_roots((root,))

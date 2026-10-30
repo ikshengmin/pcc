@@ -27,6 +27,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_USER_CLASS_START,
 )
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (
     cstr,
@@ -405,6 +406,34 @@ def _iter_type_has_getitem(o) -> int:
 
 @c_abi_export("py_obj_next")
 def py_obj_next(it_obj):
+    return _obj_next_body(it_obj, 0)
+
+
+@c_abi_export("py_obj_iter_next")
+def py_obj_iter_next(it_obj):
+    """Iteration consumer entry: NULL without an exception also means done.
+
+    Native sequence exhaustion needs no StopIteration object. User next,
+    generator and tuple-wrapper paths retain their existing exception result;
+    consumers still match and consume StopIteration from those paths.
+    Explicit next(it) keeps py_obj_next and its observable exception/value.
+    """
+    return _obj_next_body(it_obj, 1)
+
+
+@c_abi_export("pcc_iter_exhausted_impl")
+def _iter_exhausted(quiet: i64) -> None:
+    if quiet != 0:
+        # The old path selected StopIteration after retiring its temporaries.
+        # Clear a cleanup callback's pending error just as consuming that
+        # selecting exception would, rather than exposing a different error.
+        py_clear_exception()
+    else:
+        py_raise_owned(py_exc_new(8, null()))
+
+
+@c_abi_export("pcc_iter_next_impl")
+def _obj_next_body(it_obj, quiet_exhaustion: i64):
     if not ptr_is_null(it_obj):
         if is_tagged_int(it_obj) == 0:
             tag: int = load_i32(it_obj, 8)
@@ -434,8 +463,7 @@ def py_obj_next(it_obj):
                     line_length = py_bytes_len(line)
                 if line_length == 0:
                     py_decref(line)
-                    exc = py_exc_new(8, null())  # StopIteration
-                    py_raise_owned(exc)
+                    _iter_exhausted(quiet_exhaustion)
                     return null()
                 if line_length < 0:
                     py_decref(line)
@@ -469,8 +497,7 @@ def py_obj_next(it_obj):
         # Callable-iterator: iter(callable, sentinel).
         if index == -2:                       # PY_ITER_CALLABLE_DONE
             _iter_finish_moving_root(it_handle)
-            exc = py_exc_new(8, null())        # StopIteration
-            py_raise_owned(exc)
+            _iter_exhausted(quiet_exhaustion)
             return null()
         pair = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
         callable = py_tuple_get(pair, 0)
@@ -582,8 +609,7 @@ def py_obj_next(it_obj):
             it_obj = _iter_reload_moving_root(it_slot, it_handle)
             store_i64(it_obj, 24, -2)          # PY_ITER_CALLABLE_DONE
             _iter_finish_moving_root(it_handle)
-            exc = py_exc_new(8, null())        # StopIteration
-            py_raise_owned(exc)
+            _iter_exhausted(quiet_exhaustion)
             return null()
         return _iter_finish_owned_root(result_slot, result_handle, it_handle)
 
@@ -591,7 +617,7 @@ def py_obj_next(it_obj):
     if ptr_is_null(seq) != 0:
         # An exhausted sequence-protocol iterator stays exhausted.
         _iter_finish_moving_root(it_handle)
-        py_raise_owned(py_exc_new(8, null()))  # StopIteration
+        _iter_exhausted(quiet_exhaustion)  # StopIteration
         return null()
     tag: int = _type_of(seq)
     n: int = 0
@@ -601,8 +627,7 @@ def py_obj_next(it_obj):
         n = py_list_len(seq)
         if index >= n:
             _iter_finish_moving_root(it_handle)
-            exc = py_exc_new(8, null())        # StopIteration
-            py_raise_owned(exc)
+            _iter_exhausted(quiet_exhaustion)
             return null()
         it_obj = _iter_reload_moving_root(it_slot, it_handle)
         seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
@@ -611,8 +636,7 @@ def py_obj_next(it_obj):
         n = py_tuple_len(seq)
         if index >= n:
             _iter_finish_moving_root(it_handle)
-            exc = py_exc_new(8, null())
-            py_raise_owned(exc)
+            _iter_exhausted(quiet_exhaustion)
             return null()
         it_obj = _iter_reload_moving_root(it_slot, it_handle)
         seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
@@ -624,8 +648,7 @@ def py_obj_next(it_obj):
         n = py_str_byte_len(seq)
         if index >= n:
             _iter_finish_moving_root(it_handle)
-            exc = py_exc_new(8, null())
-            py_raise_owned(exc)
+            _iter_exhausted(quiet_exhaustion)
             return null()
         it_obj = _iter_reload_moving_root(it_slot, it_handle)
         seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
@@ -635,8 +658,7 @@ def py_obj_next(it_obj):
         n = py_bytes_len(seq)
         if index >= n:
             _iter_finish_moving_root(it_handle)
-            exc = py_exc_new(8, null())
-            py_raise_owned(exc)
+            _iter_exhausted(quiet_exhaustion)
             return null()
         idx = py_int_from_i64(index)
         if ptr_is_null(idx):
@@ -673,7 +695,7 @@ def py_obj_next(it_obj):
                 it_obj = _iter_reload_moving_root(it_slot, it_handle)
                 pcc_gc_store_ptr(it_obj, ptr_add(it_obj, 16), null())
                 _iter_finish_moving_root(it_handle)
-                py_raise_owned(py_exc_new(8, null()))  # StopIteration
+                _iter_exhausted(quiet_exhaustion)  # StopIteration
                 return null()
             _iter_finish_moving_root(it_handle)
             return null()

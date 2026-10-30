@@ -133,6 +133,19 @@ def test_default_stage_execution_is_memory_guarded_and_bounded(tmp_path):
     assert command[-2:] == ["--", "compiler"]
 
 
+@pytest.mark.parametrize("retain", [False, True])
+def test_process_rss_history_follows_existing_process_sample_retention(tmp_path, retain):
+    environment = {"PCC_BOOTSTRAP_KEEP_PROCESS_SAMPLES": "1"} if retain else {}
+    options = _options(tmp_path, **environment)
+    command = bootstrap._posix_guard_command(options.out_dir / "guard", options, ["compiler"])
+    assert ("--process-rss-history" in command) is retain
+    assert command[-2:] == ["--", "compiler"]
+    unchanged = bootstrap._posix_guard_command(
+        options.out_dir / "guard", _options(tmp_path), ["compiler"],
+    )
+    assert [part for part in command if part != "--process-rss-history"] == unchanged
+
+
 def test_two_hour_ci_stage_deadline_preserves_local_default_and_memory_guard(tmp_path):
     assert bootstrap.Options({}).stage_timeout == 1800
     assert bootstrap.SAFE_MAX_STAGE_TIMEOUT == 7200

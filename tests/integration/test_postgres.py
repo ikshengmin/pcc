@@ -2,7 +2,7 @@ import os
 import socket
 import subprocess
 from contextlib import contextmanager
-import fcntl
+from scripts.file_lock import exclusive_file_lock
 import hashlib
 import shlex
 import tempfile
@@ -192,13 +192,8 @@ def _make_env():
 
 @contextmanager
 def _file_lock(lock_path):
-    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    with open(lock_path, "w") as lockfile:
-        fcntl.flock(lockfile, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lockfile, fcntl.LOCK_UN)
+    with exclusive_file_lock(lock_path):
+        yield
 
 
 @contextmanager

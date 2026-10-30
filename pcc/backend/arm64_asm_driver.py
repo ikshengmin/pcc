@@ -675,6 +675,26 @@ def measure_text_layout(
         builder.close()
 
 
+def _measure_owned_text_layout(
+    asm_lines: list[str],
+    encoded_line_records: CompilerIntArena | None = None,
+    structured_symbol_names: list[str] | tuple[str, ...] = (),
+) -> tuple[dict[str, int], int]:
+    """Transfer labels from a fresh, private measurement builder.
+
+    Only internal emission uses this helper. No builder or offset mapping
+    escapes before return; close releases arenas but never mutates labels.
+    Public measure_text_layout retains its independent-copy contract.
+    """
+    builder = AArch64ModuleBuilder(structured_symbol_names)
+    try:
+        _append_assembly_lines(builder, asm_lines, encoded_line_records)
+        builder.finalize_text_layout()
+        return builder.text_label_offsets(), builder.text_size()
+    finally:
+        builder.close()
+
+
 def assemble_lines(
     asm_lines: list[str],
     structured_sections=(),

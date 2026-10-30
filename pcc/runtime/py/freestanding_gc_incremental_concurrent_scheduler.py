@@ -38,6 +38,7 @@ pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_py_gc_minor_graph_lock_depth = extern("pcc_py_gc_minor_graph_lock_depth", (), c_int64)
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
+pcc_gc_metric_shard = extern("pcc_gc_metric_shard", (), c_int64)
 pcc_gc_is_cms_worker = extern("pcc_gc_is_cms_worker", (), c_int64)
 pcc_thread_join = extern("pcc_thread_join", (c_ptr, c_ptr), c_int64)
 pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
@@ -64,6 +65,9 @@ pcc_thread_owns_stopped_world = extern(
 )
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_reclaim_retired_index_tables = extern(
+    "pcc_gc_reclaim_retired_index_tables", (), c_int64
+)
 pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
 pcc_gc_trace_cext_referents_unlocked = extern(
     "pcc_gc_trace_cext_referents_unlocked", (c_ptr, c_ptr), c_void
@@ -935,6 +939,7 @@ def pcc_gc_backend4_maybe_auto_step() -> None:
     stopped: i64 = pcc_stop_the_world()
     processed: i64 = 0
     if stopped == 0:
+        pcc_gc_reclaim_retired_index_tables()
         processed = pcc_gc_step(budget)
         pcc_gc_tracing_discharge_debt(processed)
         if processed == 0:
@@ -998,7 +1003,7 @@ def pcc_gc_cms_stop_worker() -> i64:
 
 @c_abi_export("pcc_gc_cms_note_alloc")
 def pcc_gc_cms_note_alloc(bytes: i64) -> None:
-    """Record allocation debt for the tracing collector thread (GC1/GC2).
+    """Record allocation debt for the tracing collector thread (GC1-GC4).
 
     The collector thread does the marking. A mutator assists only once its
     allocation outruns the collector (debt past four thresholds) and only
@@ -1030,6 +1035,9 @@ def pcc_gc_cms_note_alloc(bytes: i64) -> None:
         if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) != commits:
             # As on the collector thread: the next application gate sweeps it.
             atomic_store_i32(
+                global_addr("pcc_gc_cms_sweep_pending"), 0, 1, "release"
+            )
+            atomic_store_i32(
                 global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release"
             )
 
@@ -1043,13 +1051,15 @@ def pcc_gc_note_alloc(bytes: i64) -> None:
         backend = pcc_gc_config_ensure()
     if bytes < 0:
         bytes: i64 = 0
-    allocations: i64 = load_i32(global_addr("pcc_gc_metric_alloc"), 0)
-    store_i32(global_addr("pcc_gc_metric_alloc"), 0, allocations + 1)
-    if backend == 1 or backend == 2:
-        # Both tracing collectors mark on the collector thread.
+    atomic_rmw_i64(
+        "add", global_addr("pcc_gc_metric_shards"), pcc_gc_metric_shard() + 8, 1, "relaxed"
+    )
+    if backend >= 1 and backend <= 4:
+        # The shared mark worker also serves the moving collectors. Their
+        # copying, remapping and finalizers retain application-gate ownership.
         pcc_gc_maybe_start_cms_worker()
         pcc_gc_cms_note_alloc(bytes)
-    elif backend == 4:
-        previous: i64 = atomic_rmw_i64("add", global_addr("pcc_gc_debt_bytes"), 0, bytes, "acq_rel")
-        if previous + bytes >= pcc_gc_tracing_debt_threshold():
-            atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release")
+        if backend == 4:
+            debt: i64 = atomic_load_i64(global_addr("pcc_gc_debt_bytes"), 0, "acquire")
+            if debt >= pcc_gc_tracing_debt_threshold():
+                atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release")

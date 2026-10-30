@@ -12,10 +12,18 @@ from pcc.frontends.c.parse import c_parser
 from pcc.frontends.c.ast.c_ast import *
 from pcc.frontends.c.parse.c_parser import CParser, Coord, ParseError
 
-_c_parser = c_parser.CParser(
+_c_parser = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _c_parser
+    if _c_parser is None:
+        _c_parser = c_parser.CParser(
                 lex_optimize=True,
                 yacc_debug=False,
                 yacc_optimize=True)
+    return _c_parser
 
 
 def expand_decl(decl):
@@ -91,7 +99,7 @@ class TestCParser_base(unittest.TestCase):
         return self.cparser.parse(txt, filename)
 
     def setUp(self):
-        self.cparser = _c_parser
+        self.cparser = _get_parser()
 
 
 class TestCParser_fundamentals(TestCParser_base):

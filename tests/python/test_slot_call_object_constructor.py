@@ -44,7 +44,8 @@ def test_canonical_object_class_is_slots_only_before_publication():
               py_incref=lambda value: events.append(('retain', value)))
     _functions(RUNTIME / 'py_obj_ops_dispatch.py', {'_builtin_type_class_for_tag', '_return_builtin_type'}, ns)
     assert ns['_builtin_type_class_for_tag'](-1) is cls
-    assert events == ['root', ('slots', cls, abi.PYOBJECTHEADER_FLAGS_OFFSET, 2), 'publish', ('retain', cls)]
+    assert events == ['root', ('slots', cls, abi.PYOBJECTHEADER_FLAGS_OFFSET, abi.PY_FLAG_CLASS_SLOTS_ONLY),
+                      'publish', ('retain', cls)]
     assert ns['_builtin_type_class_for_tag'](-1) is cls
     assert events[-1] == ('retain', cls) and events.count('root') == 1
 

@@ -78,8 +78,28 @@ def test_tls_exception_accessors_heal_forwarded_owner_reference():
         "py_decref(cur)",
     ):
         assert needle in helper
-    assert py_src.count("cur = _resolve_current_exception()") == 2
-    assert "return _resolve_current_exception()" in py_src
+
+    def body(name):
+        rest = py_src.split("\ndef " + name + "(", 1)[1]
+        return rest[:min(i for i in (rest.find("\ndef "), rest.find("\n@")) if i >= 0)]
+
+    # Every accessor that hands out or consumes the pending exception heals
+    # it through the helper; py_err_occurred only tests it for NULL.
+    for name, call in (
+        ("py_current_exception", "return _resolve_current_exception()"),
+        ("py_clear_exception", "cur = _resolve_current_exception()"),
+        ("_take_pending_exception", "current = _resolve_current_exception()"),
+        ("py_raise_rooted", "current = _resolve_current_exception()"),
+    ):
+        assert call in body(name), name
+    assert py_src.count("py_tls_exc_get()") == 1
+    assert "def py_err_occurred(" not in py_src
+    # py_err_occurred lives beside the thread-local slot and only tests it.
+    substrate = _read(RUNTIME_PY / "py_substrate.py")
+    occurred = substrate.split("\ndef py_err_occurred(", 1)[1].split("\n@", 1)[0]
+    assert 'ptr_is_null(global_load_ptr("py_tls_current_exc_storage"))' in occurred
+    assert "_resolve_current_exception" not in occurred
+    assert "pcc_gc_note_relocation_read" not in occurred
 
     py_traceback = _read(RUNTIME_PY / "py_exc_traceback.py")
     assert py_traceback.count("saved_exc = py_current_exception()") == 2
@@ -88,10 +108,13 @@ def test_tls_exception_accessors_heal_forwarded_owner_reference():
 def test_pcc_python_ports_mirror_gc_store_ptr_paths():
     expectations = {
         RUNTIME_PY / "py_list.py": [
-            "store_plan, lst, ptr_add(items, length * 8), item",
+            # append commits into the slot past the current length
+            "slot = ptr_add(items, length * 8)",
+            "store_plan, lst, slot, item",
             "store_plan, lst, ptr_add(items, idx * 8), item",
-            "store_plans, lst, ptr_add(items, i * 8), right",
-            "ptr_add(store_plans, 128), lst, ptr_add(items, j * 8), left",
+            # reverse permutes existing owners: barrier notes, no commits
+            "pcc_gc_note_slot_write_barrier(lst, left_slot, right)",
+            "pcc_gc_note_slot_write_barrier(lst, right_slot, left)",
         ],
         RUNTIME_PY / "py_tuple.py": [
             "pcc_gc_store_ptr(tuple_ptr, slot, item)",
@@ -121,51 +144,43 @@ def test_pcc_python_ports_mirror_gc_store_ptr_paths():
             assert needle in src, f"{path} missing {needle!r}"
 
 
-def test_list_reverse_retains_borrowed_items_across_barrier_swap():
-    c_order = [
-        "PyObject *left = pcc_gc_load_ptr(lst, &l->items[i]);",
-        "PyObject *right = pcc_gc_load_ptr(lst, &l->items[j]);",
-        "left = pcc_gc_retain_plan_prepare_locked(&left_plan, left);",
-        "right = pcc_gc_retain_plan_prepare_locked(&right_plan, right);",
-        "pcc_gc_store_ptr_plan_commit_locked(\n            &left_store_plan",
-        "pcc_gc_store_ptr_plan_commit_locked(\n            &right_store_plan",
-        "pcc_gc_root_slot_unlock();",
-        "pcc_gc_store_ptr_plan_finish(&left_store_plan);",
-        "pcc_gc_store_ptr_plan_finish(&right_store_plan);",
-        "pcc_gc_retain_plan_finish(&left_plan);",
-        "pcc_gc_retain_plan_finish(&right_plan);",
-        "py_decref(left);",
-        "py_decref(right);",
-    ]
-    pos = -1
+def test_list_reverse_permutes_owners_in_one_transaction():
+    """The locked reversal swaps owners without a count change or an unlock.
 
+    Reversal only permutes owners the list already holds. It used to swap
+    one pair per graph transaction and retain both items across each unlock;
+    a concurrent pop between transactions let the swap read a slot past the
+    new length and bring a popped owner back. One transaction needs no
+    retains: loads take the read barrier and each rewritten slot notes the
+    write barrier before the lock is released.
+    """
     py_src = _read(RUNTIME_PY / "py_list.py")
     py_block = py_src.split("def py_list_reverse(lst) -> None:", 1)[1]
+    py_block = py_block.split("\ndef ", 1)[0]
     py_fast = py_block.split("list_slot = stack_alloc(8)", 1)[0]
     assert py_fast.index("py_incref(fast_left)") < py_fast.index(
         "pcc_gc_store_ptr("
     ) < py_fast.index("py_decref(fast_left)")
     py_moving = py_block.split("list_slot = stack_alloc(8)", 1)[1]
     py_order = [
-        "left = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))",
-        "right = pcc_gc_load_ptr(lst, ptr_add(items, j * 8))",
-        "left = pcc_gc_retain_plan_prepare_locked(retain_plans, left)",
-        "right = pcc_gc_retain_plan_prepare_locked(",
-        "pcc_gc_store_ptr_plan_commit_locked(\n            store_plans",
-        "pcc_gc_store_ptr_plan_commit_locked(\n            ptr_add(store_plans, 128)",
+        "pcc_py_gc_minor_graph_lock()",
+        "j: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) - 1",
+        "left = pcc_gc_load_ptr(lst, left_slot)",
+        "right = pcc_gc_load_ptr(lst, right_slot)",
+        "store_ptr(left_slot, 0, right)",
+        "pcc_gc_note_slot_write_barrier(lst, left_slot, right)",
+        "store_ptr(right_slot, 0, left)",
+        "pcc_gc_note_slot_write_barrier(lst, right_slot, left)",
         "pcc_py_gc_minor_graph_unlock()",
-        "pcc_gc_store_ptr_plan_finish(store_plans)",
-        "pcc_gc_store_ptr_plan_finish(ptr_add(store_plans, 128))",
-        "pcc_gc_retain_plan_finish(retain_plans)",
-        "pcc_gc_retain_plan_finish(ptr_add(retain_plans, 56))",
-        "py_decref(left)",
-        "py_decref(right)",
     ]
     pos = -1
     for needle in py_order:
         next_pos = py_moving.find(needle)
-        assert next_pos > pos, f"py_list.py reverse swap order missing/out of order: {needle!r}"
+        assert next_pos > pos, f"py_list.py reverse transaction missing/out of order: {needle!r}"
         pos = next_pos
+    assert py_moving.count("pcc_py_gc_minor_graph_lock()") == 1
+    for forbidden in ("py_incref", "py_decref", "_plan_"):
+        assert forbidden not in py_moving
 
 
 def test_hash_rehash_move_stores_route_through_slot_write_barrier():
@@ -290,19 +305,33 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
     assert 'extern("pcc_gc_store_ptr"' in py_src
 
     # Template sibling (append) idiom in the port.
-    assert "store_ptr(items, length * 8, null())" in py_src
-    assert "store_plan, lst, ptr_add(items, length * 8), item" in py_src
+    assert "slot = ptr_add(items, length * 8)" in py_src
+    assert "store_ptr(slot, 0, null())" in py_src
+    assert "store_plan, lst, slot, item" in py_src
 
     py_extend = py_src.split("def py_list_extend(a, b) -> None:", 1)[1]
     py_extend = py_extend.split("def py_list_insert", 1)[0]
 
-    assert py_extend.count("store_ptr(a_items, (la + i) * 8, null())") == 2, (
-        "py_list.py extend must NULL-init the fresh slot in both fast paths"
-    )
-    assert py_extend.count("pcc_gc_store_ptr_plan_commit_locked(") == 2, (
-        "py_list.py extend must locked-plan-store in both moving paths"
-    )
-    assert py_extend.count("pcc_gc_store_ptr_plan_finish(store_plan)") == 2
+    # List and tuple sources share one transaction helper: each fresh slot
+    # is NULL-inited, then committed through a locked store plan that is
+    # finished after the unlock.
+    assert py_extend.count("_list_extend_locked(") == 1
+    py_locked = py_src.split("def _list_extend_locked(", 1)[1].split("\ndef ", 1)[0]
+    assert py_locked.index("store_ptr(slot, 0, null())") < py_locked.index(
+        "pcc_gc_store_ptr_plan_commit_locked("
+    ) < py_locked.index("pcc_py_gc_minor_graph_unlock()") < py_locked.index(
+        "pcc_gc_store_ptr_plan_finish("
+    ), "py_list.py extend must NULL-init, then locked-plan-store, then finish"
+    assert "py_incref(" not in py_locked
+    # The GC0 fast paths (list and tuple source) keep the same idiom through
+    # the unlocked barrier store.
+    assert py_extend.count(
+        "store_ptr(fast_a_items, (fast_la + fast_i) * 8, null())"
+    ) == 2
+    assert py_extend.count(
+        "pcc_gc_store_ptr(\n                    fast_grown,\n"
+        "                    ptr_add(fast_a_items, (fast_la + fast_i) * 8),"
+    ) == 2
     assert "store_ptr(a_items, (la + i) * 8, v)" not in py_extend, (
         "py_list.py extend still has the raw, unbarriered element store"
     )
@@ -377,18 +406,25 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     ):
         assert forbidden not in strict_append_fast
     assert "_append_rooted(lst, item, 0)" in strict_append
-    strict_append = strict_src.split("def _append_rooted(lst, item, fresh: int) -> int:", 1)[1].split(
-        '@c_abi_export("py_list_append")', 1
+    strict_wrapper = strict_src.split("def _append_rooted(lst, item, fresh: int) -> int:", 1)[1].split(
+        "def _append_rooted_slots(", 1
     )[0]
-    strict_list_prepare = strict_append.index(
+    strict_list_prepare = strict_wrapper.index(
         "_prepare_moving_root(list_slot, list_handle_slot)"
     )
-    strict_item_prepare = strict_append.index(
+    strict_item_prepare = strict_wrapper.index(
         "_prepare_moving_root(item_slot, item_handle_slot)"
     )
-    strict_grow_call = strict_append.index(
-        "_grow_if_needed(", strict_item_prepare
-    )
+    delegated = strict_wrapper.index("result: int = _append_rooted_slots(")
+    assert strict_list_prepare < strict_item_prepare < delegated
+    assert delegated < strict_wrapper.rindex("_finish_moving_root(item_handle_slot)")
+    assert delegated < strict_wrapper.rindex("_finish_moving_root(list_handle_slot)")
+    strict_append = strict_src.split("def _append_rooted_slots(", 1)[1].split(
+        '@c_abi_export("py_list_append")', 1
+    )[0]
+    assert "_prepare_moving_root(" not in strict_append
+    assert "_finish_moving_root(" not in strict_append
+    strict_grow_call = strict_append.index("_grow_if_needed(")
     strict_lock = strict_append.index("pcc_py_gc_minor_graph_lock()")
     strict_reload = strict_append.index(
         "item = _reload_moving_root(item_slot, item_handle_slot)", strict_lock
@@ -399,11 +435,10 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     strict_unlock = strict_append.index(
         "pcc_py_gc_minor_graph_unlock()", strict_store
     )
-    assert strict_list_prepare < strict_item_prepare < strict_lock < (
-        strict_reload
-    ) < strict_store < strict_unlock < strict_append.index(
+    assert strict_lock < strict_reload < strict_store < strict_unlock
+    assert strict_unlock < strict_append.index(
         "pcc_gc_store_ptr_plan_finish(store_plan)", strict_unlock
-    ) < strict_append.rindex("_finish_moving_root(")
+    )
     assert strict_grow_call > strict_append.rindex(
         "pcc_py_gc_minor_graph_unlock()", 0, strict_grow_call
     )
@@ -417,7 +452,17 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     assert "_prepare_moving_root(source_slot, source_handle_slot)" in strict_extend
     assert "a = _reload_moving_root(list_slot, list_handle_slot)" in strict_extend
     assert "b = _reload_moving_root(source_slot, source_handle_slot)" in strict_extend
-    assert "pcc_py_gc_minor_graph_lock()" in strict_extend
+    # List and tuple sources append in graph transactions that reload both
+    # roots after the lock.
+    assert "_list_extend_locked(" in strict_extend
+    strict_extend_locked = strict_src.split("def _list_extend_locked(", 1)[1].split("\ndef ", 1)[0]
+    extend_lock = strict_extend_locked.index("pcc_py_gc_minor_graph_lock()")
+    assert strict_extend_locked.index(
+        "a = _reload_moving_root(list_slot, list_handle_slot)", extend_lock
+    ) > extend_lock
+    assert strict_extend_locked.index(
+        "b = _reload_moving_root(source_slot, source_handle_slot)", extend_lock
+    ) > extend_lock
     strict_push = strict_src.split("def _push_to_list(out, v):", 1)[1].split(
         "def _seq_len", 1
     )[0]
@@ -452,11 +497,18 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     strict_get = strict_src.split("def py_list_get(lst, i: int):", 1)[1].split(
         '@c_abi_export("py_list_getitem")', 1
     )[0]
-    strict_get_fast = strict_get.split("if pcc_gc_backend() == 0:", 1)[1].split(
+    strict_get_fast = strict_get.split(
+        "if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:", 1
+    )[1].split(
         "list_slot = stack_alloc(8)", 1
     )[0]
     assert "pcc_py_gc_minor_graph_lock" not in strict_get_fast
     assert "_prepare_moving_root" not in strict_get_fast
+    # Other collectors read through the shared rooted transaction.
+    assert "return _list_get_owned_rooted(lst, i, 0)" in strict_get
+    strict_get = strict_src.split(
+        "def _list_get_owned_rooted(lst, i: int, raising: int):", 1
+    )[1].split("\ndef ", 1)[0]
     strict_get_lock = strict_get.index("pcc_py_gc_minor_graph_lock()")
     strict_get_load = strict_get.index("pcc_gc_load_ptr(", strict_get_lock)
     strict_get_prepare = strict_get.index(
@@ -495,24 +547,23 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     )
 
     strict_reverse = strict_src.split("def py_list_reverse(lst) -> None:", 1)[1]
+    strict_reverse = strict_reverse.split("list_slot = stack_alloc(8)", 1)[1]
+    strict_reverse = strict_reverse.split("\ndef ", 1)[0]
     strict_reverse_lock = strict_reverse.index("pcc_py_gc_minor_graph_lock()")
-    strict_reverse_prepare = strict_reverse.index(
-        "pcc_gc_retain_plan_prepare_locked(", strict_reverse_lock
+    strict_reverse_load = strict_reverse.index(
+        "pcc_gc_load_ptr(", strict_reverse_lock
     )
-    strict_reverse_store = strict_reverse.index(
-        "pcc_gc_store_ptr_plan_commit_locked(", strict_reverse_prepare
+    strict_reverse_barrier = strict_reverse.index(
+        "pcc_gc_note_slot_write_barrier(", strict_reverse_load
     )
     strict_reverse_unlock = strict_reverse.index(
-        "pcc_py_gc_minor_graph_unlock()", strict_reverse_store
+        "pcc_py_gc_minor_graph_unlock()", strict_reverse_barrier
     )
-    strict_reverse_finish = strict_reverse.index(
-        "pcc_gc_retain_plan_finish(", strict_reverse_unlock
-    )
-    assert strict_reverse_lock < strict_reverse_prepare < strict_reverse_store < (
+    assert strict_reverse_lock < strict_reverse_load < strict_reverse_barrier < (
         strict_reverse_unlock
-    ) < strict_reverse_finish < strict_reverse.index(
-        "py_decref(left)", strict_reverse_finish
     )
+    assert strict_reverse.count("pcc_py_gc_minor_graph_lock()") == 1
+    assert "_plan_" not in strict_reverse
     strict_snapshot = strict_src.split("def _append_snapshot_items(", 1)[1].split(
         '@c_abi_export("py_list_concat")', 1
     )[0]
@@ -521,7 +572,6 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     assert "value = py_list_get(source, i)" in strict_snapshot
     assert "py_list_append(out, value)" in strict_snapshot
     for fn, next_export in (
-        ("py_list_concat", "py_list_copy"),
         ("py_list_copy", "py_list_repeat"),
         ("py_list_repeat", "py_list_contains"),
     ):
@@ -529,6 +579,24 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
             f'@c_abi_export("{next_export}")', 1
         )[0]
         assert "_append_snapshot_items(" in body
+    # Concat retains each fetched element in its existing root and delegates
+    # to the same append transaction, preserving the caller-owned handles.
+    strict_concat = strict_src.split("def py_list_concat(", 1)[1].split(
+        '@c_abi_export("py_list_copy")', 1
+    )[0]
+    assert "success: int = _list_concat_fill(slots, handles)" in strict_concat
+    strict_fill = strict_src.split("def _list_concat_fill(slots, handles) -> int:", 1)[1].split(
+        "\ndef ", 1
+    )[0]
+    assert strict_fill.index(
+        "py_list_get(load_ptr(source_slot, 0), source_index)"
+    ) < strict_fill.index("appended: int = _append_rooted_slots(")
+    assert "result_slot, item_slot, result_handle_slot, item_handle_slot, 0" in strict_fill
+    assert "item_pin: int" not in strict_fill
+    assert strict_fill.index("result_pin: int = _list_concat_pin_slot(result_slot)") < (
+        strict_fill.index("appended: int = _append_rooted_slots(")
+    ) < strict_fill.index("_list_concat_restore_slot(result_slot, result_pin)")
+    assert 'py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))' in strict_fill
 
 
 def test_list_equality_callbacks_run_unlocked_and_remove_reloads_current_index():
@@ -591,7 +659,9 @@ def test_list_clear_publishes_empty_before_split_decref_tails():
     strict_clear = strict_src.split("def py_list_clear(lst) -> None:", 1)[1].split(
         '@c_abi_export("py_obj_clear")', 1
     )[0]
-    strict_fast = strict_clear.split("if pcc_gc_backend() == 0:", 1)[1].split(
+    strict_fast = strict_clear.split(
+        "if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:", 1
+    )[1].split(
         "list_slot = stack_alloc(8)", 1
     )[0]
     assert "pcc_gc_store_ptr_plan_" not in strict_fast
@@ -660,7 +730,8 @@ def test_list_set_slice_snapshots_then_publishes_whole_payload_before_decref_tai
     strict_snapshot = strict_set.index(
         "_snapshot_set_slice_replacement(replacement)", strict_convert
     )
-    strict_fast = strict_set.split("if backend == 0:", 1)[1].split(
+    # The unlocked GC0 swap is single-threaded only (``unlocked``).
+    strict_fast = strict_set.split("if unlocked != 0:", 1)[1].split(
         "old_plans = null()", 1
     )[0]
     assert strict_fast.index("store_ptr(lst, 32, new_items)") < strict_fast.index(

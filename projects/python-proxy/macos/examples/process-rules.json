@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "name": "Antigravity and language tools",
+      "processes": ["Antigravity.app", "Antigravity", "com.google.antigravity", "language_server", "agy"],
+      "protocol": "both",
+      "action": "proxy"
+    },
+    {
+      "name": "Chrome and its helpers",
+      "processes": ["Google Chrome.app", "com.google.Chrome", "com.google.Chrome.helper*"],
+      "protocol": "both",
+      "action": "proxy"
+    }
+  ],
+  "default": "direct"
+}

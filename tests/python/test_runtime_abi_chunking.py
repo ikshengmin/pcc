@@ -99,3 +99,21 @@ def test_signature_chunks_preserve_flat_literal_values_and_order(
     expected = eval(compile(expression, str(SOURCE), "eval"), vars(runtime_abi))
 
     assert list(signatures.items()) == list(expected.items())
+
+
+# Discover every bounded helper family, so a newly added family cannot escape
+# the same native-literal contract by missing a hand-maintained parameter list.
+_CHUNK_FAMILIES = tuple(sorted({
+    name.rsplit("_", 1)[0] + "_"
+    for name, value in vars(runtime_abi).items()
+    if name.startswith("_") and "_part_" in name
+    and name.rsplit("_", 1)[1].isdigit() and callable(value)
+}))
+
+
+@pytest.mark.parametrize("prefix", _CHUNK_FAMILIES)
+def test_every_abi_chunk_family_obeys_native_literal_bound(prefix: str) -> None:
+    assert {"_runtime_signatures_part_", "_cross_object_signatures_part_"} <= set(_CHUNK_FAMILIES)
+    _keys, sizes = _chunk_keys(prefix)
+    assert sizes
+    assert max(sizes) <= 50

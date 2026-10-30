@@ -406,10 +406,24 @@ def _assert_owned_dynamic_calls(text, symbol, expected_count):
              if instruction.kind == "call"]
     assert not any(call[2] in ("py_obj_call", "py_obj_call_method")
                    for _, _, call in calls), "raw callable dispatch lost slot owners"
-    registrations = {slot(call[4][1][1]): (b, i) for b, i, call in calls
-                     if call[2] == "pcc_gc_frame_enter_lifo"}
-    releases = {slot(call[4][0][1]) for _, _, call in calls
-                if call[2] == "pcc_gc_frame_leave_lifo"}
+    # Both precise-map and registered-slot targets publish this same slot ABI.
+    # Keep families paired: a mapped enter cannot be discharged by an old leave.
+    frame_families = {
+        "pcc_gc_frame_enter_lifo": "pcc_gc_frame_leave_lifo",
+        "pcc_gc_frame_enter_lifo_mapped": "pcc_gc_frame_leave_lifo_mapped",
+    }
+    registrations = {}
+    releases = set()
+    for b, i, call in calls:
+        if call[2] in frame_families:
+            assert call[1].describe() == "void" and not call[3]
+            assert len(call[4]) == 2
+            assert all(operand_type.kind == "ptr" for operand_type, _ in call[4])
+            registrations[slot(call[4][1][1])] = (b, i, call[2])
+        elif call[2] in frame_families.values():
+            assert call[1].describe() == "void" and not call[3]
+            assert len(call[4]) == 1 and call[4][0][0].kind == "ptr"
+            releases.add((slot(call[4][0][1]), call[2]))
     predecessors = [set() for _ in blocks]
     for b in range(len(blocks)):
         for j in range(kernel.cfg_successor_count(b)):
@@ -438,8 +452,10 @@ def _assert_owned_dynamic_calls(text, symbol, expected_count):
         for operand_type, value in call[4]:
             assert operand_type.kind == "ptr"
             root = slot(value)
-            assert root in allocas and root in registrations and root in releases
-            assert dominates(registrations[root], (b, i)), root
+            assert root in allocas and root in registrations
+            registration = registrations[root]
+            assert (root, frame_families[registration[2]]) in releases
+            assert dominates((registration[0], registration[1]), (b, i)), root
         # A failed call must take its error edge before consuming the result.
         check = blocks[b].instructions[i + 1]
         assert check.kind == "icmp" and check.data[0] == "slt"

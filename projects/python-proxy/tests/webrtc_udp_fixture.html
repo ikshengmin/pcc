@@ -1,0 +1,120 @@
+<!doctype html><meta charset="utf-8"><title>ZeroOmega TURN UDP test</title>
+<style>body{font:16px system-ui;max-width:900px;margin:30px auto}pre{white-space:pre-wrap}video,canvas{width:240px}button{font:inherit;padding:10px}</style>
+<h1>Chrome WebRTC over the local SOCKS5 UDP chain</h1>
+<p>Generated video and audio only. No camera or microphone is accessed.</p>
+<button id="run">Run WebRTC UDP test</button>
+<canvas id="canvas" width="160" height="96"></canvas><video id="video" autoplay muted playsinline></video>
+<pre id="result">Ready</pre>
+<script nonce="zeroomega-test">
+const fixture = __FIXTURE__;
+const output = document.getElementById('result');
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function assert(condition, message) { if (!condition) throw new Error(message); }
+async function until(predicate, timeout = 12000) {
+  const start = performance.now();
+  while (!await predicate()) { if (performance.now() - start > timeout) throw new Error('Timed out waiting for WebRTC'); await sleep(50); }
+}
+async function selected(pc) {
+  const stats = await pc.getStats();
+  const transport = [...stats.values()].find(s => s.type === 'transport' && s.selectedCandidatePairId);
+  if (!transport) return null;
+  const pair = stats.get(transport.selectedCandidatePairId);
+  return {local: stats.get(pair.localCandidateId), remote: stats.get(pair.remoteCandidateId), pair};
+}
+document.getElementById('run').onclick = async () => {
+  window.testResult = undefined;
+  output.textContent = 'Running';
+  let a, b, timer, audio;
+  const streams = [];
+  try {
+    assert(window.__zeroOmegaTurnHook, 'The actual Chrome extension did not inject its WebRTC hook');
+    const siteConfiguration = {iceServers: [{urls: 'stun:127.0.0.1:' + fixture.trap_port}],
+      iceCandidatePoolSize: 1, iceTransportPolicy: 'all'};
+    a = new RTCPeerConnection(siteConfiguration);
+    b = new RTCPeerConnection(siteConfiguration);
+    const pendingA = [], pendingB = [];
+    let iceError;
+    function candidate(target, pending, event) {
+      if (!event.candidate) return;
+      if (target.remoteDescription) target.addIceCandidate(event.candidate).catch(error => { iceError = error; });
+      else pending.push(event.candidate);
+    }
+    a.onicecandidate = e => candidate(b, pendingB, e);
+    b.onicecandidate = e => candidate(a, pendingA, e);
+    const canvas = document.getElementById('canvas');
+    const draw = canvas.getContext('2d');
+    let frame = 0;
+    timer = setInterval(() => { draw.fillStyle = 'hsl(' + frame++ * 20 + ' 80% 50%)'; draw.fillRect(0,0,160,96); draw.fillStyle = '#000'; draw.fillText('Frame ' + frame, 10, 30); }, 100);
+    const video = canvas.captureStream(10);
+    streams.push(video);
+    audio = new AudioContext();
+    const destination = audio.createMediaStreamDestination();
+    const oscillator = audio.createOscillator();
+    oscillator.connect(destination); oscillator.start();
+    await audio.resume();
+    streams.push(destination.stream);
+    for (const stream of streams) for (const track of stream.getTracks()) a.addTrack(track, stream);
+    const receivedStream = new MediaStream();
+    document.getElementById('video').srcObject = receivedStream;
+    b.ontrack = event => receivedStream.addTrack(event.track);
+    const channel = a.createDataChannel('relay-proof');
+    channel.binaryType = 'arraybuffer';
+    let received = 0;
+    let dataError;
+    b.ondatachannel = ({channel: incoming}) => {
+      incoming.binaryType = 'arraybuffer';
+      incoming.onmessage = event => incoming.send(event.data);
+    };
+    channel.onmessage = event => {
+      const data = new Uint8Array(event.data);
+      if (data.length !== 4096 || data.some((value, i) => value !== ((i + received) & 255))) dataError = 'Payload mismatch';
+      received++;
+    };
+    a.setConfiguration(siteConfiguration);
+    await a.setLocalDescription(await a.createOffer());
+    assert(a.getConfiguration().iceTransportPolicy === 'relay', 'ICE policy was not forced to relay');
+    assert(a.getConfiguration().iceServers[0].urls[0] === fixture.turn_url || a.getConfiguration().iceServers[0].urls === fixture.turn_url,
+      'Wrong TURN endpoint');
+    await b.setRemoteDescription(a.localDescription);
+    for (const candidate of pendingB) await b.addIceCandidate(candidate);
+    await b.setLocalDescription(await b.createAnswer());
+    await a.setRemoteDescription(b.localDescription);
+    for (const candidate of pendingA) await a.addIceCandidate(candidate);
+    await until(() => channel.readyState === 'open');
+    for (let n = 0; n < 32; n++) channel.send(Uint8Array.from({length: 4096}, (_, i) => (i + n) & 255));
+    await until(() => received === 32);
+    assert(!dataError, dataError);
+    assert(!iceError, String(iceError));
+    let media;
+    await until(async () => {
+      media = [...(await b.getStats()).values()].filter(s => s.type === 'inbound-rtp');
+      return media.some(s => s.kind === 'video' && s.framesDecoded >= 5) && media.some(s => s.kind === 'audio' && s.packetsReceived > 0);
+    });
+    const paths = [await selected(a), await selected(b)];
+    for (const path of paths) {
+      assert(path && path.local.protocol === 'udp' && path.remote.protocol === 'udp', 'Selected transport is not UDP');
+      assert(path.local.candidateType === 'relay' && path.remote.candidateType === 'relay', 'Selected candidate bypasses TURN');
+      assert(!path.local.relayProtocol || path.local.relayProtocol === 'udp', 'TURN connection is not UDP');
+    }
+    const transit = await (await fetch('/stats')).json();
+    assert(transit.turn_channels > 0 && transit.allocations === 2, 'Missing TURN relay traffic');
+    assert(transit.direct_stun_packets === 0, 'Site STUN server received unproxied traffic');
+    const result = {status: 'PASS', browser: navigator.userAgent, dataBytesEchoed: 32 * 4096,
+      media: media.map(s => ({kind: s.kind, packetsReceived: s.packetsReceived, framesDecoded: s.framesDecoded})),
+      paths, transit};
+    output.textContent = JSON.stringify(result, null, 2);
+    window.testResult = result;
+  } catch (error) {
+    const result = {status: 'FAIL', error: error.stack, stateA: a?.connectionState, stateB: b?.connectionState,
+      configuration: a?.getConfiguration(), pathA: a ? await selected(a) : null,
+      transit: await (await fetch('/stats')).json()};
+    // Test-only credentials; this page is served only on an ephemeral loopback port.
+    output.textContent = JSON.stringify(result, null, 2);
+    window.testResult = result;
+  } finally {
+    a?.close(); b?.close(); clearInterval(timer);
+    for (const stream of streams) for (const track of stream.getTracks()) track.stop();
+    await audio?.close();
+  }
+};
+</script>

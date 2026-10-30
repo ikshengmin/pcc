@@ -36,8 +36,8 @@ from pcc.unsafe import (
 )
 
 
-py_class_new = extern(
-    "py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr
+py_class_new_builtin = extern(
+    "py_class_new_builtin", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr
 )
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
@@ -124,7 +124,7 @@ def pcc_runtime_module_class():
     cls = global_load_ptr("pcc_runtime_module_class_cache")
     if not ptr_is_null(cls):
         return cls
-    cls = py_class_new(cstr("module"), null(), 0, null(), 0)
+    cls = py_class_new_builtin(cstr("module"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
         pcc_gc_pin(cls)
         global_store_ptr("pcc_runtime_module_class_cache", cls)

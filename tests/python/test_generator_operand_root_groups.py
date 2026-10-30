@@ -46,6 +46,8 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
         self._entry_inline_edge_anchor_function = None
         self._entry_inline_edge_anchor_record = None
         self._freestanding_module = False
+        # Production initializes this lazily-decided frame-entry mode the same way.
+        self._precise_stack_frames_mapped = None
         self._current_global_names = set()
         self._current_param_names = set()
         self._exact_int_env_flags = {}
@@ -77,6 +79,7 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
             ("pcc_gc_frame_leave_lifo", VOID, [PTR]),
             ("pcc_gc_store_root", VOID, [PTR, PTR]),
             ("py_gen_frame_get", PTR, [PTR, I64]),
+            ("py_gen_frame_take", PTR, [PTR, I64]),
             ("py_gen_frame_set", VOID, [PTR, I64, PTR]),
         ):
             self.runtime[name] = ir.Function(self.module, ir.FunctionType(ret, args), name)
@@ -103,6 +106,8 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
 
     def _generator_frame_helper(self, operation):
         return self.runtime["py_gen_frame_" + operation]
+
+    _generator_frame_take = generator.GeneratorLoweringMixin._generator_frame_take
 
     def _emit_owned_valueclass_cleanup(self, skipped):
         assert skipped is None
@@ -498,13 +503,15 @@ entry:
             addresses.require_owning("alias")
 
 
-def _source_with_repeated_generator_exits():
+def _source_with_repeated_generator_exits(suspending=False):
     # The normal source frontend fixture selects production operand ownership;
     # no alternate compiler/module identity is installed for this test.
-    lines = ["def probe(choice):", "    value = slot_operand_probe([0])",
+    first = "[[0], (yield 0)]" if suspending else "[0]"
+    lines = ["def probe(choice):", "    value = slot_operand_probe(" + first + ")",
              "    if choice == 0:", "        return value", "    yield value"]
     for index in range(1, 19):
-        lines.extend([f"    value = slot_operand_probe([{index}])",
+        operand = f"[[{index}], (yield {index})]" if suspending else f"[{index}]"
+        lines.extend([f"    value = slot_operand_probe({operand})",
                       f"    if choice == {index}:", "        return value"])
     lines.extend(["    yield value", "    return value"])
     return "\n".join(lines) + "\n"
@@ -514,9 +521,29 @@ def _source_with_repeated_generator_exits():
 def source_generator_group_ir():
     from tests.python.test_slot_call_operand_roots import _emit
 
-    text = _emit(_source_with_repeated_generator_exits())
+    # Partial list operands now genuinely survive a yield, so this remains a
+    # persistent-frame regression when synchronous statements become lexical.
+    text = _emit(_source_with_repeated_generator_exits(suspending=True))
     module, blocks = _parsed_function(text, "user_slot_operand_probe__gen_resume")
     return text, module, blocks
+
+
+def test_diagnostic_synchronous_statements_avoid_heap_operand_groups(monkeypatch):
+    from tests.python.test_slot_call_operand_roots import _emit
+    from pcc.frontends.python.codegen import generator_lowering, layer1_entrypoints
+
+    monkeypatch.setattr(
+        layer1_entrypoints, "synchronous_generator_statement_context",
+        generator_lowering.diagnostic_synchronous_generator_statement_context,
+    )
+
+    text = _emit(_source_with_repeated_generator_exits())
+    module, blocks = _parsed_function(text, "user_slot_operand_probe__gen_resume")
+    addresses = RootSlotContract(blocks, module.globals_)
+    assert not any(name.startswith("gen.operand.roots.") for name in addresses.allocas)
+    assert any(name.startswith("probe.operand") for name in addresses.allocas)
+    addresses.assert_frame_exits(set())
+    _assert_precise_roots(text)
 
 
 def test_source_generator_late_chunks_cover_repeated_early_exits(source_generator_group_ir):

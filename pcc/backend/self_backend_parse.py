@@ -264,6 +264,11 @@ _DECLARATION_ONLY_SCALAR_TYPES = (
 
 _NUMERIC_SSA_NAME_CACHE: dict[int, str] = {}
 _DOT_NUMERIC_SSA_NAME_CACHE: dict[int, str] = {}
+# Positive proofs for immutable built-in strings. Bit 1 admits an IR name;
+# bit 2 additionally admits the narrower emitted-symbol grammar. Never share
+# the latter proof from a hyphenated SSA spelling. Bound memory within a module.
+_VALIDATED_NAME_FLAGS: dict[str, int] = {}
+_VALIDATED_NAME_LIMIT = 32768
 _SPLIT_NESTING_MARKERS = '"{}[]()<>'
 
 
@@ -367,6 +372,7 @@ def retire_module_parse_caches() -> None:
     """Release module-scoped canonical strings after terminal object output."""
     _NUMERIC_SSA_NAME_CACHE.clear()
     _DOT_NUMERIC_SSA_NAME_CACHE.clear()
+    _VALIDATED_NAME_FLAGS.clear()
     reset_operand_intern()
 
 
@@ -384,6 +390,7 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
     type_context.pointer_type_cache.clear()
     _NUMERIC_SSA_NAME_CACHE.clear()
     _DOT_NUMERIC_SSA_NAME_CACHE.clear()
+    _VALIDATED_NAME_FLAGS.clear()
     # Compact instruction operand canonicalization is module-scoped.  Keeping
     # a prior module's string alive makes a later instruction definition use
     # that old object while its terminator/phi use keeps the new module's
@@ -400,6 +407,9 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
 
 
 def check_simple_symbol_name(name: str) -> None:
+    cacheable = type(name) is str
+    if cacheable and (_VALIDATED_NAME_FLAGS.get(name, 0) & 2) != 0:
+        return
     valid = bool(name)
     index = 0
     while valid and index < len(name):
@@ -414,6 +424,8 @@ def check_simple_symbol_name(name: str) -> None:
         )
         index += 1
     if valid:
+        if cacheable:
+            _remember_validated_name(name, 3)
         return
     raise BackendUnavailable(
         f"self backend MVP only supports simple C identifier symbols, got {name!r}"
@@ -1182,6 +1194,9 @@ def _ascii_decimal_name(text: str, start: int = 0) -> bool:
 def _ascii_plain_ir_name(text: str) -> bool:
     if not text:
         return False
+    cacheable = type(text) is str
+    if cacheable and (_VALIDATED_NAME_FLAGS.get(text, 0) & 1) != 0:
+        return True
     first = ord(text[0])
     if not (
         65 <= first <= 90
@@ -1205,7 +1220,15 @@ def _ascii_plain_ir_name(text: str) -> bool:
         ):
             return False
         index += 1
+    if cacheable:
+        _remember_validated_name(text, 1)
     return True
+
+
+def _remember_validated_name(text: str, flags: int) -> None:
+    if len(_VALIDATED_NAME_FLAGS) >= _VALIDATED_NAME_LIMIT:
+        _VALIDATED_NAME_FLAGS.clear()
+    _VALIDATED_NAME_FLAGS[text] = flags
 
 
 def _ascii_decimal_span(text: str, start: int, end: int) -> bool:
@@ -1485,6 +1508,10 @@ def decode_ssa_name(token: str) -> str:
     text = token.strip()
     if len(text) > 1 and text[0] == "%":
         name = text[1:]
+        if name in {"null", "poison", "undef", "false", "true", "zeroinitializer"}:
+            # Keep the value-reference namespace, as for numeric SSA names.
+            # Otherwise later constant folding confuses %null with null.
+            return "%" + name
         if _ascii_decimal_name(name):
             numeric_name = int(name)
             cached_name = _NUMERIC_SSA_NAME_CACHE.get(numeric_name)
@@ -1507,6 +1534,8 @@ def decode_ssa_name(token: str) -> str:
             f"unsupported SSA value syntax for self backend: {token!r}"
         )
     name = match.group(1) or match.group(2)
+    if name in {"null", "poison", "undef", "false", "true", "zeroinitializer"}:
+        return "%" + name
     if name.isdigit():
         numeric_name = int(name)
         cached_name = _NUMERIC_SSA_NAME_CACHE.get(numeric_name)

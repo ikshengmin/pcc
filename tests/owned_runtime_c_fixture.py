@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,8 +19,9 @@ from tests.runtime_fixture_provenance import _verified_test_runtime_archive
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def admitted_runtime() -> Path:
-    explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
+def admitted_runtime(explicit: str | Path | None = None) -> Path:
+    if explicit is None:
+        explicit = os.environ.get("PCC_RUNTIME_ARCHIVE")
     assert explicit, "whole-runtime control needs an explicitly admitted PCC_RUNTIME_ARCHIVE"
     archive, receipt = _verified_test_runtime_archive(explicit)
     assert all(member.get("object_emitter") == "pcc-self-backend-object-writer"
@@ -86,16 +89,30 @@ def object_symbols(path: Path, *, undefined: bool = False):
     return SimpleNamespace(returncode=0, stdout="\n".join(rows), stderr="")
 
 
-def link_c_harness(harness: Path, output: Path, *, defines=(), extra_include_dirs=()):
+def link_c_harness(
+    harness: Path,
+    output: Path,
+    *,
+    defines=(),
+    extra_include_dirs=(),
+    extra_sources=(),
+    runtime_archive: str | Path | None = None,
+):
     """Original C text -> owned frontend/emitter/linker -> real runtime closure."""
-    archive = admitted_runtime()
+    archive = admitted_runtime(runtime_archive)
     target = host_target_triple()
     evaluator = CEvaluator(backend="self", target_triple=target)
     def forbidden(*args, **kwargs):
         raise AssertionError("owned C fixture attempted an external build process")
-    with patch("subprocess.Popen", forbidden):
+    # CEvaluator also admits an implicit runtime on Linux. Pin that admission
+    # to this exact verified archive, including a caller's threaded override.
+    # Restore the caller's environment even when compilation or linking fails.
+    with patch.dict(os.environ, {"PCC_RUNTIME_ARCHIVE": str(archive)}), patch(
+        "subprocess.Popen", forbidden,
+    ):
         units = evaluator.compile_translation_units(
-            [TranslationUnit(harness.name, str(harness), harness.read_text())],
+            [TranslationUnit(source.name, str(source), source.read_text())
+             for source in (*extra_sources, harness)],
             use_system_cpp=False, use_compile_cache=False,
             include_dirs=[str(ROOT / "pcc/runtime/include"),
                           *extra_include_dirs, str(ROOT / "utils/fake_libc_include")],
@@ -106,3 +123,45 @@ def link_c_harness(harness: Path, output: Path, *, defines=(), extra_include_dir
         evaluator.emit_executable(units, str(output), link_args=[str(archive)])
     assert output.is_file()
     return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def link_c_harness_bounded(
+    harness: Path,
+    output: Path,
+    *,
+    runtime_archive: str | Path,
+    extra_include_dirs=(),
+    extra_sources=(),
+    timeout: float = 60,
+):
+    """Keep a per-probe deadline while the child uses only the owned builder."""
+    from tests.python.process_timeout import run_process_group_timeout
+
+    payload = {
+        "harness": str(harness.resolve()),
+        "output": str(output.resolve()),
+        "runtime_archive": str(Path(runtime_archive).resolve()),
+        "extra_include_dirs": [str(Path(path).resolve()) for path in extra_include_dirs],
+        "extra_sources": [str(path.resolve()) for path in extra_sources],
+    }
+    # This is the host-pcc0 test driver, not an external C compiler/linker.
+    # The child re-admits the archive and forbids build subprocesses inside
+    # link_c_harness. The supervisor cleans up its process group on timeout.
+    return run_process_group_timeout(
+        [sys.executable, "-m", "tests.owned_runtime_c_fixture", json.dumps(payload)],
+        timeout=timeout,
+        cwd=ROOT,
+        stderr_path=Path(str(output) + ".compile.stderr"),
+    )
+
+
+def _link_c_harness_request(payload: str):
+    arguments = json.loads(payload)
+    arguments["harness"] = Path(arguments["harness"])
+    arguments["output"] = Path(arguments["output"])
+    arguments["extra_sources"] = tuple(Path(path) for path in arguments["extra_sources"])
+    return link_c_harness(**arguments)
+
+
+if __name__ == "__main__":
+    _link_c_harness_request(sys.argv[1])

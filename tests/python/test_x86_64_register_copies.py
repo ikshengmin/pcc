@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import pytest
 
+from itertools import product
+from random import Random
+
 from pcc.backend.x86_64_register_copies import forward_register_copies
+from pcc.backend import x86_64_register_copies as copies
+from tests.x86_64_dead_moves_reference import _dead_moves as reference_dead_moves
 
 
 def test_operands_read_the_original_and_dead_copies_go():
@@ -229,3 +234,164 @@ def test_zero_idiom_stays_while_its_flags_are_read():
     # no rax.
     lines = ["  xor eax, eax", "  call printf", "  ret"]
     assert forward_register_copies(lines) == lines
+
+
+class _CountReads(list):
+    """Count host test input accesses without changing their values."""
+
+    def __init__(self, values):
+        super().__init__(values)
+        self.accesses = 0
+
+    def __getitem__(self, index):
+        self.accesses += 1
+        return super().__getitem__(index)
+
+
+def test_dead_moves_stop_after_out_only_change_in_cycle():
+    # Block 0 reads rax; block 1 defines it and jumps back. In reverse order,
+    # revisiting block 1 changes only its live_out: its definition kills live_in.
+    # That updated live_out must still keep the definition in the final pass.
+    # Counts include the final dead-marking scan and are not timings.
+    tail = ([0, copies._RAX], [0, 1], {"read": 0, "write": 1},
+            [0, 1], ["write", "read"], [0, 0])
+    reads = _CountReads([copies._RAX, 0])
+    old_reads = _CountReads(reads)
+    assert copies._dead_moves(2, reads, *tail) == [0, 0]
+    assert reference_dead_moves(2, old_reads, *tail) == [0, 0]
+    # Only block 1 needs a second visit, not the whole two-block graph.
+    assert reads.accesses == 4
+    assert old_reads.accesses == 7
+
+
+@pytest.mark.parametrize("blocks", (1, 8, 64))
+def test_dead_move_worklist_does_not_rescan_unaffected_reverse_chain(blocks):
+    # Reverse layout is adversarial to a whole-graph backwards sweep: the
+    # only read propagates one edge per sweep. Count input visits, not time.
+    values = [copies._RAX] + [0] * (blocks - 1)
+    reads = _CountReads(values)
+    old_reads = _CountReads(values)
+    writes = [0] * blocks
+    kinds = [0] * blocks
+    labels = {str(index): index for index in range(blocks)}
+    ends = list(range(blocks))
+    targets = [""] + [str(index - 1) for index in range(1, blocks)]
+    falls = [0] * blocks
+    tail = (writes, kinds, labels, ends, targets, falls)
+    assert copies._dead_moves(blocks, reads, *tail) == [0] * blocks
+    assert reference_dead_moves(blocks, old_reads, *tail) == [0] * blocks
+    # Initial visit of all B blocks, B-1 affected predecessors, final B rows.
+    assert reads.accesses == 3 * blocks - 1
+    assert old_reads.accesses == blocks * (blocks + 2)
+
+
+def test_dead_move_worklist_deduplicates_edges_and_requeues_self_loop():
+    # Block0's branch and fallthrough both reach block1; block1 loops to
+    # itself. Each changed block can be pending only once, even with both
+    # duplicate predecessors and a self-edge.
+    reads = _CountReads([0, copies._RAX])
+    tail = ([0, 0], [0, 0], {"a": 0, "b": 1}, [0, 1], ["b", "b"], [1, 0])
+    assert copies._dead_moves(2, reads, *tail) == reference_dead_moves(2, [0, copies._RAX], *tail)
+    assert reads.accesses == 5  # block1 twice, block0 once, then two final rows
+
+
+def test_dead_moves_match_reference_for_all_two_block_masks():
+    # Every pair of two-bit read/write masks and all three drop kinds,
+    # across all 12 CFGs expressible by two blocks with one terminator each.
+    # Includes self loops, backedges, kills, branches and disconnected blocks.
+    masks = (0, copies._RAX, copies._FLAGS, copies._RAX | copies._FLAGS)
+    effects = tuple(product(masks, masks, (0, 1, 2)))
+    first_edges = (("", 0), ("a", 0), ("b", 0), ("a", 1))
+    second_edges = (("", 0), ("a", 0), ("b", 0))
+    cases = 0
+    for first, second, edge_a, edge_b in product(
+        effects, effects, first_edges, second_edges
+    ):
+        reads = [first[0], second[0]]
+        writes = [first[1], second[1]]
+        kinds = [first[2], second[2]]
+        args = (2, reads, writes, kinds, {"a": 0, "b": 1}, [0, 1],
+                [edge_a[0], edge_b[0]], [edge_a[1], edge_b[1]])
+        original = (reads[:], writes[:], kinds[:])
+        assert copies._dead_moves(*args) == reference_dead_moves(*args), args
+        assert (reads, writes, kinds) == original
+        cases += 1
+    assert cases == 27648
+
+
+def test_dead_moves_match_reference_for_multiline_cyclic_cfgs():
+    # Fixed finite corpus: 1-8 blocks, 1-4 lines per block, all 17 bits,
+    # conditional fallthrough, backwards/forwards edges and real barriers.
+    rng = Random(0x1738A85)
+    masks = (0, copies._RAX, copies._RCX, copies._R10, copies._FLAGS,
+             copies._FRAME, copies._RET_READS, copies._EVERYTHING)
+    for case in range(512):
+        blocks = 1 + rng.randrange(8)
+        reads, writes, kinds, labels, ends, targets, falls = [], [], [], {}, [], [], []
+        for block in range(blocks):
+            labels[str(block)] = len(reads)
+            for _ in range(1 + rng.randrange(4)):
+                reads.append(rng.choice(masks))
+                writes.append(rng.choice(masks))
+                kinds.append(rng.randrange(3))
+            ends.append(len(reads) - 1)
+            targets.append("" if rng.randrange(4) == 0 else str(rng.randrange(blocks)))
+            falls.append(rng.randrange(2))
+        args = (len(reads), reads, writes, kinds, labels, ends, targets, falls)
+        assert copies._dead_moves(*args) == reference_dead_moves(*args), (case, args)
+
+
+def test_dead_moves_unknown_target_and_empty_input_keep_fallback():
+    for args in (
+        (0, [], [], [], {}, [], [], []),
+        (2, [0, 0], [copies._R10, 0], [1, 0], {"here": 0},
+         [1], ["missing"], [0]),
+    ):
+        assert copies._dead_moves(*args) is None
+        assert reference_dead_moves(*args) is None
+    lines = ["  mov r10, 5", "  jmp .Lmissing"]
+    assert forward_register_copies(lines) is lines
+
+
+def test_dead_move_cycle_retains_latest_out_and_line_metadata():
+    class Line(str):
+        def __new__(cls, text, origin):
+            line = super().__new__(cls, text)
+            line.origin = origin
+            return line
+
+    text = [".Lread:", "  test r10, r10", "  jmp .Lwrite", ".Lwrite:",
+            "  mov r10, 7", "  mov r11, r11", "  jmp .Lread"]
+    lines = [Line(line, index) for index, line in enumerate(text)]
+    result = forward_register_copies(lines)
+    kept = (0, 1, 2, 3, 4, 6)
+    assert result == [text[index] for index in kept]
+    for line, index in zip(result, kept, strict=True):
+        assert line is lines[index]
+        assert line.origin == index
+    # With nothing to remove or forward, the original list is returned too.
+    assert forward_register_copies(result) is result
+
+
+def test_cyclic_forwarding_matches_reference_with_flags_and_barriers(monkeypatch):
+    fixtures = [
+        # Strong liveness must not resurrect a byte-copy-only cycle.
+        [".Lloop:", "  mov al, bl", "  jmp .Lloop"],
+        # The flags and a partially written return register remain live.
+        [".Lloop:", "  xor r10, r10", "  mov al, bl", "  jne .Lloop", "  ret"],
+        # A backward read retains a later write across a kill.
+        [".La:", "  test r10, r10", "  jmp .Lb", ".Lb:", "  mov r10, 7", "  jmp .La"],
+        # An unmodeled instruction is an all-register/flags barrier.
+        [".Lloop:", "  mov r10, rbx", "  lock xadd QWORD PTR [r13], r10",
+         "  jne .Lloop", "  ret"],
+        # Forwarding clears at a label while callee-preserved copies survive.
+        [".Lloop:", "  mov r13, rbx", "  call g", "  mov rdi, r13",
+         "  test rdi, rdi", "  jne .Lloop", "  ret"],
+    ]
+    for lines in fixtures:
+        actual = forward_register_copies(lines)
+        with monkeypatch.context() as patch:
+            patch.setattr(copies, "_dead_moves", reference_dead_moves)
+            expected = forward_register_copies(lines)
+        assert actual == expected
+    assert forward_register_copies(fixtures[0]) == [".Lloop:", "  jmp .Lloop"]

@@ -50,6 +50,20 @@ def _state_definitions(path: Path) -> dict[str, tuple[str, int | None]]:
     return definitions
 
 
+def _state_arrays(path: Path) -> set[str]:
+    """Names of the module's global arrays (shard tables, isolation padding)."""
+    arrays: set[str] = set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in {"define_global_i32_array", "define_global_i64_array"}
+                and node.args and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.startswith(("pcc_gc_", "py_gc_"))):
+            arrays.add(node.args[0].value)
+    return arrays
+
+
 def _build_object(tmp_path: Path, emitter: str) -> Path:
     llvm_ir = tmp_path / "freestanding_gc_state.ll"
     pipeline.compile_python(
@@ -159,7 +173,19 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # stack-map rooting setting one; GC0's inline atomic refcount gate
     # (pcc_gc_refcount_atomic) one more, GC0's automatic collection the
     # survivors of the last collection, and tracing pacing the heap marked.
-    assert len(expected) == 215
+    # Current committed storage has 223 symbols (the old 215 pin was stale).
+    # Mark completion now has its own flag, separate from moving work.
+    # Three collector-private fields bind GC0 candidate validation.
+    # GC3 records when a step must promote young objects in place.
+    # The pin balance and allocation count moved to the root-operations
+    # shard table (pcc_gc_metric_shards) with the pin word's padding.
+    # Sharded tracked lists added their table lock depth (503d32958).
+    assert len(expected) == 227
+    assert expected["pcc_gc_backend3_oldify_suspended"] == ("define_global_i32", 0)
+    assert expected["pcc_gc_backend0_subset_active"] == ("define_global_i32", 0)
+    assert expected["pcc_gc_backend0_subset_pairs"] == ("define_global_ptr_null", None)
+    assert expected["pcc_gc_backend0_subset_count"] == ("define_global_i64", 0)
+    assert expected["pcc_gc_cms_sweep_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_refcount_atomic"] == ("define_global_i32", 0)
     assert expected["pcc_gc_tracked_after_collect"] == ("define_global_i64", 0)
     assert expected["pcc_gc_tracing_marked_bytes"] == ("define_global_i64", 0)
@@ -186,7 +212,7 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
         for line in symbols.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == set(expected)
+    assert defined == set(expected) | _state_arrays(STATE_SOURCE)
 
     result = _build_and_run_harness(
         tmp_path, "gc_state_" + emitter, [str(obj)]

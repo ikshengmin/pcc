@@ -140,3 +140,40 @@ def cast_raw(value: c_ptr) -> c_ptr:
     assert "@pcc_gc_retain" not in body
     assert "@pcc_gc_pin" not in body
     assert "@py_incref" not in body
+
+
+@pytest.mark.parametrize("spelling", ["cast", "typing.cast"])
+def test_typing_cast_raw_pointer_runs_in_a_program(
+    tmp_path, python_program_compiler, pcc_runtime_archive, spelling,
+):
+    # A program closure compiles typing itself, so `cast` is also a known
+    # imported function there; the cast still lowers to its raw operand.
+    source = tmp_path / "cast_raw_run.py"
+    source.write_text('''import typing
+from typing import cast
+from pcc.extern import c_abi_export, c_ptr
+from pcc.unsafe import free, load_i64, malloc, ptr_to_int, store_i64
+
+
+@c_abi_export("cast_raw_identity")
+def cast_raw(value: c_ptr) -> c_ptr:
+    return CAST(c_ptr, value)
+
+
+def main():
+    memory = malloc(16)
+    store_i64(memory, 8, 41)
+    same = cast_raw(memory)
+    print(load_i64(same, 8), ptr_to_int(same) == ptr_to_int(memory))
+    free(memory)
+
+
+main()
+'''.replace("CAST", spelling))
+    binary = tmp_path / "cast_raw_run"
+    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+                            runtime_archive=str(pcc_runtime_archive))
+    for backend in range(5):
+        ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
+                             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
+        assert (ran.returncode, ran.stdout, ran.stderr) == (0, "41 True\n", ""), backend

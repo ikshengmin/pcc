@@ -193,6 +193,8 @@ void pcc_gc_publish_initialized(PyObject *obj);
  * runtime-owned indexes and never inspect an unproven candidate header. */
 int64_t pcc_gc_pointer_is_managed(PyObject *obj);
 int64_t pcc_gc_pointer_register(PyObject *obj);
+/* Compiler-created scalar headers in process-lifetime image storage only. */
+int64_t pcc_gc_pointer_register_static_literal(PyObject *obj);
 /* Slab-granule provenance map (design: ARCH-P0-PROVENANCE-GRANULE-MAP).
  * Registration serializes its own sole writer; callers must not hold the
  * allocator lock.  A duplicate granule is rejected without changing its
@@ -223,6 +225,9 @@ void      pcc_gc_release(PyObject *o);
  * the proof via PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS. */
 PyObject *pcc_gc_retain_known(PyObject *o);
 void      pcc_gc_release_known(PyObject *o);
+/* Both old/new owners are compiler-proven initialized native objects. */
+void      pcc_gc_store_root_known(PyObject **slot, PyObject *value);
+void      pcc_gc_store_root_take_known(PyObject **slot, PyObject *value);
 void      pcc_gc_set_known_ref_checks(int64_t enabled);
 extern int32_t pcc_thread_stop_requested;
 void      pcc_debug_check_release(const char *name, void *obj);
@@ -234,6 +239,8 @@ PyObject *pcc_gc_resolve_owned_ptr(PyObject *value);
 void      pcc_gc_store_ptr(PyObject *owner, PyObject **slot, PyObject *value);
 void      pcc_gc_store_root(PyObject **slot, PyObject *value);
 void      pcc_gc_store_root_take(PyObject **slot, PyObject *value); /* consumes value's reference */
+/* The private, registered slot already owns a freshly returned reference. */
+int64_t   pcc_gc_publish_owned_root(PyObject **slot);
 /* Consume value into a heap slot under GC0. Other collectors return 0 with
  * no mutation or ownership change; the caller must use its ordinary store. */
 int64_t pcc_gc_try_store_ptr_take(PyObject *owner, PyObject **slot, PyObject *value);
@@ -367,18 +374,33 @@ int64_t   pcc_gc_consume_precise_stackmap(
 void      pcc_gc_register_precise_stackmap_table(const void *table);
 void      pcc_gc_safepoint(void);
 int64_t   pcc_gc_collect(int32_t reason);
+/* NULL/tagged values and the five image-defined intrinsic singletons
+ * (None, True, False, NotImplemented, Ellipsis) are intrinsically nonmoving:
+ * pin/unpin leave their flags and pin-balance metric unchanged. Heap objects,
+ * including objects made immortal at runtime, retain the normal protocol. */
 void      pcc_gc_pin(PyObject *o);
 void      pcc_gc_unpin(PyObject *o);
 /* Foreign-address leases require an already traced, owning slot containing a
- * compiler-proven initialized managed value. Acquire locks before reloading;
- * tokens: 0 intrinsic no-op, 1 counted node, 2 proven nonmoving/mode guard.
+ * compiler-proven initialized managed value; the caller keeps the slot stable
+ * during raw-pointer use. NULL/tagged words return 0 without an address guard.
+ * Heap values retain provenance/mode guards and reload after any parking lock.
+ * Tokens: 0 intrinsic no-op, 1 counted node, 2 proven nonmoving/mode guard.
  * Negative acquire: -1 invalid provenance/transition, -2 counter overflow.
  * Release exactly once with its token, after all raw-pointer uses, before
  * dropping the root. Token 0 is always a no-op. Return 0 on success, -1 bad
  * token/slot, -3 underflow/invariant failure. Neither API touches a pending
  * Python exception. The collector predicate requires graph lock or STW. */
 int64_t   pcc_gc_foreign_lease_acquire(PyObject **slot);
+/* A private traced borrowed slot backed by an owner alive through release.
+ * Relocation changes its address without transferring refcounts. The slot
+ * must not be rebound until pcc_gc_foreign_lease_release consumes its token. */
+int64_t   pcc_gc_borrowed_lease_acquire(PyObject **slot);
 int64_t   pcc_gc_foreign_lease_release(PyObject **slot, int64_t acquired);
+/* Diagnostic total only after the caller has quiesced all lease changes.
+ * Includes indexed, mode-only and terminal-tail reservations. Not an exact
+ * concurrent snapshot and never backend-transition admission. Returns -1
+ * while a transition is reserved, -2 if the sum cannot fit in int64_t. */
+int64_t   pcc_gc_foreign_lease_count_quiescent(void);
 /* Slot-to-slot runtime-entry handoff. Destination is an already registered
  * owning root. Source is an owning root, or (copy_lease only) a traced owning
  * heap slot whose container/payload already has a caller-owned address lease.
@@ -400,14 +422,32 @@ int64_t   pcc_gc_root_move(PyObject **destination, PyObject **source);
  * Healing it must not retain or release a source-slot reference. Its actual
  * owner remains live for the call. Destination gains one owner and lease. */
 int64_t   pcc_gc_root_copy_borrowed_lease(PyObject **destination, PyObject **source);
+/* Copy between distinct registered private roots, retaining into an empty
+ * destination without an address lease. Source is not a shared global/field;
+ * its owner and slot stay live throughout. source_borrowed is exactly 0/1.
+ * Returns zero on success; later raw-address consumers acquire their own lease. */
+int64_t pcc_gc_root_copy_local(PyObject **destination, PyObject **source,
+                              int64_t source_borrowed);
 /* Split form for atomic lookup/selection callers already holding graph lock.
  * Runtime configuration is complete; plan256 is writable 256-byte storage.
  * Prepare initializes it and never runs deferred refcount/log work. Always
  * finish it after the OUTERMOST unlock, on success and failure alike. */
+/* Copy an owned source into an empty registered root under the graph lock,
+ * without an address lease. Source payload must stay protected. Finish the
+ * initialized plan128 with pcc_gc_store_root_plan_finish after outer unlock. */
+int64_t pcc_gc_root_copy_owned_prepare_locked(PyObject **destination,
+    PyObject **source, void *plan128);
 int64_t   pcc_gc_root_copy_lease_prepare_locked(PyObject **destination,
     PyObject **source, int64_t source_borrowed, void *plan256);
 void      pcc_gc_root_copy_lease_finish(void *plan256);
 int64_t   pcc_gc_object_is_address_pinned(PyObject *obj);
+/* GC0 no-callback retirement of at most 64 trailing references in a dying
+ * owner's contiguous array. Returns unconsumed prefix; leaves slots intact. */
+int64_t pcc_gc_release_nonterminal_tail(void *slots, int64_t count);
+/* Under the graph lock, initialize a private unowned field from a stable
+ * owning/borrowed source root or permanent literal. Returns 1 after retaining
+ * and writing, 0 without effects. Caller publishes length only on success. */
+int64_t pcc_gc_try_init_ptr_locked(PyObject **destination, PyObject **source);
 /* Transfer one owned reference from a stable pointer slot to the return value.
  * The caller has acquired one pin and saved the pre-acquisition pin bit in
  * prior_pin (0 or PY_FLAG_GC_PINNED), and has completed all parking operations.
@@ -917,6 +957,9 @@ int64_t   py_threading_thread_join_args(PyObject *thread, PyObject *timeout);
 void py_incref(PyObject *o);
 void py_decref(PyObject *o);
 
+/* Negative means type-predicate versions saturated and must not be cached. */
+extern int64_t pcc_object_type_epoch;
+
 /* ---- None -------------------------------------------------------------- */
 extern PyObject *const py_None;
 extern PyObject *const py_NotImplemented;
@@ -1134,7 +1177,13 @@ PyObject *py_os_urandom(PyObject *n);
 /* ---- List -------------------------------------------------------------- */
 PyObject *py_list_new(int64_t initial_capacity);
 PyObject *py_list_from_static_items(PyObject *const *items, int64_t count);
+/* Move distinct, registered owning roots into an empty output root.
+ * Sources are stable root addresses; successful construction empties them. */
+int64_t py_list_from_owned_roots(void *sources, int64_t count, void *output);
 void      py_list_append(PyObject *lst, PyObject *item);
+/* Stable traced sources, or a proven permanent item slot; mask bits 0/1 mark
+ * borrowed list/item slots. The call retains the item without consuming it. */
+void py_list_append_from_slots(void *list_slot, void *item_slot, int64_t borrowed_mask);
 /* Borrowed-item append for compiler-proven fresh native instances.  This is
  * not ownership transfer: the caller keeps and releases its owned ref. */
 void      py_list_append_fresh_native_instance(PyObject *lst, PyObject *item);
@@ -1193,6 +1242,10 @@ void      py_dict_update(PyObject *dst, PyObject *src);
 
 /* ---- Tuple ------------------------------------------------------------- */
 PyObject *py_tuple_new(int64_t n);
+/* Consume distinct, registered unleased roots into a fresh tuple output. */
+int64_t py_tuple_from_owned_roots(void *sources, int64_t count, void *output);
+/* As above, but return the output lease token; the caller must release it. */
+int64_t pcc_tuple_from_owned_roots_lease(void *sources, int64_t count, void *output);
 PyObject *py_tuple_from_static_items(PyObject *const *items, int64_t count);
 PyObject *py_tuple_from_list(PyObject *lst);         /* new tuple from list elems */
 PyObject *py_tuple_from_splat(PyObject *seq);        /* new tuple from tuple/list/len+getitem seq */
@@ -1280,6 +1333,8 @@ void      py_dealloc_weakref(PyObject *ref);
 PyObject *py_obj_getattr(PyObject *o, const char *name);
 PyObject *py_obj_load_method(PyObject *obj, const char *name, PyObject **out_self);
 PyObject *py_obj_call_method(PyObject *method, PyObject *self_obj, PyObject *args);
+PyObject *py_obj_call_loaded_method(PyObject *method, PyObject *receiver, PyObject *args,
+                                    int64_t has_self);
 PyObject *py_obj_call_method_kwargs(PyObject *method, PyObject *self_obj, PyObject *args, PyObject *kwargs);
 PyObject *py_obj_getattr_default(PyObject *o, const char *name);
 PyObject *py_obj_getattr_maybe(PyObject *o, const char *name);
@@ -1345,6 +1400,10 @@ PyObject *py_obj_sorted(PyObject *x);
 int64_t py_obj_sorted_slots(PyObject **source_slot, PyObject **key_slot,
                             PyObject **compare_slot, int64_t reverse,
                             PyObject **result_slot);
+/* Truth-convert reverse after iterable snapshot, before key callbacks. */
+int64_t py_obj_sorted_reverse_slots(PyObject **source_slot, PyObject **key_slot,
+                                    PyObject **compare_slot, PyObject **reverse_slot,
+                                    PyObject **result_slot);
 /* Registered owning inputs; distinct empty output. Returns 0 or -1. */
 int64_t py_obj_mul_slots(PyObject **left_owner, PyObject **right_owner,
                          PyObject **output_owner);
@@ -1380,6 +1439,9 @@ int64_t   py_obj_isinstance(PyObject *o, PyObject *cls);
 int64_t   py_obj_issubclass(PyObject *derived, PyObject *cls);
 PyObject *py_obj_iter(PyObject *o);
 PyObject *py_obj_next(PyObject *it);
+/* Consumer entry: NULL may be ordinary exhaustion without an exception.
+ * StopIteration from a user/generator/wrapper path must still be consumed. */
+PyObject *py_obj_iter_next(PyObject *it);
 /* iter(callable, sentinel): callable-iterator over the existing PY_TYPE_ITER
  * object. Returns a new reference to a callable-iterator that yields
  * callable() until a result compares equal to sentinel. */
@@ -1527,10 +1589,16 @@ int64_t   py_obj_is_slice(PyObject *o);
 
 /* ---- Native generator objects ------------------------------------------ */
 PyObject *py_gen_frame_new(int64_t slot_count); /* fixed-size, None-filled list frame */
+/* GC0 private generator storage; other collectors return a list frame. */
+PyObject *py_gen_inline_frame_new(int64_t slot_count);
+PyObject *py_gen_from_inline_frame(void *resume, PyObject *frame);
+int64_t py_gen_frame_len(PyObject *frame);
 /* Compiler-private fixed-size frames: caller owns the frame, every slot is
- * a managed object, tagged value or NULL. Get returns NEW; set retains.
- * GC1-4 use the ordinary list operations and their existing barriers. */
+ * a managed object, tagged value or NULL. Get returns NEW; take moves the
+ * slot's owner out and leaves NULL; set retains. GC1-4 use the ordinary
+ * list operations and their existing barriers. */
 PyObject *py_gen_frame_get(PyObject *frame, int64_t index);
+PyObject *py_gen_frame_take(PyObject *frame, int64_t index);
 void      py_gen_frame_set(PyObject *frame, int64_t index, PyObject *value);
 /* Save compiler-owned, rooted local slots. Returns 0 without mutation when
  * the collector/frame is not eligible; callers retain their ordinary path. */

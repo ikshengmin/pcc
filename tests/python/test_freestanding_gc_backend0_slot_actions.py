@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import os
+import sys
 import subprocess
 import textwrap
 from pathlib import Path
@@ -19,6 +21,7 @@ CLEAR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_sweep_slots.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_backend0_node_in_collection",
     "pcc_gc_backend0_is_unreachable",
     "pcc_gc_backend0_mark_reachable",
     "pcc_gc_backend0_mark_slot",
@@ -112,7 +115,7 @@ def test_backend0_slot_actions_have_exact_raw_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS
+    assert undefined == RAW_FUNCTION_IMPORTS | {"pcc_gc_backend0_subset_active"}
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
@@ -213,23 +216,31 @@ def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
         textwrap.dedent(
             """
             import gc
+            import weakref
 
             runs = []
+            temporary_watches = []
+
+            class Temporary:
+                pass
 
             class Finalized:
                 def __del__(self):
+                    temporary = Temporary()
+                    temporary_watches.append(weakref.ref(temporary))
                     runs.append("ran")
                     self.peer = None
 
             def make_cycle():
                 value = Finalized()
                 value.peer = value
+                return weakref.ref(value)
 
             def main() -> None:
-                before = gc.get_count()[0]
-                make_cycle()
+                watch = make_cycle()
                 gc.collect()
-                print(gc.get_count()[0] == before)
+                print(watch() is None and len(temporary_watches) == 1
+                      and temporary_watches[0]() is None)
                 print(runs)
 
             if __name__ == "__main__":
@@ -239,6 +250,12 @@ def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
         encoding="utf-8",
     )
 
+    # Aggregate get_count equality was already false on the previous runtime
+    # and CPython. Check the actual object and callback-created temporary
+    # lifetimes instead, while retaining the table-lock reentry shape.
+    reference = subprocess.run([sys.executable, str(source)], capture_output=True,
+                               text=True, timeout=5)
+    assert (reference.returncode, reference.stdout, reference.stderr) == (0, "True\n['ran']\n", "")
     executable = tmp_path / "backend0_finalizer_reentry"
     pipeline.compile_python(
         str(source),
@@ -252,6 +269,7 @@ def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
         capture_output=True,
         text=True,
         timeout=5,
+        env=dict(os.environ, PCC_GC_BACKEND="0"),
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "True\n['ran']\n"

@@ -39,8 +39,17 @@ class StmtMiscLoweringMixin:
             return
         if isinstance(expr, Call) and self._maybe_emit_bytearray_insert_stmt(expr):
             return
-        # Otherwise evaluate for side-effects.
-        value = self._emit_expr(expr)
+        # A None sink requests disposal only when a producer explicitly
+        # identifies this exact expression's final owned root. It does not
+        # request boxing, alter call dispatch, or consume nested arguments.
+        # Producers without that contract keep the ordinary value cleanup.
+        self._slot_call_result_sinks.append((expr, None, False))
+        try:
+            value = self._emit_expr(expr)
+        finally:
+            _expression, _slot, discarded = self._slot_call_result_sinks.pop()
+        if discarded:
+            return
         if value in getattr(self, "_cpy_values", ()):
             if self._cpy_value_is_owned(value):
                 self._guard_cpy_value_not_null(value)

@@ -106,6 +106,10 @@ pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void
 py_decref = extern("py_decref", (c_ptr,), c_void)
 
 
+pcc_gc_gray_count_increment_acq_rel = extern("pcc_gc_gray_count_increment_acq_rel", (), c_void)
+pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
+pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+
 @c_abi_export("pcc_gc_backend4_relocate_copy_preallocated_unlocked")
 def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
     from_obj, size: i64, to_obj, payload_plan, forwarding_plan, finish_plan
@@ -154,10 +158,15 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
     # The header copy clobbers allocation-origin flags.  Preserve the
     # destination residency so chained relocation cannot undercount the page
     # that physically owns the replacement object.
-    to_residency: i64 = load_i32(to_obj, 12) & 331776
+    prior_to_flags: i64 = load_i32(to_obj, 12)
+    to_residency: i64 = prior_to_flags & 331776
     memmove(to_obj, from_obj, size)
     store_i64(to_obj, 0, 1)
     new_flags: i64 = load_i32(to_obj, 12)
+    if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+        # Allocation already colored this private target. Preserve that
+        # verdict through preparation; a successful copy is queued below.
+        new_flags = (new_flags & ~56) | (prior_to_flags & 56)
     # SWEEP_CANDIDATE (1024) is a finished-cycle "was unreachable"
     # verdict, not residency: relocation proves the value is live memory
     # being kept. Carrying it onto the copy lets a later no-re-mark
@@ -166,6 +175,10 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
     # stays sweep-visible until remap retirement, so its own stale
     # verdict dies with the old identity too.
     store_i32(to_obj, 12, (new_flags & ~343040) | to_residency)
+    if (prior_to_flags & 16) != 0 and (new_flags & 16) == 0:
+        pcc_gc_gray_count_decrement_acq_rel()
+    elif (prior_to_flags & 16) == 0 and (new_flags & 16) != 0:
+        pcc_gc_gray_count_increment_acq_rel()
     if (
         pcc_gc_relocate_copy_payload_prepared_locked(
             from_obj, to_obj, tag, size, payload_plan
@@ -180,6 +193,12 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
         != 0
     ):
         return null()
+    if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+        # GC4 keeps the source shell sweep-visible until remap retirement.
+        # Its replacement is a distinct active node and owns its own scan.
+        if (load_i32(to_obj, 12) & 16) == 0:
+            pcc_gc_gray_count_increment_acq_rel()
+        pcc_gc_set_mark_color(to_obj, 16)
     # Forwarding is the commit point.  Before it succeeds the source still
     # owns its original sweep verdict so every rollback path remains honest.
     store_i32(from_obj, 12, load_i32(from_obj, 12) & ~1024)

@@ -586,32 +586,49 @@ def _dead_moves(
     # empty sets reaches the least fixed point.
     live_in = [0] * block_count
     live_out = [0] * block_count
-    changed = True
-    while changed:
-        changed = False
-        block_id = block_count - 1
-        while block_id >= 0:
-            out = 0
-            block_successors = successors[block_id]
-            successor_index = 0
-            while successor_index < len(block_successors):
-                out |= live_in[block_successors[successor_index]]
-                successor_index += 1
-            live = out
-            line_index = block_last[block_id]
-            first = block_first[block_id]
-            while line_index >= first:
-                kind = droppable[line_index]
-                if kind != 2:
-                    writes = writes_of[line_index]
-                    if not (kind == 1 and not writes & live):
-                        live = (live & ~writes) | reads_of[line_index]
-                line_index -= 1
-            if out != live_out[block_id] or live != live_in[block_id]:
-                live_out[block_id] = out
-                live_in[block_id] = live
-                changed = True
-            block_id -= 1
+    predecessors: list[list[int]] = []
+    pending: list[int] = []
+    queued = [True] * block_count
+    block_id = 0
+    while block_id < block_count:
+        predecessors.append([])
+        pending.append(block_id)
+        block_id += 1
+    block_id = 0
+    while block_id < block_count:
+        for successor in successors[block_id]:
+            predecessors[successor].append(block_id)
+        block_id += 1
+    # Pop in the original reverse block order initially. A changed live-in
+    # can affect only predecessors; unrelated blocks need no repeated line
+    # scan. The queued flags bound pending to one entry per block, including
+    # self-loops and duplicate successor edges.
+    while pending:
+        block_id = pending.pop()
+        queued[block_id] = False
+        out = 0
+        for successor in successors[block_id]:
+            out |= live_in[successor]
+        live = out
+        line_index = block_last[block_id]
+        first = block_first[block_id]
+        while line_index >= first:
+            kind = droppable[line_index]
+            if kind != 2:
+                writes = writes_of[line_index]
+                if not (kind == 1 and not writes & live):
+                    live = (live & ~writes) | reads_of[line_index]
+            line_index -= 1
+        # Retain the latest out even when this block kills the incoming
+        # change: final dead-move selection consumes live_out, whereas only
+        # live_in changes can affect predecessors.
+        live_out[block_id] = out
+        if live != live_in[block_id]:
+            live_in[block_id] = live
+            for predecessor in predecessors[block_id]:
+                if not queued[predecessor]:
+                    pending.append(predecessor)
+                    queued[predecessor] = True
 
     dead = [0] * count
     block_id = 0

@@ -36,7 +36,7 @@ pcc_platform_write = extern(
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_thread_start = extern("pcc_thread_start", (c_ptr, c_ptr, c_ptr), c_int64)
-pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
+pcc_thread_safepoint_gate = extern("pcc_thread_safepoint_gate", (), c_void)
 pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 pcc_gc_tracing_step_cycle = extern(
     "pcc_gc_tracing_step_cycle", (c_int64,), c_int64
@@ -59,7 +59,7 @@ pcc_gc_tracing_discharge_debt = extern(
 
 @c_abi_export("pcc_gc_cms_worker_main_py")
 def pcc_gc_cms_worker_main_py(arg):
-    """The tracing collector thread of GC1 and GC2: marks while mutators run.
+    """The tracing collector thread of GC1-GC4: marks while mutators run.
 
     Marking is incremental-update (Dijkstra): mutator heap and root stores
     shade the stored object while a cycle is active, and every traced batch
@@ -95,9 +95,20 @@ def pcc_gc_cms_worker_main_py(arg):
         if threshold0 <= 0:
             enabled = 0
         traced: i64 = 0
+        pending = global_addr("pcc_gc_backend4_auto_step_pending")
+        sweep_pending = global_addr("pcc_gc_cms_sweep_pending")
         if (
             enabled != 0
-            and (backend == 1 or backend == 2)
+            and (backend >= 1 and backend <= 4)
+            and atomic_load_i32(sweep_pending, 0, "acquire") != 0
+        ):
+            # A disabled application gate may consume its wakeup. Retain the
+            # completed mark and re-arm cleanup after enable/threshold restore,
+            # even when all allocation tickets have already been drained.
+            atomic_store_i32(pending, 0, 1, "release")
+        if (
+            enabled != 0
+            and (backend >= 1 and backend <= 4)
             and (drains < pushes or marking != 0)
         ):
             # Every allocation requests a cycle. A new one begins only once
@@ -107,8 +118,7 @@ def pcc_gc_cms_worker_main_py(arg):
             # while a completed mark waits for its sweep. A completed cycle
             # pays the debt (pcc_gc_finish_tracing_cycle).
             due: i64 = marking
-            pending = global_addr("pcc_gc_backend4_auto_step_pending")
-            if due == 0 and atomic_load_i32(pending, 0, "acquire") == 0:
+            if due == 0 and atomic_load_i32(sweep_pending, 0, "acquire") == 0:
                 debt_slot = global_addr("pcc_gc_debt_bytes")
                 if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
                     due = 1
@@ -118,7 +128,7 @@ def pcc_gc_cms_worker_main_py(arg):
                 growth: i64 = threshold0
                 if survivors > growth:
                     growth = survivors
-                if load_i32(global_addr("py_gc_tracked_count"), 0) - survivors >= growth:
+                if atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire") - survivors >= growth:
                     due = 1
             if due != 0:
                 # A dedicated thread marks at full speed; the batch bounds how
@@ -141,6 +151,7 @@ def pcc_gc_cms_worker_main_py(arg):
                     # runs their finalizers, so a mutator does it at its next
                     # application gate, with the world stopped
                     # (pcc_gc_safepoint).
+                    atomic_store_i32(sweep_pending, 0, 1, "release")
                     atomic_store_i32(pending, 0, 1, "release")
             if drains < pushes:
                 atomic_store_i32(
@@ -150,7 +161,10 @@ def pcc_gc_cms_worker_main_py(arg):
                 pcc_platform_sleep_ns(1000000)
         else:
             pcc_platform_sleep_ns(1000000)
-        pcc_thread_safepoint()
+        # A completed batch leaves no raw managed address on this stack.
+        # Park as relocation-safe here; an in-batch runtime poll remains
+        # non-gated and continues to prevent unsafe movement.
+        pcc_thread_safepoint_gate()
     atomic_rmw_i32(
         "add", global_addr("pcc_gc_cms_worker_stops"), 0, 1, "relaxed"
     )
@@ -217,9 +231,9 @@ def _pcc_gc_config_parse_backend(raw, default: i64) -> i64:
 
 @c_abi_export("pcc_gc_maybe_start_cms_worker")
 def pcc_gc_maybe_start_cms_worker() -> None:
-    # GC1 and GC2 trace on the collector thread, concurrently with mutators.
+    # All tracing backends mark here; moving phases retain their gate protocol.
     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected != 1 and selected != 2:
+    if selected < 1 or selected > 4:
         return
     if pcc_threads_enabled() == 0:
         return
@@ -232,7 +246,7 @@ def pcc_gc_maybe_start_cms_worker() -> None:
         return
     # The backend may have changed after the optimistic read above.
     selected = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected != 1 and selected != 2:
+    if selected < 1 or selected > 4:
         atomic_store_i32(
             global_addr("pcc_gc_cms_worker_started"), 0, 0, "release"
         )
@@ -378,3 +392,7 @@ def pcc_gc_begin_explicit_tracing_collect() -> None:
 @c_abi_export("pcc_gc_end_explicit_tracing_collect")
 def pcc_gc_end_explicit_tracing_collect() -> None:
     store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 0)
+    # The mutator owns the stopped world through this cleanup boundary.
+    # An unfinished cycle remains active and will publish its own completion.
+    if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
+        atomic_store_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, 0, "release")

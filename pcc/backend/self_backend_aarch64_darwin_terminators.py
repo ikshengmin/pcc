@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from . import BackendUnavailable
-from .self_backend_aarch64_darwin_abi import reg_name
+from .self_backend_aarch64_darwin_abi import reg_name, reg_name_indexed
 from .self_backend_aarch64_darwin_branch_protection import (
     branch_protection_enabled,
     epilogue_authenticate_and_return,
@@ -16,6 +16,8 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_frame_pair_line,
 )
 from .self_backend_aarch64_darwin_regalloc import (
+    aarch64_zero_test_operand,
+    allocated_scalar_register_indexed,
     callee_saved_area_size,
     emit_callee_saved_loads,
 )
@@ -174,6 +176,7 @@ def emit_cond_branch_terminator_indexed(
     false_label = block_label(func.name, false_target)
     false_prep = block_edge_label(func.name, block_name, false_target)
     fused_predicate = ""
+    zero_register = ""
     if condition_ref >= 0 and condition_ref in func.aarch64_fused_branch_values:
         # The block ends with the compare that defines the condition; it left
         # its result in the flags (see _fusable_branch_conditions).
@@ -183,6 +186,12 @@ def emit_cond_branch_terminator_indexed(
         )
         icmp: CompilerInt4 = kernel.instruction_record(metadata.second)
         fused_predicate = kernel.call_texts[icmp.first]
+        zero_operand = aarch64_zero_test_operand(kernel, icmp)
+        if zero_operand >= 0:
+            register = allocated_scalar_register_indexed(kernel, zero_operand, icmp.second)
+            if register < 0:
+                register = 9
+            zero_register = reg_name_indexed(kernel, icmp.second, register)
         lines: list[str] = []
     else:
         lines = materialize_scalar_value_indexed(
@@ -219,15 +228,15 @@ def emit_cond_branch_terminator_indexed(
         return lines
     if direct_targets and not true_has_phis and not false_has_phis:
         if true_target_id == next_block_id:
-            lines.append(_cond_branch_line(fused_predicate, False, false_label))
+            lines.append(_cond_branch_line(fused_predicate, False, false_label, zero_register))
         elif false_target_id == next_block_id:
-            lines.append(_cond_branch_line(fused_predicate, True, true_label))
+            lines.append(_cond_branch_line(fused_predicate, True, true_label, zero_register))
         else:
-            lines.append(_cond_branch_line(fused_predicate, False, false_label))
+            lines.append(_cond_branch_line(fused_predicate, False, false_label, zero_register))
             lines.append(emitted_branch_line("b", true_label))
         return lines
     if direct_targets and not false_has_phis:
-        lines.append(_cond_branch_line(fused_predicate, False, false_label))
+        lines.append(_cond_branch_line(fused_predicate, False, false_label, zero_register))
         lines.extend(
             emit_phi_assignments(
                 func,
@@ -240,7 +249,7 @@ def emit_cond_branch_terminator_indexed(
             lines.append(emitted_branch_line("b", true_label))
         return lines
     if direct_targets and not true_has_phis:
-        lines.append(_cond_branch_line(fused_predicate, True, true_label))
+        lines.append(_cond_branch_line(fused_predicate, True, true_label, zero_register))
         lines.extend(
             emit_phi_assignments(
                 func,
@@ -257,7 +266,7 @@ def emit_cond_branch_terminator_indexed(
         # conditional branch targets the local edge label right after the
         # false edge, which is in range for a function of any size.
         true_prep = block_edge_label(func.name, block_name, true_target)
-        lines.append(_cond_branch_line(fused_predicate, True, true_prep))
+        lines.append(_cond_branch_line(fused_predicate, True, true_prep, zero_register))
         lines.extend(
             emit_phi_assignments(
                 func,
@@ -277,7 +286,7 @@ def emit_cond_branch_terminator_indexed(
             )
         )
         return lines
-    lines.append(_cond_branch_line(fused_predicate, False, false_prep))
+    lines.append(_cond_branch_line(fused_predicate, False, false_prep, zero_register))
     lines.extend(
         emit_phi_assignments(
             func,
@@ -301,12 +310,15 @@ def emit_cond_branch_terminator_indexed(
     return lines
 
 
-def _cond_branch_line(fused_predicate: str, branch_when: bool, label: str) -> str:
+def _cond_branch_line(fused_predicate: str, branch_when: bool, label: str, zero_register: str = "") -> str:
     """Branch to ``label`` when the condition equals ``branch_when``.
 
     A fused compare left its predicate in the flags; otherwise the i1 was
     materialized in w9.
     """
+    if zero_register:
+        mnemonic = "cbz" if branch_when == (fused_predicate == "eq") else "cbnz"
+        return emitted_branch_line(mnemonic, label, zero_register)
     if fused_predicate:
         if branch_when:
             return emitted_branch_line("b." + aarch64_cc(fused_predicate), label)

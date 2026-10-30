@@ -11,7 +11,7 @@ import weakref
 
 from pcc.backend import elf_x86_64 as elf
 from pcc.backend.owned_elf_inputs import ElfInputStore
-from tests.elf_packed_application_preimage import original_linker
+from tests.elf_packed_application_jump26_reference import original_linker
 from tests.python.test_elf_packed_link_classification import (
     BASE, TARGET, _exception_chain, _fixture, _outcome, _pack, _packed_object,
 )

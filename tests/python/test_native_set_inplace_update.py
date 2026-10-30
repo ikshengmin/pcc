@@ -52,15 +52,15 @@ def _function_body(ir_text: str, fn_name_suffix: str) -> str | None:
 
 
 @pytest.mark.parametrize(
-    "method,runtime_fn",
+    "method,method_id",
     [
-        ("difference_update", "py_set_difference_update"),
-        ("intersection_update", "py_set_intersection_update"),
-        ("symmetric_difference_update", "py_set_symmetric_difference_update"),
+        ("difference_update", 5),
+        ("intersection_update", 4),
+        ("symmetric_difference_update", 7),
     ],
 )
 @pytest.mark.parametrize("mode", ["off", "on"])
-def test_inplace_update_uses_native_runtime(method, runtime_fn, mode):
+def test_inplace_update_uses_native_runtime(method, method_id, mode):
     program = textwrap.dedent(
         f"""
         def f(items: list[str], drop: list[str]) -> object:
@@ -73,7 +73,9 @@ def test_inplace_update_uses_native_runtime(method, runtime_fn, mode):
     ir = _compile_to_ll(program, f"set_{method}_{mode}", mode=mode)
     body = _function_body(ir, "f")
     assert body is not None
-    assert f"@{runtime_fn}" in body, body
+    assert re.search(
+        rf"@py_set_call_method_slots\(ptr [^,]+, i64 {method_id},", body,
+    ), body
     # Must NOT fall through to the dynamic CPython method dispatch.
     assert f"cpy.fn.{method}" not in body, body
     assert f"cpy.call1.{method}" not in body, body

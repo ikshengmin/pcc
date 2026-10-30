@@ -32,6 +32,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import macho_spec as spec
+from .indexed_phase_timing import (
+    CoarsePhaseTiming,
+    native_macho_merge_timing_enabled,
+)
 from .macho_obj import (
     DataInCodeRegion,
     MachOEmitError,
@@ -466,6 +470,17 @@ def _relocation_symbol_name(
             f"{len(symbols)} symbols"
         )
     symbol = symbols[symbol_index]
+    if (type(symbol) is PackedNativeSymbol
+            and type(symbol.section_index) is int
+            and type(symbol.flags) is int
+            and type(symbol.name) is str):
+        # Packed symbols derive N_UNDF/N_SECT solely from section_index.
+        # N_PEXT is outside N_TYPE/N_EXT; other public n_type kinds retain
+        # the ordinary resolver below, as do opaque fields and subclasses.
+        name = symbol.name
+        if symbol.section_index != 0 and not symbol.external:
+            return local_rename.get(name, name)
+        return name
     name = _symbol_name(symbol)
     if (
         (_symbol_type(symbol) & spec.N_TYPE) == spec.N_SECT
@@ -690,10 +705,38 @@ def _folded_relocation_rows(
     generator, the keyword dataclass calls and the per-row ``spec`` lookups
     were most of a prior-gate link's relocation reads.
     """
+    out: list = []
+    _fold_relocation_rows_into(
+        raw, sections, symbols, local_rename, out,
+        offset_bias=offset_bias, symbol_names=symbol_names,
+    )
+    return out
+
+
+def _count_folded_relocation_rows(
+    raw, sections, symbols, local_rename, *, offset_bias=0, symbol_names=None,
+) -> int:
+    """Count canonical logical rows without allocating Relocation records."""
+    return _fold_relocation_rows_into(
+        raw, sections, symbols, local_rename, None,
+        offset_bias=offset_bias, symbol_names=symbol_names,
+    )
+
+
+def _fold_relocation_rows_into(
+    raw, sections, symbols, local_rename, out: list | None, *,
+    offset_bias=0, symbol_names=None,
+) -> int:
+    """Share companion/name validation between eager materialization and count.
+
+    A None output counts only. Keep resolving every constructor argument in
+    canonical order: counting must reject the same malformed raw stream before
+    the caller opens a payload window or starts semantic validation.
+    """
     reloc_unsigned = spec.ARM64_RELOC_UNSIGNED
     reloc_addend = spec.ARM64_RELOC_ADDEND
     reloc_subtractor = spec.ARM64_RELOC_SUBTRACTOR
-    out: list = []
+    count = 0
     pending_addend = None
     pending_subtractor = None
     for entry in raw:
@@ -709,23 +752,23 @@ def _folded_relocation_rows(
                     "SUBTRACTOR must be followed by a same-address, "
                     "same-width extern UNSIGNED entry"
                 )
-            out.append(new_relocation(
-                pending_subtractor["r_address"] + offset_bias,
-                _relocation_symbol_name(
-                    symbols,
-                    pending_subtractor["r_symbolnum"],
-                    local_rename,
-                    context="SUBTRACTOR relocation",
-                ),
-                reloc_subtractor, False, pending_subtractor["r_length"], 0, None,
-                _relocation_symbol_name(
-                    symbols,
-                    entry["r_symbolnum"],
-                    local_rename,
-                    context="SUBTRACTOR minuend relocation",
-                ),
-                None,
-            ))
+            offset = pending_subtractor["r_address"] + offset_bias
+            symbol_name = _relocation_symbol_name(
+                symbols, pending_subtractor["r_symbolnum"], local_rename,
+                context="SUBTRACTOR relocation",
+            )
+            length = pending_subtractor["r_length"]
+            minuend = _relocation_symbol_name(
+                symbols, entry["r_symbolnum"], local_rename,
+                context="SUBTRACTOR minuend relocation",
+            )
+            if out is None:
+                count += 1
+            else:
+                out.append(new_relocation(
+                    offset, symbol_name, reloc_subtractor, False, length,
+                    0, None, minuend, None,
+                ))
             pending_subtractor = None
             continue
         if entry["r_type"] == reloc_addend:
@@ -768,11 +811,19 @@ def _folded_relocation_rows(
                     f"section-target relocation names section {index}"
                 )
             target = sections[index - 1]
-            out.append(new_relocation(
-                entry["r_address"] + offset_bias, "",
-                entry["r_type"], bool(entry["r_pcrel"]), entry["r_length"], 0,
-                (target["segname_str"], target["sectname_str"]), None, None,
-            ))
+            offset = entry["r_address"] + offset_bias
+            relocation_type = entry["r_type"]
+            pcrel = bool(entry["r_pcrel"])
+            length = entry["r_length"]
+            target_segment = target["segname_str"]
+            target_section = target["sectname_str"]
+            if out is None:
+                count += 1
+            else:
+                out.append(new_relocation(
+                    offset, "", relocation_type, pcrel, length, 0,
+                    (target_segment, target_section), None, None,
+                ))
             pending_addend = None
             continue
         addend = (
@@ -791,15 +842,22 @@ def _folded_relocation_rows(
                 local_rename,
                 context="extern relocation",
             )
-        out.append(new_relocation(
-            entry["r_address"] + offset_bias, symbol_name, entry["r_type"],
-            bool(entry["r_pcrel"]), entry["r_length"], addend, None, None, None,
-        ))
+        offset = entry["r_address"] + offset_bias
+        relocation_type = entry["r_type"]
+        pcrel = bool(entry["r_pcrel"])
+        length = entry["r_length"]
+        if out is None:
+            count += 1
+        else:
+            out.append(new_relocation(
+                offset, symbol_name, relocation_type, pcrel, length,
+                addend, None, None, None,
+            ))
     if pending_addend is not None:
         raise LinkError("trailing ADDEND entry with nothing to modify")
     if pending_subtractor is not None:
         raise LinkError("trailing SUBTRACTOR entry without UNSIGNED pair")
-    return out
+    return count
 
 
 def _inspect_link_input(
@@ -1024,6 +1082,19 @@ def link_relocatable_native(
         objects = list(objects)
     if not objects:
         raise LinkError("nothing to link")
+
+    merge_timing = None
+    merge_started = 0
+    if _consume_inputs and _source_view and _final_executable:
+        try:
+            if native_macho_merge_timing_enabled():
+                merge_timing = CoarsePhaseTiming()
+                # Time-only children: disable every GC read before begin,
+                # including its first snapshot. The constructor reads none.
+                merge_timing.gc_unavailable = True
+                merge_started = merge_timing.begin("macho_merge_inputs")
+        except BaseException:
+            merge_timing = None
 
     merged: dict[tuple[str, str], _MergedSection] = {}
     order: list[tuple[str, str]] = []
@@ -1391,6 +1462,13 @@ def link_relocatable_native(
     if _consume_inputs:
         input_raw_bytes = 0
 
+    if merge_timing is not None:
+        try:
+            merge_timing.complete("macho_merge_inputs", merge_started)
+            merge_started = merge_timing.begin("macho_merge_stackmaps")
+        except BaseException:
+            merge_timing = None
+
     if stack_map_payloads:
         try:
             if compact_budget is None:
@@ -1450,6 +1528,13 @@ def link_relocatable_native(
             ))
         merged[stack_key] = stack_section
         order.append(stack_key)
+
+    if merge_timing is not None:
+        try:
+            merge_timing.complete("macho_merge_stackmaps", merge_started)
+            merge_started = merge_timing.begin("macho_merge_final_view")
+        except BaseException:
+            merge_timing = None
 
     # An unresolved symbol is valid in an MH_OBJECT: preserve it for the
     # eventual final link rather than guessing a definition.
@@ -1562,15 +1647,24 @@ def link_relocatable_native(
     try:
         if _source_view:
             if compact_budget is not None:
-                return OwnedMergedSourceView(
+                result = OwnedMergedSourceView(
                     out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
                     proven_relocations=tuple(proven_relocations),
                     compact_budget=compact_budget,
                 )
-            return OwnedMergedSourceView(
-                out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
-                proven_relocations=tuple(proven_relocations),
-            )
+            else:
+                result = OwnedMergedSourceView(
+                    out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
+                    proven_relocations=tuple(proven_relocations),
+                )
+            # Keep the managed owner live across diagnostic allocation/GC.
+            # An exception above deliberately leaves this phase incomplete.
+            if merge_timing is not None:
+                try:
+                    merge_timing.complete("macho_merge_final_view", merge_started)
+                except BaseException:
+                    pass
+            return result
         return NativeObject.from_sections(
             out_sections, undefined=unresolved, weak_undefined=weak_unresolved,
             _consume_relocations=True,

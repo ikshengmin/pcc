@@ -297,6 +297,51 @@ def build_signature(
 ) -> bytes:
     """Build the complete SuperBlob for a file whose signed range is
     `hashed_region` (offset 0 up to the signature's own file offset)."""
+    # Resolve the public input length only after the original metadata checks.
+    return _build_signature_region(
+        hashed_region, -1, identifier=identifier,
+        exec_seg_base=exec_seg_base, exec_seg_limit=exec_seg_limit,
+        exec_seg_flags=exec_seg_flags, version=version, flags=flags,
+    )
+
+
+def _build_signature_prefix(
+    image: bytes,
+    code_limit: int,
+    *,
+    identifier: bytes,
+    exec_seg_base: int,
+    exec_seg_limit: int,
+    exec_seg_flags: int,
+) -> bytes:
+    """Independently hash an immutable image prefix without copying it whole.
+
+    Native memoryview slices materialize bytes. Keep the full view here and
+    bound each page instead; CPython retains its zero-copy page views.
+    """
+    if not isinstance(image, bytes):
+        raise CodesignError("signature prefix image must be bytes")
+    _validate_u32("code_limit", code_limit)
+    if code_limit > len(image):
+        raise CodesignError("signature prefix is outside the image")
+    return _build_signature_region(
+        memoryview(image), code_limit, identifier=identifier,
+        exec_seg_base=exec_seg_base, exec_seg_limit=exec_seg_limit,
+        exec_seg_flags=exec_seg_flags,
+    )
+
+
+def _build_signature_region(
+    hashed_region: bytes,
+    code_limit: int,
+    *,
+    identifier: bytes,
+    exec_seg_base: int,
+    exec_seg_limit: int,
+    exec_seg_flags: int,
+    version: int = _CODEDIRECTORY_VERSION,
+    flags: int = _CODEDIRECTORY_FLAGS,
+) -> bytes:
     if isinstance(hashed_region, (bytearray, memoryview)):
         # A memoryview over the output buffer lets the caller sign in place;
         # the hashing below only reads.
@@ -325,7 +370,9 @@ def build_signature(
     ):
         _validate_u64(name, value)
 
-    code_limit = len(hashed_region)
+    bounded_prefix = code_limit >= 0
+    if not bounded_prefix:
+        code_limit = len(hashed_region)
     if code_limit > _U32_MAX:
         raise CodesignError(
             "signed region exceeds 32-bit codeLimit; codeLimit64 is unsupported"
@@ -350,7 +397,9 @@ def build_signature(
         exec_seg_base, exec_seg_limit, exec_seg_flags,
     )
     hashes = b"".join(
-        hashlib.sha256(hashed_region[i:i + _PAGE]).digest()
+        hashlib.sha256(hashed_region[
+            i:min(i + _PAGE, code_limit) if bounded_prefix else i + _PAGE
+        ]).digest()
         for i in range(0, code_limit, _PAGE)
     )
     cd_blob = cd + ident_z + hashes

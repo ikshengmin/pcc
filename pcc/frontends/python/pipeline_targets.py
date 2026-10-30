@@ -68,6 +68,41 @@ def ensure_module_target(path: str, triple: str) -> str:
     return path
 
 
+def _ordinary_module_ir_batch(module_ir_texts) -> bool:
+    """A metadata-only guard; never invoke opaque iterators or formatting."""
+    if type(module_ir_texts) is not list and type(module_ir_texts) is not tuple:
+        return False
+    for pair in module_ir_texts:
+        if type(pair) is not tuple or len(pair) != 2:
+            return False
+        if type(pair[0]) is not str or type(pair[1]) is not str:
+            return False
+    return True
+
+
+def combine_module_ir_texts(module_ir_texts) -> str:
+    """Join ordinary IR payloads without first copying each decorated module.
+
+    The metadata guard completes before any formatting. Opaque inputs retain
+    the original iteration, formatting, exception and callback order. For the
+    ordinary batch, the fragments retain existing immutable payloads plus small
+    headers until the one final concatenation; no per-module payload copy exists.
+    """
+    if not _ordinary_module_ir_batch(module_ir_texts):
+        return str(
+            "\n\n".join(
+                f"; ---- module: {name} ----\n{text}" for name, text in module_ir_texts
+            )
+        )
+    fragments: list[str] = []
+    for name, text in module_ir_texts:
+        if fragments:
+            fragments.append("\n\n")
+        fragments.append(f"; ---- module: {name} ----\n")
+        fragments.append(text)
+    return str("".join(fragments))
+
+
 def write_utf8_text_file(path: str, text: str) -> None:
     with open(str(path), "w", encoding="utf-8") as stream:
         stream.write(str(text))

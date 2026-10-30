@@ -8,10 +8,74 @@ parent_dir = os.path.dirname(os.path.dirname(this_dir))
 sys.path.insert(0, parent_dir)
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+import pytest
+from tests.owned_c_execution import compile_and_run_owned_c
 
 
 def _evaluate(source):
     return CEvaluator().evaluate(source, optimize=False)
+
+
+@pytest.mark.parametrize("expression", [
+    "items[0][0]",
+    "pointers[0][0]",
+    "**pointers",
+])
+def test_unsigned_pointer_chains_execute_high_bytes(expression):
+    source = '''static unsigned char *items[1];
+static signed char *signed_items[1];
+int read_byte(unsigned char **pointers, unsigned char *bytes) {
+    return ''' + expression + ''';
+}
+int main(void) {
+    unsigned char bytes[1] = {128};
+    signed char negative[1] = {-128};
+    items[0] = bytes;
+    signed_items[0] = negative;
+    if (read_byte(items, bytes) != 128) return 1;
+    bytes[0] = 255;
+    if (read_byte(items, bytes) != 255) return 2;
+    if (signed_items[0][0] != -128) return 3;
+    return 0;
+}
+'''
+    result = compile_and_run_owned_c(source)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+
+
+@pytest.mark.parametrize("operation", [
+    "__atomic_load_n(pointers, __ATOMIC_RELAXED)",
+    "__atomic_exchange_n(pointers, replacement, __ATOMIC_SEQ_CST)",
+])
+def test_atomic_pointer_results_keep_pointee_type_in_ir(operation):
+    # Pointer atomic emission is a separate existing backend gap. Check the
+    # frontend type contract here; the ordinary pointer chains execute above.
+    from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
+    from pcc.frontends.c.parse.c_parser import CParser
+
+    source = '''int read_byte(unsigned char **pointers, unsigned char *replacement) {
+        return (''' + operation + ''')[0];
+    }'''
+    generator = CCodeGenerator()
+    generator.generate_code(CParser().parse(source))
+    body = str(generator.module)
+    assert "zext i8" in body
+    assert "sext i8" not in body
+
+
+def test_pointer_cast_changes_only_its_own_signedness_view():
+    result = compile_and_run_owned_c('''int main(void) {
+        unsigned char positive = 128;
+        unsigned char *u = &positive;
+        signed char negative = -1;
+        signed char *s = &negative;
+        if (((signed char *)u)[0] != -128) return 1;
+        if (u[0] != 128) return 2;
+        if (((unsigned char *)s)[0] != 255) return 3;
+        if (s[0] != -1) return 4;
+        return 0;
+    }''')
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 def test_unsigned_char_return_is_zero_extended():

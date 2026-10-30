@@ -355,6 +355,12 @@ annotations or freezing built-ins by changing language behavior (pcc proves
 instead); typed forks of third-party packages, which is ecosystem work that
 must not displace the P0 goals.
 
+## Related algorithm applicability review
+
+The [ETH exact-counting assessment](eth-exact-counting-applicability.md)
+(2026-10-27) records a source-pinned negative fit for current Stage1 scheduling,
+native linking and stack maps; it adds no production algorithm or priority change.
+
 ## Order and current state
 
 Recommended order: 7 (removes a measured 5-17x call gap and a red test); from
@@ -370,3 +376,4 @@ repository gains. Related work that did land: `393d7c83d` (GC4 store-buffer
 membership retirement, real GC4 witness), `50b8b0979` (AArch64 packed plans
 retired when stack-map tables are off), `fae9228d8` (callable publication skips
 unrelated FuncDef checks) and `b00d7e918` (parallel runtime archive build).
+

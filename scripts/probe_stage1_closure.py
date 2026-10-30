@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import traceback
 
 
@@ -86,23 +87,26 @@ def _try_full_multi_compile(srcs: list[str], mods: list[str]) -> tuple[bool, str
     discovery-only CLI. It does not emit or execute a native Stage1 compiler.
     """
     from pcc.frontends.python.pipeline import compile_python_multi
-    out_path = "/tmp/stage1_closure_probe.ll"
     try:
-        compile_python_multi(
-            srcs,
-            out_path,
-            verbose=False,
-            emit_llvm_only=True,
-            entry_module=mods[0],
-            module_names=mods,
-            libpython_mode="off",
-            backend="self",
-        )
-        if os.path.exists(out_path):
-            with open(out_path, "r", encoding="utf-8") as f:
-                ir_text = f.read()
-            return True, ir_text, ""
-        return False, "", "no IR produced"
+        # Own a fresh, platform-native directory for each call. A shared /tmp
+        # pathname is neither portable nor evidence that this call emitted IR.
+        with tempfile.TemporaryDirectory(prefix="pcc-stage1-closure-") as directory:
+            out_path = os.path.join(directory, "closure.ll")
+            compile_python_multi(
+                srcs,
+                out_path,
+                verbose=False,
+                emit_llvm_only=True,
+                entry_module=mods[0],
+                module_names=mods,
+                libpython_mode="off",
+                backend="self",
+            )
+            if os.path.exists(out_path):
+                with open(out_path, "r", encoding="utf-8") as f:
+                    ir_text = f.read()
+                return True, ir_text, ""
+            return False, "", "no IR produced"
     except Exception as e:
         return False, "", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
 

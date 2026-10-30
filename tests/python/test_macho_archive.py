@@ -29,7 +29,7 @@ from pcc.backend.macho_archive import ArchiveError, read_archive, select_members
 
 _CC = shutil.which(os.environ.get("CC", "cc"))
 _AR = shutil.which("ar")
-_IS_ARM64_DARWIN = os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+_IS_ARM64_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 _GATE = None if (_CC and _AR and _IS_ARM64_DARWIN) else "needs cc/ar on Darwin arm64"
 
 pytestmark = pytest.mark.pcc_gate(unavailable=_GATE)

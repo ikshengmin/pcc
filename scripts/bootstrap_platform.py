@@ -411,7 +411,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                     output.unlink(missing_ok=True)
                     record = guarded(command, cwd=ROOT, env=stage_env, log_path=out_dir / f"stage{stage}.log",
                                  timeout=stage1_timeout if stage == 1 and stage1_timeout is not None else timeout,
-                                 rss_limit=rss_limit, native=stage > 1)
+                                 rss_limit=rss_limit, native=stage > 1, observe_stage1=stage == 1)
                     if profile_directory is not None:
                         # A killed worker may have claimed the sole attempt but
                         # left no terminal stats. Never call this baseline data.
@@ -548,6 +548,8 @@ def run_from_shared(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
         except (OSError, ValueError, KeyError, IndexError):
             pass
         if shared is None:
+            if os.environ.get("PCC_TEST_NO_NATIVE_PROVISIONING") == "1":
+                raise RuntimeError("integration requires its admitted same-source Stage1; automatic rebuild is disabled")
             shared = run_chain("0", common, stage_limit=1, timeout=timeout, rss_limit=rss_limit,
                                allow_dirty=allow_dirty, jobs=shared_stage1_jobs(4, rss_limit), lock_held=True)
         return run_chain(gc_backend, out_dir, stage_limit=stage_limit, timeout=timeout,

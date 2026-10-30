@@ -21,6 +21,214 @@ from pcc.frontends.python.pipeline_ast_wire import (
     _py_ast_from_wire, _py_ast_node_replace, _py_ast_to_wire,
 )
 from pcc.ir.compat import ir
+from tests.python.root_copy_ir import root_copy_calls
+
+
+class UnborrowedAttributeCodegen(L1CodeGen):
+    """The former attribute receiver policy, as a narrow negative control."""
+
+    def _emit_slot_call_attribute(self, expr, label):
+        previous = getattr(self, "_unborrowed_attribute_label", None)
+        self._unborrowed_attribute_label = label + ".receiver"
+        try:
+            return super()._emit_slot_call_attribute(expr, label)
+        finally:
+            self._unborrowed_attribute_label = previous
+
+    def _emit_slot_call_operand(self, expr, label, borrow_stable=False):
+        if label == getattr(self, "_unborrowed_attribute_label", None):
+            borrow_stable = False
+        return super()._emit_slot_call_operand(expr, label, borrow_stable)
+
+
+def _attribute_emit(source, *, before=False):
+    """Ordinary Python through production lowering, not SlotProbeCodegen."""
+    from tests.owned_ir_validation import verify_ir_text
+
+    typed = type_infer.infer_module(parse_and_lift(source, "attribute_borrow.py", "attribute_borrow"))
+    generator = (UnborrowedAttributeCodegen if before else L1CodeGen)(typed, ir_scaffold_mode="on")
+    generator._strict_no_libpython = True
+    generator._prefer_native_callable_values = True
+    text = str(generator.generate(typed))
+    verified = verify_ir_text(text)
+    bodies = re.findall(r"^define [^\n]*@user_attribute_borrow_probe[^\n]*\{.*?^}",
+                        text, re.M | re.S)
+    assert bodies and all("strict.nolib.stub:" not in body and "@py_cpy_" not in body for body in bodies)
+    return "\n".join(bodies), verified
+
+
+def _assert_attribute_parameter_not_cleared(body, name="value"):
+    for helper in ("pcc_gc_store_root", "py_cleanup_one_root_preserving_exception",
+                   "py_cleanup_two_roots_preserving_exception"):
+        assert not any(name + ".addr" in call for call in _calls(body, helper)), helper
+
+
+def test_attribute_receiver_reuses_parameter_with_live_lookup_and_leases():
+    source = "def probe(value):\n    return value.data + 1\n"
+    before, _ = _attribute_emit(source, before=True)
+    after, parsed = _attribute_emit(source)
+    assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 1
+    assert not _calls(before, "pcc_gc_borrowed_lease_acquire")
+    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
+    assert "value.addr" in _calls(after, "pcc_gc_borrowed_lease_acquire")[0]
+    copies = root_copy_calls(before, local=True, borrowed=True)
+    assert len(copies) == 1 and copies[0].source.startswith("%value.addr")
+    assert not root_copy_calls(after, local=True, borrowed=True)
+    assert not _calls(after, "pcc_gc_root_copy_borrowed_lease")
+    assert _calls(after, "pcc_gc_foreign_lease_release")
+    _assert_attribute_parameter_not_cleared(after)
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    from tests.python.root_slot_contract import RootSlotContract
+    function = next(fn for fn in parsed.functions if fn.name == "user_attribute_borrow_probe")
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    RootSlotContract(blocks, parsed.globals_).assert_frame_exits()
+
+
+@pytest.mark.parametrize("source", [
+    "def probe(value, other):\n    value = other\n    return value.data + 1\n",
+    "def probe(value, values):\n    for value in values:\n        result = value.data + 1\n    return 0\n",
+    "def probe(value):\n    def change(other):\n        nonlocal value\n        value = other\n    return value.data + 1\n",
+    "def probe(value):\n    yield value.data + 1\n",
+    "def probe(value):\n    alias = value\n    return alias.data + 1\n",
+    "shared = None\ndef probe():\n    return shared.data + 1\n",
+])
+def test_attribute_unstable_receivers_keep_the_original_owning_policy(source):
+    before, _ = _attribute_emit(source, before=True)
+    after, _ = _attribute_emit(source)
+    assert _calls(after, "py_obj_getattr")
+    assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
+    for helper in ("pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease",
+                   "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo", "py_obj_getattr"):
+        assert len(_calls(before, helper)) == len(_calls(after, helper)), helper
+    for borrowed in (False, True):
+        assert len(root_copy_calls(before, local=True, borrowed=borrowed)) == len(
+            root_copy_calls(after, local=True, borrowed=borrowed)
+        )
+
+
+def test_attribute_exception_edges_release_lease_without_clearing_parameter():
+    source = """def probe(value):
+    try:
+        return value.data + 1
+    except AttributeError:
+        return 42
+"""
+    before, _ = _attribute_emit(source, before=True)
+    after, parsed = _attribute_emit(source)
+    assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 1
+    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
+    assert _calls(after, "py_cleanup_one_lease_preserving_exception")
+    assert _calls(after, "pcc_gc_foreign_lease_release")
+    # The builtin handler uses its existing inline/tag match, not necessarily
+    # the generic py_exc_matches helper. Its selected cleanup remains intact.
+    assert len(_calls(before, "py_clear_exception")) == len(_calls(after, "py_clear_exception"))
+    _assert_attribute_parameter_not_cleared(after)
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    from tests.python.root_slot_contract import RootSlotContract
+    function = next(fn for fn in parsed.functions if fn.name == "user_attribute_borrow_probe")
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    RootSlotContract(blocks, parsed.globals_).assert_frame_exits()
+
+
+def test_attribute_alias_keeps_its_owner_and_each_dynamic_lookup():
+    source = """def probe(value):
+    alias = value
+    first = value.data + 1
+    return first + alias.data
+"""
+    before, _ = _attribute_emit(source, before=True)
+    after, _ = _attribute_emit(source)
+    assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 2
+    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
+    assert any(copy.source.startswith("%alias.addr") for copy in
+               root_copy_calls(after, local=True, borrowed=False))
+    _assert_attribute_parameter_not_cleared(after)
+
+
+def test_attribute_descriptor_and_getattribute_remain_live():
+    source = """events = []
+class Descriptor:
+    @property
+    def data(self):
+        events.append('property')
+        return 4
+class Override:
+    def __getattribute__(self, name):
+        if name == 'data':
+            events.append('override')
+            return 8
+        raise AttributeError(name)
+def probe(value):
+    return value.data + 1
+"""
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["probe"](namespace["Descriptor"]()) == 5
+    assert namespace["probe"](namespace["Override"]()) == 9
+    assert namespace["events"] == ["property", "override"]
+    before, _ = _attribute_emit(source, before=True)
+    after, _ = _attribute_emit(source)
+    assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 1
+    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
+
+
+def test_actual_packed_relocation_reader_elides_one_receiver_owner():
+    """Real linker callee + real local exports; not a Stage1/native benchmark."""
+    from pathlib import Path
+    from pcc.frontends.python import py_ast
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
+    from pcc.frontends.python.pipeline_closed_world import (
+        _closed_world_boxed_int_functions, _closed_world_function_object_exports,
+    )
+    from tests.owned_ir_validation import verify_ir_text
+
+    root = Path(__file__).resolve().parents[2]
+    names = ("pcc.backend.native_object", "pcc.backend.macho_obj",
+             "pcc.backend.macho_spec", "pcc.backend.self_backend_value_arena")
+    paths = [str(root.joinpath(*name.split('.')).with_suffix('.py')) for name in names]
+    parsed, exports, derived = build_closed_world_context(paths, names)
+    external = {name: values for name, values in exports.items() if name != names[0]}
+    typed = type_infer.infer_module(parsed[0], external_exports=external, derived_class_map=derived)
+    functions = ("_packed_relocation_fields_at", "_relocation_fields_at", "_native_payload_reads_available")
+    classes = ("PackedNativeObject", "PackedNativeSection", "PackedNativeSymbol", "NativeObjectError")
+    selected = replace(typed, body=tuple(node for node in typed.body if (
+        isinstance(node, (py_ast.Import, py_ast.ImportFrom, py_ast.Assign))
+        or isinstance(node, py_ast.FuncDef) and node.name in functions
+        or isinstance(node, py_ast.ClassDef) and node.name in classes
+    )))
+    bodies = []
+    for implementation in (UnborrowedAttributeCodegen, L1CodeGen):
+        generator = implementation(selected, ir_scaffold_mode="on")
+        generator._strict_no_libpython = True
+        generator._prefer_native_callable_values = True
+        generator._module_source_path = paths[0]
+        generator._skip_program_main = True
+        generator._sibling_module_inits = names
+        generator._native_module_exports = external
+        generator._native_function_object_exports = _closed_world_function_object_exports(exports, names[0])
+        generator._native_boxed_int_functions = _closed_world_boxed_int_functions(exports, names[0])
+        text = str(generator._generate_initial_module())
+        verify_ir_text(text)
+        found = re.findall(r"^define [^\n]*@user_pcc_backend_native_object__packed_relocation_fields_at\([^\n]*\).*?^}", text, re.M | re.S)
+        assert len(found) == 1 and "strict.nolib.stub:" not in found[0] and "@py_cpy_" not in found[0]
+        bodies.append(found[0])
+    before, after = bodies
+    assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 2
+    assert len(root_copy_calls(before, local=True, borrowed=True)) == 2
+    assert len(root_copy_calls(after, local=True, borrowed=True)) == 1
+    borrowed = _calls(after, "pcc_gc_borrowed_lease_acquire")
+    assert len(borrowed) == 1 and "section.addr" in borrowed[0]
+    assert not _calls(before, "pcc_gc_borrowed_lease_acquire")
+    # Precise stack-map mode uses the mapped entry for the same owning slot.
+    # Count both exact ABI spellings, not declarations or similarly named calls.
+    for helpers in (
+        ("pcc_gc_frame_enter_lifo", "pcc_gc_frame_enter_lifo_mapped"),
+        ("pcc_gc_store_root",),
+    ):
+        before_count = sum(len(_calls(before, helper)) for helper in helpers)
+        after_count = sum(len(_calls(after, helper)) for helper in helpers)
+        assert after_count == before_count - 1, helpers
+    _assert_attribute_parameter_not_cleared(after, "section")
 
 
 class SlotProbeCodegen(L1CodeGen):
@@ -81,17 +289,24 @@ def test_parameter_operand_copies_authoritative_borrowed_root():
     return slot_operand_probe(value)
 """)
     text = _probe_function(text)
-    copies = _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    copies = root_copy_calls(text, local=True, borrowed=True)
     assert len(copies) == 1
-    assert "value.addr" in _with_slot_origins(text, copies[0])
+    assert copies[0].source.startswith("%value.addr")
+    assert "probe.operand" in copies[0].destination
     assert not _calls(text, "pcc_gc_root_copy_lease")
-    assert _calls(text, "pcc_gc_foreign_lease_release")
+    assert not _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    # This probe returns the copied owner directly; it has no raw-argument
+    # consumer and therefore no address transaction to acquire or retire.
+    assert not _calls(text, "pcc_gc_foreign_lease_acquire")
+    assert not _calls(text, "pcc_gc_foreign_lease_release")
     rebound = _emit("""def probe(value):
     value = [1]
     return slot_operand_probe(value)
 """)
     rebound = _probe_function(rebound)
-    assert _calls(rebound, "pcc_gc_root_copy_lease")
+    assert any(copy.source.startswith(("%value.addr", "%value.for.obj.addr")) for copy in
+               root_copy_calls(rebound, local=True, borrowed=False))
+    assert not root_copy_calls(rebound, local=True, borrowed=True)
     assert not _calls(rebound, "pcc_gc_root_copy_borrowed_lease")
 
 
@@ -133,8 +348,11 @@ def test_nested_literal_operands_use_slot_producers():
     assert _calls(text, "py_list_append")
     assert _calls(text, "py_dict_set")
     assert _calls(text, "py_set_add")
-    assert _calls(text, "py_tuple_from_list")
-    assert not _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    constructors = _calls(_probe_function(text), "py_tuple_from_owned_roots")
+    assert len(constructors) == 1 and "i64 3" in constructors[0]
+    assert not _calls(_probe_function(text), "py_tuple_set_item")
+    assert not _calls(_probe_function(text), "py_tuple_from_list")
+    assert not root_copy_calls(text, borrowed=True)
     assert "call.slot.argument.lease" in text
     # An explicit sequence argument is evaluated completely before set()
     # hashes its first member. In particular, a raising a.__hash__ must not
@@ -242,9 +460,18 @@ def test_keyword_mapping_merges_remain_owned_through_move():
     return slot_kwargs_probe(first=1, **mapping, last=2)
 """)
     text = _probe_function(text)
-    assert len(_calls(text, "py_call_merge_kwargs_unique")) == 3
-    assert len(_calls(text, "pcc_gc_root_move")) == 3
-    assert _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    # The first explicit group is already the private output. The mapping
+    # and trailing explicit group still merge, each moving its completed
+    # owner back into that oldest root before temporaries are retired.
+    merges = _calls(text, "py_call_merge_kwargs_unique")
+    moves = _calls(text, "pcc_gc_root_move")
+    assert len(merges) == 2
+    assert len(moves) == len(merges)
+    assert len(_calls(text, "py_dict_new")) == 2
+    borrowed = root_copy_calls(text, local=True, borrowed=True)
+    assert len(borrowed) == 1
+    assert borrowed[0].source.startswith("%mapping.addr")
+    assert text.index(borrowed[0].line) < text.index(merges[0])
 
 
 def test_cpython_parameter_never_enters_native_slot_copy():
@@ -265,7 +492,8 @@ def test_module_operand_leaves_root_before_nonparking_take():
     text = _emit("slot_operand_probe([1])\n")
     take = _calls(text, "pcc_gc_take_pinned_slot")[-1]
     prefix = text[:text.index(take)]
-    assert _calls(prefix, "pcc_gc_frame_leave_lifo")
+    assert (_calls(prefix, "pcc_gc_frame_leave_lifo")
+            or _calls(prefix, "pcc_gc_frame_leave_lifo_mapped"))
     assert prefix.rfind("@pcc_gc_frame_leave_lifo") > prefix.rfind("@pcc_py_gc_minor_graph_unlock")
 
 
@@ -309,8 +537,8 @@ def probe():
     return Child.build((17,))
 """)
     assert len(_calls(text, "py_obj_call_slots")) >= 2
-    borrowed = [_with_slot_origins(text, call) for call in _calls(text, "pcc_gc_root_copy_borrowed_lease")]
-    assert any("cls.addr" in call for call in borrowed)
+    borrowed = root_copy_calls(text, local=True, borrowed=True)
+    assert any(copy.source.startswith("%cls.addr") for copy in borrowed)
     assert not _calls(text, "py_obj_call_method_kwargs")
 
 
@@ -394,7 +622,7 @@ def test_literal_unary_bool_plus_produces_integer():
     text = _probe_function(text)
     # Identity-copying the bool would preserve the wrong runtime type.
     assert _calls(text, "py_int_add")
-    assert not _calls(text, "pcc_gc_root_copy_lease")
+    assert not root_copy_calls(text, borrowed=False)
     for expression, helper in (("True & False", "py_obj_and"),
                                ("True | False", "py_obj_or"),
                                ("True ^ False", "py_obj_xor"),
@@ -486,11 +714,9 @@ def test_numeric_slot_direct_name_copies_authoritative_source_root():
     direct = _emit("def probe(value: int):\n    return slot_operand_probe(value)\n")
     direct = _probe_function(direct)
     owned = re.search(r"%value\.owned[^ ]* = alloca i1", direct) is not None
-    helper = "pcc_gc_root_copy_lease" if owned else "pcc_gc_root_copy_borrowed_lease"
-    copies = [_with_slot_origins(direct, call) for call in _calls(direct, helper)]
-    assert any("value.addr" in call for call in copies)
-    other = "pcc_gc_root_copy_borrowed_lease" if owned else "pcc_gc_root_copy_lease"
-    assert not _calls(direct, other)
+    copies = root_copy_calls(direct, local=True, borrowed=not owned)
+    assert any(copy.source.startswith("%value.addr") for copy in copies)
+    assert not root_copy_calls(direct, borrowed=owned)
 
 
 def test_non_integer_binop_publishes_before_operand_cleanup():

@@ -7,7 +7,15 @@ from pcc.driver.project import TranslationUnit
 from tests.owned_c_corpus import run_owned_c_corpus
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def _collect_ifs(node):
@@ -31,7 +39,7 @@ def _collect_ifs(node):
 
 
 def test_ssa_branch_prune_removes_join_proven_constant_if():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int f(int c) {
             int x = 0;
@@ -71,7 +79,7 @@ def test_ssa_branch_prune_removes_join_proven_constant_if():
 
 
 def test_ssa_branch_prune_skips_width_sensitive_unsigned_like_condition():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int f(void) {
             int x = 0;
@@ -93,7 +101,7 @@ def test_ssa_branch_prune_skips_width_sensitive_unsigned_like_condition():
 
 
 def test_ssa_branch_prune_folds_if_on_short_circuit_value_result():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int helper(void);
 

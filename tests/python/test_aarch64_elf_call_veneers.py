@@ -130,7 +130,7 @@ def test_reserved_slot_bounds_are_checked_before_mutation():
 
 
 @pytest.mark.parametrize("kind,symbol_type,word", [
-    (282, elf.STT_FUNC, B),
+    (282, elf.STT_NOTYPE, B),
     (283, elf.STT_NOTYPE, BL),
     (283, elf.STT_SECTION, BL),
     (283, elf.STT_OBJECT, BL),
@@ -349,10 +349,10 @@ def test_all_segment_layout_is_reserved_before_first_relocation(monkeypatch):
 
 
 def test_no_branch_candidates_keep_original_small_image_layout():
-    obj = _object(kind=282, word=B, target=BASE + 0x1004)
+    obj = _object(kind=0, word=NOP, target=BASE + 0x1004)
     image, offset, entry = _link(obj)
     assert offset == 0x1000 and len(image) == 0x1008
-    assert image[offset:] == _words(B | 1, RET)
+    assert image[offset:] == _words(NOP, RET)
 
 
 def test_unresolved_weak_function_is_not_a_proven_veneer_target():

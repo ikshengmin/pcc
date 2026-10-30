@@ -3,11 +3,19 @@ from pcc.frontends.c.passes import PassContext
 from pcc.frontends.c.passes.ssa_sccp import SSASCCPPass
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def test_ssa_sccp_pass_bootstraps_and_records_constants():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int choose(void) {
             int y = 1;
@@ -40,7 +48,7 @@ def test_ssa_sccp_pass_bootstraps_and_records_constants():
 def test_ssa_sccp_pass_ignores_unsupported_functions_after_bootstrap_skip():
     # Use a goto/label pattern the SSA builder explicitly rejects (Switch
     # is now lowered, so it no longer qualifies as a skip trigger).
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int dispatch(int n) {
             if (n) goto out;

@@ -63,22 +63,106 @@ def metrics(body):
 def assert_each_acquisition_sets_its_own_cleanup_flag(body, slots):
     aliases = pointer_bitcast_aliases(body)
     canonical = lambda value: canonical_pointer(value, aliases)
-    blocks = re.split(r'^[\w.$]+:\n', body, flags=re.M)[1:]
+    flags = {canonical(slot): canonical(flag) for slot, flag in slots.items()}
+    blocks = {}
+    current = None
+    for line in body.splitlines():
+        label = re.match(r'^([\w.$]+):', line)
+        if label:
+            current = label[1]
+            blocks[current] = []
+        elif current is not None:
+            blocks[current].append(line.strip())
+    assert blocks
+    edges = {name: re.findall(r'label %([\w.$]+)', '\n'.join(lines))
+             for name, lines in blocks.items()}
+    entry = next(iter(blocks))
+    reachable = set()
+    pending = [entry]
+    while pending:
+        name = pending.pop()
+        if name not in reachable:
+            reachable.add(name)
+            pending.extend(edges[name])
+    predecessors = {name: set() for name in reachable}
+    for name in reachable:
+        for successor in edges[name]:
+            predecessors[successor].add(name)
+
+    def update(state, line):
+        stored = re.search(r'store i1 ([^ ,]+), ptr (%[^ ,]+)', line)
+        if stored:
+            flag = canonical(stored[2])
+            if flag in flags.values():
+                if stored[1] == '1':
+                    state.add(flag)
+                else:
+                    state.discard(flag)
+
+    # Must analysis: a flag is ready only if every incoming path sets it.
+    # Intersect predecessor states, including clears, rather than requiring
+    # acquisition and publication to happen in the same basic block.
+    outgoing = {name: set(flags.values()) for name in reachable}
+    incoming = {}
+    changed = True
+    while changed:
+        changed = False
+        for name in blocks:
+            if name not in reachable:
+                continue
+            incoming[name] = (set() if name == entry else
+                              set.intersection(*(outgoing[p] for p in predecessors[name])))
+            state = incoming[name].copy()
+            for line in blocks[name]:
+                update(state, line)
+            if state != outgoing[name]:
+                outgoing[name] = state
+                changed = True
     acquisitions = 0
-    for block in blocks:
-        latest = {}
-        for line in block.splitlines():
-            stored = re.search(r'store i1 ([01]), ptr (%[^ ,]+)', line)
-            if stored:
-                latest[canonical(stored[2])] = stored[1]
+    for name in blocks:
+        if name not in reachable:
+            continue
+        state = incoming[name].copy()
+        for line in blocks[name]:
+            update(state, line)
             move = re.search(r'@pcc_gc_root_move\(ptr (%[^ ,]+), ptr (%[^ ,)]+)\)', line)
-            if move:
+            if move and canonical(move[1]) in flags:
                 target = canonical(move[1])
-                if target in slots:
-                    assert latest.get(canonical(slots[target])) == '1', (target, block)
-                    acquisitions += 1
+                assert flags[target] in state, ('unowned runtime move', target, name)
+                acquisitions += 1
+            stored = re.search(r'store ptr ([^ ,]+), ptr (%[^ ,]+)', line)
+            if stored and stored[1] != 'null' and canonical(stored[2]) in flags:
+                target = canonical(stored[2])
+                assert flags[target] in state, ('unowned scalar move', target, name)
     assert acquisitions
     return acquisitions
+
+
+def cleanup_flag_diamond(left='store i1 1, ptr %ready', right='store i1 1, ptr %ready'):
+    return ('define ptr @probe() {\nentry:\n'
+            '  br i1 %condition, label %left, label %right\n'
+            'left:\n  ' + left + '\n  br label %merge\n'
+            'right:\n  ' + right + '\n  br label %merge\n'
+            'merge:\n  %status = call i64 (ptr, ptr) @pcc_gc_root_move(ptr %owner, ptr %source)\n'
+            '  ret ptr null\n}\n')
+
+
+def test_cleanup_flag_checker_accepts_publication_on_every_incoming_path():
+    text = cleanup_flag_diamond(left='store i1 1, ptr %ready\n  store ptr %value, ptr %owner')
+    assert assert_each_acquisition_sets_its_own_cleanup_flag(text, {'%owner': '%ready'}) == 1
+
+
+@pytest.mark.parametrize('left,right', (
+    ('store i1 1, ptr %ready', ''),
+    ('store i1 1, ptr %ready\n  store i1 0, ptr %ready', 'store i1 1, ptr %ready'),
+    ('store i1 1, ptr %ready', 'store i1 %unknown, ptr %ready'),
+    ('store ptr %value, ptr %owner\n  store i1 1, ptr %ready', 'store i1 1, ptr %ready'),
+))
+def test_cleanup_flag_checker_rejects_unowned_heap_and_scalar_paths(left, right):
+    with pytest.raises(AssertionError, match='unowned'):
+        assert_each_acquisition_sets_its_own_cleanup_flag(
+            cleanup_flag_diamond(left, right), {'%owner': '%ready'},
+        )
 
 
 @pytest.mark.parametrize('shape', ('flat', 'nested-finally'))

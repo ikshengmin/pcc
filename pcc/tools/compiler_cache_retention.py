@@ -584,6 +584,43 @@ def _entry_leases(path: Path, now_ns: int) -> list[Path]:
     return leases
 
 
+def _file_lock_held(lock: Path) -> bool:
+    """Whether some process holds the advisory lock on the lock *file*.
+
+    A file-lock publisher (tests/runtime_build_cache.py, scripts/file_lock.py)
+    keeps the file after its build, so the file's existence says nothing; only
+    a held lock means a publish is running. Probe with a non-blocking
+    exclusive lock and release it at once.
+    """
+    try:
+        stream = open(lock, "rb")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    with stream:
+        if os.name == "nt":  # pragma: no cover - Windows host
+            import msvcrt
+
+            try:
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return True
+            try:
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            return False
+        import fcntl
+
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return False
+
+
 def _publish_lock_active(
     path: Path,
     now_ns: int,
@@ -593,7 +630,7 @@ def _publish_lock_active(
     lock = Path(str(path) + ".lock")
     try:
         if not lock.is_dir():
-            return lock.exists()
+            return lock.exists() and _file_lock_held(lock)
     except OSError:
         return True
     pid, created_ns = _owner_record(lock / "owner.json")
@@ -806,12 +843,24 @@ def _empty_state() -> dict:
 def _load_state(root: Path) -> dict:
     try:
         state = json.loads(_state_path(root).read_text(encoding="utf-8"))
-        if state.get("schema") != STATE_SCHEMA:
+        if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA:
             return _empty_state()
         if not isinstance(state.get("entries"), dict):
             return _empty_state()
+        # These values are consumed outside the per-entry recovery path.
+        # Reject a malformed persisted index before resuming its cursor;
+        # rebuilding metadata from disk preserves the cache artifacts and
+        # their live lease/publication protections.
+        for name in ("scan_cycle", "last_auto_ns"):
+            int(state.get(name, 0) or 0)
+        for row in state["entries"].values():
+            if not isinstance(row, dict):
+                return _empty_state()
+            int(row.get("seen_cycle", -1))
+            int(row.get("size_bytes", 0))
+            int(row.get("last_used_ns", 0))
         return state
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    except (OSError, TypeError, ValueError, OverflowError, json.JSONDecodeError):
         return _empty_state()
 
 

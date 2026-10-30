@@ -41,6 +41,7 @@ import hashlib, json, sys
 from pcc.frontends.python.owned_runtime_build import _compile_runtime_module, runtime_ir_passes
 from pcc.ir.optimization.driver import optimize_ir
 from pcc.backend.owned_object_emit import emit_owned_object
+from tests.python.gc_primary_index_provider_support import emit_provider_object
 import resource
 resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
 copy_source, index_source, build = map(Path, sys.argv[1:])
@@ -58,6 +59,7 @@ for source, name in ((copy_source, 'copy'), (index_source, 'index')):
                       'ir_sha256': hashlib.sha256(ir.read_bytes()).hexdigest(),
                       'object_sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
                       'runtime_passes': passes, 'target': triple}), flush=True)
+emit_provider_object(index_source.parent.parent, build, triple)
 """
 
 # Explicit semantic snapshots, independent of the implementation's page-probe
@@ -284,6 +286,7 @@ def emitted_copy(tmp_path_factory):
     link = subprocess.run(
         ["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(build),
          str(FIXTURES / "gc4_copy_page_probe_native.c"), str(obj), str(index_obj),
+         str(build / "primary-index-provider.o"),
          "-Wl,--wrap=calloc", "-Wl,--wrap=free", "-o", str(executable)],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=remaining,
     )
@@ -342,6 +345,7 @@ def test_current_owned_copy_has_exact_strict_closure(emitted_copy):
     index_undefined, index_defined = _owned_elf_symbol_names(index_obj)
     assert index_undefined == {
         "calloc", "free", "pcc_allocator_object_side_slot", "pcc_allocator_granule_object_slot",
+        "pcc_gc_tracked_primary_index_cells",
     }
     index_source = contract.STRICT_SOURCE.with_name("freestanding_gc_index_table.py")
     source_tree = ast.parse(index_source.read_text())

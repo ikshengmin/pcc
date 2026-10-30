@@ -1,8 +1,8 @@
 # Proxy stability tests
 
-Tests exercise the `http+socks5` listener using real TCP sockets on temporary
+Tests exercise the `http+socks5` listener using real TCP/UDP sockets on temporary
 loopback ports. They do not read browser data or use the live 8082/8083 listeners.
-The default suite has 93 cases; one opt-in soak case exercises another 48
+The default suite includes SOCKS5 UDP association cases; one opt-in soak case exercises another 48
 concurrent HTTP/2 streams for 245 seconds.
 
 | Area | Checks |
@@ -14,6 +14,7 @@ concurrent HTTP/2 streams for 245 seconds.
 | Data integrity | Eight simultaneous 1 MiB transfers, binary payloads, two-hop HTTP/SOCKS chains, 2 MiB transfer to a slow receiver |
 | Cleanup | Either peer closing, abrupt transport abort, healthy connections surviving a peer failure, no retained writer/task registrations |
 | CLI | SIGINT during idle, incomplete handshake and active transfer; process exit and coroutine cleanup |
+| SOCKS5 UDP | ProxyBridge's exact UDP ASSOCIATE request, IPv4/IPv6/domain destinations, authentication, binary/empty payloads, STUN mapping stability across destinations, independent upstream replies, source-port pinning, malformed/fragmented packets, 32 simultaneous associations, control EOF/timeout/rejection, UDP API and standalone listeners |
 | TLS/HTTP2 | Certificate and hostname verification, eight multiplexed streams, an injected in-flight RST_STREAM, GOAWAY with accepted streams completing, streamed responses |
 | Soak | Direct, SOCKS5 and HTTP CONNECT; idle and heartbeat responses; six TLS sessions and 48 streams concurrently |
 
@@ -66,13 +67,32 @@ Updating this source does not reload already running proxy processes.
 
 ## Installed connection logging
 
-The local `trace_proxy.py` launcher defaults to `PPROXY_TRACE_MODE=essential`.
-It records process lifecycle, upstream availability transitions, connection and
-handshake failures, I/O errors, and an upstream closing without returning any
-data after a client request. Normal connections, normal EOF, task cancellation
-and periodic per-connection snapshots are omitted. Errors retain destination
-and upstream metadata; payloads and credentials are not logged.
+The tracked `python -m pproxy.diagnostic` entrypoint defaults to
+`PPROXY_TRACE_MODE=essential`. Set
+`PPROXY_TRACE_PATH` to the JSONL log path and pass the ordinary proxy arguments.
+It records process lifecycle, upstream availability transitions, failed
+connections/handshakes and unexpected relay errors. Normal connections, normal
+EOF, cancellation, connection resets and broken pipes are silent. Default mode
+does not wrap stream reads/writes/drains/closes or collect per-chunk counters,
+timestamps or snapshots. Routine disconnects are discarded before constructing
+tracebacks. Errors retain destination and upstream metadata; payloads and
+credentials are not logged.
 
-Set `PPROXY_TRACE_MODE=diagnostic` in the launch environment when a full trace is
-needed. The mode is read at process startup and recorded in `process_start`.
-The filter has 24 focused tests in `test_diagnostic_log.py`.
+Failures include their phase, exception type, file/function/line traceback and
+exception cause/context chain. Messages, source snippets and local variable
+values are omitted because they can contain credentials or traffic. Each
+exception retains the innermost 32 frames, with at most four chained exceptions;
+truncation is explicit. Startup records hash the running source files so line
+numbers can be matched to the loaded version. The log rotates at 10 MiB with
+three backups. An assertion wrapped as a connection-close error remains visible.
+
+Set `PPROXY_TRACE_MODE=diagnostic` explicitly when per-chunk tracking and a full
+connection trace (including normal traffic and zero-response upstream closes)
+are needed. That mode adds overhead. The mode is read at process startup and
+recorded in `process_start`.
+`test_diagnostic_log.py` tests filtering and metadata, and starts the real CLI
+on a temporary port to trigger a SOCKS authentication-version assertion and
+an authentication failure, verify their source locations and absence of
+credentials, then exchange data through a subsequent healthy tunnel.
+It also checks normal transfers, EOF and resets on either peer produce no
+connection log records, while relay assertions still reach the error handler.

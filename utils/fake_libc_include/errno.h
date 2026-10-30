@@ -66,6 +66,9 @@
 #ifndef EMFILE
 #define EMFILE 24
 #endif
+#ifndef ENOTTY
+#define ENOTTY 25
+#endif
 #ifndef ENOSPC
 #define ENOSPC 28
 #endif
@@ -158,12 +161,13 @@
 #endif
 #endif
 
-/* The owned Linux errno cell is native TLS, shared with the runtime wrappers.
- * Darwin keeps the system accessor. This does not define a Windows CRT ABI. */
+/* Use the platform ABI: hosted Linux resolves this in libc, while the owned
+ * Linux provider forwards it to the runtime's native TLS errno cell. Darwin
+ * keeps its system accessor. This does not define a Windows CRT ABI. */
 #ifndef errno
 #if defined(__linux__)
-int *pcc_errno_location(void);
-#define errno (*pcc_errno_location())
+int *__errno_location(void);
+#define errno (*__errno_location())
 #elif defined(__APPLE__) || defined(__PCC_HOST_DARWIN__)
 int *__error(void);
 #define errno (*__error())

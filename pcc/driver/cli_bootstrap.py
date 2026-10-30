@@ -10652,6 +10652,16 @@ def _bootstrap_cli_main_impl(
         raw_argv = _normalized_sys_argv()
     else:
         raw_argv = _copy_seq(argv)
+    if raw_argv and raw_argv[0] == "--pcc-c-unit-artifact-worker":
+        if len(raw_argv) != 3:
+            _write_text("Error: C artifact worker requires request and output paths", err=True)
+            return 2
+        if sys.implementation.name != "pcc":
+            _write_text("Error: C artifact worker requires native pcc1", err=True)
+            return 2
+        from pcc.frontends.c.evaluator.native_artifact import run_native_c_artifact
+
+        return run_native_c_artifact(raw_argv[1], raw_argv[2])
     if len(raw_argv) == 1 and raw_argv[0] == "--tooling-capabilities":
         _write_text(python_tooling_capabilities_json())
         return 0

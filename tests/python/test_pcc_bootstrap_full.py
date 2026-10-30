@@ -556,6 +556,15 @@ def shared_stage1_pcc1(pcc_runtime_archive) -> Path:
         pytest.fail(
             "Full self-backend bootstrap is currently verified on macOS arm64 only"
         )
+    admitted = os.environ.get("PCC_CI_STAGE1_MANIFEST")
+    if admitted:
+        from scripts.ci_pytest_markers import admitted_stage1
+        compiler = admitted_stage1(_REPO_ROOT, Path(admitted), pcc_runtime_archive)
+        assert compiler.is_file() and os.access(compiler, os.X_OK), "admitted shared pcc1 is not executable"
+        assert not _links_libpython(compiler), "shared pcc1 unexpectedly links libpython"
+        return compiler
+    if os.environ.get("PCC_TEST_NO_NATIVE_PROVISIONING") == "1":
+        pytest.fail("full bootstrap requires its explicitly admitted CI Stage1; automatic rebuild is disabled")
     return _build_shared_stage1(pcc_runtime_archive)
 
 
@@ -903,10 +912,6 @@ def _bootstrap_active_gc_lease(gc_backend: str, parallel_slots: int):
     """
     backend = str(gc_backend)
     limit = _bootstrap_gc_active_limit(parallel_slots)
-    if limit <= 1:
-        yield 1
-        return
-
     run_dir = _bootstrap_resource_run_dir()
     pid = os.getpid()
     waiting_path = run_dir / f"waiting-gc{backend}-{pid}"

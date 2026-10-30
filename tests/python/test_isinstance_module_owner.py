@@ -71,6 +71,9 @@ def main():
     assert not isinstance(right, (first.Token, int))
     assert isinstance(left, (first.Token, second.Token))
     assert isinstance(right, (first.Token, second.Token))
+    # Classinfo is a live module attribute, including after publication.
+    first.Token = second.Token
+    assert first_match(right) and not first_match(left)
     print("qualified-owner-ok")
 main()
 ''')
@@ -96,12 +99,20 @@ def test_alias_classinfo_real_ir_keeps_owning_module(tmp_path, monkeypatch, reve
                          emit_llvm_only=True, backend="self", libpython_mode="off",
                          ir_scaffold_mode=scaffold)
     text = output.read_text()
-    for function, owner, other in (("first_match", "owner_left", "owner_right"),
-                                   ("second_match", "owner_right", "owner_left")):
+    for function, alias, other in (("first_match", "first", "owner_right"),
+                                   ("second_match", "second", "owner_left")):
         body = _function(text, function)
-        assert "@.class." + owner + ".Token" in body, body
-        assert "@.class." + other + ".Token" not in body, body
-        assert re.search(r"\bcall\b[^\n]*@py_isinstance\(", body), body
+        # Reading the current module binding and its Token attribute preserves
+        # both the owning module and subsequent rebinding. A static class
+        # symbol is insufficient for this Python operation.
+        read = re.search(r"@py_module_attr_get\([^\n]*ptr @([^,)]+)\)", body)
+        assert read is not None, function
+        encoded = "".join("\\" + format(byte, "02X") for byte in (alias + "\0").encode())
+        definition = re.search(r"^@" + re.escape(read.group(1)) + r" = [^\n]+", text, re.M)
+        assert definition is not None and 'c"' + encoded + '"' in definition.group(0)
+        assert "@.class." + other + ".Token" not in body
+        assert re.search(r"@py_obj_getattr\([^\n]*@\.pyattr.Token", body)
+        assert re.search(r"\bcall\b[^\n]*@py_obj_isinstance\(", body)
 
 
 @pytest.fixture

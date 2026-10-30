@@ -7,7 +7,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-extern int32_t pcc_gc_metric_pin;
+/* The pin balance is summed from the runtime's statistics shards. */
+extern int64_t pcc_gc_metric_pin_balance(void);
 
 static int probe(void) {
     if (pcc_threads_enabled() != 1) return 10;
@@ -16,26 +17,26 @@ static int probe(void) {
     if (!object) return 12;
     uint32_t *flags = (uint32_t *)((unsigned char *)object + 12);
     uint32_t before_flags = *flags;
-    int32_t before_metric = pcc_gc_metric_pin;
+    int64_t before_metric = pcc_gc_metric_pin_balance();
     if ((before_flags & 64) != 0) return 13;
     pcc_gc_pin(object);
     if (*flags != (before_flags | 64)) return 14;
-    if (pcc_gc_metric_pin != before_metric + 1) return 15;
+    if (pcc_gc_metric_pin_balance() != before_metric + 1) return 15;
     pcc_gc_unpin(object);
     if (*flags != before_flags) return 16;
-    if (pcc_gc_metric_pin != before_metric) return 17;
+    if (pcc_gc_metric_pin_balance() != before_metric) return 17;
     pcc_gc_pin((PyObject *)0);
     pcc_gc_unpin((PyObject *)0);
     pcc_gc_pin((PyObject *)(uintptr_t)3);
     pcc_gc_unpin((PyObject *)(uintptr_t)3);
-    if (pcc_gc_metric_pin != before_metric) return 18;
+    if (pcc_gc_metric_pin_balance() != before_metric) return 18;
     int64_t references = *(int64_t *)object;
     PyObject *slot = object;
     pcc_gc_pin(object);
     PyObject *taken = pcc_gc_take_pinned_slot(&slot, 0);
     if (taken != object || slot != 0) return 20;
     if (*flags != before_flags || *(int64_t *)object != references) return 21;
-    if (pcc_gc_metric_pin != before_metric) return 22;
+    if (pcc_gc_metric_pin_balance() != before_metric) return 22;
     /* Preserve an outer caller's non-counted pin bit while balancing only
      * this transfer's additional pin/metric entry. */
     pcc_gc_pin(object);
@@ -44,13 +45,13 @@ static int probe(void) {
     taken = pcc_gc_take_pinned_slot(&slot, 64);
     if (taken != object || slot != 0) return 23;
     if (*flags != (before_flags | 64) || *(int64_t *)object != references) return 24;
-    if (pcc_gc_metric_pin != before_metric + 1) return 25;
+    if (pcc_gc_metric_pin_balance() != before_metric + 1) return 25;
     pcc_gc_unpin(object);
     slot = (PyObject *)(uintptr_t)3;
     if (pcc_gc_take_pinned_slot(&slot, 64) != (PyObject *)(uintptr_t)3 || slot != 0) return 26;
     if (pcc_gc_take_pinned_slot(&slot, 0) != 0 || slot != 0) return 27;
     if (pcc_gc_take_pinned_slot((PyObject **)0, 64) != 0) return 28;
-    if (pcc_gc_metric_pin != before_metric) return 29;
+    if (pcc_gc_metric_pin_balance() != before_metric) return 29;
     py_decref(object);
     return 0;
 }

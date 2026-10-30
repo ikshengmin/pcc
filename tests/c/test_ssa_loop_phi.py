@@ -6,11 +6,19 @@ from pcc.frontends.c.passes.ssa_loop_phi import SSALoopPhiPass
 from pcc.frontends.c.ssa import LoopPhiKind
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def _analyze(src: str) -> tuple[PassContext, dict]:
-    ast = _PARSER.parse(src)
+    ast = _get_parser().parse(src)
     ctx = PassContext()
     SSALoopPhiPass().run(ast, ctx)
     return ctx, getattr(ctx, "ssa_loop_phi_results", {})

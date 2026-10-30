@@ -6,7 +6,7 @@ intrinsics; the C implementation remains an independent differential oracle.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_abi_typed_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_rmw_i32,
     atomic_rmw_i64,
@@ -1707,7 +1707,9 @@ def _run_flags(
     return 0
 
 
-@c_abi_export("pcc_re_engine_supported")
+# Public regex ABI uses C int status/search/capacity fields. Keep internal
+# arithmetic i64, but do not read caller-provided i32 stack arguments as i64.
+@c_abi_typed_export("pcc_re_engine_supported", "i32", ("ptr",))
 def pcc_re_engine_supported(pattern) -> i64:
     if ptr_is_null(pattern) != 0:
         return 0
@@ -1718,7 +1720,7 @@ def pcc_re_engine_supported(pattern) -> i64:
     return 0
 
 
-@c_abi_export("pcc_re_engine_supported_flags")
+@c_abi_typed_export("pcc_re_engine_supported_flags", "i32", ("ptr", "i64"))
 def pcc_re_engine_supported_flags(pattern, flags: i64) -> i64:
     if ptr_is_null(pattern) != 0 or (flags & ~26) != 0:
         return 0
@@ -1734,7 +1736,7 @@ def pcc_re_engine_compile_count() -> i64:
     return atomic_load_i64(global_addr("pcc_re_compile_count_value"), 0, "relaxed")
 
 
-@c_abi_export("pcc_re_engine_run_flags")
+@c_abi_typed_export("pcc_re_engine_run_flags", "i32", ("ptr", "i64", "ptr", "i64", "i64", "i32", "ptr", "i32", "ptr"))
 def pcc_re_engine_run_flags(
     pattern,
     flags: i64,
@@ -1759,7 +1761,7 @@ def pcc_re_engine_run_flags(
     )
 
 
-@c_abi_export("pcc_re_engine_run_from")
+@c_abi_typed_export("pcc_re_engine_run_from", "i32", ("ptr", "ptr", "i64", "i64", "i32", "ptr", "i32", "ptr"))
 def pcc_re_engine_run_from(
     pattern,
     text,
@@ -1783,7 +1785,7 @@ def pcc_re_engine_run_from(
     )
 
 
-@c_abi_export("pcc_re_engine_run")
+@c_abi_typed_export("pcc_re_engine_run", "i32", ("ptr", "ptr", "i64", "i32", "ptr", "i32", "ptr"))
 def pcc_re_engine_run(
     pattern,
     text,
@@ -1806,7 +1808,7 @@ def pcc_re_engine_run(
     )
 
 
-@c_abi_export("pcc_re_engine_group_names_flags")
+@c_abi_typed_export("pcc_re_engine_group_names_flags", "i32", ("ptr", "i64", "ptr", "i32"))
 def pcc_re_engine_group_names_flags(pattern, flags: i64, out, out_length: i64) -> i64:
     if ptr_is_null(pattern) != 0 or ptr_is_null(out) != 0:
         return -3
@@ -1831,6 +1833,6 @@ def pcc_re_engine_group_names_flags(pattern, flags: i64, out, out_length: i64) -
     return group_count
 
 
-@c_abi_export("pcc_re_engine_group_names")
+@c_abi_typed_export("pcc_re_engine_group_names", "i32", ("ptr", "ptr", "i32"))
 def pcc_re_engine_group_names(pattern, out, out_length: i64) -> i64:
     return pcc_re_engine_group_names_flags(pattern, 0, out, out_length)

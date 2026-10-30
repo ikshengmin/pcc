@@ -20,6 +20,7 @@ from pcc.frontends.python.codegen.debug_info_lowering import debug_source_path
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime
 from pcc.frontends.python.codegen.typed_int_bounded_proof import compute_bounded_int_abi_function_names
 from pcc.frontends.python.codegen.vthread_effect_analysis import classify_vthread_park_boundaries, compute_vthread_may_park_callables
+from pcc.frontends.python.codegen.vthread_effect_analysis import _lexical_scope_nodes
 from pcc.frontends.python.codegen.module_global_lowering import _predeclare_owned_builtin_import_globals
 from pcc.frontends.python.codegen.str_default_cells import emit_module_str_default_cells
 
@@ -29,6 +30,51 @@ _COMPILE_TIME_SCAFFOLD_MODULES = frozenset(
     {"pcc.runtime.py.py_abi_constants"}
 )
 _FREESTANDING_MARKER = "__pcc_freestanding__"
+
+
+def _has_raw_root_scope(host) -> bool:
+    for statement in host.ast_module.body:
+        if isinstance(statement, Assign):
+            for target in statement.targets:
+                if isinstance(target, Name) and target.ident in (
+                    "__pcc_runtime_port__", "__pcc_freestanding__",
+                ):
+                    return True
+    scopes = [host.ast_module.body]
+    while scopes:
+        body = scopes.pop()
+        for node in _lexical_scope_nodes(body):
+            if isinstance(node, (FuncDef, ClassDef)):
+                scopes.append(node.body)
+            if _is_import_from_stmt(node):
+                module = _import_from_module_or_empty(node)
+                if host._is_extern_scaffold_import_module(module) or module in ("pcc", "pcc.unsafe"):
+                    return True
+            elif _is_import_stmt(node):
+                for module, alias in node.names:
+                    if host._is_extern_scaffold_import_module(module) or module in ("pcc", "pcc.unsafe"):
+                        return True
+    return False
+
+
+def _configure_known_root_stores(host) -> None:
+    """Select only compiler-emitted managed roots, never the public raw ABI."""
+    enabled = (
+        str(os.environ.get("PCC_KNOWN_ROOT_STORES", "0")).lower()
+        in ("1", "true", "yes", "on")
+        and host._known_object_refcounts
+        and host._strict_no_libpython
+        and not host._freestanding_module
+        and not host._runtime_port_module
+        and not host._module_has_c_abi_export
+        and not host._module_uses_raw_int_scaffold
+        and not _has_raw_root_scope(host)
+    )
+    # generate(module=...) can reuse a codegen owner for another ABI domain.
+    # Always restore the original declaration before applying this proof.
+    for name in ("pcc_gc_store_root", "pcc_gc_store_root_take"):
+        selected = name + "_known" if enabled else name
+        host.runtime[name] = host.module.globals[selected]
 
 
 def _is_freestanding_marker_assign(stmt: Stmt) -> bool:
@@ -261,6 +307,7 @@ class GenerationLoweringMixin:
             setattr(self, "_fn_err_exit_blocks", {})
             setattr(self, "_fn_err_exit_gc_root_names", {})
             setattr(self, "_fn_gc_root_slot_registry", {})
+            setattr(self, "_function_root_groups", {})
             setattr(self, "_fn_err_exit_gc_root_slots", {})
             setattr(self, "_fn_err_exit_owned_slots", {})
             setattr(self, "_fn_err_exit_finish_blocks", {})
@@ -439,6 +486,7 @@ class GenerationLoweringMixin:
         _codegen_log(self, debug_codegen, "module flags raw-int end")
         _codegen_log(self, debug_codegen, "module flags c-abi begin")
         setattr(self, "_module_has_c_abi_export", self._module_imports_c_abi_export())
+        _configure_known_root_stores(self)
         _codegen_log(self, debug_codegen, "module flags c-abi end")
         _codegen_log(self, debug_codegen, "module flags typed-int begin")
         setattr(
@@ -869,6 +917,17 @@ class GenerationLoweringMixin:
                 _codegen_log(self, debug_codegen, "declare end")
             stmt_index += 1
 
+        # A source function that can be deleted needs the live namespace
+        # protocol before ANY function body is emitted. Otherwise an earlier
+        # getter can retain the static declaration after a later global del.
+        if not (self._freestanding_module or self._runtime_port_module
+                or self._module_has_c_abi_export):
+            for definition in self.ast_module.body:
+                if (isinstance(definition, FuncDef)
+                        and definition.name in getattr(self, "_module_del_target_names", ())
+                        and not definition.name.startswith("__nested_")):
+                    slot = self._native_extension_module_global(definition.name)
+                    self._native_extension_modules()[definition.name] = slot
         self._predeclare_native_builtin_module_attr_stores(tuple(self.ast_module.body))
         _frontend_phase_timing(self, phase_timing, "prepare", phase_started)
 

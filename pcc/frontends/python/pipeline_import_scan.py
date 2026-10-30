@@ -54,14 +54,43 @@ def _source_module_scope_lines(
     return out
 
 
-def _iter_source_import_specs(source: str, *, top_level_only: bool) -> list[str]:
-    """Return module names from simple ``import mod[, other]`` lines."""
-    out: list[str] = []
+_INIT_IMPORT_SCOPE_LINES = _source_module_scope_lines
+
+
+def _source_import_lines_with_scope_state(source, top_level_only, scope_state):
+    # Only the adjacent init-order readers own this short-lived state. Direct
+    # calls and custom strings/readers retain the original scan behavior.
+    reusable = False
+    if type(source) is str and top_level_only is True and type(scope_state) is list:
+        try:
+            reusable = _source_module_scope_lines is _INIT_IMPORT_SCOPE_LINES
+        except NameError:
+            pass
+    if reusable and len(scope_state) == 2 and scope_state[0] == source:
+        return scope_state[1]
     lines = (
         _source_module_scope_lines(source)
         if top_level_only
         else [(line, True) for line in source.splitlines()]
     )
+    if reusable:
+        scope_state.clear()
+        scope_state.append(source)
+        scope_state.append(lines)
+    return lines
+
+
+def _iter_source_import_specs(source: str, *, top_level_only: bool) -> list[str]:
+    """Return module names from simple ``import mod[, other]`` lines."""
+    return _iter_source_import_specs_with_scope_state(source, top_level_only=top_level_only)
+
+
+def _iter_source_import_specs_with_scope_state(
+    source: str, *, top_level_only: bool, scope_state=None,
+) -> list[str]:
+    """Return module names from simple ``import mod[, other]`` lines."""
+    out: list[str] = []
+    lines = _source_import_lines_with_scope_state(source, top_level_only, scope_state)
     for raw_line, at_module_scope in lines:
         if top_level_only and not at_module_scope:
             continue
@@ -156,6 +185,10 @@ def _iter_source_importlib_literal_specs(
     top_level_only: bool,
 ) -> list[str]:
     """Retain canonical literal imports from real source calls only."""
+    # Every supported call marker (including f-string expressions) needs this
+    # literal prefix. Preserve custom string/truth callbacks on the old path.
+    if type(source) is str and type(top_level_only) is bool and "importlib." not in source:
+        return []
     out: list[str] = []
     for _line, _active, calls in _literal_import_call_lines(
         source, ["importlib.import_module("], top_level_only=top_level_only,
@@ -173,6 +206,10 @@ def _iter_source_importlib_resource_literal_specs(
     top_level_only: bool,
 ) -> list[str]:
     """Retain canonical resource anchors, including multiline first arguments."""
+    # Every supported call marker (including f-string expressions) needs this
+    # literal prefix. Preserve custom string/truth callbacks on the old path.
+    if type(source) is str and type(top_level_only) is bool and "importlib." not in source:
+        return []
     api_names = (
         "files", "contents", "is_resource", "open_binary", "open_text",
         "path", "read_binary", "read_text",
@@ -256,16 +293,25 @@ def _iter_source_import_from_specs(
     fidelity. Avoiding CPython AST objects here keeps the compiled
     bootstrap path away from fragile runtime attribute walks.
     """
+    return _iter_source_import_from_specs_with_scope_state(source, top_level_only=top_level_only)
+
+
+def _iter_source_import_from_specs_with_scope_state(
+    source: str, *, top_level_only: bool, scope_state=None,
+) -> list[tuple[str, list[str]]]:
+    """Return ``[(module_spec, [imported_name...]), ...]`` from source text.
+
+    Keep this intentionally narrow: package-closure discovery only needs
+    textual ``from ... import ...`` statements, not full Python AST
+    fidelity. Avoiding CPython AST objects here keeps the compiled
+    bootstrap path away from fragile runtime attribute walks.
+    """
     specs: list[tuple[str, list[str]]] = []
     pending = ""
     pending_active = False
     paren_depth = 0
 
-    lines = (
-        _source_module_scope_lines(source)
-        if top_level_only
-        else [(line, True) for line in source.splitlines()]
-    )
+    lines = _source_import_lines_with_scope_state(source, top_level_only, scope_state)
     for raw_line, at_module_scope in lines:
         stripped = raw_line.strip()
         if not pending_active:

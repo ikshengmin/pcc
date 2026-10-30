@@ -3,6 +3,7 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_rmw_i32,
     cstr,
     free,
     global_addr,
@@ -104,6 +105,9 @@ pcc_py_gc_defer_tripwire = extern(
 )
 pcc_gc_live_bytes_subtract = extern(
     "pcc_gc_live_bytes_subtract", (c_int64,), c_void
+)
+pcc_gc_gray_count_decrement_acq_rel = extern(
+    "pcc_gc_gray_count_decrement_acq_rel", (), c_void
 )
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_index_remove = extern(
@@ -371,8 +375,15 @@ def _retire_forwarded_source_into_finish(from_obj, finish) -> None:
     if ptr_is_null(dead) != 0:
         return
     size: i64 = pcc_gc_object_node_size(dead)
-    if pcc_gc_object_node_freeing(dead) == 0 and size > 0:
-        pcc_gc_live_bytes_subtract(size)
+    if pcc_gc_object_node_freeing(dead) == 0:
+        # A GC4 shell stays active and owns its gray work until this unlink.
+        # GC3 oldification already retired the inactive source's work while
+        # transferring it to the replacement, even if its GRAY bit remains.
+        if (load_i32(from_obj, 12) & 16) != 0:
+            pcc_gc_gray_count_decrement_acq_rel()
+            atomic_rmw_i32("and", from_obj, 12, ~16, "acq_rel")
+        if size > 0:
+            pcc_gc_live_bytes_subtract(size)
     pcc_gc_object_index_remove(from_obj)
     pcc_gc_object_node_unlink(dead)
     store_ptr(dead, 16, load_ptr(finish, 24))

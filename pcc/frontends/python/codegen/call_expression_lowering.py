@@ -42,6 +42,12 @@ from pcc.frontends.python.py_ast import (
 )
 from pcc.frontends.python.codegen.bootstrap_trace import bootstrap_trace_enabled
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.call_object_lowering import (
+    direct_call_argument_is_gate_free,
+    direct_call_argument_is_managed,
+    direct_call_argument_reads_stable_root,
+    pin_rooted_direct_call_arguments,
+)
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -1093,6 +1099,9 @@ class CallExpressionLoweringMixin:
             return result
         name = func_name
         if live_import_name_slot(self, name) is not None:
+            parked = self._emit_may_park_import_call(expr, name)
+            if parked is not None:
+                return parked
             direct = self._emit_slot_call_static_import(expr, name)
             if direct is not None:
                 return direct
@@ -1728,29 +1737,28 @@ class CallExpressionLoweringMixin:
         if name == "property" and 1 <= len(expr.args) <= 3 and not expr.kwargs:
             return self._emit_owned_descriptor_constructor(expr, "py_property_new", 3)
         if name == "sorted" and len(expr.args) == 1:
-            # sorted(x) or sorted(x, reverse=<bool const>). A constant
-            # reverse=True reverses the result list in place after sorting.
-            # key= (first-class function) and a non-constant reverse fall
-            # through to the libpython path.
+            # Root all keyword values in source order. The runtime converts
+            # a dynamic reverse only after taking the iterable snapshot,
+            # matching sorted() -> list.sort() callback/exception ordering.
             reverse_const = None
+            reverse_expr = None
             key_expr = None
             other_kwarg = False
             for kw_name, kw_val in expr.kwargs or ():
                 if kw_name == "reverse" and isinstance(kw_val, BoolLit):
                     reverse_const = bool(kw_val.value)
+                elif kw_name == "reverse":
+                    reverse_expr = kw_val
                 elif kw_name == "key":
                     key_expr = kw_val
                 else:
                     other_kwarg = True
-            # sorted(xs, key=<supported inline callable>): inline the key
-            # extraction (no first-class-function boxing). An unsupported key
-            # (or any other kwarg) yields None / falls through to the libpython
-            # path — we must NOT run plain py_obj_sorted below, which would
-            # silently ignore the key.
+            # The key remains a first-class callable; do not drop unsupported
+            # keywords or silently fall back to unkeyed sorting.
             if key_expr is not None:
                 if not other_kwarg:
                     keyed = self._emit_sorted_with_key_lambda(
-                        expr, key_expr, reverse_const
+                        expr, key_expr, reverse_const, reverse_expr
                     )
                     if keyed is not None:
                         self._note_owned_object_value(keyed)
@@ -1773,10 +1781,12 @@ class CallExpressionLoweringMixin:
                 ):
                     result = self._emit_sorted_with_lifetimes(
                         expr, None, None, reverse_const, elem_hint,
+                        reverse_expr=reverse_expr,
                     )
                 else:
                     result = self._emit_sorted_with_lifetimes(
                         expr, None, None, reverse_const,
+                        reverse_expr=reverse_expr,
                     )
                 self._note_owned_object_value(result)
                 return result
@@ -2598,9 +2608,10 @@ class CallExpressionLoweringMixin:
             return result
         return self._emit_static_user_function_call(expr, name, fn)
 
-    def _emit_static_user_function_call(self, expr: Call, name: str, fn) -> ir.Value:
+    def _emit_static_user_function_call(self, expr: Call, name: str, fn, ast_func_def=None) -> ir.Value:
         """Call the user function bound to ``name`` through its native ABI."""
-        ast_func_def = self._find_user_funcdef(name)
+        if ast_func_def is None:
+            ast_func_def = self._find_user_funcdef(name)
         if self._ordinary_call_needs_runtime_binding(expr, ast_func_def):
             return self._emit_runtime_bound_user_call(expr, name, fn)
         if ast_func_def.is_async:
@@ -2711,6 +2722,9 @@ class CallExpressionLoweringMixin:
             i += 1
         args_ir: list[ir.Value] = []
         pinned_arg_temps: list[tuple[ir.Value, bool]] = []
+        # Arguments read from stable roots of this activation, not pinned.
+        rooted_arg_values: list[ir.Value] = []
+        may_park_callee = id(ast_func_def) in getattr(self, "_vthread_may_park_func_ids", set())
         i = 0
         while i < len(resolved_args) and i < len(runtime_formals) and i < len(fn.args):
             ast_arg = resolved_args[i]
@@ -2737,22 +2751,23 @@ class CallExpressionLoweringMixin:
                 # The resolved callee's defining module owns this manual
                 # pointer ABI. This is a call view, never managed storage.
                 target_ty = ast_arg.ty
+            if (rooted_arg_values
+                    and not direct_call_argument_is_gate_free(self, ast_arg, target_ty)):
+                pin_rooted_direct_call_arguments(self, rooted_arg_values, pinned_arg_temps)
             v = self._emit_arg_for_abi_param_with_cleanup(
                 ast_arg,
                 target_ty,
                 param_ir_ty,
                 tuple(pinned_arg_temps),
             )
-            if (
-                not getattr(self, "_freestanding_module", False)
-                and not getattr(self, "_module_has_c_abi_export", False)
-                and not isinstance(target_ty, RawPointerType)
-                and isinstance(v.type, ir.PointerType)
-                and v not in getattr(self, "_cpy_values", ())
-            ):
+            if direct_call_argument_is_managed(self, ast_arg, v, target_ty):
                 owned = getattr(self, "_last_call_arg_owned_temp", False)
-                self._gc_pin(v)
-                pinned_arg_temps.append((v, owned))
+                if (not owned and not may_park_callee
+                        and direct_call_argument_reads_stable_root(self, ast_arg, target_ty)):
+                    rooted_arg_values.append(v)
+                else:
+                    self._gc_pin(v)
+                    pinned_arg_temps.append((v, owned))
             args_ir.append(v)
             i += 1
         call_name = (
@@ -2776,6 +2791,24 @@ class CallExpressionLoweringMixin:
             or fn.name in self._manual_pointer_abi_functions
         ):
             raise L1CodegenError("raw-pointer ABI call cannot publish into a managed operand root: " + name)
+        # A function compiled from this module returns NULL exactly when it
+        # raises. Runtime modules return NULL as a plain sentinel, C-ABI
+        # exports run without error checks, raw-pointer results may be NULL,
+        # and parking or CPython-bridged callees keep the thread-state check.
+        null_signals_error = (
+            not returns_cpython
+            and not synchronous_park_result
+            and not may_park_callee
+            and name not in self._cross_module_func_defs
+            and self._func_c_abi_export_symbol(ast_func_def) is None
+            and not isinstance(ast_func_def.return_ty, RawPointerType)
+            and fn.name not in self._manual_pointer_abi_functions
+            and not getattr(self, "_module_uses_raw_int_scaffold", False)
+            and not getattr(self, "_module_has_c_abi_export", False)
+            and not getattr(self, "_runtime_port_module", False)
+            and not getattr(self, "_freestanding_module", False)
+            and not (self.ast_module.name or "").startswith("pcc.runtime.")
+        )
         result = self._call_user(
             fn,
             args_ir,
@@ -2786,6 +2819,7 @@ class CallExpressionLoweringMixin:
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),
             aggregate_result_ty=ast_func_def.return_ty,
+            null_signals_error=null_signals_error,
         )
         for arg_value, owned in pinned_arg_temps:
             self._gc_unpin(arg_value)

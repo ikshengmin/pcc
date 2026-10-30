@@ -175,15 +175,7 @@ def _compile_extension(tmp_path: Path) -> Path:
     return site
 
 
-def test_cext_inplace_true_divide_and_fallback(
-    tmp_path,
-    pcc_runtime_archive,
-):
-    site = _compile_extension(tmp_path)
-    main = tmp_path / "main.py"
-    main.write_text(MAIN_SOURCE, encoding="utf-8")
-    executable = tmp_path / "main_bin"
-
+def _cext_oracle_environment(site: Path, pcc_runtime_archive: Path) -> dict:
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
@@ -194,6 +186,24 @@ def test_cext_inplace_true_divide_and_fallback(
     env["PCC_SELF_LINK"] = "cc"
     env["PCC_RUNTIME_CC"] = "pcc"
     env["PCC_RUNTIME_ARCHIVE"] = str(pcc_runtime_archive)
+
+    # This explicitly labeled system-linker oracle needs textual emission;
+    # direct indexed artifacts can only be consumed by the owned linker.
+    env["PCC_DIRECT_INDEXED_KERNEL_CAPTURE"] = "0"
+    env["PCC_DIRECT_INDEXED_KERNEL_EMIT"] = "0"
+    return env
+
+
+def test_cext_inplace_true_divide_and_fallback(
+    tmp_path,
+    pcc_runtime_archive,
+):
+    site = _compile_extension(tmp_path)
+    main = tmp_path / "main.py"
+    main.write_text(MAIN_SOURCE, encoding="utf-8")
+    executable = tmp_path / "main_bin"
+
+    env = _cext_oracle_environment(site, pcc_runtime_archive)
 
     compile_proc = subprocess.run(
         [

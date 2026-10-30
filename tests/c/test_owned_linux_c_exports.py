@@ -71,17 +71,20 @@ def test_linux_export_exact_abi_object(tmp_path, target, deny_external_compilers
     for signature in (
         "void @_Exit(i32 ", "void @_exit(i32 ", "i32 @close(i32 ",
         "i32 @fcntl(i32 ", "void @exit(i32 ", "i32 @atexit(ptr ",
-        "i32 @setpgid(i32 ",
+        "i32 @setpgid(i32 ", "i32 @open(ptr ", "i64 @lseek(i32 ",
+        "ptr @strerror(i32 ", "ptr @__errno_location()",
     ):
         assert signature in text
     object_bytes = emit_owned_object(text, target)
     output.with_suffix(".o").write_bytes(object_bytes)
     obj = parse_relocatable(object_bytes)
     definitions = {s.name for s in obj.symbols if s.section_index != 0}
-    assert {"_Exit", "_exit", "close", "fcntl", "exit", "atexit", "setpgid"} <= definitions
+    assert {"_Exit", "_exit", "close", "fcntl", "exit", "atexit", "setpgid",
+            "open", "lseek", "strerror", "__errno_location"} <= definitions
     undefined = {s.name for s in obj.symbols if s.section_index == 0 and s.name}
     assert undefined <= {"pcc_errno_set", "pcc_platform_abort", "malloc", "free", "fflush",
-                         "__fini_array_start", "__fini_array_end"}
+                         "__fini_array_start", "__fini_array_end",
+                         "pcc_errno_linux_c_locale_message", "pcc_errno_location"}
     assert not re.search(r"call[^\n]*@(py_box_|py_int_)", text)
 
 
@@ -488,3 +491,114 @@ def test_flush_output_retries_eintr_retains_short_write_tail_and_sets_errno():
     assert bytes(memory.load(buffer, offset) for offset in range(3)) == b"CDE"
     assert memory.load(stream, 48) == 3 and memory.load(stream, 16) == 6
     assert errors == [28]
+
+
+@pytest.mark.parametrize("machine,directory,temporary", (
+    (b"x86_64", 65536, 4259840),
+    (b"aarch64", 16384, 4210688),
+))
+def test_open_mode_arguments_follow_target_flags(machine, directory, temporary):
+    """Host boundary control only; native execution has a separate regression."""
+    calls, reads, errors = [], [], []
+    ns = _model("freestanding_linux_libc", ("open_c",),
+                target_platform_machine=lambda: machine,
+                load_i8=lambda value, offset: value[offset],
+                va_start=lambda: reads.append("start") or "cursor",
+                va_arg_i32=lambda cursor: reads.append("i32") or 416,
+                va_end=lambda cursor: reads.append("end"),
+                open_file_flags=lambda *args: calls.append(args) or 7,
+                pcc_errno_set=errors.append)
+    for flags, needs_mode in ((0, False), (directory, False), (1025, False),
+                              (64 | 2, True), (temporary | 2, True)):
+        reads.clear()
+        assert ns["open_c"]("path", flags) == 7
+        assert calls[-1] == ("path", flags, 416 if needs_mode else 0, -100)
+        assert reads == (["start", "i32", "end"] if needs_mode else [])
+    assert errors == []
+
+
+def test_open_and_lseek_publish_errno_once_and_preserve_offsets():
+    """This model checks the seam, not emitted/native libc qualification."""
+    calls, errors = [], []
+    ns = _model("freestanding_linux_libc", ("open_c", "lseek_c"),
+                target_platform_machine=lambda: b"x86_64",
+                load_i8=lambda value, offset: value[offset],
+                open_file_flags=lambda *args: calls.append(args) or -4,
+                seek_file=lambda *args: calls.append(args) or -9,
+                pcc_errno_set=errors.append)
+    assert ns["open_c"]("missing", 0) == -1
+    assert calls == [("missing", 0, 0, -100)] and errors == [4]
+    assert ns["lseek_c"](-1, -4294967297, 1) == -1
+    assert calls[-1] == (-1, -4294967297, 1) and errors == [4, 9]
+    ns["seek_file"] = lambda *args: calls.append(args) or 4294967297
+    assert ns["lseek_c"](5, 4294967297, 0) == 4294967297
+    assert calls[-1] == (5, 4294967297, 0) and errors == [4, 9]
+
+
+@pytest.mark.pcc_gate(probe=lambda: sys.platform == "linux" and platform.machine() == "x86_64")
+def test_open_lseek_c_abi_executes_with_owned_runtime(tmp_path, monkeypatch):
+    from tests.owned_runtime_c_fixture import admitted_runtime
+
+    archive = admitted_runtime()
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
+    binary = tmp_path / "open_lseek"
+    with monkeypatch.context() as owned:
+        def forbidden(*args, **kwargs):
+            raise AssertionError("owned C emit/link attempted an external process")
+        owned.setattr(subprocess, "Popen", forbidden)
+        evaluator, units = _units((FIXTURES / "open_lseek.c").read_text(), TARGETS[0])
+        evaluator.emit_executable(units, str(binary))
+    output, missing, zero_mode = tmp_path / "output", tmp_path / "missing", tmp_path / "mode0"
+    run = subprocess.run([str(binary), str(output), str(missing), str(zero_mode),
+                          str(tmp_path)], capture_output=True, timeout=10)
+    assert (run.returncode, run.stdout, run.stderr) == (0, b"", b"")
+    assert output.read_bytes() == b"abcd"
+    assert zero_mode.stat().st_mode & 0o777 == 0
+
+
+def test_strerror_returns_existing_immutable_storage_without_mutation():
+    """Host boundary control; actual threaded C execution is separate."""
+    known = b"No such file or directory\0"
+    unknown = b"Unknown error\0"
+    calls = []
+    ns = _model("freestanding_linux_libc", ("strerror_c",),
+                errno_c_locale_message=lambda value: calls.append(value) or (known if value == 2 else None),
+                ptr_is_null=lambda value: value is None,
+                cstr=lambda value: unknown if value == "Unknown error" else None)
+    assert ns["strerror_c"](2) is known
+    for value in (-2147483648, -1, 41, 58, 134, 2147483647):
+        assert ns["strerror_c"](value) is unknown
+    assert calls == [2, -2147483648, -1, 41, 58, 134, 2147483647]
+    assert ns["strerror_c"](2) is known
+
+
+@pytest.mark.pcc_gate(probe=lambda: sys.platform == "linux" and platform.machine() == "x86_64")
+def test_strerror_c_abi_executes_with_owned_threaded_runtime(tmp_path, monkeypatch):
+    from tests.owned_runtime_c_fixture import admitted_runtime
+
+    archive = admitted_runtime()
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
+    binary = tmp_path / "strerror_threads"
+    with monkeypatch.context() as owned:
+        def forbidden(*args, **kwargs):
+            raise AssertionError("owned C emit/link attempted an external process")
+        owned.setattr(subprocess, "Popen", forbidden)
+        evaluator, units = _units((FIXTURES / "strerror_threads.c").read_text(), TARGETS[0])
+        evaluator.emit_executable(units, str(binary))
+    run = subprocess.run([str(binary)], capture_output=True, timeout=10)
+    assert (run.returncode, run.stdout, run.stderr) == (0, b"", b"")
+
+
+def test_strerror_admits_only_exact_immutable_errno_lookup_boundary():
+    from pcc.frontends.python.pipeline_freestanding import (
+        freestanding_allowed_external_symbols,
+        freestanding_module_scope_extern_bindings,
+    )
+
+    source = (ROOT / "pcc/runtime/py/freestanding_linux_libc.py").read_text()
+    symbol = "pcc_errno_linux_c_locale_message"
+    assert (symbol, "(c_int32,)", "c_ptr") in freestanding_module_scope_extern_bindings(source)
+    assert symbol in freestanding_allowed_external_symbols(source)
+    for signature in ("(c_int64,), c_ptr", "(c_int32,), c_int64", "(c_ptr,), c_ptr"):
+        wrong = 'message = extern("' + symbol + '", ' + signature + ')\n'
+        assert symbol not in freestanding_allowed_external_symbols(wrong)

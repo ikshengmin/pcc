@@ -48,7 +48,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -78,7 +78,34 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[57:59] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
     assert gate.HOST_FILES[59:61] == (gate.MACHO_SECTION_TARGET_INDEX_TEST, gate.WIN64_DIRECT_SCALAR_TEST)
     assert gate.HOST_FILES[61:63] == (gate.CONSUMED_UNSAFE_TEST, gate.IR_BUILDER_CALL9_TEST)
-    assert gate.HOST_FILES[63:] == (gate.MACHO_ARCHIVE_RETIREMENT_TEST, gate.GC_MARK_COLOR_ATOMIC_TEST)
+    assert gate.HOST_FILES[63:65] == (gate.MACHO_ARCHIVE_RETIREMENT_TEST, gate.GC_MARK_COLOR_ATOMIC_TEST)
+    assert gate.HOST_FILES[65:70] == gate.TUPLE_OWNED_ROOT_HOST_TESTS == (
+        "tests/python/test_tuple_owned_root_factory.py",
+        "tests/python/test_fixed_tuple_literal.py",
+        "tests/python/test_fixed_call_argument_tuple.py",
+        "tests/python/test_dict_materialization_owners.py",
+        "tests/python/test_slot_call_operand_roots.py",
+    )
+    assert gate.HOST_FILES[70:72] == gate.AARCH64_STACKMAP_RETIREMENT_HOST_TESTS == (
+        "tests/python/test_aarch64_stackmap_emission_retirement.py",
+        "tests/python/test_aarch64_stackmap_plan_ownership.py",
+    )
+    assert gate.HOST_FILES[72:] == (
+        'tests/python/test_worker_estimate_ratio_fold.py',
+        'tests/python/test_root_leave_identity_ledger.py',
+        'tests/python/test_float_callback_movement_protocol.py',
+        'tests/python/test_shared_pinned_return_cleanup.py',
+        'tests/python/test_macho_coarse_link_timing.py',
+        'tests/python/test_macho_sign_phase_timing.py',
+        'tests/python/test_dyn_find_dispatch.py',
+        'tests/python/test_find_runtime_slot_adapters.py',
+        'tests/python/test_bound_find_protocol.py',
+        'tests/python/test_str_method_slot_models.py',
+        'tests/test_ci_native_find_protocol.py',
+        'tests/python/test_str_len_protocol.py',
+    )
+    assert gate.HOST_COUNTS[72:] == (36, 29, 4, 29, 5, 19, 10, 65, 7, 92, 1, 2)
+    assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_gc_mark_color_atomic.py"') == 2
@@ -87,21 +114,24 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 65
-    assert sum(gate.HOST_COUNTS) == 2947 and sum(gate.HOST_COUNTS[:63]) == 2909
-    assert sum(gate.HOST_COUNTS[:62]) == 2900
-    assert sum(gate.HOST_COUNTS[:61]) == 2723
-    assert sum(gate.HOST_COUNTS[:60]) == 2612
-    assert sum(gate.HOST_COUNTS[:59]) == 2601
-    assert sum(gate.HOST_COUNTS[:58]) == 2550
-    assert sum(gate.HOST_COUNTS[:57]) == 2546
-    assert sum(gate.HOST_COUNTS[:53]) == 2433
-    assert sum(gate.HOST_COUNTS[:52]) == 2408
-    assert sum(gate.HOST_COUNTS[:51]) == 2377
-    assert sum(gate.HOST_COUNTS[:50]) == 2335 and sum(gate.HOST_COUNTS[:49]) == 2289
-    assert sum(gate.HOST_COUNTS[:48]) == 2248
-    assert sum(gate.HOST_COUNTS[:47]) == 2205
-    assert sum(gate.HOST_COUNTS[:43]) == 2113
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 84
+    assert sum(gate.HOST_COUNTS) == 3557 and sum(gate.HOST_COUNTS[:72]) == 3258
+    assert sum(gate.HOST_COUNTS[:70]) == 3210
+    assert sum(gate.HOST_COUNTS[:65]) == 3002
+    assert sum(gate.HOST_COUNTS[:63]) == 2964
+    assert sum(gate.HOST_COUNTS[:62]) == 2955
+    assert sum(gate.HOST_COUNTS[:61]) == 2778
+    assert sum(gate.HOST_COUNTS[:60]) == 2667
+    assert sum(gate.HOST_COUNTS[:59]) == 2656
+    assert sum(gate.HOST_COUNTS[:58]) == 2571
+    assert sum(gate.HOST_COUNTS[:57]) == 2567
+    assert sum(gate.HOST_COUNTS[:53]) == 2454
+    assert sum(gate.HOST_COUNTS[:52]) == 2429
+    assert sum(gate.HOST_COUNTS[:51]) == 2398
+    assert sum(gate.HOST_COUNTS[:50]) == 2356 and sum(gate.HOST_COUNTS[:49]) == 2310
+    assert sum(gate.HOST_COUNTS[:48]) == 2269
+    assert sum(gate.HOST_COUNTS[:47]) == 2226
+    assert sum(gate.HOST_COUNTS[:43]) == 2134
     assert sum(gate.HOST_COUNTS[:42]) == 2018
     assert sum(gate.HOST_COUNTS[:40]) == 2009
     assert sum(gate.HOST_COUNTS[:38]) == 1999
@@ -120,7 +150,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert sum(gate.HOST_COUNTS[:17]) == 1067 and sum(gate.HOST_COUNTS[:16]) == 1007
     assert sum(gate.HOST_COUNTS[:14]) == 998
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
-                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 51),
+                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 85),
                                      (gate.IR_BUILDER_CALL9_TEST, 9)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
@@ -150,7 +180,8 @@ def test_default_command_retains_project_xdist(tmp_path):
             assert isinstance(values, (ast.List, ast.Tuple))
             cases *= len(values.elts)
         dirty_count += cases
-    assert dirty_count == 95
+    # 95 existing cases + 21 incoming-only dirty-row regression cases.
+    assert dirty_count == 116
     facts_tree = ast.parse((ROOT / gate.REGALLOC_FACTS_TEST).read_text())
     facts_nodes = [node for node in facts_tree.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -207,6 +238,68 @@ def test_default_command_retains_project_xdist(tmp_path):
                    for node in ast.walk(identity))
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     push_filters, pull_request_filters = workflow.split('\n  pull_request:', 1)
+    assert gate.HOST_CONTRACT_DATA_INPUTS == (
+        "scripts/regen_l1_codegen_static_methods.py",
+        "tests/python/test_native_float_callback_movement.py",
+        "scripts/ci_native_find_protocol.py",
+        "tests/python/test_set_call_slot_roots.py",
+    )
+    assert not set(gate.HOST_CONTRACT_DATA_INPUTS).intersection(gate.HOST_FILES)
+    hashes = next(node.value for node in identity.body if isinstance(node, ast.Assign)
+                  and isinstance(node.targets[0], ast.Subscript)
+                  and isinstance(node.targets[0].slice, ast.Constant)
+                  and node.targets[0].slice.value == "test_inputs")
+    assert isinstance(hashes, ast.DictComp)
+    assert ast.unparse(hashes.value) == "sha(ROOT / name)"
+    # Evaluate only the actual input-name expression, not source_identity's
+    # compiler/environment imports. Both data dependencies are read, not run.
+    input_names = eval(compile(ast.Expression(hashes.generators[0].iter),
+                               "<host-input-names>", "eval"), vars(gate))
+    for path in gate.HOST_CONTRACT_DATA_INPUTS:
+        assert input_names.count(path) == 1
+        assert gate.sha(ROOT / path) == hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    for path in (*gate.HOST_FILES[72:], *gate.HOST_CONTRACT_DATA_INPUTS):
+        assert path in input_names
+        assert push_filters.count('      - "' + path + '"') == 1
+        assert pull_request_filters.count('      - "' + path + '"') == 1
+
+    # The default host phase executes these cases, not their native gates.
+    for path, expected_count in zip(
+        (*gate.TUPLE_OWNED_ROOT_HOST_TESTS, *gate.AARCH64_STACKMAP_RETIREMENT_HOST_TESTS),
+        (54, 30, 9, 76, 39, 31, 17),
+    ):
+        assert push_filters.count('      - "' + path + '"') == 1
+        assert pull_request_filters.count('      - "' + path + '"') == 1
+        module = ast.parse((ROOT / path).read_text())
+        parameter_values = {
+            node.targets[0].id: node.value
+            for node in module.body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, (ast.List, ast.Tuple))
+        }
+        count = 0
+        for node in module.body:
+            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+                continue
+            if any(ast.unparse(mark) == "pytest.mark.integration" for mark in node.decorator_list):
+                continue
+            cases = 1
+            for mark in node.decorator_list:
+                assert isinstance(mark, ast.Call)
+                assert ast.unparse(mark.func) == "pytest.mark.parametrize"
+                values = mark.args[1]
+                if isinstance(values, ast.Name):
+                    values = parameter_values[values.id]
+                if isinstance(values, ast.Call):
+                    assert isinstance(values.func, ast.Name) and values.func.id == "range"
+                    assert not values.keywords
+                    cases *= len(range(*(ast.literal_eval(arg) for arg in values.args)))
+                else:
+                    assert isinstance(values, (ast.List, ast.Tuple))
+                    cases *= len(values.elts)
+            count += cases
+        assert count == expected_count
     assert gate.GC_RELOCATION_PAGE_CURSOR_INPUTS == (
         gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
         "pcc/runtime/py/freestanding_gc_relocation_selector.py",
@@ -1121,6 +1214,38 @@ def workflow_job(text, name):
     return match.group(1)
 
 
+def assert_workflow_marker_permissions(text):
+    # Only the same-run artifact consumer declares permissions. Do not expose
+    # its read scope globally or add any permission to the original producers.
+    assert re.findall(r"(?m)^\s*permissions:[^\n]*", text) == ["    permissions:"]
+    marker = workflow_job(text, "pytest-markers")
+    permission_block = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", marker)
+    assert permission_block is not None
+    assert permission_block.group(1) == "      contents: read\n      actions: read\n"
+
+
+def assert_workflow_job_budgets(text):
+    expected = {
+        "ci-plan": 5,
+        "macos-pcc0-regressions": 25,
+        "macos-pcc0-float-doc-regressions": 25,
+        "macos-pcc0-indexed-split": 25,
+        "worker-prior-preflight": 190,
+        "windows-rss-publication": 10,
+        "other-platform-native-wheel": 360,
+        "pcc1-package-parity": 200,
+        "pytest-markers": 60,
+    }
+    jobs = text.split("\njobs:\n", 1)[1]
+    assert re.findall(r"(?m)^  ([A-Za-z0-9_-]+):$", jobs) == list(expected)
+    actual = {}
+    for name, minutes in expected.items():
+        values = re.findall(r"(?m)^    timeout-minutes: (\d+)$", workflow_job(text, name))
+        assert values == [str(minutes)], name
+        actual[name] = int(values[0])
+    return actual
+
+
 def test_x86_jump_threading_uses_existing_three_platform_host_gate():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     jump_test = "tests/python/test_x86_jump_threading.py"
@@ -1155,7 +1280,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     ownership = "tests/python/test_aarch64_stackmap_plan_ownership.py"
     identity_test = "tests/python/test_native_func_top_level_identity.py"
     staged_source = "tests/python/test_macho_staged_source_target_order.py"
-    assert ownership not in gate.HOST_FILES
+    assert ownership in gate.HOST_FILES
     assert identity_test not in gate.HOST_FILES
     assert consumer in gate.HOST_FILES
     consumer_tree = ast.parse((ROOT / consumer).read_text())
@@ -1280,10 +1405,15 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         "  group: ${{ github.workflow }}-${{ github.event_name }}-"
         "${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref "
         "|| format('{0}-{1}', github.run_id, github.run_attempt) }}\n"
-        "  cancel-in-progress: false"
+        "  cancel-in-progress: false\n"
+        "  queue: max"
     )
     group = concurrency.splitlines()[0].removeprefix("  group: ")
     cancel = concurrency.splitlines()[1].removeprefix("  cancel-in-progress: ")
+    queue = concurrency.splitlines()[2].removeprefix("  queue: ")
+    # Retain one active run and up to 100 pending in each unchanged group.
+    # GitHub orders arrivals at the group, not commits, and can cancel overflow.
+    assert queue == "max"
     base = dict(workflow="gate", event_name="push", ref="refs/heads/master",
                 run_id="101", run_attempt="1")
     for changes, expected_group, expected_cancel in (
@@ -1327,6 +1457,22 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         assert "ci_worker_size_prior_gate.py" not in body and "needs:" not in body
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in mac
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
+    assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in mac
+    assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in mac
+    assert_workflow_marker_permissions(text)
+    # Keep these negative controls in the existing node: HOST_COUNTS is an
+    # exact execution inventory, not a reason to drop the rejection checks.
+    for before, after in (
+        ("      contents: read\n", "      contents: write\n"),
+        ("      actions: read\n", "      actions: write\n"),
+        ("      actions: read\n", "      actions: read\n      id-token: write\n"),
+        ("\njobs:\n", "\npermissions: read-all\n\njobs:\n"),
+        ("  ci-plan:\n", "  ci-plan:\n    permissions: read-all\n"),
+        ("  other-platform-native-wheel:\n", "  other-platform-native-wheel:\n    permissions: read-all\n"),
+    ):
+        assert text.count(before) == 1
+        with pytest.raises(AssertionError):
+            assert_workflow_marker_permissions(text.replace(before, after, 1))
     # A push qualifies Stage1 plus the five-collector canary; the full
     # Stage2/Stage3 chain is a manual dispatch input, never a soft failure.
     assert "full_chain:" in text and "type: boolean" in text
@@ -1352,7 +1498,7 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     # independent native regression must not rebuild or require pcc1 success.
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     other = workflow_job(workflow, "other-platform-native-wheel")
-    name = "Verify GC4 relocation with the existing single-thread runtime"
+    name = "Verify GC4 relocation with one mutator in the admitted threaded runtime"
     step = other.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
     assert "!cancelled() && startsWith(matrix.platform, 'linux-')" in step
     assert "steps.platform_runtime.outputs.ready == 'true'" in step
@@ -1370,7 +1516,7 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     assert "build/worker-prior-gate/**/*.xml" in other
     probe_path = "tests/python/test_gc_relocation_sweep_verdict.py"
     assert workflow.count('      - "' + probe_path + '"') == 2
-    node = probe_path + "::test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"
+    node = probe_path + "::test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator"
     import textwrap
 
     calls = []
@@ -1379,10 +1525,10 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     # Execute only the workflow wrapper with a mocked runner. No compiler,
     # runtime admission, subprocess or native program runs in this host test.
     exec(compile(textwrap.dedent(step.split("        run: |\n", 1)[1]),
-                 "<gc4 single-thread workflow>", "exec"), {})
+                 "<gc4 single-mutator workflow>", "exec"), {})
     args, kwargs = calls.pop()
     assert not calls
-    assert args[:3] == (Path("build/worker-prior-gate"), "gc4-single-thread-relocation", [node])
+    assert args[:3] == (Path("build/worker-prior-gate"), "gc4-single-mutator-relocation", [node])
     assert args[3]["PCC_RUNTIME_ARCHIVE"] == "/admitted/libpy_runtime_pcc_py.a"
     assert kwargs == {"integration": True, "timeout": 300}
     command = gate.pytest_command(tmp_path, [node], integration=True)
@@ -1399,10 +1545,10 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     with monkeypatch.context() as scoped:
         scoped.setattr(probe, "_run_probe", lambda *args, **kwargs: run_calls.append((args, kwargs)))
         probe.test_relocation_copy_clears_stale_sweep_verdict_backend4(tmp_path, "pcc_python")
-        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread(tmp_path)
+        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator(tmp_path)
     assert run_calls == [
-        ((tmp_path, "pcc_python"), {"expected_threads": True}),
-        ((tmp_path, "pcc_python_single_thread"), {"expected_threads": False}),
+        ((tmp_path, "pcc_python"), {}),
+        ((tmp_path, "pcc_python_single_mutator"), {}),
     ]
     archive = tmp_path / "libpy_runtime_pcc_py.a"
     archive.write_bytes(b"host-test placeholder, never a native runtime")
@@ -1416,37 +1562,35 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(probe, "link_c_harness", fake_link)
-    for threads in (True, False):
+    kinds = ("pcc_python", "pcc_python_single_mutator")
+    for kind in kinds:
         manifest = {"target_triple": "host-test-only", "members": [
-            {"runtime_build_config": {"threads": threads, "refcount": "atomic"}},
+            {"runtime_build_config": {"threads": True, "refcount": "atomic"}},
         ]}
         Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
-        executable = probe._compile_probe(tmp_path, str(threads), 4, expected_threads=threads)
+        executable = probe._compile_probe(tmp_path, kind, 4)
         receipt = json.loads(executable.with_suffix(".identity.json").read_text())
-        assert receipt["runtime_config"] == {"threads": threads, "refcount": "atomic"}
+        assert receipt["runtime_config"] == {"threads": True, "refcount": "atomic"}
         assert receipt["compiler"] == "host-pcc0" and receipt["runtime_provisioning"] is False
         assert set(receipt["runtime_hashes"]) == {"", ".provenance.json", ".capi_syms"}
+        manifest["members"][0]["runtime_build_config"]["threads"] = False
+        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
         with pytest.raises(AssertionError):
-            probe._compile_probe(tmp_path, "wrong-threads", 4, expected_threads=not threads)
+            probe._compile_probe(tmp_path, "wrong-threads", 4)
+        manifest["members"][0]["runtime_build_config"]["threads"] = True
         manifest["members"][0]["runtime_build_config"]["refcount"] = "plain"
         Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
         with pytest.raises(AssertionError):
-            probe._compile_probe(tmp_path, "wrong-refcount", 4, expected_threads=threads)
+            probe._compile_probe(tmp_path, "wrong-refcount", 4)
     assert linked == [
         probe.PROBE_SOURCE.replace("@BACKEND@", "4")
-        .replace("@EXPECTED_THREADS@", str(int(threads)))
-        .replace("@EXPECTED_REFCOUNT_STRATEGY@", strategy)
-        for threads, strategy in (
-            (True, "PCC_REFCOUNT_STRATEGY_ATOMIC"),
-            (False, "PCC_REFCOUNT_STRATEGY_NONATOMIC"),
-        )
+        .replace("@EXPECTED_THREADS@", "1")
+        .replace("@EXPECTED_REFCOUNT_STRATEGY@", "PCC_REFCOUNT_STRATEGY_ATOMIC")
+        for _ in kinds
     ]
-    for source, threads, strategy in (
-        (linked[0], 1, "PCC_REFCOUNT_STRATEGY_ATOMIC"),
-        (linked[1], 0, "PCC_REFCOUNT_STRATEGY_NONATOMIC"),
-    ):
-        assert f"if (pcc_threads_enabled() != {threads}) return 6;" in source
-        assert f"if (pcc_refcount_strategy() != {strategy}) return 1;" in source
+    for source in linked:
+        assert "if (pcc_threads_enabled() != 1) return 6;" in source
+        assert "if (pcc_refcount_strategy() != PCC_REFCOUNT_STRATEGY_ATOMIC) return 1;" in source
     assert linked[0].split("    if (pcc_gc_set_backend(backend)", 1)[1] == (
         linked[1].split("    if (pcc_gc_set_backend(backend)", 1)[1]
     )
@@ -1454,9 +1598,17 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
 
 def test_stage1_extension_preserves_other_job_budgets_and_hosted_ceiling():
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
-    job_minutes = [int(value) for value in re.findall(r"(?m)^    timeout-minutes: (\d+)$", text)]
-    assert job_minutes == [25, 25, 25, 190, 10, 360, 200]
-    assert max(job_minutes) <= 360
+    job_minutes = assert_workflow_job_budgets(text)
+    assert max(job_minutes.values()) <= 360
+    # Every original producer and both added jobs retain their exact cap.
+    for name in job_minutes:
+        body = workflow_job(text, name)
+        for delta in (-1, 1):
+            changed = re.sub(r"(?m)^(    timeout-minutes: )(\d+)$",
+                             lambda match: match[1] + str(int(match[2]) + delta), body)
+            assert changed != body
+            with pytest.raises(AssertionError):
+                assert_workflow_job_budgets(text.replace(body, changed, 1))
     # Preserve the previous 60-minute allowance outside runtime and Stage1.
     assert 200 * 60 - 1200 - gate.STAGE1_TIMEOUT_S == 60 * 60
     preflight = workflow_job(text, "worker-prior-preflight")
@@ -1554,7 +1706,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17) + (36, 29, 4, 29, 5, 19, 10, 65, 7, 92, 1, 2) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -3232,7 +3384,7 @@ else:
     expected_summary_tail = one(ast.parse("""if classification_candidate is not None and classification_candidate[0] is True:
     if type(relocation) is not ElfRelocation or type(relocation.type) is not int:
         classification_candidate[0] = None
-    elif relocation.type in (283, 311, 312, 541, 542):
+    elif relocation.type in (283, 282, 311, 312, 541, 542):
         classification_candidate[0] = False
 """).body)
 

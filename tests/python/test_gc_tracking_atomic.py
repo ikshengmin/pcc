@@ -22,22 +22,59 @@ TRACKED = 2
 UPDATES = ("black", "pin", "unpin", "dying", "high_bit")
 
 
+def _layout_constants():
+    tree = ast.parse(TRACKING.read_text(encoding="utf-8"))
+    return {
+        node.target.id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, int)
+    }
+
+
 class TrackingState:
+    """Header interleavings with one selected shard and stubbed lock admission.
+
+    Production list/pool transitions and atomic counter operations execute.
+    Selecting a shard and acquiring it are explicit model boundaries; native
+    shard/collector concurrency belongs to the separate runtime C matrix.
+    """
+
     def __init__(self, initial, update, *, inserted=1, owner=False, present=True,
                  allocation=True, backend=1):
         self.memory = HeaderMemory(initial)
         self.namespace = self.memory.namespace()
+        self.layout = _layout_constants()
+        self.namespace.update(self.layout)
+        self.namespace["c_ptr"] = object
         self.update = update
         self.owner = owner
         self.inserted = inserted
         self.present = present
         self.allocation = allocation
-        self.node = {0: self.memory.obj, 24: None, 32: None}
+        self.shard_index = 3
+        self.node = {
+            self.layout["_NODE_OBJECT"]: self.memory.obj,
+            self.layout["_NODE_GC_REFS"]: 0,
+            self.layout["_NODE_REACHABLE"]: 0,
+            self.layout["_NODE_SHARD"]: self.shard_index,
+            self.layout["_NODE_PREV"]: None,
+            self.layout["_NODE_NEXT"]: None,
+        }
+        head = self.node if initial & TRACKED else None
+        self.shard = {
+            self.layout["_SHARD_LOCK"]: 0,
+            self.layout["_SHARD_HEAD"]: None if owner else head,
+            self.layout["_SHARD_POOL"]: None,
+            self.layout["_SHARD_POOL_COUNT"]: 0,
+        }
         self.globals = {
             "pcc_gc_table_lock_owner_token": {0: 99 if owner else 0},
             "pcc_gc_tracked_node_pool": None,
             "pcc_gc_tracked_node_pool_count": {0: 0},
-            "py_gc_head": self.node if initial & TRACKED else None,
+            "py_gc_head": head if owner else None,
             "py_gc_tracked_count": {0: 1 if initial & TRACKED else 0},
             "pcc_gc_deferred_node_free_head": None,
         }
@@ -50,10 +87,15 @@ class TrackingState:
             "pcc_threads_enabled": lambda: 1,
             "gc_backend_current": lambda: backend,
             "atomic_load_i64": self.load_owner,
+            "atomic_load_i32": self.load32,
+            "atomic_cas_i32": self.cas32,
+            "atomic_rmw_i32": self.rmw32,
             "pcc_current_native_thread_token": lambda: 99,
             "ptr_diff": lambda ptr, base: ptr,
-            "pcc_gc_default_table_lock": lambda: self.events.append("lock"),
-            "pcc_gc_default_table_unlock": lambda: self.events.append("unlock"),
+            "_tracked_shard_address": self.shard_address,
+            "_tracked_shard_index": self.select_shard,
+            "_tracked_shard_lock": self.lock_shard,
+            "_tracked_shard_unlock": self.unlock_shard,
             "global_addr": lambda name: self.globals[name],
             "global_load_ptr": lambda name: self.globals[name],
             "global_store_ptr": lambda name, value: self.globals.__setitem__(name, value),
@@ -67,14 +109,69 @@ class TrackingState:
             "py_gc_index_insert": self.insert,
             "py_gc_index_remove": self.remove,
         })
-        for name in ("_tracked_node_recycle", "pcc_gc_default_unlink_tracked_node",
+        for name in ("_tracked_table_owned_by_current", "_tracked_node_pool_take",
+                     "_tracked_node_recycle", "pcc_gc_default_unlink_tracked_node",
                      "py_gc_track", "py_gc_untrack"):
             _load(TRACKING, name, self.namespace)
+
+    def head(self):
+        return (self.globals["py_gc_head"] if self.owner
+                else self.shard[self.layout["_SHARD_HEAD"]])
+
+    def pool(self):
+        return (self.globals["pcc_gc_tracked_node_pool"] if self.owner
+                else self.shard[self.layout["_SHARD_POOL"]])
+
+    def shard_address(self, index):
+        assert index == self.shard_index
+        return self.shard
+
+    def select_shard(self, obj):
+        assert obj is self.memory.obj
+        return self.shard_index
+
+    def lock_shard(self, index):
+        assert index == self.shard_index
+        self.events.append("lock")
+
+    def unlock_shard(self, index):
+        assert index == self.shard_index
+        self.events.append("unlock")
 
     def load_owner(self, slot, offset, order):
         assert slot is self.globals["pcc_gc_table_lock_owner_token"]
         assert (offset, order) == (0, "acquire")
         return slot[0]
+
+    def counter(self, slot, offset):
+        assert offset == 0
+        assert any(slot is self.globals[name] for name in (
+            "pcc_gc_tracked_node_pool_count", "py_gc_tracked_count",
+        ))
+        return slot[offset]
+
+    def load32(self, obj, offset, order):
+        if obj is self.memory.obj:
+            return self.memory.load(obj, offset, order)
+        assert order == "acquire"
+        return self.counter(obj, offset)
+
+    def cas32(self, obj, offset, expected, desired, order, fail_order):
+        if obj is self.memory.obj:
+            return self.memory.cas(obj, offset, expected, desired, order, fail_order)
+        assert (order, fail_order) == ("acq_rel", "acquire")
+        old = self.counter(obj, offset)
+        if old == _i32(expected):
+            obj[offset] = _i32(desired)
+        return old
+
+    def rmw32(self, operation, obj, offset, value, order):
+        if obj is self.memory.obj:
+            return self.memory.rmw(operation, obj, offset, value, order)
+        assert order == "acq_rel" and operation in ("add", "sub")
+        old = self.counter(obj, offset)
+        obj[offset] = _i32(old + value if operation == "add" else old - value)
+        return old
 
     def allocate(self, size):
         assert size == 40
@@ -82,9 +179,8 @@ class TrackingState:
         return self.node if self.allocation else None
 
     def interfere(self):
-        # Both index callbacks occur after the tracking function's flags
-        # snapshot and before its membership publication. A different lock
-        # protects the collector's color CAS; neither waits for this table lock.
+        # Both index callbacks occur after the header snapshot but before
+        # membership publication. The color/pin writer does not take this lock.
         assert self.owner or self.events[0] == "lock"
         obj = self.memory.obj
         if self.update == "black":
@@ -132,10 +228,10 @@ def test_track_only_sets_membership_bit(update, inserted, owner):
     assert state.memory.writes[-1] == "or"
     assert state.globals["py_gc_tracked_count"][0] == (1 if inserted > 0 else 0)
     if inserted > 0:
-        assert state.globals["py_gc_head"] is state.node
+        assert state.head() is state.node
         assert state.node[0] is state.memory.obj
     else:
-        assert state.globals["pcc_gc_tracked_node_pool"] is state.node
+        assert state.pool() is state.node
         assert state.globals["pcc_gc_tracked_node_pool_count"][0] == 1
     state.check_locks()
 
@@ -152,12 +248,12 @@ def test_untrack_only_clears_membership_bit(update, present, owner):
     assert state.memory.writes[-1] == "and"
     assert state.globals["py_gc_tracked_count"][0] == (0 if present else 1)
     if present:
-        assert state.globals["py_gc_head"] is None
+        assert state.head() is None
         if owner:
             assert state.globals["pcc_gc_deferred_node_free_head"] is state.node
             assert state.globals["pcc_gc_tracked_node_pool_count"][0] == 0
         else:
-            assert state.globals["pcc_gc_tracked_node_pool"] is state.node
+            assert state.pool() is state.node
             assert state.globals["pcc_gc_tracked_node_pool_count"][0] == 1
     state.check_locks()
 
@@ -184,21 +280,41 @@ def test_failed_tracking_does_not_publish_membership(allocation):
     assert state.memory.obj[12] == _i32(state.expected_nontracked)
     assert "or" not in state.memory.writes and "and" not in state.memory.writes
     assert state.globals["py_gc_tracked_count"][0] == 0
-    assert state.globals["py_gc_head"] is None
+    assert state.head() is None
     state.check_locks()
 
 
 def test_tracking_header_writes_are_exact_masked_atomic_operations():
     tree = ast.parse(TRACKING.read_text(encoding="utf-8"))
+    constants = _layout_constants()
+    assert constants["_TRACKED"] == TRACKED
+
+    def mask_value(node):
+        if isinstance(node, ast.Name):
+            return constants[node.id]
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+            return ~mask_value(node.operand)
+        return ast.literal_eval(node)
+
     writes = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
         if node.func.id == "atomic_rmw_i32":
-            assert ast.unparse(node.args[1]) == "obj"
-            assert ast.literal_eval(node.args[2]) == 12
-            assert ast.literal_eval(node.args[4]) == "acq_rel"
-            writes.append((ast.literal_eval(node.args[0]), ast.unparse(node.args[3])))
+            if ast.unparse(node.args[1]) == "obj":
+                assert ast.literal_eval(node.args[2]) == 12
+                assert ast.literal_eval(node.args[4]) == "acq_rel"
+                writes.append((ast.literal_eval(node.args[0]), mask_value(node.args[3])))
+            else:
+                # Shared accounting moved to atomics; it is not a header
+                # write and must target one of the two named counter cells.
+                assert ast.unparse(node.args[1]) in {
+                    "global_addr('py_gc_tracked_count')",
+                    "global_addr('pcc_gc_tracked_node_pool_count')",
+                }
+                assert ast.literal_eval(node.args[2]) == 0
+                assert ast.literal_eval(node.args[0]) in ("add", "sub")
+                assert ast.literal_eval(node.args[4]) == "acq_rel"
         elif node.func.id == "store_i32":
             assert ast.unparse(node.args[0]) != "obj"
-    assert sorted(writes) == [("and", "~2"), ("or", "2"), ("or", "2")]
+    assert sorted(writes) == [("and", ~TRACKED), ("or", TRACKED), ("or", TRACKED)]

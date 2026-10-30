@@ -6,11 +6,19 @@ from pcc.frontends.c.passes.whole_program import WholeProgramAnalyzer
 from pcc.frontends.c.passes.whole_program_pass import WholeProgramAnalysisPass
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def _parse(src: str):
-    return _PARSER.parse(src)
+    return _get_parser().parse(src)
 
 
 def test_whole_program_detects_specialization_candidate_same_constant():

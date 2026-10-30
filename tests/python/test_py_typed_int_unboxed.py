@@ -139,6 +139,23 @@ def _assert_no_class_or_valuebox_allocation(body: str) -> None:
     assert "@py_valuebox_new" not in body, body
 
 
+def _assert_raw_range_induction(body: str) -> None:
+    """The induction value stays i64 before and after memory promotion."""
+    lane = re.search(r"(%i\.range\.addr[\w.]*) = (alloca|phi)\s+i64", body)
+    assert lane is not None, body
+    if lane.group(2) == "phi":
+        values = [lane.group(1)]
+    else:
+        values = re.findall(
+            r"(%[\w.]+) = load i64, ptr " + re.escape(lane.group(1)) + r"\b", body,
+        )
+        assert values, body
+    assert any(re.search(r"icmp slt i64 " + re.escape(value) + r",", body)
+               for value in values), body
+    assert any(re.search(r"add i64 " + re.escape(value) + r",", body)
+               for value in values), body
+
+
 def test_c_abi_i64_branch_keeps_negative_i64_min_in_scalar_lane(tmp_path):
     ir_text = _compile_to_ll(
         tmp_path,
@@ -506,7 +523,11 @@ def test_exact_int_branch_slot_is_owned_rooted_and_balanced_on_error(tmp_path):
     assert len(re.findall(r"%value\.addr(?:\.\d+)? = alloca ptr", body)) == 1, body
     assert "@pcc_gc_frame_enter" in body, body
     assert "@pcc_gc_store_root" in body, body
-    assert "@pcc_gc_release" in body, body
+    assert "@pcc_gc_store_root_take" in body, body
+    assert re.search(
+        r"@pcc_gc_store_root\(ptr %value\.err\.active\.slot[\w.]*, ptr null\)",
+        body,
+    ), body
     assert "@pcc_gc_frame_leave" in body, body
     assert "err.exit" in body, body
 
@@ -582,7 +603,7 @@ def test_exact_int_chained_assignment_plans_each_name_as_one_object_slot(tmp_pat
     assert "@py_int_add" in body, body
 
 
-def test_exact_int_rebind_pins_replacement_before_releasing_previous_value(
+def test_exact_int_rebind_transfers_replacement_into_owned_root(
     tmp_path,
 ):
     ir_text = _compile_to_ll(
@@ -603,18 +624,20 @@ def test_exact_int_rebind_pins_replacement_before_releasing_previous_value(
     )
     body = _fn_body(ir_text, "pcc_test_exact_rebind_pin")
     assert body is not None, ir_text
-    # A fresh exact value is not yet in the local's frame root.  Pin it before
-    # the relocation-aware root-store atomically retains the replacement and
-    # releases the previous slot owner; then unpin and consume the temporary.
-    assert re.search(
-        r"(?s)call ptr (?:\([^)]*\) )?@py_int_shl.*?"
-        r"call void (?:\([^)]*\) )?@pcc_gc_pin.*?"
-        r"bitcast ptr %value\.addr.*?"
-        r"call void (?:\([^)]*\) )?@pcc_gc_store_root.*?"
-        r"call void (?:\([^)]*\) )?@pcc_gc_unpin.*?"
-        r"call void (?:\([^)]*\) )?@pcc_gc_release",
-        body,
-    ), body
+    # The take store consumes the NEW value and releases the previous slot
+    # owner. Releasing that temporary again would double-consume its owner.
+    replacements = re.findall(
+        r"(%[\w.]+) = call ptr (?:\([^)]*\) )?@py_int_shl\(", body,
+    )
+    assert len(replacements) == 2, body
+    for replacement in replacements:
+        assert re.search(
+            r"@pcc_gc_store_root_take\(ptr %value\.addr[\w.]*, ptr "
+            + re.escape(replacement) + r"\)", body,
+        ), body
+        assert not re.search(
+            r"@pcc_gc_release\(ptr " + re.escape(replacement) + r"\)", body,
+        ), body
 
 
 def test_exact_int_branch_and_zero_iteration_runtime_behavior(
@@ -1146,7 +1169,7 @@ def test_typed_int_annotations_default_to_boxed_tagged_abi(tmp_path):
     ), ir_text
     body = _fn_body(ir_text, "add")
     assert body is not None, ir_text
-    assert "@py_int_add" in body, body
+    assert "@py_obj_add" in body, body
 
 
 def test_typed_int_direct_call_defaults_to_boxed_tagged_shape_and_runs(tmp_path):
@@ -1159,9 +1182,16 @@ def test_typed_int_direct_call_defaults_to_boxed_tagged_shape_and_runs(tmp_path)
     assert bench_body is not None, ir_text
     assert "int.tag.fast" in add_body, add_body
     assert "tag.add" in add_body, add_body
-    assert "@py_int_add" in add_body, add_body
+    assert "@py_obj_add" in add_body, add_body
+    argument = re.search(
+        r"(%[\w.]+) = call ptr (?:\([^)]*\)\s*)?"
+        r"@pcc_gc_load_borrowed_ptr\(ptr null, ptr %n\.addr[\w.]*\)",
+        bench_body,
+    )
+    assert argument is not None, bench_body
     assert re.search(
-        r"call\s+ptr\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_add\s*\(ptr\s+%n,",
+        r"call\s+ptr\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_add\s*\(ptr\s+"
+        + re.escape(argument.group(1)) + ",",
         bench_body,
     ), bench_body
     assert "low.call" not in bench_body, bench_body
@@ -1196,9 +1226,7 @@ def test_for_range_induction_keeps_raw_i64_lane_under_boxed_int_mode(tmp_path):
     ), ir_text
     body = _fn_body(ir_text, "sum_range")
     assert body is not None, ir_text
-    assert re.search(r"%i\.range\.addr[^=]*=\s+phi\s+i64", body), body
-    assert re.search(r"icmp\s+slt\s+i64\s+%i\.range\.addr", body), body
-    assert re.search(r"add\s+i64\s+%i\.range\.addr", body), body
+    _assert_raw_range_induction(body)
     assert "range.int.obj" in body, body
     assert "@py_int_from_i64" in body, body
     assert "@py_obj_call" not in body, body
@@ -1211,7 +1239,7 @@ def test_for_range_raw_lane_reboxes_before_dyn_and_typed_calls(tmp_path):
     ir_text = _compile_to_ll(tmp_path, _TYPED_RANGE_ESCAPE, "typed_range_escape")
     body = _fn_body(ir_text, "last")
     assert body is not None, ir_text
-    assert re.search(r"%i\.range\.addr[^=]*=\s+phi\s+i64", body), body
+    _assert_raw_range_induction(body)
     assert "range.int.obj" in body, body
     assert "@py_int_from_i64" in body, body
     assert re.search(
@@ -1254,7 +1282,7 @@ def test_tagged_int_mul_uses_inline_overflow_fast_path(tmp_path):
     assert "int.tag.fast" in body, body
     assert "llvm.smul.with.overflow.i64" in ir_text, ir_text
     assert "tag.mul" in body, body
-    assert "@py_int_mul" in body, body
+    assert "@py_obj_mul_slots" in body, body
     assert "tag.fits" in body, body
 
 

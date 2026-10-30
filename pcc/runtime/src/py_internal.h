@@ -109,13 +109,20 @@ int64_t pcc_platform_socket_peer_text(
  * GEN_SOURCE keeps those iterator objects as data at virtual_thread.call.
  * Explicit native continuations retain the original MAY_PARK protocol. */
 #define PY_FLAG_GEN_MAY_PARK 0x100000
-/* Native function entry roles. Descriptor-role bits 0x200000/0x400000 are
- * reserved independently. AUTO_PARK is a compiler-created ordinary callable
+/* Type-specific bits 21/22 on a class object: its instances have no
+ * __dict__ (__slots__ without "__dict__"), and it subclasses the builtin
+ * dict. A class is GC-tracked and finalized like any other object, so these
+ * markers cannot share PY_FLAG_GC_TRACKED or PY_FLAG_FINALIZED. */
+#define PY_FLAG_CLASS_SLOTS_ONLY 0x200000
+#define PY_FLAG_CLASS_DICT_SUBCLASS 0x400000
+/* Native function entry roles. AUTO_PARK is a compiler-created ordinary callable
  * whose ABI entry creates a resumable state machine; it is not a Gen role.
  * TRANSPARENT_CALL forwards call context to one actual semantic target. */
 #define PY_FLAG_FUNC_AUTO_PARK 0x800000
 #define PY_FLAG_FUNC_TRANSPARENT_CALL 0x1000000
 #define PY_FLAG_GEN_SOURCE 0x2000000
+/* Type-specific generator storage: frame is NULL; slots follow the header. */
+#define PY_FLAG_GEN_INLINE_FRAME 0x400000
 #define PY_FLAG_FUNC_CONTINUATION_FACTORY 0x4000000
 /* BaseException.__suppress_context__, independent of collector state. */
 #define PY_FLAG_EXC_SUPPRESS_CONTEXT 0x8000000
@@ -941,6 +948,12 @@ typedef struct {
     int64_t done;
     PyObject *send_value;
 } PyGenObject;
+
+typedef struct {
+    PyGenObject gen;
+    int64_t length;
+    PyObject *items[];
+} PyInlineGenObject;
 
 typedef struct {
     PyObjectHeader h;

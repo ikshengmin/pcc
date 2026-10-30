@@ -1,6 +1,6 @@
 import os
 from contextlib import contextmanager
-import fcntl
+from scripts.file_lock import exclusive_file_lock
 import hashlib
 import subprocess
 import tempfile
@@ -43,13 +43,8 @@ def _make_env():
 
 @contextmanager
 def _readline_build_lock():
-    os.makedirs(os.path.dirname(READLINE_CONFIG_LOCK), exist_ok=True)
-    with open(READLINE_CONFIG_LOCK, "w") as lockfile:
-        fcntl.flock(lockfile, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lockfile, fcntl.LOCK_UN)
+    with exclusive_file_lock(READLINE_CONFIG_LOCK):
+        yield
 
 
 def _ensure_readline_configured():

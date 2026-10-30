@@ -26,9 +26,16 @@ from tests.c_parse_oracle.corpus import CORPUS  # noqa: E402
 
 _ORACLE_DIR = REPO / "tests" / "c_parse_oracle"
 
-# Module-scope parser instance — CParser is expensive to build (PLY
-# generates its LR table on first use), so share it across cases.
-_parser = CParser()
+# Build the PLY parser only when a test runs, then share it across cases.
+_parser = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _parser
+    if _parser is None:
+        _parser = CParser()
+    return _parser
 
 
 @pytest.mark.parametrize("name", sorted(CORPUS))
@@ -40,7 +47,7 @@ def test_c_parser_oracle(name: str) -> None:
             f"oracle missing for {name!r} — run scripts/build_c_oracle.py"
         )
     expected = json.loads(oracle_path.read_text(encoding="utf-8"))
-    tree = _parser.parse(src, filename=f"<{name}>")
+    tree = _get_parser().parse(src, filename=f"<{name}>")
     actual = normalize(tree)
     diffs = diff(expected, actual)
     if diffs:

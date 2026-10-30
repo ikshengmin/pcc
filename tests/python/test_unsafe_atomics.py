@@ -134,7 +134,7 @@ def test_atomic_cas_loop_matches_removed_dec_if_positive_helper(tmp_path, backen
     from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "dec_if_positive.py"
-    exe = tmp_path / ("dec_if_positive_" + backend + ".out")
+    exe = tmp_path / f"dec_if_positive_{backend}.out"
     src.write_text(DEC_IF_POSITIVE_PROGRAM, encoding="utf-8")
     compile_python(
         str(src),
@@ -148,6 +148,62 @@ def test_atomic_cas_loop_matches_removed_dec_if_positive_helper(tmp_path, backen
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "2\n1\n0\n0\n0\n"
+
+
+# Untyped helper parameters carry raw addresses as tagged ints; every
+# raw-memory base operand must decode them like atomic_load_i64 does.
+DYNAMIC_ADDRESS_PROGRAM = textwrap.dedent("""
+    from pcc.unsafe import (
+        atomic_cas_i32,
+        atomic_load_i32,
+        atomic_load_i64,
+        atomic_rmw_i64,
+        atomic_store_i32,
+        atomic_store_i64,
+        free,
+        malloc,
+        realloc,
+    )
+
+    def bump(slot) -> int:
+        atomic_store_i64(slot, 0, 40, "release")
+        return atomic_rmw_i64("add", slot, 0, 2, "acq_rel")
+
+    def swap32(slot) -> int:
+        return atomic_cas_i32(slot, 8, 0, 9, "acq_rel", "acquire")
+
+    def grow(block):
+        return realloc(block, 64)
+
+    def main() -> None:
+        slot = malloc(16)
+        atomic_store_i32(slot, 8, 0, "relaxed")
+        print(bump(slot))
+        print(atomic_load_i64(slot, 0, "acquire"))
+        print(swap32(slot))
+        print(atomic_load_i32(slot, 8, "acquire"))
+        slot = grow(slot)
+        print(atomic_load_i64(slot, 0, "acquire"))
+        print(atomic_load_i32(slot, 8, "acquire"))
+        free(slot)
+
+    if __name__ == "__main__":
+        main()
+    """).lstrip()
+
+
+def test_dynamic_address_parameters_reach_raw_memory(tmp_path):
+    from pcc.frontends.python.pipeline import compile_python
+
+    src = tmp_path / "dynamic_address.py"
+    exe = tmp_path / "dynamic_address.out"
+    src.write_text(DYNAMIC_ADDRESS_PROGRAM, encoding="utf-8")
+    compile_python(
+        str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off", backend="self",
+    )
+    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "40\n42\n0\n9\n42\n9\n"
 
 
 def _compile_to_ll(tmp_path, source: str) -> str:
@@ -203,6 +259,11 @@ def test_atomic_intrinsics_lower_to_aarch64_exclusives(tmp_path):
         "stlxrb ",
         "stlrb ",
         "strb ",
+        # relaxed rmw/cas and the relaxed test_and_set keep only exclusivity
+        "ldxr ",
+        "stxr ",
+        "ldxrb ",
+        "stxrb ",
     ):
         assert needle in asm, f"missing {needle!r} in self-backend asm"
     # relaxed accesses must stay plain: the monotonic i64 load emits ldr,

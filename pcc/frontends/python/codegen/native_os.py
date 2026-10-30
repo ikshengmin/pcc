@@ -784,6 +784,7 @@ class NativeOsLoweringMixin:
             "dirname",
             "split",
             "exists",
+            "lexists",
             "isabs",
             "isfile",
             "isdir",
@@ -963,17 +964,17 @@ class NativeOsLoweringMixin:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):
                 return None
             return self._emit_owned_os_runtime_call(expr, "py_os_path_" + name)
-        if name == "exists" and len(expr.args) == 1:
+        if name in ("exists", "lexists") and len(expr.args) == 1:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):
                 return None
             i32v = self._emit_owned_os_runtime_call(
-                expr, "py_os_path_exists", scalar=True,
+                expr, "py_os_path_" + name, scalar=True,
             )
             return self.builder.icmp_signed(
                 "!=",
                 i32v,
                 ir.Constant(_I32, 0),
-                name=self._fresh("os.path.exists.i1"),
+                name=self._fresh("os.path." + name + ".i1"),
             )
         if name in ("isabs", "isfile", "isdir", "islink") and len(expr.args) == 1:
             if not self._native_os_path_arg_can_stay_native(expr.args[0]):

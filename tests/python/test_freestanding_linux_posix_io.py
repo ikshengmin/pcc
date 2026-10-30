@@ -132,7 +132,8 @@ def test_linux_posix_exports_have_owned_cross_target_abi(tmp_path, target):
     undefined = {symbol.name for symbol in obj.symbols if symbol.section_index == 0 and symbol.name}
     assert SIGNATURES.keys() <= defined
     assert undefined == {"pcc_errno_set", "pcc_platform_abort", "malloc", "free", "fflush",
-                         "__fini_array_start", "__fini_array_end"}
+                         "__fini_array_start", "__fini_array_end",
+                         "pcc_errno_linux_c_locale_message", "pcc_errno_location"}
     for name, (restype, arguments) in SIGNATURES.items():
         match = re.search(r"define external " + restype + r" @" + name + r"\(([^)]*)\)", text)
         assert match, name

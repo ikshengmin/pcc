@@ -6,8 +6,10 @@ The integration fixture is called directly here; no native compiler is run.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -30,8 +32,11 @@ from tests import conftest as shared_fixtures
 from tests import runtime_fixture_provenance as admission
 from tests.integration import test_threaded_path_ownership_qualification as path_suite
 from tests.python import conftest as python_fixtures
+from tests.python import _gc_substrate_common as substrate
+from tests.python import test_gc_concurrent_collection as concurrent
 
 
+pytest_plugins = ["pytester"]
 TARGET = "x86_64-unknown-linux-gnu"
 _ABSENT = object()
 
@@ -58,8 +63,11 @@ def runtime_tree(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("// fixture identity\n", encoding="utf-8")
     monkeypatch.setattr(admission, "_RUNTIME_ROOT", root)
+    monkeypatch.setattr(substrate, "RUNTIME_DIR", root)
+    monkeypatch.setattr(substrate, "cached_pcc_python_runtime", _forbidden)
+    monkeypatch.setattr(substrate, "cached_threaded_pcc_python_runtime", _forbidden)
     monkeypatch.setattr(pipeline_targets, "host_target_triple", lambda: TARGET)
-    monkeypatch.setenv("PCC_WITH_THREADS", "0")
+    monkeypatch.setenv("PCC_WITH_THREADS", "1")
     monkeypatch.setenv("PCC_REFCOUNT_KIND", "atomic")
     monkeypatch.setattr(owned_runtime_build, "build_runtime_archive", _forbidden)
     monkeypatch.setattr(owned_runtime_build, "ensure_target_runtime", _forbidden)
@@ -132,6 +140,16 @@ def _select(route, archive, monkeypatch):
             return shared_fixtures.pcc_runtime_archive.__wrapped__(None)
         if route == "threaded":
             return shared_fixtures.threaded_pcc_runtime_archive.__wrapped__()
+        if route == "concurrent":
+            runtime, selected = concurrent._build_threaded_runtime(
+                archive.parent, cc="must-not-run",
+            )
+            assert runtime == admission._RUNTIME_ROOT
+            return selected
+        if route == "substrate":
+            runtime, selected = substrate._runtime_variant("pcc_python", threaded=True)
+            assert runtime == archive.parent
+            return selected
         fixture = path_suite.path_toolchain.__wrapped__()
         compiler, selected, source_root, records, identities = next(fixture)
         assert "freestanding_thread_kernel_pthread.o" in records
@@ -144,12 +162,115 @@ def _select(route, archive, monkeypatch):
         assert dict(os.environ) == environment
 
 
-@pytest.mark.parametrize("route", ["default", "threaded", "integration"])
+@pytest.mark.parametrize("route", ["default", "threaded", "integration", "substrate", "concurrent"])
 def test_explicit_routes_accept_current_complete_archive_without_provisioning(
     runtime_tree, monkeypatch, route,
 ):
-    archive = _archive(runtime_tree, threads=route != "default")
+    archive = _archive(runtime_tree, threads=True)
     assert _select(route, archive, monkeypatch) == archive
+
+
+
+def test_concurrent_fixture_keeps_source_headers_separate_from_explicit_archive(
+    runtime_tree, tmp_path, monkeypatch,
+):
+    archive = _archive(runtime_tree, threads=True)
+    bundle = tmp_path / "native-bundle"
+    bundle.mkdir()
+    selected = bundle / archive.name
+    for suffix in ("", ".provenance.json", ".capi_syms"):
+        shutil.move(str(archive) + suffix, str(selected) + suffix)
+    monkeypatch.setenv("PCC_TEST_NO_NATIVE_PROVISIONING", "1")
+    assert _select("concurrent", selected, monkeypatch) == selected
+    assert not (bundle / "include").exists()
+
+
+@pytest.mark.parametrize("defect", [
+    None, "missing-manifest", "changed-source", "wrong-target",
+    "unthreaded", "local-refcount", "in-runtime",
+])
+def test_carrier_fixture_delegates_verified_parent_without_provisioning(
+    runtime_tree, monkeypatch, pytester, defect,
+):
+    """Resolve the real overriding fixture, never collect its native consumers."""
+    # Match the sibling-import path provided when pytest collects tests/python.
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / "python"))
+    carriers = importlib.import_module("tests.python.test_virtual_thread_pcc_py_carriers")
+
+    archive = _archive(
+        runtime_tree,
+        threads=True,
+        refcount="local" if defect == "local-refcount" else "atomic",
+        target="aarch64-unknown-linux-gnu" if defect == "wrong-target" else TARGET,
+    )
+    bundle = pytester.path / "native-bundle"
+    bundle.mkdir()
+    selected = bundle / archive.name
+    for suffix in ("", ".provenance.json", ".capi_syms"):
+        shutil.move(str(archive) + suffix, str(selected) + suffix)
+    if defect == "missing-manifest":
+        Path(str(selected) + ".provenance.json").unlink()
+    elif defect == "changed-source":
+        (runtime_tree / "py/py_obj.py").write_text("# changed\n", encoding="utf-8")
+    elif defect == "unthreaded":
+        # A stale receipt, not a request to build the removed single-thread kernel.
+        def change(manifest):
+            for member in manifest["members"]:
+                member["runtime_build_config"]["threads"] = False
+
+        _change_manifest(selected, change)
+    elif defect == "in-runtime":
+        monkeypatch.setattr(carriers, "RUNTIME", bundle)
+
+    monkeypatch.setenv("PCC_TEST_NO_NATIVE_PROVISIONING", "1")
+    monkeypatch.setenv("PCC_THREADED_RUNTIME_ARCHIVE", str(selected))
+    builder_calls = []
+
+    def forbidden_builder(*_args, **_kwargs):
+        builder_calls.append(True)
+        pytest.fail("carrier fixture attempted automatic provisioning")
+
+    # Also catches the old module-local imported builder if it is reintroduced.
+    monkeypatch.setattr(
+        carriers, "cached_threaded_pcc_python_runtime", forbidden_builder,
+        raising=False,
+    )
+    monkeypatch.setattr(shared_fixtures, "cached_threaded_pcc_python_runtime", forbidden_builder)
+    monkeypatch.setattr(shared_fixtures, "require_native_provisioning_allowed", forbidden_builder)
+    pytester.makeini("[pytest]\n")
+    pytester.makeconftest(
+        "from tests.conftest import threaded_pcc_runtime_archive\n"
+    )
+    body_marker = pytester.path / "fixture-consumer-ran"
+    pytester.makepyfile(
+        "from pathlib import Path\n"
+        "from tests.python.test_virtual_thread_pcc_py_carriers import threaded_pcc_runtime_archive\n"
+        "def test_selected_archive(threaded_pcc_runtime_archive):\n"
+        f"    assert threaded_pcc_runtime_archive == Path({str(selected)!r})\n"
+        f"    Path({str(body_marker)!r}).write_text('verified', encoding='utf-8')\n"
+    )
+    # The outer suite keeps its normal worker policy. This isolated in-process
+    # pytest harness exercises fixture resolution only, without tool subprocesses.
+    environment = {key: value for key, value in os.environ.items() if key.startswith("PCC_")}
+    result = pytester.runpytest_inprocess("-x", "-q", "--confcutdir", str(pytester.path))
+    assert {key: value for key, value in os.environ.items() if key.startswith("PCC_")} == environment
+    assert not builder_calls
+    if defect is None:
+        result.assert_outcomes(passed=1)
+        assert body_marker.read_text(encoding="utf-8") == "verified"
+    else:
+        result.assert_outcomes(errors=1)
+        assert not body_marker.exists()
+        expected = (
+            "cannot read provenance JSON" if defect == "missing-manifest"
+            else "AssertionError" if defect == "in-runtime"
+            else "source does not match its receipt" if defect == "changed-source"
+            else (
+                f"does not match {TARGET}: "
+                "{'threads': True, 'refcount': 'atomic'}"
+            )
+        )
+        assert expected in result.stdout.str()
 
 
 def test_default_fixture_honors_effective_thread_and_refcount_configuration(runtime_tree, monkeypatch):
@@ -159,7 +280,7 @@ def test_default_fixture_honors_effective_thread_and_refcount_configuration(runt
     assert _select("default", archive, monkeypatch) == archive
 
 
-@pytest.mark.parametrize("route", ["default", "threaded", "integration"])
+@pytest.mark.parametrize("route", ["default", "threaded", "integration", "substrate", "concurrent"])
 @pytest.mark.parametrize("config", [
     pytest.param(_ABSENT, id="missing"),
     pytest.param(None, id="null"),
@@ -168,7 +289,7 @@ def test_default_fixture_honors_effective_thread_and_refcount_configuration(runt
     pytest.param({"threads": "1", "refcount": "atomic"}, id="string-threads"),
 ])
 def test_all_routes_reject_unproven_member_configuration(runtime_tree, monkeypatch, route, config):
-    archive = _archive(runtime_tree, threads=route != "default")
+    archive = _archive(runtime_tree, threads=True)
 
     def change(manifest):
         member = manifest["members"][0]
@@ -182,10 +303,10 @@ def test_all_routes_reject_unproven_member_configuration(runtime_tree, monkeypat
         _select(route, archive, monkeypatch)
 
 
-@pytest.mark.parametrize("route", ["default", "threaded", "integration"])
+@pytest.mark.parametrize("route", ["default", "threaded", "integration", "substrate", "concurrent"])
 @pytest.mark.parametrize("field", ["threads", "refcount"])
 def test_all_routes_reject_mixed_member_configuration(runtime_tree, monkeypatch, route, field):
-    threaded = route != "default"
+    threaded = True
     archive = _archive(runtime_tree, threads=threaded)
 
     def change(manifest):
@@ -198,10 +319,10 @@ def test_all_routes_reject_mixed_member_configuration(runtime_tree, monkeypatch,
         _select(route, archive, monkeypatch)
 
 
-@pytest.mark.parametrize("route", ["default", "threaded", "integration"])
+@pytest.mark.parametrize("route", ["default", "threaded", "integration", "substrate", "concurrent"])
 @pytest.mark.parametrize("checksum", [pytest.param(_ABSENT, id="missing"), None, "unknown", "0" * 64])
 def test_all_routes_reject_missing_or_stale_codegen(runtime_tree, monkeypatch, route, checksum):
-    archive = _archive(runtime_tree, threads=route != "default")
+    archive = _archive(runtime_tree, threads=True)
 
     def change(manifest):
         member = manifest["members"][0]

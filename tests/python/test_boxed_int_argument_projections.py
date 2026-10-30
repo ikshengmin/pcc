@@ -64,17 +64,17 @@ def test_boxed_parameter_roots_owned_ir(tmp_path, monkeypatch):
         before_collection = body[:body.index("@pcc_gc_collect")]
         # The slot is registered and retired directly, or through identity aliases.
         roots = [slot] + re.findall(r"(%gc\.frame\.slots\.ptr[^ ]*) = bitcast ptr " + re.escape(slot) + r" to ptr", before_collection)
-        assert any(re.search(r"@pcc_gc_frame_enter\([^\n]*ptr " + re.escape(root) + r"\)", before_collection)
+        assert any(re.search(r"@pcc_gc_frame_enter_mapped\([^\n]*ptr " + re.escape(root) + r"\)", before_collection)
                    for root in roots), name
         assert ".pcc.gc.frame.map.borrowed" in before_collection, name
         assert "@pcc_gc_load_borrowed_ptr" in body, name
         leaves = [slot] + re.findall(r"(%gc\.frame\.leave\.ptr[^ ]*) = bitcast ptr " + re.escape(slot) + r" to ptr", body)
-        assert any(re.search(r"@pcc_gc_frame_leave\(ptr " + re.escape(leave) + r"\)", body) for leave in leaves), name
+        assert any(re.search(r"@pcc_gc_frame_leave_mapped\(ptr " + re.escape(leave) + r"\)", body) for leave in leaves), name
     body = re.search(r"(?ms)^define [^\n]*@user_boxed_roots_rebound\(.*?\n\}", text).group(0)
     assert "value.param.retain" in body
     assert ".pcc.gc.frame.map.borrowed" not in body
     assert re.search(r"%value\.owned[^ ]* = alloca i1", body)
-    assert "@pcc_gc_store_root" in body
+    assert "@pcc_gc_store_root_take" in body
     assert emit_owned_object(text, "x86_64-unknown-linux-gnu")[:4] == b"\x7fELF"
 
 

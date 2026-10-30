@@ -21,7 +21,12 @@ this contract.
 from __future__ import annotations
 
 import struct
+import sys
 from dataclasses import dataclass, field
+
+from pcc.unsafe import (
+    abi_constant, null, ptr_is_null, store_i32, store_i64,
+)
 
 from .precise_stackmap import (
     ARCH_X86_64,
@@ -113,6 +118,16 @@ _AR_MAGIC = b"!<arch>\n"
 _AR_HEADER_SIZE = 60
 _MAX_SECTIONS = 1_000_000
 _MAX_SYMBOLS = 4_000_000
+
+
+def _native_patch_words_available() -> bool:
+    try:
+        return ptr_is_null(null()) != 0
+    except NotImplementedError:
+        return False
+
+
+_NATIVE_PATCH_WORDS = _native_patch_words_available()
 
 
 def _align(value: int, alignment: int) -> int:
@@ -345,7 +360,7 @@ def _validate_object(obj: ElfObject) -> None:
                 # follow every original per-row validation and never resolve symbols.
                 if type(relocation) is not ElfRelocation or type(relocation.type) is not int:
                     classification_candidate[0] = None
-                elif relocation.type in (283, 311, 312, 541, 542):
+                elif relocation.type in (283, 282, 311, 312, 541, 542):
                     classification_candidate[0] = False
     for index, symbol in enumerate(obj.symbols):
         if index == 0:
@@ -1003,6 +1018,25 @@ def _write_int(image: bytearray, offset: int, value: int, bits: int, signed: boo
     if value < minimum or value > maximum:
         kind = "signed" if signed else "unsigned"
         raise ElfError(f"relocation result {value} does not fit {kind} i{bits}")
+    # Keep the original validation and fallback behavior, including slicing
+    # outside the image and callbacks on non-exact operands. Native relocation
+    # sites can write the scalar without allocating an intermediate bytes value.
+    if (
+        _NATIVE_PATCH_WORDS and sys.byteorder == "little"
+        and type(image) is bytearray and type(offset) is int
+        and type(value) is int and type(bits) is int and type(signed) is bool
+        and bits in (32, 64) and 0 <= offset <= len(image) - bits // 8
+    ):
+        # Pass the rooted object itself, not a retained derived payload pointer.
+        # store_i32 truncates its signed-i64 operand to the low 32 bits; an
+        # unsigned high-bit u64 must first use its signed two's-complement form.
+        if bits == 32:
+            store_i32(image, abi_constant("object.bytearray.data_offset") + offset, value)
+        else:
+            if value >= (1 << 63):
+                value -= 1 << 64
+            store_i64(image, abi_constant("object.bytearray.data_offset") + offset, value)
+        return
     image[offset:offset + bits // 8] = int(value).to_bytes(
         bits // 8, "little", signed=signed
     )
@@ -1063,6 +1097,15 @@ def link_static_executable(
         archive_selections=archive_selections,
         compact_archive_relocations=compact_archive_relocations,
     ))
+
+
+def _aarch64_veneer_branch(kind, ordinary_record):
+    # New JUMP26 support belongs to ordinary integer records. Preserve the
+    # old CALL26 comparison (including its result's truth conversion) for
+    # opaque records and integer subclasses, without a second type getter.
+    if ordinary_record and type(kind) is int:
+        return kind in (283, 282)
+    return kind == 283
 
 
 def _staged_classification_is_empty(store, objects, object_index, section_index, section, relocations):
@@ -1262,7 +1305,7 @@ def _link_static_executable_image(
                         # The ordinary loop overwrites its previous row here. Release
                         # a preceding custom row at the same boundary before callbacks.
                         relocation = None
-                        if (machine == EM_AARCH64 and relocation_type == 283
+                        if (machine == EM_AARCH64 and relocation_type in (283, 282)
                                 and section.flags & SHF_EXECINSTR
                                 and not section.flags & SHF_WRITE):
                             slots = branch_slots.get((object_index, section_index))
@@ -1312,7 +1355,7 @@ def _link_static_executable_image(
             relocation_sources = [relocations]
             del relocations
             for relocation in relocation_sources.pop():
-                if (machine == EM_AARCH64 and relocation.type == 283
+                if (machine == EM_AARCH64 and _aarch64_veneer_branch(relocation.type, type(relocation) is ElfRelocation)
                         and section.flags & SHF_EXECINSTR
                         and not section.flags & SHF_WRITE):
                     slots = branch_slots.get((object_index, section_index))
@@ -1610,7 +1653,7 @@ def _link_static_executable_image(
                         object_index, symbol_index
                     )
                     from .elf_aarch64_relocations import (
-                        apply_call26_with_veneer,
+                        apply_branch26_with_veneer,
                         apply_relocation,
                         veneer_slot_offset,
                     )
@@ -1622,7 +1665,7 @@ def _link_static_executable_image(
                     elif relocation_type in (549, 551):
                         target = tls_offset(object_index, symbol_index)
                     try:
-                        if (relocation_type == 283 and _symbol.type == STT_FUNC
+                        if (relocation_type in (283, 282) and _symbol.type == STT_FUNC
                                 and _symbol.section_index != SHN_UNDEF
                                 and not -(1 << 27) <= target + addend - place < (1 << 27)
                                 and (object_index, section_index) in branch_pools):
@@ -1632,7 +1675,7 @@ def _link_static_executable_image(
                             pool_starts = branch_pools[(object_index, section_index)]
                             veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
                                                    for pool in pool_starts)
-                            apply_call26_with_veneer(image, patch,
+                            apply_branch26_with_veneer(image, patch, relocation_type,
                                                     target + addend, place,
                                                     veneer_offsets)
                         else:
@@ -1706,6 +1749,7 @@ def _link_static_executable_image(
                 )
                 if machine == EM_AARCH64:
                     from .elf_aarch64_relocations import (
+                        apply_branch26_with_veneer,
                         apply_call26_with_veneer,
                         apply_relocation,
                         veneer_slot_offset,
@@ -1718,6 +1762,12 @@ def _link_static_executable_image(
                     elif relocation.type in (549, 551):
                         target = tls_offset(object_index, relocation.symbol_index)
                     try:
+                        # Decide new eligibility before a custom CALL comparison can
+                        # mutate its owning field. Custom records/subclass kinds
+                        # keep the original predicate and constant CALL helper.
+                        jump26 = (type(relocation) is ElfRelocation
+                                  and type(relocation.type) is int
+                                  and relocation.type == 282)
                         if (relocation.type == 283 and _symbol.type == STT_FUNC
                                 and _symbol.section_index != SHN_UNDEF
                                 and not -(1 << 27) <= target + relocation.addend - place < (1 << 27)
@@ -1729,6 +1779,19 @@ def _link_static_executable_image(
                             veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
                                                    for pool in pool_starts)
                             apply_call26_with_veneer(image, patch,
+                                                    target + relocation.addend, place,
+                                                    veneer_offsets)
+                        elif (jump26 and _symbol.type == STT_FUNC
+                                and _symbol.section_index != SHN_UNDEF
+                                and not -(1 << 27) <= target + relocation.addend - place < (1 << 27)
+                                and (object_index, section_index) in branch_pools):
+                            slot_index = branch_slots[(object_index, section_index)][
+                                (object_index, relocation.symbol_index, relocation.addend)
+                            ]
+                            pool_starts = branch_pools[(object_index, section_index)]
+                            veneer_offsets = tuple(veneer_slot_offset(pool, slot_index)
+                                                   for pool in pool_starts)
+                            apply_branch26_with_veneer(image, patch, 282,
                                                     target + relocation.addend, place,
                                                     veneer_offsets)
                         else:

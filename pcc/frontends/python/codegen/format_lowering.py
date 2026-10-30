@@ -632,10 +632,10 @@ class FormatLoweringMixin:
                     temporary = self._emit_slot_call_operand(argument, "str.format.input")
                     self._try_err_block = self._slot_call_cleanup_block((temporary,), cleanup)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    moved = self.builder.call(
-                        self.runtime["pcc_gc_root_move"],
-                        [self._as_gc_ptr(destination), self._as_gc_ptr(temporary)],
-                        name=self._fresh("str.format.argument.move"),
+                    moved = self._emit_root_slot_move(
+                        destination,
+                        temporary,
+                        label="str.format.argument.move",
                     )
                     self._slot_call_check_status(moved, "format argument move", expr.span)
                     self._release_slot_call_roots((temporary,))
@@ -709,10 +709,10 @@ class FormatLoweringMixin:
                             [self._as_gc_ptr(current), ir.Constant(ir.IntType(8).as_pointer(), None)],
                         )
                         next_value = combined
-                    moved = self.builder.call(
-                        self.runtime["pcc_gc_root_move"],
-                        [self._as_gc_ptr(current), self._as_gc_ptr(next_value)],
-                        name=self._fresh("str.format.accumulator.move"),
+                    moved = self._emit_root_slot_move(
+                        current,
+                        next_value,
+                        label="str.format.accumulator.move",
                     )
                     self._slot_call_check_status(moved, "format accumulator move", expr.span)
                     if single_field:
@@ -725,10 +725,10 @@ class FormatLoweringMixin:
                             self.runtime["pcc_gc_store_root"],
                             [self._as_gc_ptr(scratch), ir.Constant(ir.IntType(8).as_pointer(), None)],
                         )
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(output), self._as_gc_ptr(current)],
-                    name=self._fresh("str.format.move"),
+                moved = self._emit_root_slot_move(
+                    output,
+                    current,
+                    label="str.format.move",
                 )
                 self._slot_call_note_published(output)
                 self._slot_call_check_status(moved, "formatted result move", expr.span)

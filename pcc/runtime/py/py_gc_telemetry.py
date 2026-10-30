@@ -24,6 +24,8 @@ __pcc_freestanding__ = True
 
 
 pcc_gc_relocation_set_size = extern("pcc_gc_relocation_set_size", (), c_int64)
+pcc_gc_metric_pin_balance = extern("pcc_gc_metric_pin_balance", (), c_int64)
+pcc_gc_metric_allocation_count = extern("pcc_gc_metric_allocation_count", (), c_int64)
 pcc_gc_scheduler_root_count = extern("pcc_gc_scheduler_root_count", (), c_int64)
 pcc_gc_frame_root_slot_count = extern("pcc_gc_frame_root_slot_count", (), c_int64)
 pcc_gc_coroutine_root_score = extern("pcc_gc_coroutine_root_score", (), c_int64)
@@ -498,7 +500,7 @@ def pcc_gc_telemetry(metric: i64) -> i64:
             global_addr("pcc_gc_minor_arena_bumps"), 0, "relaxed"
         )
     if metric == 0:
-        return load_i32(global_addr("pcc_gc_metric_alloc"), 0)
+        return pcc_gc_metric_allocation_count()
     if metric == 1:
         return load_i32(global_addr("pcc_gc_metric_store"), 0)
     if metric == 2:
@@ -506,7 +508,7 @@ def pcc_gc_telemetry(metric: i64) -> i64:
     if metric == 3:
         return load_i32(global_addr("pcc_gc_metric_safepoint"), 0)
     if metric == 4:
-        return load_i32(global_addr("pcc_gc_metric_pin"), 0)
+        return pcc_gc_metric_pin_balance()
     if metric == 5:
         return load_i64(global_addr("pcc_gc_metric_step"), 0)
     return -1

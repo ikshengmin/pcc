@@ -56,6 +56,9 @@ from pcc.frontends.python.codegen.list_builtin_lowering import ListBuiltinLoweri
 from pcc.frontends.python.codegen.list_method_lowering import ListMethodLoweringMixin
 from pcc.frontends.python.codegen.literal_lowering import LiteralLoweringMixin
 from pcc.frontends.python.codegen.method_call_expression_lowering import MethodCallExpressionLoweringMixin
+from pcc.frontends.python.codegen.method_call_fallback_lowering import (
+    MethodCallFallbackLoweringMixin,
+)
 from pcc.frontends.python.codegen.method_call_lowering import MethodCallLoweringMixin
 from pcc.frontends.python.codegen.module_global_lowering import ModuleGlobalLoweringMixin
 from pcc.frontends.python.codegen.module_lifecycle_lowering import ModuleLifecycleLoweringMixin
@@ -143,6 +146,7 @@ class L1CodeGenMixinStack(
     AttrLoadLoweringMixin,
     CallExpressionLoweringMixin,
     MethodCallExpressionLoweringMixin,
+    MethodCallFallbackLoweringMixin,
     ClassModelLoweringMixin,
     ModuleGlobalLoweringMixin,
     ModuleLifecycleLoweringMixin,

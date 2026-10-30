@@ -31,6 +31,7 @@ _error_pending = extern("py_err_occurred", (), c_int64)
 _walk_scan = extern("py_os_walk_scan", (c_obj, c_obj, c_obj), c_obj)
 _walk_prefix = extern("py_os_walk_prefix", (c_obj,), c_obj)
 _path_islink_result = extern("py_os_path_islink_result", (c_obj,), c_obj)
+_path_lexists_result = extern("py_os_path_lexists_result", (c_obj,), c_obj)
 _environ_get = extern("py_os_getenv", (c_obj, c_obj), c_obj)
 _environ_getitem = extern("py_os_environ_getitem", (c_obj,), c_obj)
 _environ_setitem = extern("py_os_environ_setitem", (c_obj, c_obj), c_obj)
@@ -862,6 +863,20 @@ class _path:
     @staticmethod
     def exists(p: str) -> bool:
         return exists(p)
+
+
+    @staticmethod
+    def lexists(path):
+        if _native_sys.implementation.name != "pcc":
+            return _native_os.path.lexists(path)
+        # A no-follow record also observes dangling links. The ordinary-object
+        # helper owns fspath/bytes conversion and predicate error suppression.
+        result = _path_lexists_result(path)
+        if ptr_is_null(result):
+            raise RuntimeError("owned os.path.lexists helper returned NULL without an exception")
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
 
     @staticmethod

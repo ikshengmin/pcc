@@ -273,6 +273,23 @@ GC_RELOCATION_PAGE_CURSOR_INPUTS = (
     "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py",
 )
 GC_MARK_COLOR_ATOMIC_TEST = "tests/python/test_gc_mark_color_atomic.py"
+TUPLE_OWNED_ROOT_HOST_TESTS = (
+    "tests/python/test_tuple_owned_root_factory.py",
+    "tests/python/test_fixed_tuple_literal.py",
+    "tests/python/test_fixed_call_argument_tuple.py",
+    "tests/python/test_dict_materialization_owners.py",
+    "tests/python/test_slot_call_operand_roots.py",
+)
+AARCH64_STACKMAP_RETIREMENT_HOST_TESTS = (
+    "tests/python/test_aarch64_stackmap_emission_retirement.py",
+    "tests/python/test_aarch64_stackmap_plan_ownership.py",
+)
+HOST_CONTRACT_DATA_INPUTS = (
+    "scripts/regen_l1_codegen_static_methods.py",
+    "tests/python/test_native_float_callback_movement.py",
+    "scripts/ci_native_find_protocol.py",
+    "tests/python/test_set_call_slot_roots.py",
+)
 HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               "tests/test_ci_worker_size_prior_gate.py", CLOSURE_TEST,
               "tests/python/test_worker_guard_cadence.py",
@@ -303,10 +320,23 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
               *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
               MACHO_SECTION_TARGET_INDEX_TEST, WIN64_DIRECT_SCALAR_TEST, CONSUMED_UNSAFE_TEST,
-              IR_BUILDER_CALL9_TEST, MACHO_ARCHIVE_RETIREMENT_TEST, GC_MARK_COLOR_ATOMIC_TEST)
+              IR_BUILDER_CALL9_TEST, MACHO_ARCHIVE_RETIREMENT_TEST, GC_MARK_COLOR_ATOMIC_TEST,
+              *TUPLE_OWNED_ROOT_HOST_TESTS, *AARCH64_STACKMAP_RETIREMENT_HOST_TESTS,
+              'tests/python/test_worker_estimate_ratio_fold.py',
+              'tests/python/test_root_leave_identity_ledger.py',
+              'tests/python/test_float_callback_movement_protocol.py',
+              'tests/python/test_shared_pinned_return_cleanup.py',
+              'tests/python/test_macho_coarse_link_timing.py',
+              'tests/python/test_macho_sign_phase_timing.py',
+              'tests/python/test_dyn_find_dispatch.py',
+              'tests/python/test_find_runtime_slot_adapters.py',
+              'tests/python/test_bound_find_protocol.py',
+              'tests/python/test_str_method_slot_models.py',
+              'tests/test_ci_native_find_protocol.py',
+              'tests/python/test_str_len_protocol.py')
 # Existing behavioral coverage remains. Thirty-five finite facts controls
 # and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 95, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 51, 11, 111, 177, 9, 12, 26)
+HOST_COUNTS = (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17, 36, 29, 4, 29, 5, 19, 10, 65, 7, 92, 1, 2)
 PHASES = ("preflight", "stage1", "pcc1")
 
 
@@ -347,7 +377,7 @@ def source_identity():
     value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
                            *PE_IMAGE_STACKMAP_PARTITION_INPUTS, *TWO_ROOT_CLEANUP_INPUTS,
                            *GC_RELOCATION_PAGE_CURSOR_INPUTS, *WIN64_DIRECT_SCALAR_INPUTS,
-                           *CONSUMED_UNSAFE_INPUTS,
+                           *CONSUMED_UNSAFE_INPUTS, *HOST_CONTRACT_DATA_INPUTS,
                            "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}

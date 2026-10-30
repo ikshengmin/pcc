@@ -63,7 +63,7 @@ class ReturnLoweringMixin:
         fn = self.current_function
         state = self._shared_return_exits.get(fn.name)
         if state is None or state[0] is not fn:
-            state = [fn, None, None]
+            state = [fn, None, None, {}]
             self._shared_return_exits[fn.name] = state
         index = 2 if rooted else 1
         if state[index] is not None:
@@ -77,17 +77,19 @@ class ReturnLoweringMixin:
         saved_block = self.builder._block
         saved_pos = self.builder._pos
         self.builder.position_at_end(leave)
-        left: list = []
+        from pcc.frontends.python.codegen.frame_root_groups import frame_root_group
+
+        # Several independently owned cells may share one physical entry.
+        # Keep each identity key's owner alive until this exit is complete.
+        emitted: dict = {}
         for record in reversed(self._fn_gc_root_slot_registry.get(fn.name, ())):
-            registered = record[1]
-            already = False
-            for done in left:
-                if done is registered:
-                    already = True
-            if already:
+            group = frame_root_group(self, record[1])
+            base = record[1] if group is None else group["base"]
+            slot_id = id(base)
+            if slot_id in emitted:
                 continue
-            left.append(registered)
-            self._emit_gc_frame_leave_for_slot(registered)
+            emitted[slot_id] = base
+            self._emit_gc_frame_leave_for_slot(base)
         self.builder.branch(tail)
         # Slots registered later retro-patch their leave into this block.
         self._fn_gc_root_exit_sites.setdefault(fn.name, []).append(leave)
@@ -116,6 +118,55 @@ class ReturnLoweringMixin:
         state[index] = (leave, slot)
         return state[index]
 
+    def _shared_return_pinned_cleanup(self, slots, target):
+        """Share exact pinned-root cleanup suffixes before a shared return.
+
+        ``slots`` is this return's already selected execution order. These
+        persistent temporary roots are entry allocas; their loads stay in the
+        caller, after its owned-local releases and before its frame leaves.
+        A later return may prepend nodes, but never adds cleanup to an earlier
+        return. Rooted and unrooted exits have different targets and chains.
+        """
+        cache = self._shared_return_exits[self.current_function.name][3]
+        saved_block = self.builder._block
+        saved_pos = self.builder._pos
+        head = target
+        try:
+            for slot in reversed(slots):
+                key = (id(slot), id(head))
+                prior = cache.get(key)
+                if prior is not None:
+                    head = prior[2]
+                    continue
+                cleanup = self.current_function.append_basic_block(
+                    name=self._fresh("ret.shared.unpin"),
+                )
+                self.builder.position_at_end(cleanup)
+                pinned = self.builder.load(
+                    slot, name=self._fresh("gc.root.cleanup.unpin"),
+                )
+                self.builder.call(
+                    self.runtime["pcc_gc_unpin"],
+                    [self._value_available_at_insertion_point(pinned)],
+                )
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(slot, name=self._fresh("gc.root.cleanup.ptr")),
+                     ir.Constant(_CSTR, None)],
+                )
+                self.builder.branch(head)
+                # Keep both identity-key owners alive; publish only a complete
+                # node. IR slots/blocks have no structural equality contract.
+                cache[key] = (slot, head, cleanup)
+                head = cleanup
+        finally:
+            if saved_pos == self.builder._END:
+                self.builder.position_at_end(saved_block)
+            else:
+                self.builder._block = saved_block
+                self.builder._pos = saved_pos
+        return head
+
     def _return_through_shared_exit(self, value, skip_name=None, rooted: bool = False) -> bool:
         """Store ``value`` (None for void), release this return's locals and
         branch to the shared exit; False leaves the return to the caller.
@@ -137,8 +188,10 @@ class ReturnLoweringMixin:
                 self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)
             else:
                 self.builder.store(value, slot)
-        self._emit_owned_local_cleanup(skip_name=skip_name, shared_exit_leaves=True)
-        self.builder.branch(leave)
+        cleanup = self._emit_owned_local_cleanup(
+            skip_name=skip_name, shared_exit_leaves=True, shared_pinned_target=leave,
+        )
+        self.builder.branch(cleanup)
         return True
 
     def _return_log(self, label: str) -> None:
@@ -257,6 +310,11 @@ class ReturnLoweringMixin:
             return False
         if value in getattr(self, "_cpy_values", ()):
             return False
+        if self._value_is_never_gc_object(value):
+            # A tagged immediate, None/True/False or a static literal: its
+            # count never changes, so the caller's release of the returned
+            # owner is a no-op and a retain here would be one too.
+            return False
         if self._value_is_owned_object(value):
             # The emitter registered this SSA value as carrying one owner (a
             # py_obj_getattr / py_obj_call result on the dynamic path).  The
@@ -364,6 +422,10 @@ class ReturnLoweringMixin:
             return False
         if self._expr_returns_unsafe_raw_pointer(stmt.value):
             return False
+        if self._value_is_never_gc_object(value):
+            # Immortal statics and tagged immediates never move or die: the
+            # return needs no root while the frames are left.
+            return False
         if force_object:
             return True
         expr_ty = getattr(stmt.value, "ty", None)
@@ -455,10 +517,13 @@ class ReturnLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block((source_slot,), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             try:
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(slot), self._as_gc_ptr(source_slot)],
-                    name=self._fresh("return.cleanup.move"),
+                # This reserved synthetic owner is a fresh alloca in this
+                # non-resumable activation, never a user-visible local cell.
+                moved = self._emit_root_slot_move(
+                    slot,
+                    source_slot,
+                    label="return.cleanup.move",
+                    private_destination=True,
                 )
                 self._slot_call_check_status(moved, "return result transfer", stmt.span)
                 self._release_slot_call_roots((source_slot,))

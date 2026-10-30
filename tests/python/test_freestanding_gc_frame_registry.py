@@ -46,6 +46,8 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_frame_node_unlink",
     "pcc_gc_frame_roots_disabled_fast",
     "pcc_gc_should_track_frame_roots",
+    # Whether the precise stack walk roots a mapped frame's slots.
+    "pcc_gc_frame_slots_walked",
 }
 TLS_STORAGE_SYMBOLS = {
     "pcc_gc_frame_node_pool_counts",
@@ -71,6 +73,9 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "pcc_gc_backend",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
+    # Whether a mapped frame's slots lie on this thread's walked stack.
+    "pcc_gc_stackmap_roots_mode",
+    "pcc_thread_stack_high",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend0_frame_roots_enabled",
@@ -148,7 +153,11 @@ def test_frame_registry_has_one_strict_source_owner():
         "pcc_gc_frame_index_replace_preallocated",
     ):
         assert symbol in internal_header
-    assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS == TLS_STORAGE_SYMBOLS
+    # The one other freestanding thread-local is the collector thread's
+    # identity, which freestanding_gc_public_collection owns.
+    assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS - TLS_STORAGE_SYMBOLS == {
+        "pcc_gc_cms_worker_current"
+    }
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_heads")' in strict
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_counts")' in strict
     assert 'define_thread_local_i32("pcc_gc_frame_node_pool_total", 0)' in strict

@@ -11,6 +11,7 @@ import subprocess
 from pcc.backend.self_backend_dispatch import emit_self_asm
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.pipeline_targets import host_target_triple
+from tests.python.gc_primary_index_provider_support import emit_provider_object
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,7 @@ def test_remembered_membership_real_self_emitted_index_object(tmp_path):
     )
     assembly = tmp_path / "gc_index.s"
     assembly.write_text(emit_self_asm(ir.read_text(encoding="utf-8")), encoding="utf-8")
+    provider = emit_provider_object(source.parent.parent, tmp_path, host_target_triple())
     harness = tmp_path / "remembered.c"
     harness.write_text(r'''
 #include <stdint.h>
@@ -181,7 +183,7 @@ int main(void) {
 ''', encoding="utf-8")
     binary = tmp_path / "remembered"
     built = subprocess.run(
-        [compiler, "-std=c11", "-fno-builtin", str(assembly), str(harness),
+        [compiler, "-std=c11", "-fno-builtin", str(assembly), str(provider), str(harness),
          "-o", str(binary)],
         capture_output=True, text=True, timeout=30,
     )

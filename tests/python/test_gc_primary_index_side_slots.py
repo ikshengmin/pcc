@@ -4,7 +4,7 @@ Tracking and untracking every container used to insert into and remove from
 one global pointer hash.  An exact object-family allocator cell now keeps its
 tracked node in a per-slab side word instead, and only keys the object
 allocator does not own (static storage, large or raw allocations) still use
-the hash table.  This drives the real allocator and tracking objects of the
+address-selected hash tables. This drives the real allocator and tracking objects of the
 production archive through both provenances.
 """
 
@@ -28,7 +28,27 @@ HARNESS = r'''
     #include <stdlib.h>
 
     extern void *pcc_allocator_object_side_slot(void *ptr, int64_t create);
-    extern int64_t pcc_py_gc_primary_count;
+    extern void *pcc_gc_tracked_shard_address(int64_t index);
+    extern void pcc_gc_default_table_lock(void);
+    extern void pcc_gc_default_table_unlock(void);
+    enum {
+        TRACKING_SHARDS = 32,
+        PRIMARY_RECORD_OFFSET = 32,
+        PRIMARY_COUNT_OFFSET = 16
+    };
+
+    static int64_t primary_count(void) {
+        int64_t total = 0;
+        pcc_gc_default_table_lock();
+        for (int64_t index = 0; index < TRACKING_SHARDS; index++) {
+            char *shard = pcc_gc_tracked_shard_address(index);
+            int64_t *count = (int64_t *)(shard + PRIMARY_RECORD_OFFSET
+                                         + PRIMARY_COUNT_OFFSET);
+            total += *count;
+        }
+        pcc_gc_default_table_unlock();
+        return total;
+    }
 
     typedef union {
         uint64_t align[2];
@@ -56,7 +76,7 @@ HARNESS = r'''
 
         /* A slab has no side array until one of its cells is tracked. */
         if (pcc_allocator_object_side_slot(first, 0) != NULL) return 3;
-        int64_t hashed = pcc_py_gc_primary_count;
+        int64_t hashed = primary_count();
         int64_t tracked = py_gc_get_count(0);
 
         py_gc_track(first);
@@ -72,7 +92,7 @@ HARNESS = r'''
         if (side_word(middle) != NULL || py_gc_index_find(middle) != NULL) {
             return 7;
         }
-        if (pcc_py_gc_primary_count != hashed) return 8;
+        if (primary_count() != hashed) return 8;
         if (py_gc_get_count(0) != tracked + 2) return 9;
 
         /* Interior pointers never alias a cell's side word. */
@@ -82,10 +102,10 @@ HARNESS = r'''
         /* Storage the object allocator does not own stays in the hash. */
         py_gc_track((PyObject *)foreign.bytes);
         if (pcc_allocator_object_side_slot(foreign.bytes, 1) != NULL) return 13;
-        if (pcc_py_gc_primary_count != hashed + 1) return 14;
+        if (primary_count() != hashed + 1) return 14;
         if (py_gc_index_find((PyObject *)foreign.bytes) == NULL) return 15;
         py_gc_untrack((PyObject *)foreign.bytes);
-        if (pcc_py_gc_primary_count != hashed) return 16;
+        if (primary_count() != hashed) return 16;
 
         py_gc_untrack(first);
         if (py_gc_index_find(first) != NULL || side_word(first) != NULL) return 17;

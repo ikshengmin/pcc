@@ -159,23 +159,29 @@ class NativeGcLoweringMixin:
             self._note_owned_object_value(boxed)
             return boxed
         if kind == "gc.get_objects" and not args:
-            return self.builder.call(
+            result = self.builder.call(
                 self.runtime["py_gc_get_objects"],
                 [],
                 name=self._fresh("gc.objects"),
             )
+            self._note_owned_object_value(result)
+            return result
         if kind == "gc.get_referents" and len(args) == 1:
-            return self.builder.call(
+            result = self.builder.call(
                 self.runtime["py_gc_get_referents"],
                 [self._emit_as_object(args[0])],
                 name=self._fresh("gc.referents"),
             )
+            self._note_owned_object_value(result)
+            return result
         if kind == "gc.get_referrers" and len(args) == 1:
-            return self.builder.call(
+            result = self.builder.call(
                 self.runtime["py_gc_get_referrers"],
                 [self._emit_as_object(args[0])],
                 name=self._fresh("gc.referrers"),
             )
+            self._note_owned_object_value(result)
+            return result
         if kind == "gc.set_threshold" and 1 <= len(args) <= 3:
             values = [
                 ir.Constant(_I32, -1),

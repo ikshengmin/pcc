@@ -37,6 +37,7 @@ SCHEDULER = RUNTIME / "freestanding_gc_incremental_concurrent_scheduler.py"
 DISPATCHER = RUNTIME / "freestanding_gc_barrier_dispatcher.py"
 MAPPED_ROOTS = RUNTIME / "freestanding_gc_mapped_roots.py"
 TELEMETRY = RUNTIME / "py_gc_telemetry.py"
+ROOT_OPERATIONS = RUNTIME / "freestanding_gc_root_operations.py"
 WIDE_METRICS = {
     "pcc_gc_metric_step": (5, "WORK_STEPS"),
     "pcc_gc_metric_max_pause_us": (7, "MAX_PAUSE_US"),
@@ -44,12 +45,14 @@ WIDE_METRICS = {
     "pcc_gc_metric_pause_sum_us": (33, "PAUSE_SUM_US"),
 }
 NARROW_COUNTERS = (
-    "pcc_gc_metric_alloc",
     "pcc_gc_metric_store",
     "pcc_gc_metric_load",
     "pcc_gc_metric_safepoint",
-    "pcc_gc_metric_pin",
 )
+NARROW_METRIC_IDS = (1, 2, 3)
+# The allocation count (metric 0) and pin balance (metric 4) are i64 fields
+# of the root-operations shard table, summed over its 64 shards.
+SHARDED_METRICS = {0: 8, 4: 0}
 HISTOGRAM = tuple(f"pcc_gc_metric_pause_hist{i}" for i in range(4))
 
 
@@ -138,6 +141,7 @@ class _Memory:
             width = 8 if kind == "define_global_i64" else 4
             self.cells[name] = bytearray(width)
             self.store(name, 0, initial, width)
+        self.cells["pcc_gc_metric_shards"] = bytearray(64 * 128)
 
     def load(self, name, offset, width):
         cell = self.cells[name]
@@ -200,6 +204,18 @@ def _host_functions(*, other_mutators=()):
         "pcc_gc_backend4_evacuation_page_drain": lambda budget: 0,
         "pcc_gc_backend4_select_relocation_pages": lambda budget: 0,
         "_tracing_work_pending": lambda: 0,
+        "pcc_gc_metric_allocation_count": lambda: sum(
+            memory.load("pcc_gc_metric_shards", index * 128 + 8, 8)
+            for index in range(64)
+        ),
+        "pcc_gc_metric_pin_balance": lambda: sum(
+            memory.load("pcc_gc_metric_shards", index * 128, 8)
+            for index in range(64)
+        ),
+        "pcc_gc_metric_shard_reset": lambda field: [
+            memory.store("pcc_gc_metric_shards", index * 128 + field, 0, 8)
+            for index in range(64)
+        ],
     }
     groups = (
         (BACKEND, ("_counter_global", "_counter_inc", "pcc_gc_telemetry_reset")),
@@ -399,10 +415,14 @@ def test_host_source_pause_accumulation_max_and_full_reset_keep_high_bits():
         memory.set(name, (1 << 40) + 31)
     for name in NARROW_COUNTERS:
         memory.set(name, 37)
+    for metric, field in SHARDED_METRICS.items():
+        memory.store("pcc_gc_metric_shards", 5 * 128 + field, (1 << 40) + 3, 8)
+        assert telemetry(metric) == (1 << 40) + 3
     functions["pcc_gc_telemetry_reset"]()
     for name, (metric, _) in WIDE_METRICS.items():
         assert memory.get(name) == telemetry(metric) == 0
     assert all(memory.get(name) == 0 for name in NARROW_COUNTERS + HISTOGRAM)
+    assert all(telemetry(metric) == 0 for metric in SHARDED_METRICS)
     record(10, 12)
     assert (telemetry(7), telemetry(32), telemetry(33)) == (2, 1, 2)
 
@@ -411,7 +431,7 @@ def test_host_source_generic_and_direct_step_writers_keep_high_bits():
     memory, functions = _host_functions()
     increment = functions["_counter_inc"]
     telemetry = functions["pcc_gc_telemetry"]
-    for metric, name in enumerate(NARROW_COUNTERS):
+    for metric, name in zip(NARROW_METRIC_IDS, NARROW_COUNTERS):
         memory.set(name, 10 + metric)
         increment(metric, 7)
         assert memory.get(name) == telemetry(metric) == 17 + metric
@@ -426,7 +446,7 @@ def test_host_source_generic_and_direct_step_writers_keep_high_bits():
         assert telemetry(5) == previous + (1 << 32) + 3
     increment(5, -2)
     assert telemetry(5) == (1 << 31) + 3 * (1 << 32) + 7
-    assert [memory.get(name) for name in NARROW_COUNTERS] == [17, 18, 19, 20, 21]
+    assert [memory.get(name) for name in NARROW_COUNTERS] == [18, 19, 20]
 
     # Entire public functions run; work providers are intentionally idle.
     # Both direct writers execute, with no claim about collector work policy.
@@ -456,6 +476,26 @@ def _raw_annotations(function):
 
 
 def _native_slice_source():
+    # Allocation/pin telemetry moved to the root-operations shard table. Keep
+    # this isolated ELF's provider closure source-derived, without linking a
+    # collector, scheduler, allocator, thread machinery or runtime archive.
+    shards = [
+        statement for statement in _tree(ROOT_OPERATIONS).body
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "define_global_i64_array"
+        and statement.value.args
+        and isinstance(statement.value.args[0], ast.Constant)
+        and statement.value.args[0].value == "pcc_gc_metric_shards"
+    ]
+    assert len(shards) == 1, "metric shard storage declaration changed"
+    shard_functions = [
+        _function(ROOT_OPERATIONS, name) for name in (
+            "pcc_gc_metric_shard_sum", "pcc_gc_metric_pin_balance",
+            "pcc_gc_metric_allocation_count", "pcc_gc_metric_shard_reset",
+        )
+    ]
     functions = [
         _raw_annotations(_function(BACKEND, "_counter_global")),
         _raw_annotations(_function(BACKEND, "_counter_inc")),
@@ -505,11 +545,14 @@ def _native_slice_source():
     # Remembered-set/epoch cleanup before and after this slice is not tested.
     reset.body = reset.body[starts[0]:ends[0] + 1]
     functions.append(reset)
-    module = ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[]))
+    module = ast.fix_missing_locations(ast.Module(
+        body=shards + shard_functions + functions, type_ignores=[],
+    ))
     return (
         "from pcc import i64\n"
         "from pcc.extern import c_abi_export\n"
-        "from pcc.unsafe import (global_addr, load_i32, load_i64, store_i32, store_i64)\n"
+        "from pcc.unsafe import (global_addr, load_i32, load_i64, store_i32, store_i64, "
+        "atomic_load_i64, atomic_store_i64, define_global_i64_array)\n"
         "__pcc_freestanding__ = True\n\n"
         + ast.unparse(module) + "\n\n" + _NATIVE_PROBE
     )
@@ -532,11 +575,13 @@ def gc_phase_width_probe() -> i64:
     _counter_inc(999, -3)
     if pcc_gc_telemetry(5) != 4294967312:
         return 5
-    _counter_inc(0, 31)
+    # Seed distinct real shard fields: these metrics no longer use
+    # _counter_inc. Keep the existing getter/reset expectations unchanged.
+    store_i64(global_addr("pcc_gc_metric_shards"), 63 * 128 + 8, 31)
     _counter_inc(1, 32)
     _counter_inc(2, 33)
     _counter_inc(3, 34)
-    _counter_inc(4, 35)
+    store_i64(global_addr("pcc_gc_metric_shards"), 17 * 128, 35)
     if pcc_gc_telemetry(0) != 31 or pcc_gc_telemetry(1) != 32:
         return 6
     if pcc_gc_telemetry(2) != 33 or pcc_gc_telemetry(3) != 34:

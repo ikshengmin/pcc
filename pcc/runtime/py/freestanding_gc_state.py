@@ -6,7 +6,12 @@ pcc-Python modules and reference these symbols through ``pcc.unsafe``.
 """
 
 from pcc import i64
-from pcc.unsafe import define_global_i32, define_global_i64, define_global_ptr_null
+from pcc.unsafe import (
+    define_global_i32,
+    define_global_i64,
+    define_global_i64_array,
+    define_global_ptr_null,
+)
 
 __pcc_freestanding__ = True
 
@@ -20,13 +25,53 @@ define_global_i32("py_gc_threshold2", 10)
 define_global_i32("py_gc_freeze_count", 0)
 define_global_ptr_null("py_gc_head")
 define_global_ptr_null("pcc_gc_deferred_node_free_head")
-# Recycled 40-byte tracking nodes (freestanding_gc_tracking.py).  Every
-# container/instance allocation tracked one node with malloc and freed it on
-# untrack; recycling under the table lock removes that malloc/free pair from
-# the alloc/free path.  Collector-side frees keep using free().
+# Recycled 40-byte tracking nodes (freestanding_gc_tracking.py). Mutators
+# keep lists per shard; the full-table owner temporarily merges them here.
+# The atomic pool count is one shared reservation budget capped at 4096;
+# collector-side deferred frees remain outside that reusable pool.
 define_global_ptr_null("pcc_gc_tracked_node_pool")
 define_global_i32("pcc_gc_tracked_node_pool_count", 0)
 define_global_i64("pcc_gc_table_lock_owner_token", 0)
+# Tracking mutators own one address-selected shard. The full-table owner
+# temporarily joins those heads/pools into the legacy globals for collection
+# and cold snapshots. One extra stride permits an explicitly aligned base.
+define_global_i64("pcc_gc_table_lock_depth", 0)
+define_global_i64_array(
+    "pcc_gc_tracked_shards",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_ptr_null("pcc_gc_backend4_parked_head")
 define_global_i32("pcc_gc_forwarding_population", 0)
 define_global_i32("py_gc_tracked_count", 0)
@@ -34,15 +79,24 @@ define_global_i32("py_gc_tracked_count", 0)
 # next is scheduled once tracking has grown by max(threshold0, this) since.
 define_global_i64("pcc_gc_tracked_after_collect", 0)
 define_global_i32("py_gc_collecting", 0)
+# Collector-private candidate context; nonzero only under stopped-world GC0.
+define_global_i32("pcc_gc_backend0_subset_active", 0)
+define_global_ptr_null("pcc_gc_backend0_subset_pairs")
+define_global_i64("pcc_gc_backend0_subset_count", 0)
 define_global_ptr_null("py_gc_callbacks")
 define_global_i32("py_gc_callbacks_firing", 0)
 
 # Shared selector, accounting, pacing, and configuration state.
+# The configuration words below are read by every thread on every reference
+# count update, barrier and field read, and written only when the backend or
+# the probe is chosen. Allocation accounting next to them (debt, live bytes,
+# metrics) is written by every thread: sharing a cache line with it made
+# each of these reads miss under concurrency. Keep them on lines of their own.
+define_global_i64_array(
+    "pcc_gc_hot_config_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("pcc_gc_backend_selected", 0)
-# Mirror of py_gc_backend.c's pcc_gc_unmanaged_refcount_ops.  i64 because it
-# counts every refcount operation that missed provenance, which on a long-lived
-# service is not bounded by anything an i32 covers.
-define_global_i64("pcc_gc_unmanaged_refcount_ops", 0)
 # Mirror of py_gc_backend.c's pcc_gc_refcount_provenance_probe: whether the
 # refcount hot path asks pcc_gc_pointer_is_managed before it touches a header.
 # 0 trusts the caller (default on the non-moving collectors 0-2), 1 probes and
@@ -61,12 +115,21 @@ define_global_i32("pcc_gc_refcount_fast", 0)
 # atomic reference-count updates (any number of threads), and only a
 # count that would reach zero takes the full release path.
 define_global_i32("pcc_gc_refcount_atomic", 0)
+define_global_i32("pcc_gc_config_initialized", 0)
+define_global_i32("pcc_gc_read_barrier_enabled", 1)
+define_global_i32("pcc_gc_backend0_frame_roots_enabled", 0)
+define_global_i64_array(
+    "pcc_gc_hot_config_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
+# Mirror of py_gc_backend.c's pcc_gc_unmanaged_refcount_ops.  i64 because it
+# counts every refcount operation that missed provenance, which on a long-lived
+# service is not bounded by anything an i32 covers.
+define_global_i64("pcc_gc_unmanaged_refcount_ops", 0)
 define_global_i32("pcc_gc_refcount_provenance_probe_reported", 0)
-define_global_i32("pcc_gc_metric_alloc", 0)
 define_global_i32("pcc_gc_metric_store", 0)
 define_global_i32("pcc_gc_metric_load", 0)
 define_global_i32("pcc_gc_metric_safepoint", 0)
-define_global_i32("pcc_gc_metric_pin", 0)
 # Recorded collector-call totals can exceed 2**31 during one compiler link.
 # These are independent scalar symbols, not offsets within a packed layout.
 define_global_i64("pcc_gc_metric_step", 0)
@@ -81,6 +144,9 @@ define_global_i32("pcc_gc_metric_pause_hist3", 0)
 # The public byte-count APIs are i64; retain that width in raw state too.
 define_global_i64("pcc_gc_debt_bytes", 0)
 define_global_i32("pcc_gc_backend4_auto_step_pending", 0)
+# A finished mark waiting for mutator-owned cleanup, distinct from a moving
+# collector's pending generation/relocation work (which must not block marking).
+define_global_i32("pcc_gc_cms_sweep_pending", 0)
 define_global_i32("pcc_gc_last_alloc_bytes", 0)
 define_global_i64("pcc_gc_live_bytes", 0)
 # Bytes the last completed tracing mark found reachable (Go's heap marked):
@@ -89,9 +155,6 @@ define_global_i64("pcc_gc_tracing_marked_bytes", 0)
 define_global_i32("pcc_gc_pause", 1000)
 define_global_i32("pcc_gc_stepmul", 10000)
 define_global_i64("pcc_gc_debt_threshold_override", 0)
-define_global_i32("pcc_gc_config_initialized", 0)
-define_global_i32("pcc_gc_read_barrier_enabled", 1)
-define_global_i32("pcc_gc_backend0_frame_roots_enabled", 0)
 define_global_i32("pcc_gc_in_auto_step", 0)
 define_global_i32("pcc_gc_explicit_collect_active", 0)
 define_global_i32("pcc_gc_gray_count", 0)
@@ -234,6 +297,13 @@ define_global_ptr_null("pcc_gc_backend4_active_medium_young_page")
 define_global_ptr_null("pcc_gc_backend4_active_medium_old_page")
 define_global_ptr_null("pcc_gc_backend4_remembered_slots_head")
 define_global_ptr_null("pcc_gc_backend4_remembered_page_head")
+# The remembered pages by page address, and whether the pages and that index
+# still cover every remembered slot (an allocation failure ends both).
+define_global_ptr_null("pcc_gc_backend4_remembered_page_index_slots")
+define_global_i64("pcc_gc_backend4_remembered_page_index_cap", 0)
+define_global_i64("pcc_gc_backend4_remembered_page_index_count", 0)
+define_global_i64("pcc_gc_backend4_remembered_page_index_used", 0)
+define_global_i32("pcc_gc_backend4_remembered_page_incomplete", 0)
 define_global_ptr_null("pcc_gc_object_node_free_head")
 define_global_i32("pcc_gc_object_node_free_count", 0)
 define_global_ptr_null("pcc_gc_backend4_zpage_node_free_head")
@@ -244,6 +314,13 @@ define_global_i64("pcc_gc_tracing_cycle_epoch", 0)
 define_global_i64("pcc_gc_tracing_finish_claim_epoch", 0)
 define_global_i64("pcc_gc_tracing_finish_claim_backend", -1)
 define_global_i64("pcc_gc_tracing_finish_commits", 0)
+# The finish commit at which a walk found no sweep candidate; -1: none yet.
+define_global_i64("pcc_gc_tracing_no_candidate_commit", -1)
+# The stopped-world epoch the last mark finished in (-1: the world ran).
+define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
+# Finalizers (__del__, generator close) that ran user code; a sweep
+# rechecks reachability after PASS 0 only when this moved.
+define_global_i64("pcc_gc_user_finalizer_runs", 0)
 define_global_i32("pcc_gc_trace_extension_roots_pending", 0)
 define_global_i64("pcc_gc_trace_extension_roots_epoch", 0)
 define_global_i64("pcc_gc_trace_extension_roots_backend", -1)
@@ -273,6 +350,9 @@ define_global_i64("pcc_gc_backend3_frame_root_scan_slot", -1)
 define_global_ptr_null("pcc_gc_backend3_frame_root_scan_cursor")
 define_global_ptr_null("pcc_gc_backend3_continuation_root_scan_cursor")
 define_global_i32("pcc_gc_backend3_scheduler_root_scan_phase", 0)
+# Nonzero while a GC3 step runs with another mutator outside an application
+# gate: oldification then promotes young objects in place instead of copying.
+define_global_i32("pcc_gc_backend3_oldify_suspended", 0)
 define_global_i64("pcc_gc_backend3_scheduler_root_scan_slot", -1)
 define_global_ptr_null("pcc_gc_backend3_scheduler_root_scan_cursor")
 define_global_ptr_null("pcc_gc_object_head")

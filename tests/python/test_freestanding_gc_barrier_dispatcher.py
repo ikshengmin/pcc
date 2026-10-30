@@ -71,8 +71,12 @@ RAW_FUNCTION_IMPORTS = {
     # an application gate (095b286f0).
     "pcc_thread_all_stopped_at_gates",
     "pcc_thread_live_count",
+    # GC3 suspends oldification in a stopped world with a mutator outside one.
+    "pcc_thread_owns_stopped_world",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
+    # GC3 copies young objects only while other mutators are at gates.
+    "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_backend4_genzgc_store_barriers",
     "pcc_gc_backend4_remap_active",
     "pcc_gc_backend4_store_buffer_entries_count",

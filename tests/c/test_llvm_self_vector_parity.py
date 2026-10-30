@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 from pathlib import Path
 import re
+import shutil
 import subprocess
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ import pytest
 from pcc.backend.self_backend_dispatch import emit_self_asm
 from pcc.backend.self_backend_targets import classify_self_backend_target_triple
 from pcc.frontends.python.pipeline_targets import host_target_triple
-from tests.c_testsuite_cases import PccCompileResult, _host_cc, subprocess_env
+from tests.c_testsuite_cases import PccCompileResult, subprocess_env
 from tests.self_backend_c_testsuite_common import assert_result_triplet_matches
 
 pytestmark = pytest.mark.xdist_group(name="llvm_self_vector_parity")
@@ -66,6 +67,15 @@ def _host_triple() -> str:
     return host_target_triple()
 
 
+def _llvm_reference_compiler() -> str:
+    # The general C oracle may select GCC, which cannot consume LLVM IR.
+    # This external driver belongs only to the reference side of the test.
+    clang = shutil.which("clang")
+    if clang is None:
+        pytest.fail("external LLVM reference oracle requires clang on PATH")
+    return clang
+
+
 def _ensure_target_triple(ir_text: str, triple: str) -> str:
     if re.search(r"^target triple = ", ir_text, re.M):
         return ir_text
@@ -83,8 +93,8 @@ def _result_from_completed_process(
 
 
 def _run_llvm_from_ir(ir_text: str, tmp_path, triple: str) -> PccCompileResult:
-    # External LLVM/cc is a reference oracle only, never the self build owner.
-    cc = _host_cc()
+    # External LLVM is a reference oracle only, never the self build owner.
+    cc = _llvm_reference_compiler()
     ir = _ensure_target_triple(ir_text, triple)
     executable_path = tmp_path / "llvm_case.out"
     ir_path = tmp_path / "llvm_case.ll"
@@ -250,12 +260,78 @@ def test_llvm_oracle_compile_failure_never_becomes_execution(tmp_path, monkeypat
         calls.append(command)
         return subprocess.CompletedProcess(command, 1, "", "oracle compiler failed")
 
-    monkeypatch.setitem(_run_llvm_from_ir.__globals__, "_host_cc", lambda: "oracle-cc")
+    monkeypatch.setitem(_run_llvm_from_ir.__globals__, "_llvm_reference_compiler", lambda: "oracle-clang")
     monkeypatch.setattr(subprocess, "run", failed_compile)
     with pytest.raises(AssertionError, match="reference oracle compile/link failed before execution"):
         _run_llvm_from_ir(INT_VECTOR_IR, tmp_path, _host_triple())
     assert len(calls) == 1
-    assert calls[0][0] == "oracle-cc"
+    assert calls[0][0] == "oracle-clang"
+
+
+def test_llvm_reference_selects_clang_not_generic_c_compiler(monkeypatch):
+    lookups = []
+
+    def which(name):
+        lookups.append(name)
+        return {"cc": "/oracle/gcc", "gcc": "/oracle/gcc", "clang": "/oracle/clang"}.get(name)
+
+    monkeypatch.setattr(shutil, "which", which)
+    assert _llvm_reference_compiler() == "/oracle/clang"
+    assert lookups == ["clang"]
+
+
+def test_llvm_reference_missing_clang_fails_before_compile(tmp_path, monkeypatch):
+    lookups = []
+
+    def which(name):
+        lookups.append(name)
+        return {"cc": "/oracle/gcc", "gcc": "/oracle/gcc"}.get(name)
+
+    def forbidden_run(*args, **kwargs):
+        raise AssertionError("oracle ran without an LLVM reference compiler")
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(subprocess, "run", forbidden_run)
+    with pytest.raises(pytest.fail.Exception, match="requires clang on PATH"):
+        _run_llvm_from_ir(INT_VECTOR_IR, tmp_path, _host_triple())
+    assert lookups == ["clang"]
+
+
+def test_llvm_reference_missing_executable_never_becomes_execution(tmp_path, monkeypatch):
+    calls = []
+
+    def compile_without_output(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setitem(_run_llvm_from_ir.__globals__, "_llvm_reference_compiler", lambda: "oracle-clang")
+    monkeypatch.setattr(subprocess, "run", compile_without_output)
+    with pytest.raises(AssertionError, match="reference oracle emitted no executable"):
+        _run_llvm_from_ir(INT_VECTOR_IR, tmp_path, _host_triple())
+    assert len(calls) == 1
+
+
+def test_llvm_reference_keeps_ir_compile_and_program_result_distinct(tmp_path, monkeypatch):
+    calls = []
+    executable = tmp_path / "llvm_case.out"
+    triple = _host_triple()
+
+    def reference_process(command, **kwargs):
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            executable.write_bytes(b"mock executable, never executed")
+            return subprocess.CompletedProcess(command, 0, "compiler output", "")
+        assert command == [str(executable)]
+        return subprocess.CompletedProcess(command, 5, "program output", "program stderr")
+
+    monkeypatch.setitem(_run_llvm_from_ir.__globals__, "_llvm_reference_compiler", lambda: "oracle-clang")
+    monkeypatch.setattr(subprocess, "run", reference_process)
+    result = _run_llvm_from_ir(INT_VECTOR_IR, tmp_path, triple)
+    assert calls[0][0] == ["oracle-clang", "-x", "ir", str(tmp_path / "llvm_case.ll"), "-o", str(executable)]
+    assert len(calls) == 2
+    assert all(kwargs["timeout"] == 30 for _, kwargs in calls)
+    assert (tmp_path / "llvm_case.ll").read_text() == _ensure_target_triple(INT_VECTOR_IR, triple)
+    assert (result.returncode, result.stdout, result.stderr) == (5, "program output", "program stderr")
 
 
 @pytest.mark.parametrize("failure", ["emit", "process", "llvmlite"])

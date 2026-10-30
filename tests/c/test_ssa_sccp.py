@@ -2,11 +2,19 @@ from pcc.frontends.c.parse.c_parser import CParser
 from pcc.frontends.c.ssa import LatticeKind, SSABuilder, SSASCCPAnalyzer
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def _analyze(source: str):
-    ast = _PARSER.parse(source)
+    ast = _get_parser().parse(source)
     func = SSABuilder().build_function(ast.ext[0])
     return SSASCCPAnalyzer().analyze(func)
 

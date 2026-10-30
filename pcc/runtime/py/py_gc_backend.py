@@ -41,6 +41,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_diff,
     ptr_to_int,
+    int_to_ptr,
     ptr_eq,
     ptr_is_null,
     stack_alloc,
@@ -72,6 +73,8 @@ pcc_py_gc_defer_tripwire = extern(
 )
 
 pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
+pcc_gc_metric_shard = extern("pcc_gc_metric_shard", (), c_int64)
+pcc_gc_metric_shard_reset = extern("pcc_gc_metric_shard_reset", (c_int64,), c_void)
 pcc_gc_relocation_member_note = extern("pcc_gc_relocation_member_note", (c_ptr,), c_void)
 pcc_gc_relocation_member_maybe = extern("pcc_gc_relocation_member_maybe", (c_ptr,), c_int64)
 pcc_gc_relocation_member_forget = extern("pcc_gc_relocation_member_forget", (c_ptr,), c_void)
@@ -80,12 +83,33 @@ pcc_gc_remembered_member_note = extern("pcc_gc_remembered_member_note", (c_ptr,)
 pcc_gc_remembered_member_maybe = extern("pcc_gc_remembered_member_maybe", (c_ptr,), c_int64)
 pcc_gc_remembered_member_require = extern("pcc_gc_remembered_member_require", (c_ptr,), c_void)
 pcc_gc_remembered_member_forget = extern("pcc_gc_remembered_member_forget", (c_ptr,), c_void)
+pcc_gc_remembered_member_exact = extern("pcc_gc_remembered_member_exact", (), c_int64)
+pcc_gc_remembered_member_taint = extern("pcc_gc_remembered_member_taint", (), c_void)
+pcc_gc_remembered_member_head = extern("pcc_gc_remembered_member_head", (c_ptr,), c_ptr)
+pcc_gc_remembered_member_set_head = extern(
+    "pcc_gc_remembered_member_set_head", (c_ptr, c_ptr), c_int64
+)
 pcc_gc_store_buffer_member_note = extern("pcc_gc_store_buffer_member_note", (c_ptr,), c_void)
 pcc_gc_store_buffer_member_taint = extern("pcc_gc_store_buffer_member_taint", (), c_void)
 pcc_gc_store_buffer_member_maybe = extern("pcc_gc_store_buffer_member_maybe", (c_ptr,), c_int64)
 pcc_gc_store_buffer_member_forget = extern("pcc_gc_store_buffer_member_forget", (c_ptr,), c_void)
 pcc_gc_store_buffer_member_owner_count = extern("pcc_gc_store_buffer_member_owner_count", (), c_int64)
 pcc_gc_store_buffer_member_clear = extern("pcc_gc_store_buffer_member_clear", (), c_void)
+pcc_gc_store_buffer_entry_note = extern("pcc_gc_store_buffer_entry_note", (c_ptr, c_ptr), c_void)
+pcc_gc_store_buffer_entry_forget = extern("pcc_gc_store_buffer_entry_forget", (c_ptr, c_ptr), c_void)
+pcc_gc_store_buffer_owner_entries = extern("pcc_gc_store_buffer_owner_entries", (c_ptr,), c_int64)
+pcc_gc_store_buffer_slot_pending = extern("pcc_gc_store_buffer_slot_pending", (c_ptr,), c_int64)
+pcc_gc_store_buffer_slot_move = extern("pcc_gc_store_buffer_slot_move", (c_ptr, c_ptr), c_void)
+pcc_gc_store_buffer_index_clear = extern("pcc_gc_store_buffer_index_clear", (), c_void)
+pcc_gc_index_py_find_slot = extern("pcc_gc_index_py_find_slot", (c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_index_py_insert = extern(
+    "pcc_gc_index_py_insert",
+    (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64, c_int64),
+    c_int64,
+)
+pcc_gc_index_py_remove = extern(
+    "pcc_gc_index_py_remove", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64), c_ptr
+)
 pcc_gc_remembered_member_clear = extern("pcc_gc_remembered_member_clear", (), c_void)
 
 
@@ -108,6 +132,15 @@ pcc_gc_object_index_remove = extern("pcc_gc_object_index_remove", (c_ptr,), c_pt
 pcc_gc_object_index_clear = extern("pcc_gc_object_index_clear", (), c_void)
 pcc_gc_managed_pointer_index_contains = extern(
     "pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64
+)
+pcc_gc_managed_pointer_index_seen = extern(
+    "pcc_gc_managed_pointer_index_seen", (c_ptr,), c_int64
+)
+pcc_gc_object_index_seen = extern(
+    "pcc_gc_object_index_seen", (c_ptr,), c_int64
+)
+pcc_gc_index_reclaim_retired = extern(
+    "pcc_gc_index_reclaim_retired", (), c_int64
 )
 pcc_gc_granule_is_object_start = extern(
     "pcc_gc_granule_is_object_start", (c_ptr,), c_int64
@@ -186,6 +219,7 @@ _forwarding_clear_all = extern("pcc_gc_forwarding_clear_all", (), c_void)
 _identity_head = extern("pcc_gc_identity_list_head", (), c_ptr)
 _identity_ensure = extern("pcc_gc_identity_ensure", (c_ptr,), c_ptr)
 _identity_remove = extern("pcc_gc_identity_remove", (c_ptr,), c_void)
+_identity_head_acquire = extern("pcc_gc_identity_list_head", (), c_ptr)
 _identity_clear_all = extern("pcc_gc_identity_clear_all", (), c_void)
 _install_forwarding_unlocked = extern(
     "pcc_gc_install_forwarding_unlocked", (c_ptr, c_ptr), c_int64
@@ -550,6 +584,10 @@ pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_thread_owns_stopped_world = extern(
     "pcc_thread_owns_stopped_world", (), c_int64
 )
+pcc_thread_world_lock_if_sole = extern(
+    "pcc_thread_world_lock_if_sole", (), c_int64
+)
+pcc_thread_world_unlock = extern("pcc_thread_world_unlock", (), c_void)
 pcc_py_gc_minor_graph_lock_depth = extern(
     "pcc_py_gc_minor_graph_lock_depth", (), c_int64
 )
@@ -591,6 +629,9 @@ _rewrite_mapped_roots = extern(
 _gc_gray_count_load_acquire = extern(
     "pcc_gc_gray_count_load_acquire", (), c_int64
 )
+_mode_leases_freeze = extern("pcc_gc_mode_leases_freeze", (), c_int64)
+_mode_leases_thaw = extern("pcc_gc_mode_leases_thaw", (), c_void)
+_static_literal_record = extern("pcc_gc_static_literal_record", (c_ptr,), c_void)
 _gc_gray_count_store_release = extern(
     "pcc_gc_gray_count_store_release", (c_int64,), c_void
 )
@@ -902,6 +943,14 @@ def pcc_gc_try_minor_alloc(bytes: int):
                 _set_minor_block_used(block, 0)
                 _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
             else:
+                # A refill may stop the world to promote stack roots. A
+                # caller holding a graph/no-park region cannot suspend;
+                # use the existing non-nursery allocation fallback instead.
+                # Leave the full nursery pending for the next permitted
+                # refill, without clearing the caller's ownership markers.
+                if pcc_thread_no_park_depth() > 0:
+                    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_arena_fallbacks"), 1)
+                    return null()
                 _minor_collect_reset()
                 block = _minor_find_reusable_block(aligned)
     if ptr_is_null(block) != 0:
@@ -924,16 +973,14 @@ def pcc_gc_try_minor_alloc(bytes: int):
 
 
 def _counter_global(metric: int):
-    if metric == 0:
-        return global_addr("pcc_gc_metric_alloc")
+    # The allocation count (0) and pin balance (4) are sharded; see
+    # pcc_gc_metric_shards.
     if metric == 1:
         return global_addr("pcc_gc_metric_store")
     if metric == 2:
         return global_addr("pcc_gc_metric_load")
     if metric == 3:
         return global_addr("pcc_gc_metric_safepoint")
-    if metric == 4:
-        return global_addr("pcc_gc_metric_pin")
     if metric == 5:
         return global_addr("pcc_gc_metric_step")
     return global_addr("pcc_gc_metric_step")
@@ -1261,6 +1308,7 @@ def _backend4_store_buffer_append_global_owned(owner, slot, value) -> None:
         py_decref(value)
         # The owner may or may not keep other entries; queries walk again.
         pcc_gc_store_buffer_member_taint()
+        pcc_gc_store_buffer_entry_forget(owner, slot)
         return
     store_ptr(node, 0, owner)
     store_ptr(node, 8, slot)
@@ -1350,7 +1398,16 @@ def _backend4_store_buffer_enqueue(owner, slot, value) -> int:
         return 0
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
-    if _backend4_store_buffer_contains(owner, slot, value) != 0:
+    # The drain promotes whatever a recorded slot holds when it runs, so a
+    # slot with an entry pending needs no second one. The slot index answers
+    # without walking the queues; an owner-wide (NULL slot) entry or an
+    # incomplete index falls back to the exact walk.
+    duplicate: int = -1
+    if ptr_is_null(slot) == 0:
+        duplicate = pcc_gc_store_buffer_slot_pending(slot)
+    if duplicate < 0:
+        duplicate = _backend4_store_buffer_contains(owner, slot, value)
+    if duplicate != 0:
         skips: int = load_i32(
             global_addr("pcc_gc_backend4_store_buffer_duplicate_skips_count"), 0
         )
@@ -1383,6 +1440,7 @@ def _backend4_store_buffer_enqueue(owner, slot, value) -> int:
     _set_store_buffer_medium_head(node)
     _backend4_store_buffer_medium_set_count(_backend4_store_buffer_medium_count() + 1)
     pcc_gc_store_buffer_member_note(owner)
+    pcc_gc_store_buffer_entry_note(owner, slot)
     _backend4_remembered_set_add(owner, slot)
     store_i32(owner, 12, flags | 512)
     pending: int = load_i32(
@@ -1432,6 +1490,10 @@ def _backend4_store_buffer_remove(owner) -> None:
     # them without walking either queue.
     if pcc_gc_store_buffer_member_maybe(owner) == 0:
         return
+    # Decref can recursively remove another owner from either queue. Finish
+    # all queue surgery first, retaining disposal order in a private chain.
+    cleanup_head = null()
+    cleanup_tail = null()
     prev = null()
     node = _store_buffer_medium_head()
     while ptr_is_null(node) == 0:
@@ -1445,8 +1507,13 @@ def _backend4_store_buffer_remove(owner) -> None:
             count: int = _backend4_store_buffer_medium_count()
             if count > 0:
                 _backend4_store_buffer_medium_set_count(count - 1)
-            py_decref(load_ptr(node, 16))
-            free(node)
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
+            store_ptr(node, 24, null())
+            if ptr_is_null(cleanup_tail):
+                cleanup_head = node
+            else:
+                store_ptr(cleanup_tail, 24, node)
+            cleanup_tail = node
             node = nxt
             continue
         prev = node
@@ -1461,13 +1528,26 @@ def _backend4_store_buffer_remove(owner) -> None:
             else:
                 store_ptr(prev, 24, nxt)
             _backend4_store_buffer_dec()
-            py_decref(load_ptr(node, 16))
-            free(node)
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
+            store_ptr(node, 24, null())
+            if ptr_is_null(cleanup_tail):
+                cleanup_head = node
+            else:
+                store_ptr(cleanup_tail, 24, node)
+            cleanup_tail = node
             node = nxt
             continue
         prev = node
         node = nxt
     pcc_gc_store_buffer_member_forget(owner)
+    # Neither a saved predecessor nor successor is exposed across callbacks.
+    # Reentrant disposal only sees the fully updated public queues/indexes.
+    node = cleanup_head
+    while ptr_is_null(node) == 0:
+        nxt = load_ptr(node, 24)
+        py_decref(load_ptr(node, 16))
+        free(node)
+        node = nxt
 
 
 @c_abi_export("pcc_gc_backend4_source_side_table_plan_prepare")
@@ -1586,6 +1666,7 @@ def pcc_gc_backend4_source_side_table_plan_commit(plan) -> int:
             medium_count: int = _backend4_store_buffer_medium_count()
             if medium_count > 0:
                 _backend4_store_buffer_medium_set_count(medium_count - 1)
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
             free(node)
             removed = removed + 1
             node = nxt
@@ -1602,6 +1683,7 @@ def pcc_gc_backend4_source_side_table_plan_commit(plan) -> int:
             else:
                 store_ptr(prev, 24, nxt)
             _backend4_store_buffer_dec()
+            pcc_gc_store_buffer_entry_forget(owner, load_ptr(node, 8))
             free(node)
             removed = removed + 1
             node = nxt
@@ -1651,6 +1733,9 @@ def pcc_gc_backend4_source_side_table_plan_finish(
 def _backend4_store_buffer_owner_pending(owner) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
+    indexed: int = pcc_gc_store_buffer_owner_entries(owner)
+    if indexed >= 0:
+        return 1 if indexed > 0 else 0
     node = _store_buffer_medium_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), owner) != 0:
@@ -1667,6 +1752,9 @@ def _backend4_store_buffer_owner_pending(owner) -> int:
 def _backend4_store_buffer_owner_fanout(owner) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
+    indexed: int = pcc_gc_store_buffer_owner_entries(owner)
+    if indexed >= 0:
+        return indexed
     node = _store_buffer_medium_head()
     count: int = 0
     while ptr_is_null(node) == 0:
@@ -1802,6 +1890,7 @@ def _backend4_store_buffer_clear() -> None:
         free(node)
         node = nxt
     pcc_gc_store_buffer_member_clear()
+    pcc_gc_store_buffer_index_clear()
     store_i32(global_addr("pcc_gc_backend4_store_buffer_entries_count"), 0, 0)
     store_i32(global_addr("pcc_gc_backend4_store_buffer_high_water_count"), 0, 0)
     store_i32(
@@ -1837,11 +1926,96 @@ def _set_remembered_set_head(head) -> None:
     global_store_ptr("pcc_gc_backend4_remembered_slots_head", head)
 
 
+# A remembered entry: owner @0, slot @8, next @16 and prev @24 in the set's
+# list, then next @32 and prev @40 in its owner's chain, whose head is the
+# owner's value in the remembered member index. While that index is exact
+# (pcc_gc_remembered_member_exact), an owner's chain reaches all of its
+# entries, so removing, counting or retargeting an owner's entries walks
+# only them instead of the whole set; otherwise those walk the set list.
+# Chains are read and written only while the index is exact: an entry
+# linked or unlinked while it is not leaves the index tainted, so no chain
+# is trusted again before the set is cleared.
+
+
+def _remembered_entry_link(owner, slot, node) -> None:
+    store_ptr(node, 0, owner)
+    store_ptr(node, 8, slot)
+    head = _remembered_set_head()
+    store_ptr(node, 16, head)
+    store_ptr(node, 24, null())
+    if ptr_is_null(head) == 0:
+        store_ptr(head, 24, node)
+    _set_remembered_set_head(node)
+    _remembered_entry_owner_push(owner, node)
+
+
+def _remembered_entry_owner_push(owner, node) -> None:
+    store_ptr(node, 32, null())
+    store_ptr(node, 40, null())
+    if pcc_gc_remembered_member_exact() == 0:
+        pcc_gc_remembered_member_taint()
+        return
+    first = pcc_gc_remembered_member_head(owner)
+    if pcc_gc_remembered_member_set_head(owner, node) != 0:
+        pcc_gc_remembered_member_taint()
+        return
+    store_ptr(node, 32, first)
+    if ptr_is_null(first) == 0:
+        store_ptr(first, 40, node)
+
+
+def _remembered_entry_owner_unlink(node) -> None:
+    if pcc_gc_remembered_member_exact() == 0:
+        pcc_gc_remembered_member_taint()
+        return
+    owner_next = load_ptr(node, 32)
+    owner_prev = load_ptr(node, 40)
+    if ptr_is_null(owner_prev) == 0:
+        store_ptr(owner_prev, 32, owner_next)
+    elif ptr_eq(pcc_gc_remembered_member_head(load_ptr(node, 0)), node) != 0:
+        pcc_gc_remembered_member_set_head(load_ptr(node, 0), owner_next)
+    if ptr_is_null(owner_next) == 0:
+        store_ptr(owner_next, 40, owner_prev)
+    store_ptr(node, 32, null())
+    store_ptr(node, 40, null())
+
+
+def _remembered_entry_unlink(node) -> None:
+    """Take node out of the set list and its owner's chain."""
+    nxt = load_ptr(node, 16)
+    prev = load_ptr(node, 24)
+    if ptr_is_null(prev) != 0:
+        _set_remembered_set_head(nxt)
+    else:
+        store_ptr(prev, 16, nxt)
+    if ptr_is_null(nxt) == 0:
+        store_ptr(nxt, 24, prev)
+    _remembered_entry_owner_unlink(node)
+
+
+def _remembered_entries_count_decrement() -> None:
+    entries: int = load_i32(
+        global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
+    )
+    if entries > 0:
+        store_i32(
+            global_addr("pcc_gc_backend4_remembered_set_entries_count"),
+            0,
+            entries - 1,
+        )
+
+
 def _backend4_remembered_set_contains(owner, slot) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
     if ptr_is_null(slot) != 0:
         return 0
+    # Every remembered (owner, slot) sets its slot's byte in the remembered
+    # pages (_backend4_remembered_entry_attach), and a slot belongs to one
+    # owner: the page byte answers in constant time unless a page allocation
+    # failed, when the list walk does.
+    if load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+        return _backend4_remembered_page_contains_slot(slot)
     node = _remembered_set_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), owner) != 0:
@@ -1855,8 +2029,14 @@ def _backend4_remembered_set_contains(owner, slot) -> int:
 def _backend4_owner_remembered_slots(owner) -> int:
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
-    node = _remembered_set_head()
     total: int = 0
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(owner)
+        while ptr_is_null(node) == 0:
+            total = total + 1
+            node = load_ptr(node, 32)
+        return total
+    node = _remembered_set_head()
     while ptr_is_null(node) == 0:
         if ptr_eq(load_ptr(node, 0), owner) != 0:
             total = total + 1
@@ -1951,12 +2131,59 @@ def _backend4_zpage_note_remembered_card(owner, slot, delta: int) -> None:
 
 
 def _backend4_remembered_page_find(key: int):
+    # The page index answers in constant time; while it is incomplete (an
+    # allocation failed), walk the page list.
+    if key != 0 and load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+        slots = global_load_ptr("pcc_gc_backend4_remembered_page_index_slots")
+        if ptr_is_null(slots) != 0:
+            return null()
+        cap: int = load_i64(global_addr("pcc_gc_backend4_remembered_page_index_cap"), 0)
+        result: int = pcc_gc_index_py_find_slot(slots, cap, int_to_ptr(key))
+        if result < 0:
+            return null()
+        return load_ptr(slots, result * 16 + 8)
     node = global_load_ptr("pcc_gc_backend4_remembered_page_head")
     while ptr_is_null(node) == 0:
         if load_i64(node, 0) == key:
             return node
         node = load_ptr(node, 16)
     return null()
+
+
+def _backend4_remembered_page_unlink(page) -> None:
+    # Only a page whose last slot left is unlinked, so the list walk for its
+    # predecessor is paid once per page, not once per slot.
+    prev = null()
+    node = global_load_ptr("pcc_gc_backend4_remembered_page_head")
+    while ptr_is_null(node) == 0:
+        if ptr_eq(node, page) != 0:
+            nxt = load_ptr(page, 16)
+            if ptr_is_null(prev) != 0:
+                global_store_ptr("pcc_gc_backend4_remembered_page_head", nxt)
+            else:
+                store_ptr(prev, 16, nxt)
+            if load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+                pcc_gc_index_py_remove(
+                    global_addr("pcc_gc_backend4_remembered_page_index_slots"),
+                    global_addr("pcc_gc_backend4_remembered_page_index_cap"),
+                    global_addr("pcc_gc_backend4_remembered_page_index_count"),
+                    global_addr("pcc_gc_backend4_remembered_page_index_used"),
+                    int_to_ptr(load_i64(page, 0)),
+                    1,
+                )
+            free(page)
+            entries: int = load_i32(
+                global_addr("pcc_gc_backend4_remembered_page_entries_count"), 0
+            )
+            if entries > 0:
+                store_i32(
+                    global_addr("pcc_gc_backend4_remembered_page_entries_count"),
+                    0,
+                    entries - 1,
+                )
+            return
+        prev = node
+        node = load_ptr(node, 16)
 
 
 def _backend4_remembered_page_add(slot) -> None:
@@ -1969,6 +2196,8 @@ def _backend4_remembered_page_add(slot) -> None:
     if ptr_is_null(page) != 0:
         page = malloc(536)
         if ptr_is_null(page) != 0:
+            # The page bytes no longer cover every remembered slot.
+            store_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0, 1)
             return
         store_i64(page, 0, key)
         store_i64(page, 8, 0)
@@ -1978,6 +2207,19 @@ def _backend4_remembered_page_add(slot) -> None:
             store_i64(page, 24 + word * 8, 0)
             word = word + 1
         global_store_ptr("pcc_gc_backend4_remembered_page_head", page)
+        if load_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0) == 0:
+            if pcc_gc_index_py_insert(
+                global_addr("pcc_gc_backend4_remembered_page_index_slots"),
+                global_addr("pcc_gc_backend4_remembered_page_index_cap"),
+                global_addr("pcc_gc_backend4_remembered_page_index_count"),
+                global_addr("pcc_gc_backend4_remembered_page_index_used"),
+                int_to_ptr(key),
+                page,
+                1,
+                1,
+                256,
+            ) != 1:
+                store_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0, 1)
         entries: int = load_i32(
             global_addr("pcc_gc_backend4_remembered_page_entries_count"), 0
         ) + 1
@@ -2012,48 +2254,28 @@ def _backend4_remembered_page_remove_slot(slot) -> None:
     address: int = ptr_to_int(slot)
     key: int = address - (address % 4096)
     byte: int = (address % 4096) // 8
-    prev = null()
-    page = global_load_ptr("pcc_gc_backend4_remembered_page_head")
-    while ptr_is_null(page) == 0:
-        if load_i64(page, 0) == key:
-            if load_i8(page, 24 + byte) == 0:
-                return
-            store_i8(page, 24 + byte, 0)
-            remaining: int = load_i64(page, 8) - 1
-            store_i64(page, 8, remaining)
-            slot_entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_page_slot_entries_count"),
-                0,
-            )
-            if slot_entries > 0:
-                store_i32(
-                    global_addr(
-                        "pcc_gc_backend4_remembered_page_slot_entries_count"
-                    ),
-                    0,
-                    slot_entries - 1,
-                )
-            if remaining <= 0:
-                nxt = load_ptr(page, 16)
-                if ptr_is_null(prev) != 0:
-                    global_store_ptr("pcc_gc_backend4_remembered_page_head", nxt)
-                else:
-                    store_ptr(prev, 16, nxt)
-                free(page)
-                entries: int = load_i32(
-                    global_addr("pcc_gc_backend4_remembered_page_entries_count"), 0
-                )
-                if entries > 0:
-                    store_i32(
-                        global_addr(
-                            "pcc_gc_backend4_remembered_page_entries_count"
-                        ),
-                        0,
-                        entries - 1,
-                    )
-            return
-        prev = page
-        page = load_ptr(page, 16)
+    page = _backend4_remembered_page_find(key)
+    if ptr_is_null(page) != 0:
+        return
+    if load_i8(page, 24 + byte) == 0:
+        return
+    store_i8(page, 24 + byte, 0)
+    remaining: int = load_i64(page, 8) - 1
+    store_i64(page, 8, remaining)
+    slot_entries: int = load_i32(
+        global_addr("pcc_gc_backend4_remembered_page_slot_entries_count"),
+        0,
+    )
+    if slot_entries > 0:
+        store_i32(
+            global_addr(
+                "pcc_gc_backend4_remembered_page_slot_entries_count"
+            ),
+            0,
+            slot_entries - 1,
+        )
+    if remaining <= 0:
+        _backend4_remembered_page_unlink(page)
 
 
 def _backend4_remembered_page_contains_slot(slot) -> int:
@@ -2069,6 +2291,13 @@ def _backend4_remembered_page_contains_slot(slot) -> int:
 def _backend4_remembered_pages_clear() -> None:
     page = global_load_ptr("pcc_gc_backend4_remembered_page_head")
     global_store_ptr("pcc_gc_backend4_remembered_page_head", null())
+    index_slots = global_load_ptr("pcc_gc_backend4_remembered_page_index_slots")
+    global_store_ptr("pcc_gc_backend4_remembered_page_index_slots", null())
+    store_i64(global_addr("pcc_gc_backend4_remembered_page_index_cap"), 0, 0)
+    store_i64(global_addr("pcc_gc_backend4_remembered_page_index_count"), 0, 0)
+    store_i64(global_addr("pcc_gc_backend4_remembered_page_index_used"), 0, 0)
+    store_i32(global_addr("pcc_gc_backend4_remembered_page_incomplete"), 0, 0)
+    free(index_slots)
     while ptr_is_null(page) == 0:
         nxt = load_ptr(page, 16)
         free(page)
@@ -2106,16 +2335,13 @@ def _backend4_remembered_set_add(owner, slot) -> int:
             skips + 1,
         )
         return 0
-    node = malloc(24)
+    node = malloc(48)
     if ptr_is_null(node) != 0:
         return 0
     # Index allocation may reenter: do it before publishing this node, then
     # read the current head below. Unknown membership preserves the old walk.
     pcc_gc_remembered_member_note(owner)
-    store_ptr(node, 0, owner)
-    store_ptr(node, 8, slot)
-    store_ptr(node, 16, _remembered_set_head())
-    _set_remembered_set_head(node)
+    _remembered_entry_link(owner, slot, node)
     entries: int = load_i32(
         global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
     )
@@ -2143,29 +2369,21 @@ def _backend4_remembered_set_remove(owner) -> None:
         return
     if pcc_gc_remembered_member_maybe(owner) == 0:
         return
-    prev = null()
-    node = _remembered_set_head()
+    # The owner's own chain when the index is exact, else the set list.
+    node = null()
+    next_offset: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(owner)
+        next_offset = 32
+    else:
+        node = _remembered_set_head()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = load_ptr(node, next_offset)
         if ptr_eq(load_ptr(node, 0), owner) != 0:
             _backend4_remembered_entry_detach(load_ptr(node, 0), load_ptr(node, 8))
-            if ptr_is_null(prev) != 0:
-                _set_remembered_set_head(nxt)
-            else:
-                store_ptr(prev, 16, nxt)
-            entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
-            )
-            if entries > 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_remembered_set_entries_count"),
-                    0,
-                    entries - 1,
-                )
+            _remembered_entry_unlink(node)
+            _remembered_entries_count_decrement()
             free(node)
-            node = nxt
-            continue
-        prev = node
         node = nxt
     # A free callback can add a new head after the walk passed it. Retire the
     # owner key only after a fresh, callback-free absence proof. Slot/card
@@ -2177,31 +2395,16 @@ def _backend4_remembered_set_remove(owner) -> None:
 def _backend4_remembered_set_remove_slot(slot) -> int:
     if ptr_is_null(slot) != 0:
         return 0
-    prev = null()
     node = _remembered_set_head()
     removed: int = 0
     while ptr_is_null(node) == 0:
         nxt = load_ptr(node, 16)
         if ptr_eq(load_ptr(node, 8), slot) != 0:
             _backend4_remembered_entry_detach(load_ptr(node, 0), load_ptr(node, 8))
-            if ptr_is_null(prev) != 0:
-                _set_remembered_set_head(nxt)
-            else:
-                store_ptr(prev, 16, nxt)
-            entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
-            )
-            if entries > 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_remembered_set_entries_count"),
-                    0,
-                    entries - 1,
-                )
+            _remembered_entry_unlink(node)
+            _remembered_entries_count_decrement()
             free(node)
             removed = 1
-            node = nxt
-            continue
-        prev = node
         node = nxt
     return removed
 
@@ -2221,16 +2424,27 @@ def _backend4_remembered_set_retarget_slot(
     # Prepare before taking a cursor: index allocation may invoke callbacks.
     # Retaining the old owner key is conservative, including multiple slots.
     pcc_gc_remembered_member_note(to_owner)
-    node = _remembered_set_head()
+    # from_owner's chain when the index is exact, else the set list.
+    node = null()
+    next_offset: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(from_owner)
+        next_offset = 32
+    else:
+        node = _remembered_set_head()
     while ptr_is_null(node) == 0:
+        nxt = load_ptr(node, next_offset)
         if ptr_eq(load_ptr(node, 0), from_owner) != 0:
             if ptr_eq(load_ptr(node, 8), from_slot) != 0:
                 _backend4_remembered_entry_detach(from_owner, from_slot)
                 pcc_gc_remembered_member_require(to_owner)
-                store_ptr(node, 0, to_owner)
+                if ptr_eq(from_owner, to_owner) == 0:
+                    _remembered_entry_owner_unlink(node)
+                    store_ptr(node, 0, to_owner)
+                    _remembered_entry_owner_push(to_owner, node)
                 store_ptr(node, 8, to_slot)
                 _backend4_remembered_entry_attach(to_owner, to_slot)
-        node = load_ptr(node, 16)
+        node = nxt
 
 
 def _backend4_remembered_set_retarget_inline_slot(
@@ -2361,14 +2575,57 @@ def pcc_gc_pointer_is_managed(o) -> int:
     # less, so singleton refcount traffic is too rare to pay for it here.
     # The allocator publishes LIVE with release ordering only after the object
     # header is complete.  Readers may therefore accept this exact positive
-    # without the graph lock.  Every other result takes the lock and executes
-    # the complete historical provenance chain.
+    # without the graph lock.
     if pcc_gc_granule_is_object_start(o) == 1:
+        return 1
+    # Objects outside the allocator's slabs -- every GC4 zpage object -- are
+    # registered in the GC1-4 object index once tracked and in the
+    # managed-pointer set before that. Both answer an exact positive without
+    # the lock (pcc_gc_index_py_seen). Every other result takes the lock and
+    # executes the complete historical provenance chain.
+    if pcc_gc_object_index_seen(o) != 0:
+        return 1
+    if pcc_gc_managed_pointer_index_seen(o) != 0:
         return 1
     _object_graph_lock()
     managed: int = _pointer_is_managed_no_lock(o)
     _object_graph_unlock()
     return managed
+
+
+@c_abi_export("pcc_gc_reclaim_retired_index_tables")
+def pcc_gc_reclaim_retired_index_tables() -> int:
+    """Free the index tables that rehashes retired, when no thread can hold one.
+
+    That is when this thread is the only registered one (it keeps the world
+    lock, which registration takes, across the free) or holds a stopped
+    world, where every other thread is parked or exited and so outside the
+    lock-free probes. Collections call it after they stop the world, and
+    pcc_gc_alloc after a rehash in a single-threaded process. Returns the
+    number freed, or -1 when another thread may still be probing.
+    """
+    if pcc_thread_world_lock_if_sole() != 0:
+        freed: int = pcc_gc_index_reclaim_retired()
+        pcc_thread_world_unlock()
+        return freed
+    if pcc_thread_owns_stopped_world() == 0:
+        return -1
+    return pcc_gc_index_reclaim_retired()
+
+
+@c_abi_export("pcc_gc_reclaim_retired_index_tables_if_alone")
+def pcc_gc_reclaim_retired_index_tables_if_alone() -> None:
+    """After a registration or tracking: free retired tables in a one-thread process.
+
+    The thread count read here is only the hint that keeps a multi-threaded
+    process from taking the world lock on every allocation; the reclaim
+    decides under that lock.
+    """
+    if ptr_is_null(global_load_ptr("pcc_py_gc_index_retired_tables")) != 0:
+        return
+    if load_i64(global_addr("pcc_live_thread_count_py"), 0) > 1:
+        return
+    pcc_gc_reclaim_retired_index_tables()
 
 
 @c_abi_export("pcc_gc_pointer_register")
@@ -2383,6 +2640,17 @@ def pcc_gc_pointer_register(o) -> int:
     _object_graph_lock()
     result: int = pcc_gc_managed_pointer_index_insert(o)
     _object_graph_unlock()
+    # The insert may have grown the set (see pcc_gc_reclaim_retired_index_tables).
+    pcc_gc_reclaim_retired_index_tables_if_alone()
+    return result
+
+
+@c_abi_export("pcc_gc_pointer_register_static_literal")
+def pcc_gc_pointer_register_static_literal(o) -> int:
+    """Register a compiler-created process-lifetime scalar image object."""
+    result: int = pcc_gc_pointer_register(o)
+    if result >= 0:
+        _static_literal_record(o)
     return result
 
 
@@ -2590,7 +2858,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         # A concurrent switch won; this was a reset of the backend it left.
         _object_graph_unlock()
         return -1
-    if load_i64(global_addr("pcc_gc_foreign_lease_active"), 0) != 0:
+    if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") != 0:
         _object_graph_unlock()
         _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
@@ -2633,7 +2901,25 @@ def pcc_gc_set_backend(backend: int) -> int:
                     _release_cms_worker_pause_unless_kept(keeps_collector)
                     return -1
             migration_node = _object_node_next(migration_node)
+    # Reserve central indexed/tail admission, then freeze every mode-only
+    # shard. A racing acquire either prevents a zero-to--1 CAS or observes its
+    # shard frozen. No backend state changes until all reservations are owned.
+    if atomic_cas_i64(
+        global_addr("pcc_gc_foreign_lease_active"), 0, 0, -1, "acq_rel", "acquire"
+    ) != 0:
+        _object_graph_unlock()
+        _release_cms_worker_pause_unless_kept(keeps_collector)
+        return -1
+    if _mode_leases_freeze() != 0:
+        # Freeze already restored its acquired prefix. Central is restored
+        # last, so no new reservation can observe a partially thawed table.
+        atomic_store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0, "release")
+        _object_graph_unlock()
+        _release_cms_worker_pause_unless_kept(keeps_collector)
+        return -1
     if _tracing_cycle_epoch_advance_unlocked() == 0:
+        _mode_leases_thaw()
+        atomic_store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0, "release")
         _object_graph_unlock()
         _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
@@ -2647,9 +2933,8 @@ def pcc_gc_set_backend(backend: int) -> int:
     store_i64(global_addr("pcc_gc_trace_extension_roots_backend"), 0, -1)
     global_store_ptr("pcc_gc_trace_cursor", null())
     _set_gray_count(0)
-    # Reserve the transition across unlocked worker/teardown operations.
-    # Acquisition refuses this sentinel; no raw pointer can race list reset.
-    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, -1)
+    # Keep the reserved transition across unlocked worker/teardown operations.
+    # Acquisition refuses the sentinel; no raw pointer can race list reset.
     _object_graph_unlock()
     if backend == 3 or backend == 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
@@ -2671,6 +2956,7 @@ def pcc_gc_set_backend(backend: int) -> int:
     store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
     store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)
     atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release")
+    atomic_store_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, 0, "release")
     store_i32(global_addr("pcc_gc_last_alloc_bytes"), 0, 0)
     if backend == 0:
         global_store_ptr("pcc_gc_backend3_promotion_head", null())
@@ -2690,7 +2976,8 @@ def pcc_gc_set_backend(backend: int) -> int:
         pcc_gc_reset_relocation_set()
         _backend4_store_buffer_clear()
     _object_graph_lock()
-    store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0)
+    _mode_leases_thaw()
+    atomic_store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0, "release")
     _object_graph_unlock()
     if keeps_collector != 0:
         # The kept thread still runs; start one only if none does.
@@ -2722,10 +3009,12 @@ def pcc_gc_telemetry_reset() -> None:
     detached_remembered = _backend3_clear_remembered_owners()
     _object_graph_unlock()
     _backend3_finish_detached_remembered_owners(detached_remembered)
-    i: int = 0
-    while i < 5:
+    i: int = 1
+    while i < 4:
         store_i32(_counter_global(i), 0, 0)
         i = i + 1
+    pcc_gc_metric_shard_reset(0)
+    pcc_gc_metric_shard_reset(8)
     store_i64(global_addr("pcc_gc_metric_step"), 0, 0)
     store_i64(global_addr("pcc_gc_unmanaged_refcount_ops"), 0, 0)
     store_i64(global_addr("pcc_gc_metric_max_pause_us"), 0, 0)
@@ -3451,8 +3740,17 @@ def _backend4_zpage_register_owner_payload_span_locked(
                 store_i64(span_existing, 16, size_bytes)
                 return 0
             capacity_existing: int = load_i64(page, 16)
-            if size_bytes > capacity_existing - offset_existing:
-                overflow_old_size: int = load_i64(span_existing, 16)
+            old_size: int = load_i64(span_existing, 16)
+            allocated_existing: int = load_i64(page, 64)
+            # A virtual payload reservation can grow only at the bump tail.
+            # Extending an older reservation would claim later live objects;
+            # its eventual tail rewind could then reallocate their bytes.
+            # Keep such payloads in the existing external-span representation.
+            if size_bytes > capacity_existing - offset_existing or (
+                size_bytes > old_size
+                and allocated_existing != offset_existing + old_size
+            ):
+                overflow_old_size: int = old_size
                 used_existing: int = load_i64(page, 8)
                 if used_existing >= overflow_old_size:
                     store_i64(page, 8, used_existing - overflow_old_size)
@@ -3461,7 +3759,6 @@ def _backend4_zpage_register_owner_payload_span_locked(
                 store_i64(span_existing, 24, -1)
                 store_i64(span_existing, 16, size_bytes)
                 return 0
-            old_size: int = load_i64(span_existing, 16)
             used_existing: int = load_i64(page, 8)
             if size_bytes >= old_size:
                 store_i64(page, 8, used_existing + size_bytes - old_size)
@@ -3557,8 +3854,12 @@ def _backend4_zpage_retarget_owner_payload_span_locked(
                 store_i64(span, 16, size_bytes)
                 return 0
             capacity: int = load_i64(page, 16)
-            if size_bytes > capacity - offset:
-                overflow_old_size: int = load_i64(span, 16)
+            old_size: int = load_i64(span, 16)
+            allocated: int = load_i64(page, 64)
+            if size_bytes > capacity - offset or (
+                size_bytes > old_size and allocated != offset + old_size
+            ):
+                overflow_old_size: int = old_size
                 used: int = load_i64(page, 8)
                 if used >= overflow_old_size:
                     store_i64(page, 8, used - overflow_old_size)
@@ -3568,7 +3869,6 @@ def _backend4_zpage_retarget_owner_payload_span_locked(
                 store_i64(span, 16, size_bytes)
                 store_i64(span, 24, -1)
                 return 0
-            old_size: int = load_i64(span, 16)
             used: int = load_i64(page, 8)
             if size_bytes >= old_size:
                 store_i64(page, 8, used + size_bytes - old_size)
@@ -3597,6 +3897,7 @@ def _backend4_map_mutator_payload_slot(
     new_size_bytes: int,
     slot_pairs,
     pair_count: int,
+    pairs_ascending: int,
 ):
     if ptr_is_null(slot) != 0:
         return slot
@@ -3605,12 +3906,29 @@ def _backend4_map_mutator_payload_slot(
         return slot
     if (offset & 7) != 0:
         return null()
-    i: int = 0
-    while i < pair_count:
-        old_slot = load_ptr(slot_pairs, i * 16)
-        if ptr_eq(old_slot, slot) != 0:
-            return load_ptr(slot_pairs, i * 16 + 8)
-        i = i + 1
+    if pairs_ascending != 0:
+        # Every caller lists its pairs by ascending old slot. A retarget maps
+        # each pending store-buffer and remembered slot of the owner, and a
+        # list growth passes one pair per element: a scan per slot cost
+        # pending slots times list length.
+        lo: int = 0
+        hi: int = pair_count
+        while lo < hi:
+            mid: int = (lo + hi) // 2
+            if ptr_diff(load_ptr(slot_pairs, mid * 16), old_base) < offset:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo < pair_count:
+            if ptr_eq(load_ptr(slot_pairs, lo * 16), slot) != 0:
+                return load_ptr(slot_pairs, lo * 16 + 8)
+    else:
+        i: int = 0
+        while i < pair_count:
+            old_slot = load_ptr(slot_pairs, i * 16)
+            if ptr_eq(old_slot, slot) != 0:
+                return load_ptr(slot_pairs, i * 16 + 8)
+            i = i + 1
     if offset >= new_size_bytes:
         return null()
     return ptr_add(new_base, offset)
@@ -3662,6 +3980,8 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
         if span_offset < -1:
             return 0
 
+    pairs_ascending: int = 1
+    previous_offset: int = -1
     i = 0
     while i < pair_count:
         old_slot = load_ptr(slot_pairs, i * 16)
@@ -3674,6 +3994,9 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
             return 0
         if (old_offset & 7) != 0 or (new_offset & 7) != 0:
             return 0
+        if old_offset <= previous_offset:
+            pairs_ascending = 0
+        previous_offset = old_offset
         i = i + 1
 
     entry = _store_buffer_medium_head()
@@ -3687,7 +4010,9 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 new_size_bytes,
                 slot_pairs,
                 pair_count,
+                pairs_ascending,
             )
+            pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
             store_ptr(entry, 8, mapped)
         entry = load_ptr(entry, 24)
     entry = _store_buffer_head()
@@ -3701,7 +4026,9 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 new_size_bytes,
                 slot_pairs,
                 pair_count,
+                pairs_ascending,
             )
+            pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
             store_ptr(entry, 8, mapped)
         entry = load_ptr(entry, 24)
 
@@ -3713,9 +4040,16 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
     # Nothing below adds a remembered entry for owner, so one answer covers
     # both walks.
     owner_remembered: int = pcc_gc_remembered_member_maybe(owner)
+    # With an exact member index both walks follow owner's own chain.
+    entry_next: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        entry_next = 32
     entry = null()
     if owner_remembered != 0:
-        entry = _remembered_set_head()
+        if entry_next == 32:
+            entry = pcc_gc_remembered_member_head(owner)
+        else:
+            entry = _remembered_set_head()
     while ptr_is_null(entry) == 0:
         if ptr_eq(load_ptr(entry, 0), owner) != 0:
             old_slot = load_ptr(entry, 8)
@@ -3729,6 +4063,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                     new_size_bytes,
                     slot_pairs,
                     pair_count,
+                    pairs_ascending,
                 )
                 if ptr_is_null(mapped) != 0:
                     return 0
@@ -3737,12 +4072,19 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                     _backend4_zpage_note_remembered_slot(owner, -1)
                     _backend4_zpage_note_remembered_card(owner, old_slot, -1)
                 store_ptr(entry, 8, mapped)
-        entry = load_ptr(entry, 16)
+        entry = load_ptr(entry, entry_next)
 
     if has_payload_span != 0:
         old_span_size: int = load_i64(payload_span, 16)
         page_capacity: int = load_i64(page, 16)
-        if span_offset >= 0 and new_size_bytes > page_capacity - span_offset:
+        allocated: int = load_i64(page, 64)
+        if span_offset >= 0 and (
+            new_size_bytes > page_capacity - span_offset
+            or (
+                new_size_bytes > old_span_size
+                and allocated != span_offset + old_span_size
+            )
+        ):
             used: int = load_i64(page, 8)
             if used >= old_span_size:
                 store_i64(page, 8, used - old_span_size)
@@ -3769,7 +4111,10 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 store_i64(page, 64, span_end)
     entry = null()
     if owner_remembered != 0:
-        entry = _remembered_set_head()
+        if entry_next == 32:
+            entry = pcc_gc_remembered_member_head(owner)
+        else:
+            entry = _remembered_set_head()
     while ptr_is_null(entry) == 0:
         if ptr_eq(load_ptr(entry, 0), owner) != 0:
             new_slot = load_ptr(entry, 8)
@@ -3779,7 +4124,7 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
                 if has_payload_span != 0:
                     _backend4_zpage_note_remembered_slot(owner, 1)
                     _backend4_zpage_note_remembered_card(owner, new_slot, 1)
-        entry = load_ptr(entry, 16)
+        entry = load_ptr(entry, entry_next)
     if has_payload_span != 0:
         return 1
     return 2
@@ -4086,34 +4431,26 @@ def pcc_gc_backend4_zpage_clear_remembered_card(owner, slot) -> int:
         _object_graph_unlock()
         return 0
     removed: int = 0
-    prev = null()
-    node = _remembered_set_head()
+    # The owner's own chain when the member index is exact, else the set.
+    node = null()
+    next_offset: int = 16
+    if pcc_gc_remembered_member_exact() != 0:
+        node = pcc_gc_remembered_member_head(owner)
+        next_offset = 32
+    else:
+        node = _remembered_set_head()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = load_ptr(node, next_offset)
         if (
             ptr_eq(load_ptr(node, 0), owner) != 0
             and _backend4_zpage_card_for_node_slot(owner_node, load_ptr(node, 8))
             == card
         ):
             _backend4_remembered_entry_detach(owner, load_ptr(node, 8))
-            if ptr_is_null(prev) != 0:
-                _set_remembered_set_head(nxt)
-            else:
-                store_ptr(prev, 16, nxt)
-            entries: int = load_i32(
-                global_addr("pcc_gc_backend4_remembered_set_entries_count"), 0
-            )
-            if entries > 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_remembered_set_entries_count"),
-                    0,
-                    entries - 1,
-                )
+            _remembered_entry_unlink(node)
+            _remembered_entries_count_decrement()
             free(node)
             removed = removed + 1
-            node = nxt
-            continue
-        prev = node
         node = nxt
     _object_graph_unlock()
     return removed
@@ -4139,11 +4476,37 @@ def pcc_gc_backend4_verify_no_old_addresses() -> int:
     return 1
 
 
+def _gc0_terminal_free_has_no_metadata(o) -> int:
+    # Only already-terminal, structurally proven object-family allocations.
+    # GC0 discards the moving/tracing object index before publishing its
+    # atomic-refcount mode; the reserved transition sentinel excludes entry
+    # during that teardown. Other collectors/origins and diagnostic modes
+    # retain the full graph transaction.
+    if load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0:
+        return 0
+    if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0:
+        return 0
+    if ptr_is_null(_identity_head_acquire()) == 0:
+        return 0
+    if pcc_gc_granule_is_object_start(o) != 1:
+        return 0
+    if atomic_load_i64(o, 0, "acquire") != 0:
+        return 0
+    return 1 if (atomic_load_i32(o, 12, "acquire") & 524288) != 0 else 0
+
+
 @c_abi_export("pcc_gc_free_object_memory")
 def pcc_gc_free_object_memory(o) -> None:
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
+        return
+    if _gc0_terminal_free_has_no_metadata(o) != 0:
+        if ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) == 0:
+            pcc_gc_note_object_freeing(o)
+        if pcc_gc_pointer_unregister(o) < 0:
+            return
+        free(o)
         return
     if pcc_gc_pointer_is_managed(o) == 0:
         return
@@ -4582,14 +4945,20 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
         elif backend == 3:
             flags: int = load_i32(o, 12)
-            new_flags: int = (flags & ~(56 | 384)) | 136
+            color: int = 8
+            if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                color = 32
+            new_flags: int = (flags & ~(56 | 384)) | 128 | color
             if ptr_is_null(pending_block) == 0:
                 new_flags = new_flags | 4096
             store_i32(o, 12, new_flags)
             store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
         elif backend == 4:
             flags: int = load_i32(o, 12)
-            new_flags: int = (flags & ~(56 | 2048 | 8192)) | 8
+            color: int = 8
+            if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                color = 32
+            new_flags: int = (flags & ~(56 | 2048 | 8192)) | color
             if (flags & 384) == 0:
                 new_flags = new_flags | 128
             store_i32(o, 12, new_flags)
@@ -4762,6 +5131,11 @@ def pcc_gc_note_object_freeing(o) -> None:
     watch = global_load_ptr("pcc_gc_free_watch")
     if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
         store_i64(watch, _FREE_WATCH_NOTED, 1)
+    if backend == 0 and _gc0_terminal_free_has_no_metadata(o) != 0:
+        # Keep free-watch/last-note evidence even though this lifetime has no
+        # identity or traced-object metadata to remove under the graph lock.
+        global_store_ptr("pcc_gc_last_noted_free", o)
+        return
     # The remap-finish struct is written only by the forwarding backends
     # (3/4): every writer below sits under that backend check, so on 0/1/2 it
     # is all-null at every exit and the six-way retirement fan-out is pure
@@ -4820,9 +5194,10 @@ def pcc_gc_note_object_freeing(o) -> None:
             # Retire this mark-cycle work before publishing freeing, including
             # the minor-block branch that leaves the node linked. Clearing the
             # bit and the first-transition guard make repeated notifications
-            # idempotent. Do not infer GC3/4 moving-copy ownership from color.
+            # idempotent. Only this still-active node owns the gray work;
+            # already retired forwarding-source nodes do not retire it twice.
             count_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-            if count_backend == 1 or count_backend == 2:
+            if count_backend >= 1 and count_backend <= 4:
                 dying_flags: int = load_i32(o, 12)
                 if (dying_flags & 16) != 0:
                     _gc_gray_count_decrement_acq_rel()
@@ -5730,8 +6105,7 @@ def pcc_gc_note_safepoint() -> None:
 
 @c_abi_export("pcc_gc_note_pin")
 def pcc_gc_note_pin(delta: int) -> None:
-    slot = global_addr("pcc_gc_metric_pin")
-    store_i32(slot, 0, load_i32(slot, 0) + delta)
+    atomic_rmw_i64("add", global_addr("pcc_gc_metric_shards"), pcc_gc_metric_shard(), delta, "relaxed")
 
 
 def _scheduler_root_node_alloc(slot):

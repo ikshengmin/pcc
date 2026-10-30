@@ -8,10 +8,12 @@ This module owns only the raw backend-0 collection state machine.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i32,
     abi_constant,
     free,
     global_addr,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -20,6 +22,7 @@ from pcc.unsafe import (
     null,
     ptr_add,
     ptr_is_null,
+    ptr_eq,
     store_i32,
     store_i64,
     store_ptr,
@@ -60,6 +63,9 @@ pcc_gc_note_object_freeing = extern(
 )
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_reclaim_retired_index_tables = extern(
+    "pcc_gc_reclaim_retired_index_tables", (), c_int64
+)
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_gc_trace_continuation_roots = extern(
     "pcc_gc_trace_continuation_roots", (), c_int64
@@ -69,6 +75,7 @@ pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
 )
 pcc_capi_dealloc_cext_object = extern("pcc_capi_dealloc_cext_object", (c_ptr, c_int64), c_int64)
+py_gc_index_find = extern("py_gc_index_find", (c_ptr,), c_ptr)
 py_gc_index_remove = extern("py_gc_index_remove", (c_ptr,), c_ptr)
 pcc_gc_default_unlink_tracked_node = extern(
     "pcc_gc_default_unlink_tracked_node", (c_ptr,), c_void
@@ -90,6 +97,106 @@ pcc_gc_backend0_mark_reachable = extern(
 pcc_gc_backend0_clear_referents = extern(
     "pcc_gc_backend0_clear_referents", (c_ptr,), c_void
 )
+
+
+# A candidate record is two raw identities, never an extra object owner.
+# Validate the current index before dereferencing a saved node; stale entries,
+# duplicate entries, and recycled addresses cannot prove garbage by themselves.
+_SUBSET_NODE = 0
+_SUBSET_OBJECT = 8
+_SUBSET_RECORD_BYTES = 16
+_SUBSET_CANDIDATE = 4
+_SUBSET_REACHABLE = 1
+# This cycle collector owns zeros produced by its own finalizers. They are
+# distinct from a mutator parked after a last decrement and before untrack.
+_COLLECTOR_FINALIZED_ZERO = 8
+
+
+@c_abi_export("pcc_gc_backend0_subset_node")
+def _subset_node(index: i64):
+    pairs = global_load_ptr("pcc_gc_backend0_subset_pairs")
+    record = ptr_add(pairs, index * _SUBSET_RECORD_BYTES)
+    obj = load_ptr(record, _SUBSET_OBJECT)
+    node = py_gc_index_find(obj)
+    if ptr_is_null(node) != 0 or ptr_eq(node, load_ptr(record, _SUBSET_NODE)) == 0:
+        return null()
+    if ptr_eq(load_ptr(node, 0), obj) == 0:
+        return null()
+    return node
+
+
+@c_abi_export("pcc_gc_backend0_subset_prepare")
+def _prepare_subset(pairs, count: i64) -> i64:
+    owned = malloc(count * _SUBSET_RECORD_BYTES)
+    if ptr_is_null(owned) != 0:
+        return -1
+    valid: i64 = 0
+    index: i64 = 0
+    while index < count:
+        source = ptr_add(pairs, index * _SUBSET_RECORD_BYTES)
+        obj = load_ptr(source, _SUBSET_OBJECT)
+        node = py_gc_index_find(obj)
+        if ptr_is_null(node) == 0 and ptr_eq(node, load_ptr(source, _SUBSET_NODE)) != 0:
+            if ptr_eq(load_ptr(node, 0), obj) != 0 and (load_i32(node, 16) & _SUBSET_CANDIDATE) == 0:
+                destination = ptr_add(owned, valid * _SUBSET_RECORD_BYTES)
+                store_ptr(destination, _SUBSET_NODE, node)
+                store_ptr(destination, _SUBSET_OBJECT, obj)
+                store_i32(node, 16, _SUBSET_CANDIDATE)
+                valid = valid + 1
+        index = index + 1
+    global_store_ptr("pcc_gc_backend0_subset_pairs", owned)
+    store_i64(global_addr("pcc_gc_backend0_subset_count"), 0, valid)
+    store_i32(global_addr("pcc_gc_backend0_subset_active"), 0, 1)
+    return valid
+
+
+@c_abi_export("pcc_gc_backend0_subset_finish")
+def _finish_subset() -> None:
+    if load_i32(global_addr("pcc_gc_backend0_subset_active"), 0) == 0:
+        return
+    count: i64 = load_i64(global_addr("pcc_gc_backend0_subset_count"), 0)
+    index: i64 = 0
+    while index < count:
+        node = _subset_node(index)
+        if ptr_is_null(node) == 0:
+            store_i32(node, 16, load_i32(node, 16) & ~_SUBSET_CANDIDATE)
+        index = index + 1
+    pairs = global_load_ptr("pcc_gc_backend0_subset_pairs")
+    global_store_ptr("pcc_gc_backend0_subset_pairs", null())
+    store_i64(global_addr("pcc_gc_backend0_subset_count"), 0, 0)
+    store_i32(global_addr("pcc_gc_backend0_subset_active"), 0, 0)
+    free(pairs)
+
+
+@c_abi_export("pcc_gc_backend0_subset_recompute")
+def _recompute_subset() -> None:
+    count: i64 = load_i64(global_addr("pcc_gc_backend0_subset_count"), 0)
+    index: i64 = 0
+    while index < count:
+        node = _subset_node(index)
+        if ptr_is_null(node) == 0:
+            obj = load_ptr(node, 0)
+            store_i64(node, 8, load_i64(obj, 0))
+            store_i32(node, 16, _SUBSET_CANDIDATE | (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO))
+        index = index + 1
+    index = 0
+    while index < count:
+        node = _subset_node(index)
+        if ptr_is_null(node) == 0:
+            pcc_gc_backend0_visit_subtract(load_ptr(node, 0))
+        index = index + 1
+    index = 0
+    while index < count:
+        node = _subset_node(index)
+        if ptr_is_null(node) == 0:
+            obj = load_ptr(node, 0)
+            if load_i64(node, 8) > 0 or (
+                load_i64(obj, 0) == 0
+                and (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO) == 0
+            ):
+                pcc_gc_backend0_mark_reachable(obj)
+        index = index + 1
+    _mark_runtime_roots()
 
 
 @c_abi_export("pcc_gc_backend0_mapped_root_count")
@@ -149,14 +256,24 @@ def _visit_scheduler_root_slots() -> i64:
 
 @c_abi_export("pcc_gc_backend0_mark_runtime_roots")
 def _mark_runtime_roots() -> None:
-    node = global_load_ptr("py_gc_head")
-    while ptr_is_null(node) == 0:
-        obj = load_ptr(node, 0)
-        if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
-            if (load_i32(obj, 12) & 64) != 0:
-                pcc_gc_backend0_mark_reachable(obj)
-        node = load_ptr(node, 32)
-
+    if load_i32(global_addr("pcc_gc_backend0_subset_active"), 0) != 0:
+        count: i64 = load_i64(global_addr("pcc_gc_backend0_subset_count"), 0)
+        index: i64 = 0
+        while index < count:
+            node = _subset_node(index)
+            if ptr_is_null(node) == 0:
+                obj = load_ptr(node, 0)
+                if (load_i32(obj, 12) & 64) != 0:
+                    pcc_gc_backend0_mark_reachable(obj)
+            index = index + 1
+    else:
+        node = global_load_ptr("py_gc_head")
+        while ptr_is_null(node) == 0:
+            obj = load_ptr(node, 0)
+            if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
+                if (load_i32(obj, 12) & 64) != 0:
+                    pcc_gc_backend0_mark_reachable(obj)
+            node = load_ptr(node, 32)
     root_slots = global_load_ptr("pcc_gc_root_slots")
     if ptr_is_null(root_slots) == 0:
         _mark_root_slots(
@@ -189,11 +306,14 @@ def _mark_runtime_roots() -> None:
 
 @c_abi_export("pcc_gc_backend0_recompute_reachability")
 def _recompute_reachability() -> None:
+    if load_i32(global_addr("pcc_gc_backend0_subset_active"), 0) != 0:
+        _recompute_subset()
+        return
     node = global_load_ptr("py_gc_head")
     while ptr_is_null(node) == 0:
         obj = load_ptr(node, 0)
         store_i64(node, 8, load_i64(obj, 0))
-        store_i32(node, 16, 0)
+        store_i32(node, 16, load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO)
         node = load_ptr(node, 32)
 
     node = global_load_ptr("py_gc_head")
@@ -203,8 +323,17 @@ def _recompute_reachability() -> None:
 
     node = global_load_ptr("py_gc_head")
     while ptr_is_null(node) == 0:
-        if load_i64(node, 8) > 0:
-            pcc_gc_backend0_mark_reachable(load_ptr(node, 0))
+        obj = load_ptr(node, 0)
+        # A last decref may park after reaching zero and before untrack.
+        # Its fields still own their references until that thread resumes
+        # disposal. Subtraction above counted those edges, so retain the
+        # whole pending owner's graph instead of collecting its children.
+        # Positive-count cycles still require an external or runtime root.
+        if load_i64(node, 8) > 0 or (
+            load_i64(obj, 0) == 0
+            and (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO) == 0
+        ):
+            pcc_gc_backend0_mark_reachable(obj)
         node = load_ptr(node, 32)
     _mark_runtime_roots()
 
@@ -230,6 +359,13 @@ def _maybe_finalize_unreachable(unreachable, count: i64) -> i64:
             ):
                 flags_before: i64 = load_i32(obj, 12)
                 py_user_del_dispatch(obj)
+                obj_after = load_ptr(node, 0)
+                if ptr_is_null(obj_after) == 0 and load_i64(obj_after, 0) == 0:
+                    # The finalizer guard released its temporary owner without
+                    # recursively deallocating. No mutator owns this zero;
+                    # retain it in our candidate pass, not the live root set.
+                    store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_FINALIZED_ZERO)
+                    finalized = 1
                 if (flags_before & 4) == 0:
                     obj_after = load_ptr(node, 0)
                     if ptr_is_null(obj_after) != 0:
@@ -261,7 +397,10 @@ def _dealloc_unreachable(obj) -> None:
         py_dealloc_func(obj)
     elif tag == abi_constant("object.type.class"):
         py_class_dealloc(obj)
-    elif tag == abi_constant("object.type.instance"):
+    elif (
+        tag == abi_constant("object.type.instance")
+        or tag == abi_constant("object.type.valuebox")
+    ):
         py_instance_dealloc(obj)
     elif tag == abi_constant("object.type.exc"):
         py_dealloc_exc(obj)
@@ -299,6 +438,24 @@ def _dealloc_unreachable(obj) -> None:
 
 @c_abi_export("py_gc_collect")
 def py_gc_collect() -> i64:
+    return _collect(null(), 0)
+
+
+@c_abi_export("pcc_gc_backend0_collect_candidates")
+def pcc_gc_backend0_collect_candidates(pairs, count: i64) -> i64:
+    """Revalidate a private candidate snapshot without retaining its objects.
+
+    This internal entry does not replace explicit gc.collect(). It is a
+    reclamation boundary for a future concurrent discovery pass, not proof
+    that GC0 discovery is already concurrent.
+    """
+    if ptr_is_null(pairs) != 0 or count <= 0 or count > 134217728:
+        return 0
+    return _collect(pairs, count)
+
+
+@c_abi_export("pcc_gc_backend0_collect_impl")
+def _collect(pairs, candidate_count: i64) -> i64:
     collecting_slot = global_addr("py_gc_collecting")
     if load_i32(collecting_slot, 0) != 0:
         return 0
@@ -306,11 +463,19 @@ def py_gc_collect() -> i64:
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
+    pcc_gc_reclaim_retired_index_tables()
     pcc_gc_default_table_lock()
+    if ptr_is_null(pairs) == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
+        pcc_gc_default_table_unlock()
+        pcc_resume_world()
+        return 0
     store_i32(collecting_slot, 0, 1)
 
-    tracked: i64 = load_i32(global_addr("py_gc_tracked_count"), 0)
+    tracked: i64 = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
+    if ptr_is_null(pairs) == 0:
+        tracked = _prepare_subset(pairs, candidate_count)
     if tracked <= 0:
+        _finish_subset()
         pcc_gc_default_drain_deferred_nodes()
         store_i32(collecting_slot, 0, 0)
         pcc_gc_default_table_unlock()
@@ -319,6 +484,7 @@ def py_gc_collect() -> i64:
 
     unreachable = malloc(tracked * 8)
     if ptr_is_null(unreachable):
+        _finish_subset()
         pcc_gc_default_drain_deferred_nodes()
         store_i32(collecting_slot, 0, 0)
         pcc_gc_default_table_unlock()
@@ -328,33 +494,50 @@ def py_gc_collect() -> i64:
     _recompute_reachability()
 
     count: i64 = 0
-    node = global_load_ptr("py_gc_head")
-    while ptr_is_null(node) == 0:
-        if load_i32(node, 16) == 0:
-            # rc==0 belongs to a py_decref parked before untrack.  Genuine
-            # cycle garbage has a positive internal refcount.
-            obj_n = load_ptr(node, 0)
-            if load_i64(obj_n, 0) > 0:
-                store_ptr(unreachable, count * 8, node)
-                count = count + 1
-        node = load_ptr(node, 32)
-
+    if load_i32(global_addr("pcc_gc_backend0_subset_active"), 0) != 0:
+        index: i64 = 0
+        while index < tracked:
+            node = _subset_node(index)
+            if ptr_is_null(node) == 0 and (load_i32(node, 16) & _SUBSET_REACHABLE) == 0:
+                if load_i64(load_ptr(node, 0), 0) > 0:
+                    store_ptr(unreachable, count * 8, node)
+                    count = count + 1
+            index = index + 1
+    else:
+        node = global_load_ptr("py_gc_head")
+        while ptr_is_null(node) == 0:
+            if load_i32(node, 16) == 0:
+                # rc==0 belongs to a py_decref parked before untrack.  Genuine
+                # cycle garbage has a positive internal refcount.
+                obj_n = load_ptr(node, 0)
+                if load_i64(obj_n, 0) > 0:
+                    store_ptr(unreachable, count * 8, node)
+                    count = count + 1
+            node = load_ptr(node, 32)
     if _maybe_finalize_unreachable(unreachable, count) != 0:
         _recompute_reachability()
 
     i: i64 = 0
     while i < count:
         node = load_ptr(unreachable, i * 8)
+        if ptr_is_null(node) == 0 and ptr_is_null(load_ptr(node, 0)) == 0:
+            # Revalidation is complete. Clear this collection-only distinction
+            # even on resurrected survivors before callbacks can create new
+            # terminal ownership; never carry it into a future collection.
+            store_i32(node, 16, load_i32(node, 16) & ~_COLLECTOR_FINALIZED_ZERO)
         if (
             ptr_is_null(node) == 0
             and ptr_is_null(load_ptr(node, 0)) == 0
-            and load_i32(node, 16) == 0
+            and (load_i32(node, 16) & _SUBSET_REACHABLE) == 0
         ):
             obj = load_ptr(node, 0)
             py_weakref_invalidate(obj)
             pcc_gc_backend0_clear_referents(obj)
         i = i + 1
 
+    # A class is not freed here: its instances and subclasses own counted
+    # references to it and read it while they are freed, so it dies by
+    # reference count when the last of them releases it.
     i: i64 = 0
     collected: i64 = 0
     while i < count:
@@ -362,7 +545,8 @@ def py_gc_collect() -> i64:
         if (
             ptr_is_null(node) == 0
             and ptr_is_null(load_ptr(node, 0)) == 0
-            and load_i32(node, 16) == 0
+            and (load_i32(node, 16) & _SUBSET_REACHABLE) == 0
+            and load_i32(load_ptr(node, 0), 8) != abi_constant("object.type.class")
         ):
             obj = load_ptr(node, 0)
             pcc_gc_default_unlink_tracked_node(node)
@@ -377,6 +561,7 @@ def py_gc_collect() -> i64:
         i = i + 1
 
     free(unreachable)
+    _finish_subset()
     pcc_gc_default_drain_deferred_nodes()
     store_i32(collecting_slot, 0, 0)
     pcc_gc_default_table_unlock()

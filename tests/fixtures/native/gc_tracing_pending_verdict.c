@@ -1,6 +1,7 @@
 /* Deterministic sweep-boundary regressions on the real tracing runtime.
- * This fixture injects only the pending CANDIDATE verdict on fully initialized
- * graphs under STW and the graph lock. It does not reproduce a worker race or
+ * This fixture injects a pending CANDIDATE verdict on fully initialized graphs
+ * under STW and the graph lock, invalidating cached verdict/provenance metadata.
+ * It does not reproduce a worker race or
  * the Darwin typed-loop failure. Every mode runs in a fresh process.
  */
 #include "py_runtime.h"
@@ -15,6 +16,8 @@ extern int32_t pcc_gc_mark_active;
 extern int32_t pcc_gc_explicit_collect_active;
 extern int32_t pcc_gc_trace_extension_roots_pending;
 extern int64_t pcc_gc_tracing_finish_claim_epoch;
+extern int64_t pcc_gc_tracing_no_candidate_commit;
+extern int64_t pcc_gc_tracing_finish_stop_epoch;
 extern int64_t pcc_gc_debt_threshold_override;
 extern int64_t pcc_gc_debt_bytes;
 extern int64_t pcc_gc_gray_count_load_acquire(void);
@@ -165,6 +168,11 @@ static int inject_candidates(int count) {
         }
         header->flags = (header->flags & ~FRESH) | CANDIDATE;
     }
+    /* These synthetic candidates are not a new completed mark. Invalidate
+     * the last mark's empty-candidate cache and same-world proof, without
+     * fabricating a finish commit or weakening the sweep-owed assertion. */
+    pcc_gc_tracing_no_candidate_commit = -1;
+    pcc_gc_tracing_finish_stop_epoch = -1;
     pcc_py_gc_minor_graph_unlock();
     return pcc_gc_sweep_owed() == 1 && finalizers == 0 ? 0 : 132;
 }

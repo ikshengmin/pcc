@@ -45,6 +45,7 @@ from pcc.unsafe import (
     unlinkat,
     stat_size,
     is_symlink,
+    lstat_kind,
     strlen,
 )
 
@@ -901,7 +902,7 @@ def py_os_fsencode_slots(path_slot, output_slot) -> int:
 
 
 def _fs_suppress_link_error(slots, tokens) -> None:
-    # os.path.islink suppresses OSError and ValueError (including encoding
+    # islink/lexists suppress OSError and ValueError (including encoding
     # errors), but preserves TypeError and arbitrary PathLike exceptions.
     # Cached exception classes already have mapped owning slots; copy from
     # those slots without allocating a fresh matcher or using a raw class.
@@ -934,7 +935,7 @@ def _fs_suppress_link_error(slots, tokens) -> None:
         py_tls_exc_swap_slot(error)
 
 
-def _fs_link_query(slots, tokens) -> int:
+def _fs_link_query(slots, tokens, nofollow_exists: int = 0) -> int:
     result: int = 0
     if _fs_encode(slots, tokens) == 0:
         encoded = load_ptr(slots, _FS_ENCODED * C_POINTER_SIZE)
@@ -944,7 +945,12 @@ def _fs_link_query(slots, tokens) -> int:
         while index < length and load_i8(raw, index) != 0:
             index = index + 1
         if index == length:
-            result = is_symlink(raw)
+            if nofollow_exists:
+                # Every obtained no-follow record counts, including a dangling
+                # link. Never substitute access/stat for this metadata query.
+                result = 1 if lstat_kind(raw) != 0 else 0
+            else:
+                result = is_symlink(raw)
     if py_err_occurred():
         _fs_suppress_link_error(slots, tokens)
     return result
@@ -979,6 +985,52 @@ def py_os_path_islink_result(path):
     result: int = 0
     if _fs_copy(slots, tokens, _FS_PATH, borrowed, 1) == 0:
         result = _fs_link_query(slots, tokens)
+    output = ptr_add(slots, _FS_RESULT * C_POINTER_SIZE)
+    if py_err_occurred():
+        py_tls_exc_swap_slot(output)
+    else:
+        pcc_gc_store_root(output, py_bool_from_bit(result))
+    _fs_close(slots, tokens, 1)
+    pcc_py_gc_minor_graph_lock()
+    value = load_ptr(output, 0)
+    prior_pin: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
+    pcc_gc_pin(value)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave(slots)
+    store_ptr(borrowed, 0, null())
+    pcc_gc_frame_leave(borrowed)
+    return pcc_gc_take_pinned_slot(output, prior_pin)
+
+
+@c_abi_export("py_os_path_lexists")
+def py_os_path_lexists(path) -> int:
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, path)
+    pcc_gc_frame_enter(global_addr("pcc_os_fsencode_borrowed_map"), borrowed)
+    slots = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    _fs_open(slots, tokens)
+    result: int = 0
+    if _fs_copy(slots, tokens, _FS_PATH, borrowed, 1) == 0:
+        result = _fs_link_query(slots, tokens, 1)
+    _fs_close(slots, tokens)
+    store_ptr(borrowed, 0, null())
+    pcc_gc_frame_leave(borrowed)
+    return result
+
+
+@c_abi_export("py_os_path_lexists_result")
+def py_os_path_lexists_result(path):
+    """Return an owned bool or exception for an ordinary c_obj wrapper."""
+    borrowed = stack_alloc(C_POINTER_SIZE)
+    store_ptr(borrowed, 0, path)
+    pcc_gc_frame_enter(global_addr("pcc_os_fsencode_borrowed_map"), borrowed)
+    slots = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_FS_SLOT_COUNT * C_POINTER_SIZE)
+    _fs_open(slots, tokens)
+    result: int = 0
+    if _fs_copy(slots, tokens, _FS_PATH, borrowed, 1) == 0:
+        result = _fs_link_query(slots, tokens, 1)
     output = ptr_add(slots, _FS_RESULT * C_POINTER_SIZE)
     if py_err_occurred():
         py_tls_exc_swap_slot(output)

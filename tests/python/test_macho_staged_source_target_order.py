@@ -31,7 +31,7 @@ def _unresolved_section_target_inputs(*, two_targets=False):
     return [native.NativeObject.from_sections(sections, undefined=undefined), helper]
 
 
-def test_staged_source_replays_each_section_three_times(tmp_path, monkeypatch):
+def test_staged_source_materializes_each_section_twice(tmp_path, monkeypatch):
     paths = _write_pcos(tmp_path, _unresolved_section_target_inputs())
     original = host._logical_staged_rows
     calls = []
@@ -45,7 +45,7 @@ def test_staged_source_replays_each_section_three_times(tmp_path, monkeypatch):
     view = host.prepare_executable_from_paths(
         paths, compact_budget=budget, _staged_rows=True,
     )
-    assert len(calls) == 3 * len(view.sections())
+    assert len(calls) == 2 * len(view.sections())
     assert budget.retained_bytes == 0
 
 

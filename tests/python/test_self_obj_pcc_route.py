@@ -33,7 +33,7 @@ from pcc.frontends.c.evaluator import c_evaluator
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, _select_self_object_emitter
 
 _CC = shutil.which(os.environ.get("CC", "cc"))
-_IS_ARM64_DARWIN = os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+_IS_ARM64_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 _GATE = None if (_CC and _IS_ARM64_DARWIN) else "needs cc and Darwin arm64"
 _DARWIN_GATE = pytest.mark.pcc_gate(unavailable=_GATE)
 _IS_X86_64_LINUX = (

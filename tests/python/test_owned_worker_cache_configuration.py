@@ -13,6 +13,7 @@ SETTINGS = (
     "PCC_SELF_TARGET_PASSES", "PCC_SELF_TARGET_PASS_TRANSPORT",
     "PCC_SELF_CALL_RESULT_REGISTERS", "PCC_SELF_CALLEE_SAVED_REGISTERS",
     "PCC_SELF_FUNCTION_LIVE_INTERVALS", "PCC_SELF_BRANCH_PROTECTION",
+    "PCC_SELF_BOOLEAN_REGISTER_LOWERING",
     "PCC_CODE_PROFILE",
 )
 
@@ -40,6 +41,7 @@ def cache_case(monkeypatch, tmp_path):
     ("PCC_SELF_CALL_RESULT_REGISTERS", "1"),
     ("PCC_SELF_CALLEE_SAVED_REGISTERS", "0"),
     ("PCC_SELF_FUNCTION_LIVE_INTERVALS", "1"),
+    ("PCC_SELF_BOOLEAN_REGISTER_LOWERING", "1"),
     ("PCC_SELF_BRANCH_PROTECTION", "0"),
 ])
 def test_each_effective_setting_separates_exact_ir(cache_case, monkeypatch, name, value):
@@ -56,6 +58,7 @@ def test_each_effective_setting_separates_exact_ir(cache_case, monkeypatch, name
     ("PCC_SELF_CALL_RESULT_REGISTERS", "off"),
     ("PCC_SELF_CALLEE_SAVED_REGISTERS", "yes"),
     ("PCC_SELF_FUNCTION_LIVE_INTERVALS", "0"),
+    ("PCC_SELF_BOOLEAN_REGISTER_LOWERING", "off"),
     ("PCC_SELF_BRANCH_PROTECTION", "on"),
 ])
 def test_equivalent_default_settings_share_key(cache_case, monkeypatch, name, value):

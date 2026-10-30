@@ -116,3 +116,42 @@ def test_rebound_and_deleted_methods_reach_construction_and_dispatch(tmp_path, m
     )
     assert _cpython_output(source) == expected
     _run_on_five_collectors(tmp_path, "class_method_rebinding", source, expected)
+
+
+def test_rebinding_in_one_function_reaches_calls_in_another(tmp_path, monkeypatch, pcc_runtime_archive):
+    # The rebinding state was tracked per function: after main rebound A.f,
+    # g()'s ``x = a.f()`` still called the compiled A.f directly (pcc printed
+    # 1 3 1 4, CPython 1 3 2 4). A method name the module assigns or deletes
+    # anywhere is looked up at run time everywhere, in statements and in
+    # operands.
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
+    source = textwrap.dedent(
+        """
+        class A:
+            def f(self):
+                return 1
+
+
+        def other(self):
+            return 2
+
+
+        def g():
+            a = A()
+            x = a.f()
+            print(x)
+            print(a.f() + 2)
+
+
+        def main():
+            g()
+            A.f = other
+            g()
+
+
+        main()
+        """
+    )
+    expected = "1\n3\n2\n4\n"
+    assert _cpython_output(source) == expected
+    _run_on_five_collectors(tmp_path, "class_method_rebinding_across", source, expected)

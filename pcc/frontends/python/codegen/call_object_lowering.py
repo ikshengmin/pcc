@@ -18,6 +18,7 @@ from pcc.frontends.python.py_ast import (
     BinOp,
     BoolExpr,
     BoolLit,
+    BytesLit,
     Call,
     DictExpr,
     DictType,
@@ -44,6 +45,7 @@ from pcc.frontends.python.py_ast import (
     ValueArrayType,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.static_object_operands import emit_nonmoving_literal_operand
 from pcc.frontends.python.codegen.errors import CPythonValueRequired, L1CodegenError
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.codegen.cpy_import_state import (
@@ -58,6 +60,105 @@ _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
+
+
+def stable_parameter_operand_source(host, expr):
+    """Reuse only the authoritative, unchanged borrowed parameter owner."""
+    if (isinstance(expr, Name)
+            and expr.ident in getattr(host, "_current_param_names", ())
+            and not getattr(host, "_generator_ctx_stack", ())
+            and getattr(host, "current_func_def", None) is not None
+            and expr.ident not in getattr(host, "_closure_boxed_params", {}).get(
+                host.current_func_def.name, ())):
+        source = host._slot_call_name_source(expr)
+        if source is not None and source[1]:
+            if not hasattr(host, "_slot_call_borrowed_operands"):
+                host._slot_call_borrowed_operands = {}
+            host._slot_call_borrowed_operands[id(source[0])] = source[0]
+            return source[0]
+    return None
+
+
+# A direct user call passes object arguments as raw pointers. The callee
+# stores them in its borrowed parameter frame before its first application
+# gate, and a moving collector relocates only while every mutator is parked at
+# such a gate (pcc_thread_all_stopped_at_gates); runtime polls never relocate.
+# Collectors mark and rewrite that frame and the caller's root slots alike.
+_GATE_FREE_ARGUMENT_LITERALS = (IntLit, FloatLit, BoolLit, NoneLit, StrLit, BytesLit)
+
+
+def direct_call_argument_reads_stable_root(host, expr, target_ty) -> bool:
+    """``expr`` reads an object root of this activation the call cannot rebind.
+
+    Such an argument needs no pin: its slot keeps the object alive, and the
+    callee's frame covers it before any relocation. Only locals and
+    parameters of an ordinary program function qualify; module globals,
+    CPython values, every binding of a resumable body and runtime library
+    code (whose callees have no application gate) keep their pins. A mutable
+    closure capture is a boxed list, read through a subscript.
+    """
+    if not isinstance(expr, Name) or not isinstance(target_ty, DynType):
+        return False
+    if (getattr(host, "_generator_ctx_stack", ())
+            or getattr(host, "current_func_def", None) is None
+            or getattr(host, "_runtime_port_module", False)
+            or getattr(host, "_python_library", False)):
+        return False
+    if expr.ident not in getattr(host, "_gc_rooted_local_names", ()):
+        return False
+    if getattr(host, "_cpy_env_flags", {}).get(expr.ident, False):
+        return False
+    entry = host.env.get(expr.ident)
+    if entry is None:
+        return False
+    slot = entry[0]
+    global_entry = host._module_globals.get(expr.ident)
+    if global_entry is not None and global_entry[0] is slot:
+        return False
+    registry = getattr(host, "_fn_gc_root_slot_registry", {}).get(
+        host.current_function.name, ()
+    )
+    return any(item[1] is slot for item in registry)
+
+
+def direct_call_argument_is_gate_free(host, expr, target_ty) -> bool:
+    """Evaluating ``expr`` as a ``target_ty`` argument reaches no gate."""
+    if isinstance(expr, _GATE_FREE_ARGUMENT_LITERALS):
+        return True
+    return direct_call_argument_reads_stable_root(host, expr, target_ty)
+
+
+def direct_call_argument_is_managed(host, expr, value, target_ty) -> bool:
+    """The call site pins ``value``, lowered from ``expr``, and releases it
+    after the call when the argument was a fresh temporary.
+
+    A C-ABI-exporting module's raw helpers pass borrowed views and boxed
+    addresses by hand, so there only an argument expression that itself
+    allocated a pcc object -- an instance constructed for the call -- is
+    managed; treated as raw, every such temporary leaked and its ``__del__``
+    never ran. Runtime ports keep their hand-managed references.
+    """
+    if getattr(host, "_freestanding_module", False):
+        return False
+    if getattr(host, "_module_has_c_abi_export", False) and (
+        getattr(host, "_runtime_port_module", False)
+        or not getattr(host, "_last_call_arg_owned_temp", False)
+        or not host._pcc_pointer_source_is_owned(expr)
+    ):
+        return False
+    return (
+        not isinstance(target_ty, RawPointerType)
+        and isinstance(value.type, ir.PointerType)
+        and value not in getattr(host, "_cpy_values", ())
+    )
+
+
+def pin_rooted_direct_call_arguments(host, rooted, pinned_arg_temps) -> None:
+    """Pin the rooted arguments read so far: a later one may reach a gate."""
+    for value in rooted:
+        host._gc_pin(value)
+        pinned_arg_temps.append((value, False))
+    rooted.clear()
 
 
 class CallObjectLoweringMixin:
@@ -156,7 +257,8 @@ class CallObjectLoweringMixin:
         # suspension or continuation entry between activation and retirement.
         # Runtime calls may still collect or reenter; the lexical frame stays
         # registered until the existing release/take/error protocol leaves it.
-        lifo = not generator_resume or synchronous_lexical
+        lexical_scope = generator_resume and generator_contexts[-1].get("lexical_slot_operands", False)
+        lifo = not generator_resume or synchronous_lexical or lexical_scope
         if lifo:
             slot = self._alloca_in_entry(_CSTR, name=name, init_null=True)
         else:
@@ -217,6 +319,73 @@ class CallObjectLoweringMixin:
                 return record
         raise L1CodegenError("slot-call root was not registered by this emitter")
 
+    def _emit_root_slot_move(
+        self,
+        destination,
+        source,
+        *,
+        label: str = "",
+        name: str = "",
+        private_destination: bool = False,
+    ):
+        """Transfer roots, specializing only exclusively owned scalar cells.
+
+        Lexical operand roots are fresh stack cells whose addresses are not
+        exposed to program writers. Persistent/generator slots and arbitrary
+        locals/output parameters do not gain that proof from registration.
+        ``private_destination`` is reserved for the fresh, hidden return
+        cleanup alloca created by _emit_owned_return_through_finally.
+        """
+        arguments = [self._as_gc_ptr(destination), self._as_gc_ptr(source)]
+        if label:
+            name = self._fresh(label)
+        source_private = False
+        if self._slot_call_root_is_registered(source):
+            source_private = self._slot_call_root_record(source)[2]
+        destination_private = private_destination
+        if not destination_private and self._slot_call_root_is_registered(destination):
+            destination_private = self._slot_call_root_record(destination)[2]
+        runtime_move = self.runtime["pcc_gc_root_move"]
+        if not source_private or not destination_private or destination is source:
+            return self.builder.call(runtime_move, arguments, name=name)
+
+        # This peek never dereferences an object. A heap pointer may become
+        # stale while the fallback parks: only the authoritative slot addresses
+        # go to that path. NULL/tagged words cannot be rewritten by a collector.
+        value = self.builder.load(source, name=self._fresh("root.move.word"))
+        bits = self.builder.ptrtoint(value, _I64, name=self._fresh("root.move.bits"))
+        tagged = self.builder.icmp_unsigned(
+            "!=", self.builder.and_(bits, ir.Constant(_I64, 1)), ir.Constant(_I64, 0),
+        )
+        empty_source = self.builder.icmp_unsigned("==", value, ir.Constant(value.type, None))
+        scalar = self.builder.or_(tagged, empty_source, name=self._fresh("root.move.scalar"))
+        function = self.current_function
+        scalar_block = function.append_basic_block(self._fresh("root.move.scalar"))
+        heap_block = function.append_basic_block(self._fresh("root.move.heap"))
+        publish_block = function.append_basic_block(self._fresh("root.move.publish"))
+        occupied_block = function.append_basic_block(self._fresh("root.move.occupied"))
+        done_block = function.append_basic_block(self._fresh("root.move.done"))
+        self.builder.cbranch(scalar, scalar_block, heap_block)
+        self.builder.position_at_end(scalar_block)
+        prior = self.builder.load(destination, name=self._fresh("root.move.destination"))
+        empty_destination = self.builder.icmp_unsigned("==", prior, ir.Constant(prior.type, None))
+        self.builder.cbranch(empty_destination, publish_block, occupied_block)
+        self.builder.position_at_end(publish_block)
+        self.builder.store(value, destination)
+        self.builder.store(ir.Constant(value.type, None), source)
+        self.builder.branch(done_block)
+        self.builder.position_at_end(occupied_block)
+        self.builder.branch(done_block)
+        self.builder.position_at_end(heap_block)
+        moved = self.builder.call(runtime_move, arguments, name=name)
+        self.builder.branch(done_block)
+        self.builder.position_at_end(done_block)
+        status = self.builder.phi(_I64, name=self._fresh("root.move.status"))
+        status.add_incoming(ir.Constant(_I64, 0), publish_block)
+        status.add_incoming(ir.Constant(_I64, -4), occupied_block)
+        status.add_incoming(moved, heap_block)
+        return status
+
     def _slot_call_result_sink(self, expr):
         for candidate, slot, _published in reversed(getattr(self, "_slot_call_result_sinks", ())):
             if candidate is expr:
@@ -233,7 +402,10 @@ class CallObjectLoweringMixin:
                 sinks[index] = (entry[0], entry[1], True)
 
     def _release_slot_call_roots(self, roots) -> None:
+        borrowed = getattr(self, "_slot_call_borrowed_operands", {})
         for slot in reversed(roots):
+            if borrowed.get(id(slot)) is slot:
+                continue
             _slot, flag, lifo = self._slot_call_root_record(slot)
             if flag is not None:
                 self.builder.store(ir.Constant(_I1, 0), flag)
@@ -247,6 +419,8 @@ class CallObjectLoweringMixin:
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
 
     def _slot_call_cleanup_block(self, roots, target, leases=()):
+        borrowed = getattr(self, "_slot_call_borrowed_operands", {})
+        roots = tuple(slot for slot in roots if borrowed.get(id(slot)) is not slot)
         if not roots and not leases:
             return target
         # Share only this function's identical cleanup program. Keep all
@@ -421,6 +595,9 @@ class CallObjectLoweringMixin:
             # py_runtime_error_if_unset uses py_raise_owned and adds its own
             # runtime traceback frame, so it is not an equivalent substitute.
             self.builder.call(self.runtime["py_raise"], [exception])
+            # TLS retained the NEW constructor result, just as in the inline
+            # error path. Retire the helper's owner before reading TLS again.
+            self.builder.call(self.runtime["pcc_gc_release"], [exception])
             current = self.builder.call(self.runtime["py_current_exception"], [])
             self.builder.cbranch(has_frame, frame, done)
             self.builder.position_at_end(frame)
@@ -472,6 +649,28 @@ class CallObjectLoweringMixin:
         self.builder.position_at_end(ready)
 
     def _slot_call_copy_source(self, destination, source, borrowed=False, span=None) -> None:
+        registry = getattr(self, "_fn_gc_root_slot_registry", {}).get(
+            self.current_function.name, (),
+        )
+        private = True
+        for slot in (source, destination):
+            if not (self._slot_call_root_is_registered(slot)
+                    or any(item[1] is slot for item in registry)):
+                private = False
+            if any(entry[0] is slot for entry in self._module_globals.values()):
+                private = False
+        if private:
+            # This operation exposes only slots, never a raw object address.
+            # Its later binder owns the address lease; copying a private root
+            # need not acquire and immediately retire another one first.
+            copied = self.builder.call(
+                self.runtime["pcc_gc_root_copy_local"],
+                [self._as_gc_ptr(destination), self._as_gc_ptr(source),
+                 ir.Constant(_I64, 1 if borrowed else 0)],
+                name=self._fresh("call.slot.copy.local"),
+            )
+            self._slot_call_check_status(copied, "operand copy", span)
+            return
         helper = "pcc_gc_root_copy_borrowed_lease" if borrowed else "pcc_gc_root_copy_lease"
         token = self.builder.call(
             self.runtime[helper], [self._as_gc_ptr(destination), self._as_gc_ptr(source)],
@@ -566,7 +765,8 @@ class CallObjectLoweringMixin:
             # the actual destination, never merely the last opcode: a later
             # cleanup call must not make an older raw result look fresh.
             immediate = self._record_defines_value(last, value)
-        immortal = isinstance(value, (ir.Constant, ir.GlobalVariable)) or self._value_is_never_gc_object(value)
+        nonmoving = self._value_is_never_gc_object(value)
+        immortal = isinstance(value, (ir.Constant, ir.GlobalVariable)) or nonmoving
         if not immediate and not immortal:
             raise L1CodegenError(
                 "slot-call " + label + " lacks an immediate owned-result handoff; "
@@ -578,6 +778,14 @@ class CallObjectLoweringMixin:
         # may be inserted between a producer's return and this first store.
         self.builder.store(value, slot)
         self._slot_call_note_published(slot)
+        if nonmoving:
+            # The exact producer proves this address cannot move. Keep the
+            # root publication barrier, without an address lease around it.
+            self.builder.call(
+                self.runtime["pcc_gc_note_slot_write_barrier"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), value],
+            )
+            return
         token = self.builder.call(
             self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
             name=self._fresh("call.slot.publish.lease"),
@@ -618,8 +826,26 @@ class CallObjectLoweringMixin:
         return BinOp(span=expr.span, ty=expr.ty, op="**",
                      lhs=expr.args[0], rhs=expr.args[1])
 
-    def _emit_slot_call_operand(self, expr: Expr, label: str):
-        """Evaluate one operand into an independent owning authoritative root."""
+    def _emit_slot_call_operand(self, expr: Expr, label: str, borrow_stable=False):
+        """Capture an owner, or explicitly borrow an unchanged parameter input."""
+        # This opt-in is only for non-consuming input users. A parameter
+        # whose binding never changes is already traced and borrowed from
+        # its caller for this activation. Keep the address lease, but avoid
+        # adding a second owner/frame merely to pass it to another helper.
+        # Cells, generators, globals and promoted/rebound locals keep owning
+        # operand roots. No escape or exact-type claim is inferred from Dyn.
+        if borrow_stable:
+            borrowed = stable_parameter_operand_source(self, expr)
+            if borrowed is not None:
+                return borrowed
+        if getattr(self, "_generator_ctx_stack", ()):
+            from pcc.frontends.python.codegen.generator_lowering import (
+                emit_generator_operand_spills,
+            )
+
+            spilled = emit_generator_operand_spills(self, expr, label)
+            if spilled is not None:
+                return spilled
         if self._expr_returns_unsafe_raw_pointer(expr):
             raise L1CodegenError(
                 "raw pointer cannot be a slot-call operand: " + type(expr).__name__
@@ -665,6 +891,12 @@ class CallObjectLoweringMixin:
                 )
             # An explicit machine lane retains its pre-existing lowering and
             # ownership boundary; it never enters the exact-int producer.
+        if (isinstance(expr, TupleExpr) and 1 <= len(expr.elems) <= 8
+                and not getattr(self, "_generator_ctx_stack", ())):
+            # Fixed synchronous literals share the call-argument retaining
+            # protocol. The helper keeps splats on the streaming list path;
+            # empty/wide tuples and suspension keep their existing lowering.
+            return self._emit_slot_call_args_tuple(expr.elems, label)
         if isinstance(expr, (TupleExpr, ListExpr)):
             return self._emit_slot_call_sequence(expr.elems, label, isinstance(expr, TupleExpr))
         if isinstance(expr, DictExpr):
@@ -815,7 +1047,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots((cls,))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("object.current"))
         finally:
             self._try_err_block = previous
@@ -851,7 +1083,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots((argument,))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("unary.result.current"))
         finally:
             self._try_err_block = previous
@@ -892,7 +1124,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots(tuple(operands))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("binary.result.current"))
         finally:
             self._try_err_block = previous
@@ -932,7 +1164,7 @@ class CallObjectLoweringMixin:
             )
             self._release_slot_call_roots(tuple(operands))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("descriptor.current"))
         finally:
             self._prefer_native_callable_values = saved_preference
@@ -991,7 +1223,7 @@ class CallObjectLoweringMixin:
             self._slot_call_runtime_call("py_builtin_format", (value, spec), result_slot=output, span=expr.span)
             self._release_slot_call_roots((value, spec))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("format.current"))
         finally:
             self._try_err_block = previous
@@ -1054,10 +1286,10 @@ class CallObjectLoweringMixin:
                 value = self._emit_slot_call_operand(branch, label + ".branch")
                 self._try_err_block = self._slot_call_cleanup_block((output, value), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(output), self._as_gc_ptr(value)],
-                    name=self._fresh("call.slot.if.move"),
+                moved = self._emit_root_slot_move(
+                    output,
+                    value,
+                    label="call.slot.if.move",
                 )
                 self._slot_call_check_status(moved, "conditional result move", expr.span)
                 self._release_slot_call_roots((value,))
@@ -1109,10 +1341,10 @@ class CallObjectLoweringMixin:
             else:
                 self.builder.cbranch(condition, short, rhs)
             self.builder.position_at_end(short)
-            moved = self.builder.call(
-                self.runtime["pcc_gc_root_move"],
-                [self._as_gc_ptr(output), self._as_gc_ptr(left)],
-                name=self._fresh("call.slot.bool.move"),
+            moved = self._emit_root_slot_move(
+                output,
+                left,
+                label="call.slot.bool.move",
             )
             self._slot_call_check_status(moved, "boolean left owner move", expr.span)
             self._release_slot_call_roots((left,))
@@ -1134,10 +1366,10 @@ class CallObjectLoweringMixin:
             if need_truth and right_truth is None:
                 truth = self._slot_call_runtime_call("py_obj_truthy", (right,), span=expr.right.span)
                 right_truth = self.builder.icmp_signed("!=", truth, ir.Constant(_I64, 0))
-            moved = self.builder.call(
-                self.runtime["pcc_gc_root_move"],
-                [self._as_gc_ptr(output), self._as_gc_ptr(right)],
-                name=self._fresh("call.slot.bool.move"),
+            moved = self._emit_root_slot_move(
+                output,
+                right,
+                label="call.slot.bool.move",
             )
             self._slot_call_check_status(moved, "boolean right owner move", expr.span)
             self._release_slot_call_roots((right,))
@@ -1279,7 +1511,7 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         return output
 
-    def _take_slot_call_root(self, slot, keep_pinned=False):
+    def _take_slot_call_root(self, slot, keep_pinned=False, source_expr=None):
         """Finish every parking operation before returning the root's owner.
 
         A tagged int or NULL is no managed object: it needs no graph lock,
@@ -1287,6 +1519,22 @@ class CallObjectLoweringMixin:
         then leave the root through the same pinned transfer, which keeps the
         result's root provenance single for precise stack-map planning.
         """
+        if source_expr is not None and not keep_pinned:
+            sinks = self._slot_call_result_sinks
+            for index in range(len(sinks) - 1, -1, -1):
+                expression, consumer, _published = sinks[index]
+                if expression is source_expr:
+                    if consumer is None:
+                        # The statement discards the result. Its existing
+                        # owning root can retire it directly, including
+                        # finalization/resurrection, without a raw-pointer
+                        # handoff and a second ownership protocol.
+                        self._release_slot_call_roots((slot,))
+                        sinks[index] = (source_expr, None, True)
+                        # This value is consumed only by the statement's
+                        # discarded marker, never by a Python operation.
+                        return ir.Constant(_CSTR, None)
+                    break
         _slot, flag, lifo = self._slot_call_root_record(slot)
         raw = self.builder.load(slot, name=self._fresh("call.slot.take.raw"))
         raw_bits = self.builder.ptrtoint(raw, _I64, name=self._fresh("call.slot.take.bits"))
@@ -1337,7 +1585,8 @@ class CallObjectLoweringMixin:
     ):
         """Expose raw operands only while independent counted leases live.
 
-        Every input is an existing owning root. Results go directly to an
+        Inputs are owning roots or proven unchanged borrowed parameter roots.
+        Results go directly to an
         empty output root before any lease release, error check, or cleanup.
         The scalar token/status values are the only SSA values crossing waits.
         """
@@ -1350,8 +1599,12 @@ class CallObjectLoweringMixin:
             for slot in roots:
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
+                borrowed = getattr(self, "_slot_call_borrowed_operands", {})
+                lease_helper = ("pcc_gc_borrowed_lease_acquire"
+                                if borrowed.get(id(slot)) is slot
+                                else "pcc_gc_foreign_lease_acquire")
                 token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
+                    self.runtime[lease_helper], [self._as_gc_ptr(slot)],
                     name=self._fresh("call.slot.argument.lease"),
                 )
                 self._slot_call_check_status(token, "argument lease", span)
@@ -1426,6 +1679,12 @@ class CallObjectLoweringMixin:
                 splat = (isinstance(elem, Call) and isinstance(elem.func, Name)
                          and elem.func.ident in ("*", "__starred__") and len(elem.args) == 1)
                 source = elem.args[0] if splat else elem
+                constant = None if splat else emit_nonmoving_literal_operand(self, source)
+                if constant is not None:
+                    self._slot_call_runtime_call(
+                        "py_list_append", (sequence,), suffix_args=(constant,), span=source.span,
+                    )
+                    continue
                 item = self._emit_slot_call_operand(source, label + ".item")
                 roots.append(item)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
@@ -1449,7 +1708,80 @@ class CallObjectLoweringMixin:
         return output
 
     def _emit_slot_call_args_tuple(self, args, label="call.args"):
-        return self._emit_slot_call_sequence(args, label, True)
+        # Small fixed-arity calls need no mutable list and list-to-tuple copy.
+        # Keep the streaming path for splats and wide calls: one cleanup
+        # scope must cover every completed argument, so prefix cleanup code
+        # would otherwise grow quadratically with unbounded argument counts.
+        if len(args) > 8:
+            return self._emit_slot_call_sequence(args, label, True)
+        for argument in args:
+            if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                    and argument.func.ident in ("*", "__starred__")
+                    and len(argument.args) == 1):
+                return self._emit_slot_call_sequence(args, label, True)
+        output = self._new_slot_call_root(label)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = [output]
+        items = []
+        try:
+            for argument in args:
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                item = self._emit_slot_call_operand(argument, label + ".item")
+                roots.append(item)
+                items.append(item)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            # Finish user evaluation before making a partially filled tuple.
+            # Every captured owner remains in its registered slot across
+            # allocation, collection and generated suspension/continuation.
+            if items and not getattr(self, "_generator_ctx_stack", ()):
+                sources = self._alloca_in_entry(
+                    ir.ArrayType(_CSTR, len(items)), name=self._fresh(label + ".sources"),
+                )
+                for index, item in enumerate(items):
+                    address = self.builder.gep(
+                        sources, [ir.Constant(_I32, 0), ir.Constant(_I32, index)],
+                        name=self._fresh(label + ".source"),
+                    )
+                    self.builder.store(self._as_gc_ptr(item), address)
+                status = self.builder.call(
+                    self.runtime["py_tuple_from_owned_roots"],
+                    [self._as_gc_ptr(sources), ir.Constant(_I64, len(items)), self._as_gc_ptr(output)],
+                    name=self._fresh("call.slot.tuple.transfer"),
+                )
+                self._slot_call_note_published(output)
+                self._slot_call_check_status(status, "tuple construction", args[0].span)
+                self._emit_post_call_err_check(args[0].span)
+                # Success empties every source; retire its map/flag without
+                # executing another retaining store against an empty slot.
+                for item in reversed(items):
+                    _slot, flag, lifo = self._slot_call_root_record(item)
+                    if flag is not None:
+                        self.builder.store(ir.Constant(_I1, 0), flag)
+                    if lifo:
+                        self._emit_gc_frame_leave_lifo_for_slot(item)
+                return output
+            value = self.builder.call(
+                self.runtime["py_tuple_new"], [ir.Constant(_I64, len(items))],
+                name=self._fresh("call.slot.fixed.tuple"),
+            )
+            self._publish_slot_call_owned(output, value, label="argument tuple")
+            index = 0
+            for item in items:
+                self._slot_call_runtime_call(
+                    "py_tuple_set_item", (output, item),
+                    suffix_args=(ir.Constant(_I64, index),), argument_order=(0, 2, 1),
+                    span=args[index].span,
+                )
+                index += 1
+            self._release_slot_call_roots(tuple(items))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return output
 
     def _slot_call_deferred_star(self, args):
         """A sole * operand is converted only after the keyword merge."""
@@ -1484,8 +1816,10 @@ class CallObjectLoweringMixin:
             self._slot_call_runtime_call("py_tuple_from_list", (sequence,), result_slot=output, span=span)
             self.builder.call(self.runtime["pcc_gc_store_root"],
                               [self._as_gc_ptr(args_root), ir.Constant(_CSTR, None)])
-            moved = self.builder.call(self.runtime["pcc_gc_root_move"],
-                                      [self._as_gc_ptr(args_root), self._as_gc_ptr(output)])
+            moved = self._emit_root_slot_move(
+                args_root,
+                output,
+            )
             self._slot_call_check_status(moved, "deferred positional tuple move", span)
             self._release_slot_call_roots((sequence, output))
         finally:
@@ -1587,7 +1921,25 @@ class CallObjectLoweringMixin:
         if output is None:
             output = self._new_slot_call_root(label + ".result")
             roots.append(output)
+        lexical_context = None
+        previous_lexical = False
+        lexical_state = 0
         try:
+            from pcc.frontends.python.codegen.generator_lowering import (
+                _spill_function,
+                generator_expr_suspends,
+            )
+            function = _spill_function(self)
+            if function is not None:
+                fd, owner = function
+                if not generator_expr_suspends(self, expr, fd, owner):
+                    # Every root created below is retired before this call
+                    # returns. Proven synchronous operands need lexical roots,
+                    # not cells copied to/from every continuation checkpoint.
+                    lexical_context = self._generator_ctx_stack[-1]
+                    previous_lexical = lexical_context.get("lexical_slot_operands", False)
+                    lexical_state = lexical_context["next_state"]
+                    lexical_context["lexical_slot_operands"] = True
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             if module_name is None:
@@ -1627,9 +1979,13 @@ class CallObjectLoweringMixin:
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
+            if lexical_context is not None:
+                lexical_context["lexical_slot_operands"] = previous_lexical
+                if lexical_context["next_state"] != lexical_state:
+                    raise L1CodegenError("synchronous call operands introduced a resume edge")
         if sink is not None:
             return self.builder.load(output, name=self._fresh(label + ".output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _static_import_call_abi(self, fn) -> bool:
         """Whether ``fn``'s ABI takes and returns only objects or scalars."""
@@ -1644,8 +2000,12 @@ class CallObjectLoweringMixin:
                 or isinstance(return_type, ir.IntType) and return_type.width in (1, 64))
 
     def _emit_slot_call_from_roots(self, callable_root, positional_roots, keyword_roots,
-                                   output, held_roots, target, span, label):
-        """The dynamic call of already evaluated roots, publishing ``output``."""
+                                   output, held_roots, target, span, label, deferred=False):
+        """The dynamic call of already evaluated roots, publishing ``output``.
+
+        A ``deferred`` call returns a lifted callable's continuation instead
+        of driving it; its resumable caller drives it.
+        """
         roots = list(held_roots)
 
         def guard():
@@ -1687,6 +2047,13 @@ class CallObjectLoweringMixin:
                                                   label + ".kwargs")
             roots.append(kwargs)
             guard()
+        if deferred:
+            self._slot_call_runtime_call(
+                "py_obj_call_deferred", (callable_root, args, kwargs),
+                result_slot=output, span=span,
+            )
+            self._release_slot_call_roots((args, kwargs))
+            return
         status = self.builder.call(
             self.runtime["py_obj_call_slots"],
             [self._as_gc_ptr(callable_root), self._as_gc_ptr(args),
@@ -1711,10 +2078,19 @@ class CallObjectLoweringMixin:
         adapter_name = self._cross_module_static_entries.get(name)
         fn = self.functions.get(name)
         fd = self._cross_module_func_defs.get(name)
+        return self._emit_slot_call_guarded_native(expr, name, fn, fd, adapter_name)
+
+    def _emit_slot_call_guarded_native(self, expr, name, fn, fd, adapter_name):
+        """Use provider metadata only after checking the evaluated callable.
+
+        Both imported names and module attributes retain their live lookup.
+        A changed callable uses ordinary binding with the same evaluated
+        arguments. Synchronous calls inside generators use lexical operand
+        roots; no owner or raw address crosses a suspension.
+        """
         if adapter_name is None or not isinstance(fn, ir.Function) or fd is None:
             return None
         if (not self._strict_no_libpython
-                or len(getattr(self, "_generator_ctx_stack", ())) > 0
                 or self._has_unpacked_operands(expr.args, expr.kwargs)
                 or fd.is_async
                 or isinstance(fd.return_ty, RawPointerType)
@@ -1726,6 +2102,23 @@ class CallObjectLoweringMixin:
             self._resolve_call_kwargs(expr.args, expr.kwargs, fd.args)
         except L1CodegenError:
             return None
+        lexical_context = None
+        previous_lexical = False
+        lexical_state = 0
+        if len(getattr(self, "_generator_ctx_stack", ())) > 0:
+            from pcc.frontends.python.codegen.generator_lowering import (
+                _spill_function,
+                generator_expr_suspends,
+            )
+            function = _spill_function(self)
+            if function is None:
+                return None
+            caller, owner = function
+            if generator_expr_suspends(self, expr, caller, owner):
+                return None
+            lexical_context = self._generator_ctx_stack[-1]
+            previous_lexical = lexical_context.get("lexical_slot_operands", False)
+            lexical_state = lexical_context["next_state"]
         span = expr.span
         label = name + ".import"
         previous = self._current_try_err_block()
@@ -1738,6 +2131,8 @@ class CallObjectLoweringMixin:
             output = self._new_slot_call_root(label + ".result")
             roots.append(output)
         placeholders = []
+        if lexical_context is not None:
+            lexical_context["lexical_slot_operands"] = True
 
         def bind(root):
             # The root stays authoritative; a placeholder Name reads it.
@@ -1797,7 +2192,7 @@ class CallObjectLoweringMixin:
                           args=tuple(positional), kwargs=tuple(keywords))
             self._slot_call_result_sinks.append((direct, output, False))
             try:
-                raw = self._emit_static_user_function_call(direct, name, fn)
+                raw = self._emit_static_user_function_call(direct, name, fn, fd)
             finally:
                 _candidate, _slot, published = self._slot_call_result_sinks.pop()
             if not published:
@@ -1828,9 +2223,13 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
             for placeholder in placeholders:
                 self.env.pop(placeholder, None)
+            if lexical_context is not None:
+                lexical_context["lexical_slot_operands"] = previous_lexical
+                if lexical_context["next_state"] != lexical_state:
+                    raise L1CodegenError("guarded synchronous call introduced a resume edge")
         if sink is not None:
             return self.builder.load(output, name=self._fresh(label + ".output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_slot_call_dict(self, pairs, span, label):
         output = self._new_slot_call_root(label)
@@ -1972,7 +2371,12 @@ class CallObjectLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block((output,), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            receiver = self._emit_slot_call_operand(expr.obj, label + ".receiver")
+            # Attribute lookup does not replace its receiver source slot.
+            # Reuse the unchanged-parameter protocol; cells/rebindings/generators still copy.
+            # The counted address lease and the live lookup are unchanged.
+            receiver = self._emit_slot_call_operand(
+                expr.obj, label + ".receiver", borrow_stable=True,
+            )
             self._try_err_block = self._slot_call_cleanup_block((output, receiver), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             self._slot_call_runtime_call(
@@ -2007,7 +2411,15 @@ class CallObjectLoweringMixin:
                     operands.append(("mapping", expr))
             else:
                 operands.append(("mapping", kwargs_expr))
-        output = self._emit_slot_call_dict((), span, label)
+        if operands and operands[0][0] == "explicit":
+            # Syntax supplies distinct string names. This first group already
+            # builds a private owning dictionary in source evaluation order;
+            # merging it into a fresh empty dictionary only copies owners.
+            # Later mappings/groups still use the checked merge protocol.
+            output = self._emit_slot_call_dict(operands[0][1], span, label)
+            operands = operands[1:]
+        else:
+            output = self._emit_slot_call_dict((), span, label)
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -2033,8 +2445,10 @@ class CallObjectLoweringMixin:
                 # back into the oldest root before retiring either temporary.
                 self.builder.call(self.runtime["pcc_gc_store_root"],
                                   [self._as_gc_ptr(output), ir.Constant(_CSTR, None)])
-                moved = self.builder.call(self.runtime["pcc_gc_root_move"],
-                                          [self._as_gc_ptr(output), self._as_gc_ptr(merged)])
+                moved = self._emit_root_slot_move(
+                    output,
+                    merged,
+                )
                 self._slot_call_check_status(moved, "keyword merge move", span)
                 self._release_slot_call_roots((source, merged))
         finally:

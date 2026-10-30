@@ -11,10 +11,9 @@ writes an incremental JSON manifest so an interrupted run cannot look green.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import datetime as dt
 import difflib
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -32,6 +31,14 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from statistics import median
 from typing import Any
+
+
+try:
+    from scripts.file_lock import exclusive_file_lock
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from file_lock import exclusive_file_lock
 
 
 SCHEMA_VERSION = 2
@@ -2117,9 +2124,9 @@ def _verify_build_evidence(bundle: dict[str, Any]) -> None:
 def _performance_lock():
     lock_path = REPO_ROOT / "build" / ".pcc-performance.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock_stream:
+    with ExitStack() as held:
         try:
-            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_stream = held.enter_context(exclusive_file_lock(lock_path, blocking=False))
         except BlockingIOError as exc:
             raise CompileABError(
                 f"another repository performance run holds {lock_path}"
@@ -2132,7 +2139,7 @@ def _performance_lock():
         }
         lock_stream.seek(0)
         lock_stream.truncate()
-        lock_stream.write(json.dumps(owner, sort_keys=True) + "\n")
+        lock_stream.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
         lock_stream.flush()
         os.fsync(lock_stream.fileno())
         try:
@@ -2142,7 +2149,7 @@ def _performance_lock():
             owner["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             lock_stream.seek(0)
             lock_stream.truncate()
-            lock_stream.write(json.dumps(owner, sort_keys=True) + "\n")
+            lock_stream.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
             lock_stream.flush()
             os.fsync(lock_stream.fileno())
 

@@ -212,8 +212,11 @@ void *PyFloat_FromDouble(double);
 
 int main(void) {
     if (Py_IsInitialized() != 1) return 1;
-    if (PyEval_SaveThread() != 0) return 2;
-    PyEval_RestoreThread((void *)0x1234);
+    /* SaveThread detaches and returns the state RestoreThread takes back,
+     * as CPython's returns this thread's PyThreadState. */
+    void *saved = PyEval_SaveThread();
+    if (saved == 0) return 2;
+    PyEval_RestoreThread(saved);
     if (PyTraceMalloc_Track(1, 0x2000, 64) != 0) return 3;
     if (PyTraceMalloc_Untrack(1, 0x2000) != 0) return 4;
 

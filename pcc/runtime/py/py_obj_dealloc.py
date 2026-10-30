@@ -8,7 +8,7 @@ replaces the C object with this module while preserving the ABI.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
-from pcc.runtime.py.py_abi_constants import DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_IMMORTAL, PY_TYPE_CONTINUATION, PY_TYPE_COROUTINE, PY_TYPE_CPY_HANDLE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_PROPERTY, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_STATICMETHOD, PY_TYPE_TASK, PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL, PY_TYPE_WEAKREF
+from pcc.runtime.py.py_abi_constants import DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_IMMORTAL, PY_TYPE_CONTINUATION, PY_TYPE_COROUTINE, PY_TYPE_CPY_HANDLE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_PROPERTY, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_STATICMETHOD, PY_TYPE_TASK, PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VALUEBOX, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL, PY_TYPE_WEAKREF
 from pcc.unsafe import (
     atomic_load_i64,
     atomic_rmw_i64,
@@ -39,6 +39,7 @@ from pcc.unsafe import (
 
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_gc_release_nonterminal_tail = extern("pcc_gc_release_nonterminal_tail", (c_ptr, c_int64), c_int64)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
@@ -118,7 +119,7 @@ def _dealloc_should_defer(tag: int) -> bool:
         return True
     if tag == PY_TYPE_SET:
         return True
-    if tag == PY_TYPE_INSTANCE:
+    if tag == PY_TYPE_INSTANCE or tag == PY_TYPE_VALUEBOX:
         return True
     if tag == PY_TYPE_EXC:
         return True
@@ -244,7 +245,7 @@ def _dealloc_dispatch(o, tag: int) -> None:
     if tag == PY_TYPE_CLASS:
         py_class_dealloc(o)
         return
-    if tag == PY_TYPE_INSTANCE:
+    if tag == PY_TYPE_INSTANCE or tag == PY_TYPE_VALUEBOX:
         py_instance_dealloc(o)
         return
     if tag == PY_TYPE_EXC:
@@ -514,12 +515,18 @@ def py_dealloc_list(o) -> None:
         store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
         store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
         store_ptr(o, PYLISTOBJECT_ITEMS_OFFSET, null())
-    i: int = 0
-    while ptr_is_null(items) == 0 and i < length:
+    # Match list stack-unwind order: release the last element first.
+    # Reload each child after earlier finalizers may have collected/moved it.
+    i: int = length
+    while ptr_is_null(items) == 0 and i > 0:
+        remaining: int = pcc_gc_release_nonterminal_tail(items, i)
+        if remaining < i:
+            i = remaining
+            continue
+        i = i - 1
         item = pcc_gc_load_ptr(o, ptr_add(items, i * 8))
         if ptr_is_null(item) == 0:
             py_decref(item)
-        i = i + 1
     if pcc_gc_backend() != 4:
         store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
         store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
@@ -531,12 +538,17 @@ def py_dealloc_list(o) -> None:
 @c_abi_export("py_dealloc_tuple")
 def py_dealloc_tuple(o) -> None:
     length: int = load_i64(o, PYTUPLEOBJECT_LEN_OFFSET)
-    i: int = 0
-    while i < length:
+    # A tuple retires its element owners in reverse order, like CPython.
+    i: int = length
+    while i > 0:
+        remaining: int = pcc_gc_release_nonterminal_tail(ptr_add(o, PYTUPLEOBJECT_ITEMS_OFFSET), i)
+        if remaining < i:
+            i = remaining
+            continue
+        i = i - 1
         item = pcc_gc_load_ptr(o, ptr_add(o, PYTUPLEOBJECT_ITEMS_OFFSET + i * 8))
         if ptr_is_null(item) == 0:
             py_decref(item)
-        i = i + 1
     pcc_gc_free_object_memory(o)
 
 

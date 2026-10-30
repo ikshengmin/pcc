@@ -53,8 +53,11 @@ class HandoffModel(Model):
         return slot
 
     def allocate(self, size):
+        # Return the beginning of a disjoint region. Returning the end lets
+        # the next smaller allocation overlap this object's live words.
+        address = self.plan_id
         self.plan_id += size
-        return self.plan_id
+        return address
 
     def plan_init(self, plan, backend):
         self.plans[plan] = False
@@ -273,6 +276,8 @@ class SpecialCallModel(HandoffModel):
             load_i8=self.byte,
             pcc_gc_scheduler_root_register_handle=self.register,
             pcc_gc_scheduler_root_unregister_handle=self.unregister,
+            pcc_gc_register_continuation_root_node=self.register_group,
+            pcc_gc_unregister_continuation_root_node=self.unregister_group,
             pcc_gc_store_root=self.root_store,
             pcc_gc_load_ptr=lambda owner, slot: self.load(slot),
             py_tls_exc_swap_slot=self.swap_error,
@@ -386,6 +391,30 @@ class SpecialCallModel(HandoffModel):
         slot = self.registered.pop(handle)
         assert self.load(slot) == 0, "boundary leaked a managed root owner"
         self.roots.remove(slot)
+
+    def register_group(self, frame_map, slots):
+        count = self.load(frame_map)
+        assert count > 0
+        members = tuple(slots + index * 8 for index in range(count))
+        assert all(self.load(slot) == 0 for slot in members)
+        self.registration_count += 1
+        if self.registration_count == self.fail_registration:
+            return 0
+        handle = self.allocate(8)
+        self.registered[handle] = (frame_map, members)
+        self.roots.update(members)
+        if self.after_registration:
+            callback, self.after_registration = self.after_registration, None
+            callback()
+        return handle
+
+    def unregister_group(self, handle):
+        frame_map, members = self.registered.pop(handle)
+        assert self.load(frame_map) == len(members)
+        assert self.load(frame_map, 8) == 0
+        for slot in members:
+            assert self.load(slot) == 0, "boundary leaked a managed root owner"
+            self.roots.remove(slot)
 
     def swap_error(self, slot):
         self.error, previous = self.load(slot), self.error
@@ -591,9 +620,9 @@ def test_raw_native_method_is_never_a_managed_root():
     assert model.invoke(model.cls(meta=meta), (33,)) == (0, 1, 33)
 
 
-def test_partial_registration_failure_unlinks_only_published_empty_roots():
+def test_group_registration_failure_leaves_no_published_roots():
     model = SpecialCallModel()
-    model.fail_registration = 5
+    model.fail_registration = 1
     assert model.invoke(model.cls(meta=model.cls())) == (-1, 1, 0)
     assert model.error and not model.registered
 
@@ -706,6 +735,7 @@ def test_default_only_sync_recursion_restores_context_without_metaclass_lookup(p
     )
     _functions(ROOT / "pcc/runtime/py/py_obj_ops_dispatch.py", {
         "py_obj_call", "py_obj_call_default", "_py_obj_call_body",
+        "_constructor_tag",
     }, ns)
     _functions(ROOT / "pcc/runtime/py/py_func.py", {"py_obj_call_default_sync"}, ns)
     assert ns["py_obj_call_default"](1000, 0, 0) == (0 if failure else 17)
@@ -732,6 +762,7 @@ def test_public_raw_call_retains_existing_metaclass_semantics():
     )
     _functions(ROOT / "pcc/runtime/py/py_obj_ops_dispatch.py", {
         "py_obj_call", "_py_obj_call_body",
+        "_constructor_tag",
     }, ns)
     assert ns["py_obj_call"](1000, 2000, 3000) == 23
     assert seen == [(1000, 2000, 3000)]
@@ -856,3 +887,38 @@ def test_selected_metaclass_call_consumes_and_restores_deferred_context(failure)
     assert model.load(output) == (0 if failure else 63)
     assert model.load("pcc_native_callable_sync_context") == 0
     assert not model.registered and model.active() == 0
+
+
+def test_shared_destination_moves_serialize_without_losing_a_source():
+    model = HandoffModel()
+    first = model.empty(90008)
+    second = model.empty(90016)
+    destination = model.empty(90000)
+    model.store(first, 0, 7)
+    model.store(second, 0, 13)
+    load = model.load
+    pending = model.pending_exception
+    armed = [True]
+    second_status = []
+
+    def competing_move():
+        second_status.append(model.move(destination, second))
+
+    def observe_read(base, offset=0):
+        value = load(base, offset)
+        if base == destination and offset == 0 and armed[0]:
+            armed[0] = False
+            # A competitor arrives after the empty read. The public entry's
+            # graph transaction must delay it until the first move commits.
+            if model.depth:
+                model.on_unlock = competing_move
+            else:
+                competing_move()
+        return value
+
+    model.ns['load_ptr'] = observe_read
+    assert model.move(destination, first) == 0
+    assert second_status == [-4]
+    assert model.load(destination) == 7
+    assert model.load(first) == 0 and model.load(second) == 13
+    assert model.pending_exception is pending

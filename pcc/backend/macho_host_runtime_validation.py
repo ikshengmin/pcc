@@ -273,6 +273,11 @@ def validate_runtime_table(payload, *, expected_arch=None, final_image=False, co
             raise wire.PreciseStackMapError("runtime continuation fields disagree")
         previous_rare = record_index
     rare_cursor = 0
+    # The guarded host route owns exact immutable bytes. Keep only the next
+    # already-validated rare row rather than decoding it again at every
+    # ordinary safepoint before its index. Load lazily at the original check
+    # position so function/record error priority and work charges are unchanged.
+    rare_row = None
     expected_first = 0
     previous_id = -1
     for _function in range(function_count):
@@ -299,13 +304,15 @@ def validate_runtime_table(payload, *, expected_arch=None, final_image=False, co
                 raise wire.PreciseStackMapError("runtime location exceeds its frame")
             exceptional = wire.NO_OFFSET
             if rare_cursor < rare_count:
-                rare_row = wire._RUNTIME_RARE.unpack_from(
-                    payload, rare_base + rare_cursor * wire._RUNTIME_RARE.size,
-                )
+                if rare_row is None:
+                    rare_row = wire._RUNTIME_RARE.unpack_from(
+                        payload, rare_base + rare_cursor * wire._RUNTIME_RARE.size,
+                    )
                 if rare_row[0] == index:
                     summaries._visit()
                     exceptional = rare_row[4]
                     rare_cursor += 1
+                    rare_row = None
             if exceptional != wire.NO_OFFSET and exceptional >= code_size:
                 raise wire.PreciseStackMapError("runtime exception edge is outside its function")
     if expected_first != record_count:

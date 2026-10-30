@@ -457,6 +457,13 @@ def link_executable(objects, *, archives=(), entry="pcc_windows_start",
         if compact_budget is not None:
             compact_budget.prepare(objects, imports)
             budget_prepared = True
+        # Selected members are owned by objects. The archive census and its
+        # final loop aliases must not keep unselected COFF graphs rooted
+        # throughout relocation and stack-map merging. Retire them only after
+        # the original host baseline and future-owner admission have completed;
+        # the budget receives no credit for their release.
+        pool = pool_definers = dirty = taken = None
+        obj = sym = None
         return _link_selected_objects(
             objects, definitions, imports, boundary_names, entry, image_base, compact_budget,
         )

@@ -709,6 +709,9 @@ class Preprocessor:
         elif target_os == "win32":
             predefines.pop("__LP64__", None)
             predefines.pop("_LP64", None)
+            # Windows C headers use this 64-bit language spelling. Normalize
+            # tokens, not source text; signed/unsigned qualifiers stay intact.
+            predefines["__int64"] = "long long"
             predefines.update({"_WIN32": "1", "_WIN64": "1", "_M_X64": "100",
                                "__SIZEOF_LONG__": "4", "__LONG_MAX__": "2147483647L",
                                "__SIZEOF_WCHAR_T__": "2", "__WCHAR_TYPE__": "unsigned short",

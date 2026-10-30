@@ -63,6 +63,7 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
@@ -577,7 +578,9 @@ def _rehash(s, new_capacity: int) -> int:
     if ptr_is_null(s) != 0 or new_capacity <= 0:
         return -1
     initial_backend: int = pcc_gc_backend()
-    if initial_backend == 0:
+    # The unlocked table swap is single-threaded only: another carrier may
+    # be reading the old table under the graph lock.
+    if initial_backend == 0 and pcc_threads_enabled() == 0:
         return _rehash_refcount_fast(s, new_capacity)
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, s)

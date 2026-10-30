@@ -72,6 +72,7 @@ pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
+pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
@@ -90,6 +91,19 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 define_global_ptr_null("pcc_module_attrs_cache")
 # 512 (C string address, pinned str) pairs; see _cached_name_key.
 define_global_ptr_null("pcc_module_name_key_cache")
+# Threaded entries are immutable after publication, never evicted, and own
+# registered pinned keys. At most 512 names of at most 256 bytes are retained.
+# Collisions, changed C buffers and allocation failures use per-call keys.
+define_global_i64("pcc_threaded_name_key_cache_bits", 0)
+_NAME_CACHE_CAPACITY = 512
+# Literal slot indices are initialized in the runtime image even for owned
+# C entrypoints, which do not execute this Python module's initializer.
+_NAME_CACHE_TEXT = 0
+_NAME_CACHE_KEY = 1
+_NAME_CACHE_HANDLE = 2
+# A module's namespace dictionary once found under this name (see _module_find).
+_NAME_CACHE_MODULE = 3
+_NAME_CACHE_ENTRY_SLOTS = 4
 define_global_ptr_null("py_func_code_class_cache")
 
 # The public dictionary is the sole lasting owner of imported module objects.
@@ -447,6 +461,88 @@ def _str_matches_cstr(key, text) -> int:
     return same
 
 
+def _threaded_name_key_match(entry, text):
+    # The C address is an opaque key; never dereference an earlier caller's
+    # buffer. Verify against the current bytes even when its address matches.
+    if ptr_is_null(entry) or not ptr_eq(load_ptr(entry, _NAME_CACHE_TEXT * C_POINTER_SIZE), text):
+        return null()
+    key = load_ptr(entry, _NAME_CACHE_KEY * C_POINTER_SIZE)
+    if _str_matches_cstr(key, text) != 0:
+        return key
+    return null()
+
+
+def _threaded_name_entry(text):
+    """The published name-cache entry for this C string, or NULL."""
+    bits: int = atomic_load_i64(global_addr("pcc_threaded_name_key_cache_bits"), 0, "acquire")
+    if bits == 0:
+        return null()
+    offset: int = ((ptr_to_int(text) >> 3) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
+    current: int = atomic_load_i64(int_to_ptr(bits), offset, "acquire")
+    if current == 0:
+        return null()
+    entry = int_to_ptr(current)
+    if ptr_is_null(_threaded_name_key_match(entry, text)):
+        return null()
+    return entry
+
+
+def _threaded_cached_name_key(text):
+    table_slot = global_addr("pcc_threaded_name_key_cache_bits")
+    bits: int = atomic_load_i64(table_slot, 0, "acquire")
+    if bits == 0:
+        candidate = malloc(_NAME_CACHE_CAPACITY * C_POINTER_SIZE)
+        if ptr_is_null(candidate):
+            return null()
+        memset(candidate, 0, _NAME_CACHE_CAPACITY * C_POINTER_SIZE)
+        prior: int = atomic_cas_i64(table_slot, 0, 0, ptr_to_int(candidate), "acq_rel", "acquire")
+        if prior != 0:
+            free(candidate)
+            bits = prior
+        else:
+            bits = ptr_to_int(candidate)
+    table = int_to_ptr(bits)
+    offset: int = ((ptr_to_int(text) >> 3) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
+    current: int = atomic_load_i64(table, offset, "acquire")
+    if current != 0:
+        return _threaded_name_key_match(int_to_ptr(current), text)
+    length: int = strlen(text)
+    if length > 256:
+        return null()
+    entry = malloc(_NAME_CACHE_ENTRY_SLOTS * C_POINTER_SIZE)
+    if ptr_is_null(entry):
+        return null()
+    memset(entry, 0, _NAME_CACHE_ENTRY_SLOTS * C_POINTER_SIZE)
+    key_slot = ptr_add(entry, _NAME_CACHE_KEY * C_POINTER_SIZE)
+    handle = pcc_gc_scheduler_root_register_handle(key_slot)
+    if ptr_is_null(handle):
+        free(entry)
+        return null()
+    # Register the empty physical owner first. The NEW result reaches it
+    # before any later call; pin itself cannot park, and publication preserves
+    # the ordinary root barrier for all five collectors.
+    fresh = py_str_new(text, length)
+    store_ptr(key_slot, 0, fresh)
+    if ptr_is_null(fresh):
+        pcc_gc_scheduler_root_unregister_handle(handle)
+        free(entry)
+        return null()
+    pcc_gc_pin(fresh)
+    pcc_gc_note_slot_write_barrier(null(), key_slot, fresh)
+    store_ptr(entry, _NAME_CACHE_TEXT * C_POINTER_SIZE, text)
+    store_ptr(entry, _NAME_CACHE_HANDLE * C_POINTER_SIZE, handle)
+    prior = atomic_cas_i64(table, offset, 0, ptr_to_int(entry), "acq_rel", "acquire")
+    if prior == 0:
+        return fresh
+    # The winner is permanent; the loser retires only its private owner and
+    # handle. No published key can disappear while a caller borrows it.
+    pcc_gc_unpin(fresh)
+    pcc_gc_store_root(key_slot, null())
+    pcc_gc_scheduler_root_unregister_handle(handle)
+    free(entry)
+    return _threaded_name_key_match(int_to_ptr(prior), text)
+
+
 def _cached_name_key(text):
     """A pinned str equal to the C string ``text``, owned by the cache.
 
@@ -455,10 +551,11 @@ def _cached_name_key(text):
     released one str per name, twice per module global read, which was most
     of py_module_attr_get in a pcc1 codegen worker. An entry is reused only
     when its address and its bytes both match, so a reused buffer address
-    cannot return another name. Threaded runtimes keep per-call keys.
+    cannot return another name. Threaded entries are never evicted; collisions
+    retain the per-call allocation path.
     """
     if pcc_threads_enabled() != 0:
-        return null()
+        return _threaded_cached_name_key(text)
     table = global_load_ptr("pcc_module_name_key_cache")
     if ptr_is_null(table):
         table = malloc(8192)
@@ -487,8 +584,8 @@ def _cached_name_key(text):
 def pcc_cached_name_key(text):
     """A borrowed pinned str equal to C string ``text``, or NULL.
 
-    NULL means no cached key is available (threaded runtime or allocation
-    failure); the caller then builds its own key as before.
+    NULL means no cached key is available (collision, changed buffer, bounded
+    capacity or allocation failure); the caller builds its own key as before.
     """
     if ptr_is_null(text):
         return null()
@@ -511,11 +608,26 @@ def _module_find(module_name):
     if ptr_is_null(cache):
         return null()
     if not ptr_is_null(module_name):
+        # A namespace is registered once, never replaced or removed, and
+        # pinned: the name's cache entry publishes it, and later lookups skip
+        # the locked dictionary lookup. Values are still read from it.
+        entry = null()
+        if pcc_threads_enabled() != 0:
+            entry = _threaded_name_entry(module_name)
+            if not ptr_is_null(entry):
+                known: int = atomic_load_i64(entry, _NAME_CACHE_MODULE * C_POINTER_SIZE, "acquire")
+                if known != 0:
+                    return int_to_ptr(known)
         cached = _cached_name_key(module_name)
         if not ptr_is_null(cached):
             attrs = py_dict_get(cache, cached)
             if not ptr_is_null(attrs):
                 py_decref(attrs)
+                if pcc_threads_enabled() != 0 and ptr_is_null(entry):
+                    entry = _threaded_name_entry(module_name)
+                if not ptr_is_null(entry):
+                    atomic_cas_i64(entry, _NAME_CACHE_MODULE * C_POINTER_SIZE,
+                                   0, ptr_to_int(attrs), "acq_rel", "acquire")
             return attrs
     key = _module_name_key(module_name)
     if ptr_is_null(key):

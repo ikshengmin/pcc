@@ -29,6 +29,10 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_managed_pointer_index_contains",
     "pcc_gc_managed_pointer_index_insert",
     "pcc_gc_managed_pointer_index_remove",
+    "pcc_gc_managed_pointer_index_seen",
+    "pcc_gc_object_index_seen",
+    "pcc_gc_index_py_seen",
+    "pcc_gc_index_reclaim_retired",
     "pcc_gc_forwarding_index_find",
     "pcc_gc_forwarding_index_insert",
     "pcc_gc_forwarding_index_remove",
@@ -111,6 +115,16 @@ def _harness_source() -> str:
 #include <stdlib.h>
 
 int64_t pcc_gc_index_slot_size(void);
+int64_t pcc_gc_index_py_hash_ptr(void *key);
+void *pcc_gc_tracked_primary_index_cells(void *key);
+enum { PRIMARY_SHARDS = 32, PRIMARY_SLOTS = 0, PRIMARY_CAP = 1,
+       PRIMARY_COUNT = 2, PRIMARY_USED = 3, PRIMARY_WORDS = 4 };
+#define TEST_OOM_OBJECT_CELL ((void *)(uintptr_t)0x71100000u)
+
+static unsigned primary_shard(const void *key) {
+    uint64_t bits = (uint64_t)(uintptr_t)key;
+    return (unsigned)(((bits >> 4) ^ (bits >> 11) ^ (bits >> 19)) & 31u);
+}
 void *py_gc_index_find(void *obj);
 int64_t py_gc_index_insert(void *obj, void *node);
 void *py_gc_index_remove(void *obj);
@@ -126,7 +140,13 @@ void pcc_gc_object_index_clear(void);
 void pcc_gc_ptr_index_tls_pool_drain(void);
 int64_t pcc_gc_managed_pointer_index_contains(void *obj);
 int64_t pcc_gc_managed_pointer_index_insert(void *obj);
+int64_t pcc_gc_managed_pointer_rehash(int64_t requested_cap);
 int64_t pcc_gc_managed_pointer_index_remove(void *obj);
+int64_t pcc_gc_managed_pointer_index_seen(void *obj);
+int64_t pcc_gc_object_index_seen(void *obj);
+int64_t pcc_gc_index_reclaim_retired(void);
+extern int64_t pcc_py_gc_managed_pointer_cap;
+extern int64_t pcc_py_gc_managed_pointer_count;
 
 #define DECL_INDEX(prefix) \
     void *prefix##_find(void *key); \
@@ -167,27 +187,29 @@ int64_t pcc_gc_forwarding_plan_index_insert(
     int64_t kind, void *key, void *node
 );
 
-/* The primary index asks the allocator whether a key is an object cell.
- * This harness allocates none, so every key takes the hash table; linked
- * against the production archive, the allocator's definitions win. */
-__attribute__((weak)) void *pcc_allocator_object_side_slot(
-    void *ptr, int64_t create
-) {
+/* Standalone raw-index tests provide the kernel storage/allocator ABI.
+ * Production-archive tests do not define these symbols: a weak stub must
+ * not conceal whether the real tracking/allocator objects were linked. */
+#ifdef PCC_INDEX_STANDALONE_STORAGE
+static int64_t primary_records[PRIMARY_SHARDS][PRIMARY_WORDS];
+void *pcc_gc_tracked_primary_index_cells(void *ptr) {
+    return primary_records[primary_shard(ptr)];
+}
+void *pcc_allocator_object_side_slot(void *ptr, int64_t create) {
     (void)ptr;
     (void)create;
     return NULL;
 }
-
-__attribute__((weak)) void *pcc_allocator_granule_object_slot(void *ptr) {
-    (void)ptr;
-    return NULL;
+void *pcc_allocator_granule_object_slot(void *ptr) {
+    /* Model an exact cell whose side-array allocation failed. */
+    return ptr == TEST_OOM_OBJECT_CELL ? ptr : NULL;
 }
+#endif
 
 static uint64_t hash_ptr(const void *ptr) {
     uint64_t value = (uint64_t)(uintptr_t)ptr >> 3;
-    value ^= value >> 17;
-    value ^= value >> 33;
-    return value;
+    value *= UINT64_C(0x9E3779B97F4A7C15);
+    return value ^ (value >> 32);
 }
 
 static void *key_for_bucket(
@@ -202,8 +224,36 @@ static void *key_for_bucket(
     }
 }
 
+static void *key_for_primary_bucket(
+    uint64_t mask, uint64_t bucket, unsigned shard, uint64_t *cursor
+) {
+    for (;;) {
+        void *key = key_for_bucket(mask, bucket, cursor);
+        if (primary_shard(key) == shard) return key;
+    }
+}
+
+static void *key_for_primary_shard(unsigned shard, uint64_t *cursor) {
+    for (;;) {
+        uintptr_t raw = (((uintptr_t)(*cursor)) << 4) + 0x10;
+        (*cursor)++;
+        if (primary_shard((void *)raw) == shard) return (void *)raw;
+    }
+}
+
 int main(void) {
     if (pcc_gc_index_slot_size() != 16) return 150;
+    /* Each address shard owns independent cells, in both the standalone
+       storage model and the real production kernel. */
+    void *records[PRIMARY_SHARDS];
+    for (unsigned shard = 0; shard < PRIMARY_SHARDS; shard++) {
+        void *key = (void *)((uintptr_t)shard << 4);
+        records[shard] = pcc_gc_tracked_primary_index_cells(key);
+        if (records[shard] == NULL) return 151;
+        for (unsigned earlier = 0; earlier < shard; earlier++) {
+            if (records[shard] == records[earlier]) return 152;
+        }
+    }
     uintptr_t nodes[640];
     void *keys[520];
     uint64_t cursor = 1;
@@ -215,7 +265,9 @@ int main(void) {
     if (pcc_gc_object_index_insert((void *)(uintptr_t)0x1000, 0) != -1) return 4;
 
     for (i = 0; i < 8; i++) {
-        keys[i] = key_for_bucket(255, 250, &cursor);
+        keys[i] = key_for_primary_bucket(255, 250, 7, &cursor);
+        if ((uint64_t)pcc_gc_index_py_hash_ptr(keys[i]) != hash_ptr(keys[i])) return 153;
+        if (pcc_gc_tracked_primary_index_cells(keys[i]) != records[7]) return 154;
         nodes[i] = 0x1000u + (uintptr_t)i;
         if (py_gc_index_insert(keys[i], &nodes[i]) != 1) return 10 + i;
     }
@@ -227,11 +279,21 @@ int main(void) {
         if (py_gc_index_find(keys[i]) != &nodes[i]) return 30 + i;
     }
 
+    /* Keep the old 500-entry growth/delete coverage inside one shard;
+       merely spreading 500 keys over 32 shards would no longer grow it. */
+    cursor = 0x1000000u >> 4;
+    int64_t *bulk_cells = (int64_t *)records[9];
+    int64_t bulk_before = bulk_cells[PRIMARY_COUNT];
+    int64_t other_before = ((int64_t *)records[7])[PRIMARY_COUNT];
     for (i = 0; i < 500; i++) {
-        keys[i] = (void *)(uintptr_t)(0x1000000u + (uintptr_t)i * 16u);
+        keys[i] = key_for_primary_shard(9, &cursor);
+        if (pcc_gc_tracked_primary_index_cells(keys[i]) != records[9]) return 155;
         nodes[16 + i] = 0x2000u + (uintptr_t)i;
         if (py_gc_index_insert(keys[i], &nodes[16 + i]) != 1) return 40;
     }
+    if (bulk_cells[PRIMARY_CAP] < 1024) return 156;
+    if (bulk_cells[PRIMARY_COUNT] != bulk_before + 500) return 157;
+    if (((int64_t *)records[7])[PRIMARY_COUNT] != other_before) return 158;
     for (i = 0; i < 500; i += 3) {
         if (py_gc_index_remove(keys[i]) != &nodes[16 + i]) return 41;
     }
@@ -248,6 +310,19 @@ int main(void) {
         if (py_gc_index_insert(null_node_key, &nodes[0]) != 1) return 46;
         if (py_gc_index_remove(null_node_key) != &nodes[0]) return 47;
     }
+
+#ifdef PCC_INDEX_STANDALONE_STORAGE
+    {
+        int64_t *cells = pcc_gc_tracked_primary_index_cells(TEST_OOM_OBJECT_CELL);
+        int64_t before[PRIMARY_WORDS];
+        for (i = 0; i < PRIMARY_WORDS; i++) before[i] = cells[i];
+        if (py_gc_index_insert(TEST_OOM_OBJECT_CELL, &nodes[600]) != -1) return 159;
+        if (py_gc_index_find(TEST_OOM_OBJECT_CELL) != NULL) return 160;
+        for (i = 0; i < PRIMARY_WORDS; i++) {
+            if (cells[i] != before[i]) return 161;
+        }
+    }
+#endif
 
     cursor = 100000;
     {
@@ -275,9 +350,20 @@ int main(void) {
         return 60;
     }
     if (pcc_gc_object_index_find(keys[1]) != &nodes[1]) return 61;
+    /* The unlocked probe agrees with the locked lookup on a colliding run
+       that wraps around the end of the table. */
+    for (i = 0; i < 6; i++) {
+        if (pcc_gc_object_index_seen(keys[i]) != 1) return 140;
+    }
+    if (pcc_gc_object_index_seen(0) != 0) return 141;
+    if (pcc_gc_object_index_seen((void *)(uintptr_t)3) != 0) return 142;
     if (pcc_gc_object_index_remove(keys[0]) != &nodes[0]) return 62;
     if (pcc_gc_object_index_remove(keys[2]) != &nodes[2]) return 63;
     if (pcc_gc_object_index_find(keys[5]) != &nodes[5]) return 64;
+    for (i = 0; i < 6; i++) {
+        int64_t expected = (i == 0 || i == 2) ? 0 : 1;
+        if (pcc_gc_object_index_seen(keys[i]) != expected) return 143;
+    }
     pcc_gc_object_index_clear();
     if (pcc_gc_object_index_find(keys[5]) != 0) return 65;
     if (pcc_gc_object_index_insert(keys[5], &nodes[5]) != 1) return 66;
@@ -348,8 +434,14 @@ int main(void) {
         if (
             pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1) != 1
         ) return 122;
-        if (prepared == 0) return 123;
-        free(prepared);
+        /* The forwarding index is probed without the graph lock (the GC4
+           load barrier), so a commit retires the table it replaces instead
+           of handing it back to be freed; the stopped world's holder frees
+           retired tables. The object, forwarding and target clears above
+           retired theirs too. */
+        if (prepared != 0) return 123;
+        if (pcc_gc_index_reclaim_retired() < 1) return 131;
+        if (pcc_gc_index_reclaim_retired() != 0) return 132;
         {
             void *key = (void *)(uintptr_t)0x9900000u;
             if (
@@ -404,7 +496,10 @@ int main(void) {
         int64_t cap = pcc_gc_frame_index_plan_capacity(1);
         if (cap != 256) return 132;
         void *prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
-        if (prepared == 0) return 133;
+        if (prepared == 0) {
+            fprintf(stderr, "frame-plan-calloc-failed cap=%lld\n", (long long)cap);
+            return 133;
+        }
         if (pcc_gc_frame_index_plan_commit(&prepared, cap, 1) != 1) return 134;
         if (prepared != 0) return 135;
         for (i = 0; i < 128; i++) {
@@ -491,6 +586,12 @@ int main(void) {
     {
         void *managed_keys[520];
         cursor = 200000;
+        /* Drop earlier retirements without clearing the production
+           runtime's live managed-pointer table. Unlike the standalone
+           object, that table already contains runtime-owned objects. */
+        pcc_gc_index_reclaim_retired();
+        int64_t managed_cap_before = pcc_py_gc_managed_pointer_cap;
+        int64_t managed_count_before = pcc_py_gc_managed_pointer_count;
         if (pcc_gc_managed_pointer_index_insert(0) != -1) return 100;
         if (pcc_gc_managed_pointer_index_insert((void *)(uintptr_t)3) != -1) {
             return 101;
@@ -531,7 +632,63 @@ int main(void) {
             if (pcc_gc_managed_pointer_index_contains(managed_keys[i]) != expected) {
                 return 108;
             }
+            /* The unlocked probe must agree after automatic growth;
+               the initial production capacity need not have been 256. */
+            if (pcc_gc_managed_pointer_index_seen(managed_keys[i]) != expected) {
+                return 109;
+            }
         }
+        /* Every actual automatic doubling retires one table and its
+           publication record. The original 500-key insert/delete checks
+           above remain: only the empty-table assumption is mode-specific. */
+        int64_t managed_cap_after = pcc_py_gc_managed_pointer_cap;
+        int64_t growth_cap = managed_cap_before ? managed_cap_before : 256;
+        int64_t expected_retired = 0;
+        while (growth_cap < managed_cap_after) {
+            growth_cap *= 2;
+            expected_retired += 2;
+        }
+        if (growth_cap != managed_cap_after) return 180;
+        /* 8 colliding keys minus one, plus 500 keys minus 167 removals. */
+        if (pcc_py_gc_managed_pointer_count != managed_count_before + 340) return 181;
+        int64_t managed_retired = pcc_gc_index_reclaim_retired();
+        if (managed_retired != expected_retired) {
+            fprintf(stderr,
+                    "managed-autogrowth cap-before=%lld cap-after=%lld retired=%lld expected=%lld\n",
+                    (long long)managed_cap_before, (long long)managed_cap_after,
+                    (long long)managed_retired, (long long)expected_retired);
+            return 133;
+        }
+        if (pcc_gc_index_reclaim_retired() != 0) return 182;
+#ifdef PCC_INDEX_STANDALONE_STORAGE
+        /* Preserve the original empty-table two-growth/four-retirement
+           assertion for the standalone object, where its premise is true. */
+        if (managed_cap_before != 0 || managed_cap_after != 1024
+            || managed_retired != 4) return 183;
+#endif
+        /* Both modes must additionally execute exactly two real growths
+           from their current capacity. Do not replace the original four-
+           retirements requirement with an at-least/possibly-zero check. */
+        int64_t stable_count = pcc_py_gc_managed_pointer_count;
+        for (i = 0; i < 2; i++) {
+            int64_t previous_cap = pcc_py_gc_managed_pointer_cap;
+            if (previous_cap <= 0 || previous_cap > INT64_MAX / 2) return 184;
+            if (pcc_gc_managed_pointer_rehash(previous_cap * 2) != 0) return 185;
+            if (pcc_py_gc_managed_pointer_cap != previous_cap * 2
+                || pcc_py_gc_managed_pointer_count != stable_count) return 186;
+        }
+        for (i = 0; i < 508; i++) {
+            int64_t expected = i < 8 ? i != 3 : (i - 8) % 3 != 0;
+            if (pcc_gc_managed_pointer_index_contains(managed_keys[i]) != expected
+                || pcc_gc_managed_pointer_index_seen(managed_keys[i]) != expected) return 187;
+        }
+        managed_retired = pcc_gc_index_reclaim_retired();
+        if (managed_retired != 4) {
+            fprintf(stderr, "managed-explicit-growth retired=%lld expected=4\n",
+                    (long long)managed_retired);
+            return 188;
+        }
+        if (pcc_gc_index_reclaim_retired() != 0) return 189;
     }
 
     pcc_gc_ptr_index_tls_pool_drain();
@@ -545,6 +702,8 @@ def _build_and_run_harness(
     tmp_path: Path,
     name: str,
     implementation: list[str],
+    *,
+    standalone: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     harness = tmp_path / (name + ".c")
     executable = tmp_path / name
@@ -554,6 +713,7 @@ def _build_and_run_harness(
             "clang",
             "-std=c11",
             "-O0",
+            *(["-DPCC_INDEX_STANDALONE_STORAGE=1"] if standalone else []),
             f"-I{RUNTIME_DIR / 'include'}",
             f"-I{RUNTIME_DIR / 'src'}",
             str(harness),
@@ -588,13 +748,15 @@ def test_freestanding_gc_index_table_ir_is_raw_and_exports_complete_abi(tmp_path
         for line in undefined.stdout.splitlines()
         if line.strip()
     }
-    # The primary index asks the allocator whether a key is an object cell
-    # with a slab side word; every other dependency is raw memory.
+    # Side-word provenance remains allocator-owned; fallback storage is
+    # selected by the tracking kernel's same address shard. Other imports
+    # are raw memory operations.
     assert undefined_names == {
         "calloc",
         "free",
         "pcc_allocator_granule_object_slot",
         "pcc_allocator_object_side_slot",
+        "pcc_gc_tracked_primary_index_cells",
     }
 
     symbols = subprocess.run(
@@ -702,6 +864,7 @@ def test_built_production_archive_attributes_and_runs_gc_index_python_object(
         tmp_path,
         "gc_index_production_archive",
         [str(pcc_runtime_archive)],
+        standalone=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "gc-index-ok\n"

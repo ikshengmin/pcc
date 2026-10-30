@@ -37,7 +37,7 @@ HANDOFF_IR = MOVEMENT_IR + r'''
 @handoff_seen = internal global i64 0
 @handoff_token = internal global i64 0
 @handoff_status = internal global i64 0
-@pcc_gc_foreign_lease_active = external global i64
+declare i64 @pcc_gc_foreign_lease_count_quiescent()
 declare void @pcc_platform_abort()
 declare void @pcc_gc_note_slot_write_barrier(ptr, ptr, ptr)
 declare ptr @pcc_gc_resolve_root_slot_unlocked(ptr, i64)
@@ -58,7 +58,8 @@ good:
 define i64 @handoff_active_count() {
 entry:
   call void @pcc_py_gc_minor_graph_lock()
-  %count = load i64, ptr @pcc_gc_foreign_lease_active
+  ; Call sites use barriers/joins: no acquisition or release can race this sum.
+  %count = call i64 @pcc_gc_foreign_lease_count_quiescent()
   call void @pcc_py_gc_minor_graph_unlock()
   ret i64 %count
 }
@@ -393,7 +394,7 @@ main()
     output = source.with_suffix("")
     compile_python(str(source), str(output), backend="self", libpython_mode="off",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
-                   link_args=(str(helper),))
+                   object_inputs=(str(helper),))
     for backend in (3, 4):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend),
                            PCC_GC_MINOR_ALLOC_MAX="4096", PATH="",

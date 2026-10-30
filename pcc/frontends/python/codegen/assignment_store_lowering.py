@@ -7,18 +7,33 @@ from typing import Optional
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
-    Attr, DynType, Expr, IntType, Name, NoneLit, NoneType, Slice,
-    Subscript, TupleExpr, Type,
+    Assign,
+    Attr,
+    DynType,
+    Expr,
+    IntType,
+    ListExpr,
+    Name,
+    NoneLit,
+    NoneType,
+    RawPointerType,
+    Slice,
+    Subscript,
+    TupleExpr,
+    Type,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.local_bound_lowering import mark_local_bound
+from pcc.frontends.python.codegen.local_bound_lowering import (
+    is_preplanned_owned_local,
+    mark_local_bound,
+)
 from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_expr_binding,
     retire_live_import_staging,
 )
 from pcc.frontends.python.codegen.attr_store_lowering import (
-    emit_live_import_attribute_store,
-    live_import_attribute_store,
+    emit_rooted_attribute_store,
+    rooted_attribute_store,
 )
 
 _I8 = ir.IntType(8)
@@ -104,30 +119,18 @@ class AssignmentStoreLoweringMixin:
     def _store_unpack_root_target(self, lhs: Expr, root, value_ty: Type) -> None:
         """Publish a retained literal element without exposing a stale SSA value."""
         lhs = self._coerce_unpack_name_like(lhs)
-        if isinstance(lhs, TupleExpr):
-            previous = self._current_try_err_block()
-            error = previous if previous is not None else self._ensure_fn_err_exit()
-            saved_cpy = self._cpy_operand_cleanup_block
-            items = []
-            try:
-                for index in range(len(lhs.elems)):
-                    item = self._new_slot_call_root("unpack.nested.item")
-                    items.append(item)
-                    self._try_err_block = self._slot_call_cleanup_block(tuple(items), error)
-                    self._cpy_operand_cleanup_block = self._try_err_block
-                    self._slot_call_runtime_call(
-                        "py_obj_getitem_i64", (root,), result_slot=item,
-                        suffix_args=(ir.Constant(_I64, index),), span=lhs.span,
-                    )
-                for index, target in enumerate(lhs.elems):
-                    self._store_unpack_root_target(target, items[index], DynType(name="dyn"))
-                self._release_slot_call_roots(tuple(items))
-            finally:
-                self._try_err_block = previous
-                self._cpy_operand_cleanup_block = saved_cpy
+        if isinstance(lhs, (TupleExpr, ListExpr)):
+            from pcc.frontends.python.codegen.assignment_statement_lowering import (
+                _emit_live_import_sequence_unpack,
+            )
+            # The source is already owned; its synthetic expression supplies
+            # only type/span information and is never evaluated or rebound.
+            source = Name(span=lhs.span, ty=value_ty, ident=self._fresh("unpack.source"))
+            assignment = Assign(span=lhs.span, targets=(lhs,), value=source)
+            _emit_live_import_sequence_unpack(self, assignment, lhs, root)
             return
-        if isinstance(lhs, Attr) and live_import_attribute_store(self, lhs):
-            emit_live_import_attribute_store(self, lhs, root)
+        if isinstance(lhs, Attr) and rooted_attribute_store(self, lhs):
+            emit_rooted_attribute_store(self, lhs, root)
             return
         if isinstance(lhs, Subscript) and live_import_expr_binding(self, lhs.obj):
             receiver = self._emit_slot_call_operand(lhs.obj, "import.item.receiver")
@@ -188,15 +191,19 @@ class AssignmentStoreLoweringMixin:
                         and self._owned_local_flag_for(lhs.ident, alloca) is None):
                     alloca = self._alloca_in_entry(_CSTR, name=lhs.ident + ".unpack.addr", init_null=True)
                     self.env[lhs.ident] = (alloca, _CSTR, declared_ty)
-                self._ensure_local_gc_frame_root(lhs.ident, alloca, _CSTR)
+                # Unpacked comprehension bindings are function-local even in
+                # module initializers and native lambdas, which have no def.
+                self._ensure_local_gc_frame_root(
+                    lhs.ident, alloca, _CSTR, allow_module=True,
+                )
                 self._emit_release_owned_local_if_flagged(lhs.ident, alloca)
                 # An unowned prior binding is borrowed: empty the destination
                 # without consuming its source owner's reference.
                 self.builder.store(ir.Constant(_CSTR, None), alloca)
-                moved = self.builder.call(
-                    self.runtime["pcc_gc_root_move"],
-                    [self._as_gc_ptr(alloca), self._as_gc_ptr(root)],
-                    name=self._fresh("unpack.literal.move"),
+                moved = self._emit_root_slot_move(
+                    alloca,
+                    root,
+                    label="unpack.literal.move",
                 )
                 self._slot_call_check_status(moved, "literal assignment move", lhs.span)
                 self._cpy_env_flags.pop(lhs.ident, None)
@@ -314,7 +321,9 @@ class AssignmentStoreLoweringMixin:
                             lhs.ident, alloca, ir_ty, allow_module=True,
                         )
                         slot = self.env[lhs.ident]
-            if planned_exact_int:
+            if planned_exact_int or (
+                slot is not None and is_preplanned_owned_local(self, lhs.ident, slot[0])
+            ):
                 self._store_value_at_name(
                     lhs,
                     value,
@@ -551,6 +560,7 @@ class AssignmentStoreLoweringMixin:
             self.builder.store(ir.Constant(_I1, 1), flag)
             mark_local_bound(self, target.ident)
             return
+        incoming_was_pointer = isinstance(value.type, ir.PointerType)
         if (
             target.ident in getattr(self, "_planned_object_local_names", set())
             and isinstance(_ir_ty, ir.PointerType)
@@ -569,6 +579,31 @@ class AssignmentStoreLoweringMixin:
                 )
         else:
             value = self._coerce(value, value_ty, declared_ty)
+        if (
+            is_preplanned_owned_local(self, target.ident, alloca)
+            and isinstance(value.type, ir.PointerType)
+            and value not in getattr(self, "_cpy_values", ())
+            and not isinstance(value_ty, RawPointerType)
+            and not getattr(self, "_suppress_implicit_gc_roots", False)
+        ):
+            # Precomputed stores (including borrowed walrus values) must obey
+            # the same owning-slot contract as ordinary assignment. Acquire
+            # the incoming owner before replacement can release an alias.
+            if not value_is_owned and incoming_was_pointer:
+                if not self._value_is_never_gc_object(value):
+                    value = self._gc_retain(
+                        value, name=self._fresh(target.ident + ".local.borrowed.retain"),
+                    )
+            self.builder.call(
+                self.runtime["pcc_gc_store_root_take"],
+                [self._as_gc_ptr(alloca), value],
+            )
+            self._owned_local_names.add(target.ident)
+            self._owned_local_has_value.add(target.ident)
+            flag = self._ensure_owned_local_flag(target.ident, alloca)
+            self.builder.store(ir.Constant(_I1, 1), flag)
+            mark_local_bound(self, target.ident)
+            return
         if self._is_valueclass_payload_type(declared_ty) and isinstance(_ir_ty, ir.LiteralStructType):
             self._ensure_valueclass_payload_gc_roots(target.ident, alloca, declared_ty, borrowed=False)
             self._copy_valueclass_payload(alloca, value, declared_ty)

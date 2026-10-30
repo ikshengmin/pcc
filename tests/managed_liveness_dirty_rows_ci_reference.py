@@ -116,7 +116,7 @@ def record_real_kernel_overhead(tmp_path, phi_source):
             for conditional in ast.walk(branch):
                 if (isinstance(conditional, ast.If) and isinstance(conditional.test, ast.Call)
                         and isinstance(conditional.test.func, ast.Attribute)
-                        and conditional.test.func.attr == "converge_liveness_row_unchecked"):
+                        and conditional.test.func.attr == "converge_liveness_incoming_row_unchecked"):
                     conditional.body.insert(0, ast.parse("_ci_changed_row()").body[0])
             inspected_function = load(inspected, {"_ci_gate_cell": cell,
                                                   "_ci_scheduler_entered": entered,

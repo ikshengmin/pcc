@@ -65,6 +65,12 @@ pcc_gc_object_is_known_no_lock = extern(
 pcc_gc_store_buffer_member_forget = extern(
     "pcc_gc_store_buffer_member_forget", (c_ptr,), c_void
 )
+pcc_gc_store_buffer_entry_forget = extern(
+    "pcc_gc_store_buffer_entry_forget", (c_ptr, c_ptr), c_void
+)
+pcc_gc_store_buffer_owner_entries = extern(
+    "pcc_gc_store_buffer_owner_entries", (c_ptr,), c_int64
+)
 pcc_gc_generational_promote_owned_slot_mode = extern(
     "pcc_gc_generational_promote_owned_slot_mode",
     (c_ptr, c_int64, c_int64),
@@ -118,6 +124,7 @@ def _reset_scheduler_root_scan() -> None:
 def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
     if remaining_budget <= 0:
         return
+    walk_pending: i64 = 0
     pcc_py_gc_minor_graph_lock()
     revision: i64 = 0
     examined: i64 = 0
@@ -215,8 +222,8 @@ def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
             # The pass ends with the mapped stack frames of every mutator,
             # promoted together under a stopped world (they do not register
             # while the precise walk is active).
-            pcc_gc_visit_walked_stack_roots(2, 0)
             _reset_frame_root_scan()
+            walk_pending = 1
             break
         root_count = load_i64(continuation, 24)
         if slot_index >= root_count:
@@ -259,6 +266,12 @@ def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
                 global_addr("pcc_gc_backend3_frame_root_scan_slot"), 0, 0
             )
     pcc_py_gc_minor_graph_unlock()
+    if walk_pending != 0:
+        # The walker may wait for another stopped-world owner or mutator.
+        # Finish/reset the registry cursor under the graph lock, then drop
+        # it before that wait; the walk owns STW while it visits stack slots.
+        # No registry node or slot address is carried across this unlock.
+        pcc_gc_visit_walked_stack_roots(2, 0)
     if examined < remaining_budget:
         pcc_gc_backend3_drain_promotion_worklist(
             remaining_budget - examined
@@ -456,11 +469,10 @@ def pcc_gc_generational_step(
     return local_processed
 
 
-@c_abi_export("pcc_gc_backend4_step_remembered_roots")
-def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
-    """Drain one GC4 remembered batch with callback-capable cleanup unlocked."""
-    if remaining_budget <= 0:
-        return 0
+@c_abi_export("pcc_gc_backend4_drain_remembered_batch")
+def _backend4_drain_remembered_batch(remaining_budget: i64) -> i64:
+    """Drain one bounded GC4 store-buffer batch under the graph lock, then
+    run its callback-capable cleanup unlocked."""
     batch_limit: i64 = remaining_budget
     if batch_limit > 8:
         batch_limit = 8
@@ -599,24 +611,31 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
 
         # Membership follows both queues even when promotion is inapplicable.
         # Forget is raw deletion only; cleanup can reenqueue after unlocking.
-        owner_pending: i64 = 0
-        pending_node = load_ptr(
-            global_addr("pcc_gc_backend4_store_buffer_medium_head"), 0
-        )
-        while ptr_is_null(pending_node) == 0:
-            if ptr_eq(load_ptr(pending_node, 0), owner) != 0:
-                owner_pending = 1
-                break
-            pending_node = load_ptr(pending_node, 24)
-        if owner_pending == 0:
+        # The entry index answers whether the owner keeps another entry; an
+        # incomplete index falls back to walking the queues.
+        pcc_gc_store_buffer_entry_forget(owner, slot)
+        owner_pending: i64 = pcc_gc_store_buffer_owner_entries(owner)
+        if owner_pending > 0:
+            owner_pending = 1
+        elif owner_pending < 0:
+            owner_pending = 0
             pending_node = load_ptr(
-                global_addr("pcc_gc_backend4_store_buffer_head"), 0
+                global_addr("pcc_gc_backend4_store_buffer_medium_head"), 0
             )
             while ptr_is_null(pending_node) == 0:
                 if ptr_eq(load_ptr(pending_node, 0), owner) != 0:
                     owner_pending = 1
                     break
                 pending_node = load_ptr(pending_node, 24)
+            if owner_pending == 0:
+                pending_node = load_ptr(
+                    global_addr("pcc_gc_backend4_store_buffer_head"), 0
+                )
+                while ptr_is_null(pending_node) == 0:
+                    if ptr_eq(load_ptr(pending_node, 0), owner) != 0:
+                        owner_pending = 1
+                        break
+                    pending_node = load_ptr(pending_node, 24)
         if owner_pending == 0:
             pcc_gc_store_buffer_member_forget(owner)
             if owner_known != 0 and (flags & 512) != 0:
@@ -684,6 +703,27 @@ def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
         free(cleanup)
         py_decref(value)
         cleanup = nxt
+    return local_drained
+
+
+@c_abi_export("pcc_gc_backend4_step_remembered_roots")
+def pcc_gc_backend4_step_remembered_roots(remaining_budget: i64) -> i64:
+    """Drain GC4 store-buffer batches until the budget or the buffer runs out.
+
+    Each batch holds the graph lock for at most eight entries. One batch per
+    step fell behind any mutator storing young values into old objects, and
+    while entries remain a GC4 step does no other work, so the buffer grew
+    without bound.
+    """
+    if remaining_budget <= 0:
+        return 0
+    local_drained: i64 = 0
+    batch_drained: i64 = 1
+    while local_drained < remaining_budget and batch_drained > 0:
+        batch_drained = _backend4_drain_remembered_batch(
+            remaining_budget - local_drained
+        )
+        local_drained = local_drained + batch_drained
     promotion_examined: i64 = 0
     if local_drained < remaining_budget:
         promotion_examined = pcc_gc_backend3_drain_promotion_worklist(

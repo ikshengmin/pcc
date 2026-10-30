@@ -98,6 +98,26 @@ def test_dumps_round_trips_through_the_host_decoder():
             assert host_json.loads(provider.dumps(obj, **kwargs)) == obj
 
 
+def test_non_string_keys_follow_cpython():
+    """Keys convert as CPython's encoder converts them: bools and None to
+    ``true``/``false``/``null``, floats to their JSON spelling, ints to
+    their text; any other key type is a TypeError. ``str(key)`` gave
+    ``"True"`` and ``"None"`` and accepted tuples."""
+    provider = _provider()
+    obj = {True: 1, False: 2, None: 3, 7: "i", 2.5: "f", float("inf"): "x", "s": 0}
+    for kwargs in ({}, {"indent": 2}, {"separators": (",", ":")}):
+        assert provider.dumps(obj, **kwargs) == host_json.dumps(obj, **kwargs)
+    numeric = {3: "c", 1: "a", 2.5: "b"}
+    assert provider.dumps(numeric, sort_keys=True) == host_json.dumps(
+        numeric, sort_keys=True
+    )
+    for bad in ({(1, 2): 1}, {b"k": 1}):
+        with pytest.raises(TypeError):
+            host_json.dumps(bad)
+        with pytest.raises(TypeError):
+            provider.dumps(bad)
+
+
 def test_allow_nan_false_rejects_non_finite_floats():
     provider = _provider()
     for value in (float("nan"), float("inf"), float("-inf")):

@@ -112,7 +112,7 @@ def test_real_linux_entry_preserves_callbacks_bytes_and_phase_arguments(monkeypa
     assert preparation == (PARSED, {
         "aggregate_returned_indirect": arm._aggregate_returned_indirect,
         "aggregate_returned_indirect_indexed": arm._aggregate_returned_indirect_indexed,
-        "materialize_legacy_slots": False, "phase_timing": None,
+        "materialize_legacy_slots": False, "source_debug": True, "phase_timing": None,
     })
     emission = next(args for name, args in warm.calls if name == "module_emit")
     assert emission == (PREPARED, False, {"profile_ir_text": SOURCE})
@@ -384,9 +384,9 @@ def test_backend_operations_and_direct_returns_match_frozen_preimages():
         assert ast.dump(stripped, include_attributes=False) == ast.dump(ast.parse(preimage), include_attributes=False)
 
 
-# Frozen974 original function; parsed as an oracle, never executed.
-_PREPARE_PREIMAGE = 'def prepare_module_for_target(\n    ir_text: str,\n    *,\n    aggregate_returned_indirect,\n    aggregate_returned_indirect_indexed=None,\n    materialize_legacy_slots: bool = True,\n    phase_timing=None,\n) -> PreparedSelfBackendModule:\n    module = parse_self_backend_module(ir_text)\n    return prepare_parsed_module_for_target(\n        module,\n        aggregate_returned_indirect=aggregate_returned_indirect,\n        aggregate_returned_indirect_indexed=aggregate_returned_indirect_indexed,\n        materialize_legacy_slots=materialize_legacy_slots,\n        phase_timing=phase_timing,\n    )\n'
+# Frozen3957 operational function; parsed as an oracle, never executed.
+_PREPARE_PREIMAGE = 'def prepare_module_for_target(\n    ir_text: str,\n    *,\n    aggregate_returned_indirect,\n    aggregate_returned_indirect_indexed=None,\n    materialize_legacy_slots: bool = True,\n    source_debug: bool = False,\n    phase_timing=None,\n) -> PreparedSelfBackendModule:\n    module = parse_self_backend_module(ir_text)\n    return prepare_parsed_module_for_target(\n        module,\n        aggregate_returned_indirect=aggregate_returned_indirect,\n        aggregate_returned_indirect_indexed=aggregate_returned_indirect_indexed,\n        materialize_legacy_slots=materialize_legacy_slots,\n        source_debug=source_debug,\n        phase_timing=phase_timing,\n    )\n'
 
 
-# Frozen974 original function; parsed as an oracle, never executed.
-_ARM_PREIMAGE = 'def emit_aarch64_darwin_asm(ir_text: str, optimize: bool = True) -> str:\n    # ``ir_text`` is a borrowed function parameter.  The self-compiled path\n    # forwards it through the prepare/parser stack.  Keep this wrapper short:\n    # the prepared module crosses the next call as an owned return value, while\n    # the large source string no longer shares a frame with every emit pass.\n    owned_ir_text = ir_text + ""\n    _emit_trace("prepare begin bytes=" + str(len(owned_ir_text)))\n    prepared = prepare_module_for_target(\n        owned_ir_text,\n        aggregate_returned_indirect=_aggregate_returned_indirect,\n        aggregate_returned_indirect_indexed=(\n            _aggregate_returned_indirect_indexed\n        ),\n        materialize_legacy_slots=False,\n    )\n    _emit_trace("prepare end")\n    return _emit_prepared_aarch64_darwin_module(\n        prepared,\n        optimize,\n        profile_ir_text=owned_ir_text,\n    )\n'
+# Frozen3957 operational function; parsed as an oracle, never executed.
+_ARM_PREIMAGE = 'def emit_aarch64_darwin_asm(ir_text: str, optimize: bool = True) -> str:\n    # ``ir_text`` is a borrowed function parameter.  The self-compiled path\n    # forwards it through the prepare/parser stack.  Keep this wrapper short:\n    # the prepared module crosses the next call as an owned return value, while\n    # the large source string no longer shares a frame with every emit pass.\n    owned_ir_text = ir_text + ""\n    _emit_trace("prepare begin bytes=" + str(len(owned_ir_text)))\n    prepared = prepare_module_for_target(\n        owned_ir_text,\n        aggregate_returned_indirect=_aggregate_returned_indirect,\n        aggregate_returned_indirect_indexed=(\n            _aggregate_returned_indirect_indexed\n        ),\n        materialize_legacy_slots=False,\n        source_debug=True,\n    )\n    _emit_trace("prepare end")\n    return _emit_prepared_aarch64_darwin_module(\n        prepared,\n        optimize,\n        profile_ir_text=owned_ir_text,\n    )\n'

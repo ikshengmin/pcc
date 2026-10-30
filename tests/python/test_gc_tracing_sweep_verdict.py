@@ -14,24 +14,42 @@ import pytest
 SOURCE = Path(__file__).resolve().parents[2] / (
     "pcc/runtime/py/freestanding_gc_tracing_sweep_collector.py"
 )
+ABI_CONSTANTS = {
+    "object.type.class": next(
+        ast.literal_eval(node.value)
+        for node in ast.parse(
+            SOURCE.with_name("py_abi_constants.py").read_text(encoding="utf-8")
+        ).body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "PY_TYPE_CLASS"
+                for target in node.targets)
+    )
+}
 WHITE, BLACK, FINALIZED, CANDIDATE = 8, 32, 4, 1024
 
 
 class _SweepBoundary:
-    def __init__(self, *, backend=2):
+    def __init__(self, *, backend=2, held_epoch=-1, finish_epoch=-1):
         self.nodes = []
         self.roots = []
         self.events = []
         self.callbacks = {}
-        self.global_cells = {"pcc_gc_backend_selected": {0: backend}}
+        self.held_epoch = held_epoch
+        self.global_cells = {
+            "pcc_gc_backend_selected": {0: backend},
+            "pcc_gc_tracing_finish_stop_epoch": {0: finish_epoch},
+            "pcc_gc_user_finalizer_runs": {0: 0},
+        }
         self.forwardings = {}
         namespace = {
             "i64": int,
+            "abi_constant": ABI_CONSTANTS.__getitem__,
             "global_addr": self.global_cells.__getitem__,
             "global_load_ptr": lambda name: self.nodes[0] if self.nodes else None,
             "ptr_is_null": lambda ptr: int(ptr is None),
             "load_ptr": lambda ptr, offset: ptr[offset],
             "load_i32": lambda ptr, offset: ptr[offset],
+            "load_i64": lambda ptr, offset: ptr[offset],
             "store_i32": lambda ptr, offset, value: ptr.__setitem__(offset, value),
             "pcc_gc_object_node_is_active": lambda node: int(node["active"]),
             "pcc_gc_forwarding_index_find": lambda obj: self.forwardings.get(id(obj)),
@@ -40,6 +58,7 @@ class _SweepBoundary:
             "pcc_gc_seed_roots": self.seed_roots,
             "pcc_gc_drain_all_gray_unlocked": self.drain_roots,
             "py_user_del_dispatch": self.dispatch,
+            "pcc_thread_world_stop_epoch_held": lambda: self.held_epoch,
             "pcc_gc_tracing_clear_unreachable": self.clear,
             "pcc_gc_tracing_finalize_unreachable": self.reclaim,
         }
@@ -97,6 +116,10 @@ class _SweepBoundary:
         if obj[12] & FINALIZED:
             return
         obj[12] |= FINALIZED
+        # Every dispatched model finalizer represents user code, even when
+        # its body is empty. Already-finalized objects do not run it again.
+        runs = self.global_cells["pcc_gc_user_finalizer_runs"]
+        runs[0] += 1
         self.events.append("del:" + obj["name"])
         callback = self.callbacks.get(obj["name"])
         if callback is not None:
@@ -125,7 +148,7 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
     child["edges"] = [child]
     boundary.roots = [root]
     assert boundary.sweep(1) == 0
-    assert boundary.events == ["seed", "drain", "seed", "drain"]
+    assert boundary.events == ["seed", "drain"]
     assert child[12] & (CANDIDATE | FINALIZED) == 0
     assert child["weakref_live"]
     assert child["edges"] == [child]
@@ -200,9 +223,43 @@ def test_pinned_and_cext_finalizer_exclusions_are_preserved():
     pinned = boundary.object("pinned", pinned=True)
     boundary.object("cext", cext=True)
     assert boundary.sweep(2) == 1
-    assert boundary.events == ["seed", "drain", "seed", "drain", "weakref:cext",
+    assert boundary.events == ["seed", "drain", "weakref:cext",
                                "clear:cext", "free:cext"]
     assert pinned["weakref_live"] and pinned[12] & CANDIDATE == 0
+
+
+def test_same_stopped_world_without_user_finalizer_needs_no_recheck():
+    boundary = _SweepBoundary(held_epoch=7, finish_epoch=7)
+    boundary.object("cext", cext=True)
+    assert boundary.sweep(1) == 1
+    assert boundary.events == ["weakref:cext", "clear:cext", "free:cext"]
+    assert boundary.global_cells["pcc_gc_user_finalizer_runs"][0] == 0
+
+
+def test_changed_stop_epoch_rechecks_live_pending_candidate():
+    boundary = _SweepBoundary(held_epoch=8, finish_epoch=7)
+    child = boundary.object("child")
+    child["edges"] = [child]
+    boundary.roots = [child]
+    assert boundary.sweep(1) == 0
+    assert boundary.events == ["seed", "drain"]
+    assert child[12] & (CANDIDATE | FINALIZED) == 0
+    assert child["weakref_live"]
+    assert child["edges"] == [child]
+
+
+def test_same_stopped_world_finalizer_still_rechecks_resurrection():
+    boundary = _SweepBoundary(held_epoch=7, finish_epoch=7)
+    child = boundary.object("child")
+    child["edges"] = [child]
+    boundary.callbacks["child"] = lambda obj: boundary.roots.append(obj)
+    assert boundary.sweep(1) == 0
+    assert boundary.events == ["del:child", "seed", "drain"]
+    assert boundary.global_cells["pcc_gc_user_finalizer_runs"][0] == 1
+    assert child[12] & CANDIDATE == 0
+    assert child[12] & FINALIZED
+    assert child["weakref_live"]
+    assert child["edges"] == [child]
 
 
 def test_gc4_forwarding_shell_is_excluded_while_unrelated_dead_object_is_swept():

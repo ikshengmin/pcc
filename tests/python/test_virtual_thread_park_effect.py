@@ -1203,6 +1203,151 @@ def test_cross_module_may_park_method_uses_generator_abi_and_resumes(
     assert ran.stdout.strip() == "42"
 
 
+CROSS_MODULE_SHAPES_LEAF_SOURCE = '''import pcc.virtual_thread as vt
+
+LOG = []
+
+def parked_leaf(value: int) -> int:
+    saved: int = value + 1
+    vt.yield_now()
+    return saved + 1
+
+def parked_named(label: str, value: int = 5, *, scale: int = 1) -> str:
+    LOG.append(label + ":start")
+    vt.yield_now()
+    LOG.append(label + ":end")
+    return label + "=" + str(value * scale)
+
+def parked_fail(value: int) -> int:
+    vt.yield_now()
+    raise ValueError("leaf failed " + str(value))
+
+def parked_list(value: int) -> list:
+    vt.yield_now()
+    return [value, value + 1]
+'''
+
+
+CROSS_MODULE_SHAPES_MAIN_SOURCE = '''import pcc.virtual_thread as vt
+from park_shapes_leaf import parked_leaf, parked_named, parked_fail, parked_list, LOG
+
+def plain(value):
+    return value * 100
+
+def local_parked(value):
+    vt.yield_now()
+    return value * 1000
+
+def typed() -> int:
+    return parked_leaf(40) + 1
+
+def keywords() -> str:
+    return parked_named("kw", scale=3, value=2)
+
+def starred() -> str:
+    args = ("star", 7)
+    return parked_named(*args)
+
+def failing() -> str:
+    try:
+        parked_fail(9)
+    except ValueError as exc:
+        return "caught " + str(exc)
+    return "missed"
+
+def listed() -> list:
+    items = parked_list(3)
+    extra = parked_leaf(1)
+    items.append(extra)
+    return items
+
+def interleave_a() -> str:
+    return parked_named("a")
+
+def interleave_b() -> str:
+    return parked_named("b")
+
+def main() -> None:
+    global parked_leaf
+    t = vt.spawn(typed)
+    vt.run(1, 64)
+    print(vt.result(t))
+    t = vt.spawn(keywords)
+    vt.run(1, 64)
+    print(vt.result(t))
+    t = vt.spawn(starred)
+    vt.run(1, 64)
+    print(vt.result(t))
+    t = vt.spawn(failing)
+    vt.run(1, 64)
+    print(vt.result(t))
+    t = vt.spawn(listed)
+    vt.run(1, 64)
+    print(vt.result(t))
+    first = vt.spawn(interleave_a)
+    second = vt.spawn(interleave_b)
+    vt.run(1, 64)
+    print(vt.result(first), vt.result(second), LOG[-4:])
+    parked_leaf = plain
+    t = vt.spawn(typed)
+    vt.run(1, 64)
+    print(vt.result(t))
+    parked_leaf = local_parked
+    t = vt.spawn(typed)
+    vt.run(1, 64)
+    print(vt.result(t))
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def test_cross_module_may_park_import_keeps_call_semantics(tmp_path: Path) -> None:
+    """An imported may-park callee resumes, and its live binding still rules.
+
+    The call reads the import binding when it runs: the provider's function
+    is driven through the resumable caller (with keywords, a star argument,
+    an exception and two interleaved callers), a rebinding to a plain
+    function returns that function's value, and a rebinding to a local
+    parking function is driven like the original.
+    """
+    from pcc.frontends.python.pipeline import compile_python_multi
+
+    leaf = tmp_path / "park_shapes_leaf.py"
+    main = tmp_path / "park_shapes_main.py"
+    executable = tmp_path / "park_shapes_multi"
+    leaf.write_text(CROSS_MODULE_SHAPES_LEAF_SOURCE, encoding="utf-8")
+    main.write_text(CROSS_MODULE_SHAPES_MAIN_SOURCE, encoding="utf-8")
+    compile_python_multi(
+        [str(leaf), str(main)],
+        str(executable),
+        module_names=["park_shapes_leaf", "park_shapes_main"],
+        entry_module="park_shapes_main",
+        ir_scaffold_mode="on",
+        libpython_mode="off",
+    )
+    expected = [
+        "43",
+        "kw=6",
+        "star=7",
+        "caught leaf failed 9",
+        "[3, 4, 3]",
+        "a=5 b=5 ['a:start', 'b:start', 'a:end', 'b:end']",
+        "4001",
+        "40001",
+    ]
+    for backend in ("0", "1", "2", "3", "4"):
+        ran = subprocess.run(
+            [str(executable)],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            env={**os.environ, "PCC_GC_BACKEND": backend},
+        )
+        assert ran.returncode == 0, (backend, ran.stdout + ran.stderr)
+        assert ran.stdout.strip().splitlines() == expected, backend
+
+
 def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_abi(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -6,11 +6,19 @@ from pcc.frontends.c.ssa.builder import SSAConstructionError
 from pcc.frontends.c.ssa.ir import SSAJump
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def _build_function(source: str, name: str | None = None):
-    ast = _PARSER.parse(source)
+    ast = _get_parser().parse(source)
     builder = SSABuilder()
     builder.index_file_scope(ast)
     if name is None:
@@ -1270,7 +1278,7 @@ def test_ssa_builder_lowers_infinite_for_loop_with_early_return():
 
 def test_ssa_builder_rejects_non_local_incdec():
     with pytest.raises(SSAConstructionError, match="non-local"):
-        ast = _PARSER.parse(
+        ast = _get_parser().parse(
             """
             int g;
             int f(void) {

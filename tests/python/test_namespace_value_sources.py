@@ -13,6 +13,7 @@ from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.py_ast import Attr, DynType, Name
 from pcc.frontends.python.py_lift import parse_and_lift
 from pcc.frontends.python.type_infer import infer_module
+from tests.python.root_copy_ir import root_copy_calls
 
 
 def _emit(source, mode="on", exports=None, siblings=()):
@@ -67,7 +68,8 @@ def test_shadowed_builtin_values_use_their_local_owner(name):
     body = _body(_emit("def probe(" + name + "):\n    return str(" + name + ")\n"))
     assert not re.search(r"call [^\n]*@py_builtin_type_for_tag\(", body)
     assert "@py_NotImplemented" not in body
-    assert re.search(r"call [^\n]*@pcc_gc_root_copy_borrowed_lease\(", body)
+    assert any(copy.source.startswith("%" + name + ".addr") for copy in
+               root_copy_calls(body, local=True, borrowed=True))
 
 
 @pytest.mark.parametrize("name", ("dict", "NotImplemented"))
@@ -232,7 +234,10 @@ def test_explicit_raw_attribute_keeps_its_unmanaged_projection():
     expr = Attr(span=None, ty=RawPointerType(name="pcc.extern.c_rawptr"),
                 obj=Name(span=None, ty=DynType(name="dyn"), ident="values"), name="ADDRESS")
     raw = object()
-    probe = SimpleNamespace(_maybe_emit_ir_scaffold_symbol_value=lambda _: raw)
+    probe = SimpleNamespace(
+        _is_method_super_call=lambda _: False,
+        _maybe_emit_ir_scaffold_symbol_value=lambda _: raw,
+    )
     # No root API exists: an explicit raw lane must bypass managed publication.
     assert L1CodeGen._emit_attr(probe, expr) is raw
 
@@ -266,7 +271,9 @@ def test_dir_result_uses_registered_output_slot_at_every_consumer(site):
     call = re.search(r"call [^\n]*@py_obj_dir_slots\(ptr (%[^,]+), ptr ([^)]+)\)", text)
     assert call, text
     assert call.group(1) != call.group(2)
-    assert text.index("@pcc_gc_root_copy_borrowed_lease") < call.start()
+    copies = root_copy_calls(text, local=True, borrowed=True)
+    assert any(copy.source.startswith("%module.addr")
+               and text.index(copy.line) < call.start() for copy in copies)
     assert "strict.nolib.stub" not in text
     assert not re.search(r"call [^\n]*@py_cpy_", text)
 

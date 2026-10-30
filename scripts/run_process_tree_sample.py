@@ -58,6 +58,126 @@ _MIN_PRESSURED_SWAP_FREE_BYTES = 4 * _GIB
 # fails closed on a genuinely memory-starved host.
 _SWAP_PRESSURE_RECLAIMABLE_MARGIN = 2
 _DARWIN_PROC_PIDINFO = None
+_PROCESS_RSS_HISTORY_MAX_BYTES = 32 * 1024 * 1024
+_PROCESS_RSS_HISTORY_MAX_SAMPLES = 32768
+
+
+class _ProcessRssHistory:
+    """Optional bounded retention, never a new sampler or an admission input.
+
+    Only one JSONL frame is assembled at a time. ``samples_written`` and
+    ``complete_bytes`` cover fully flushed frames; write failure can leave an
+    incomplete final line for readers to discard. ``complete`` describes
+    retention, not the target's outcome.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.stream = None
+        self.created = False
+        self.closed = False
+        self.status = "recording"
+        self.samples_seen = 0
+        self.samples_written = 0
+        self.samples_produced = None
+        self.complete_bytes = 0
+        self.reason = ""
+        self.error_type = ""
+
+    def _stop(self, status: str, reason: str, error=None) -> None:
+        self.status = status
+        self.reason = reason
+        self.error_type = "" if error is None else type(error).__name__
+        # An optional evidence warning must not mask the original guard result,
+        # including when the supervisor's own stderr is no longer writable.
+        with contextlib.suppress(Exception):
+            print(
+                "process RSS history " + status + ": " + reason
+                + (" (" + self.error_type + ")" if self.error_type else ""),
+                file=sys.stderr, flush=True,
+            )
+
+    def record(self, sampled_at, sample, tree, observed_processes) -> None:
+        self.samples_seen += 1
+        if self.status != "recording":
+            return
+        if self.samples_written >= _PROCESS_RSS_HISTORY_MAX_SAMPLES:
+            self._stop("truncated", "sample_limit")
+            return
+        operation = "encode"
+        try:
+            frame = {
+                "schema": "pcc.process-rss-history.v1",
+                "sample_index": self.samples_seen - 1,
+                "sampled_at_monotonic_s": sampled_at,
+                "elapsed_s": sample["elapsed_s"],
+                "platform": sys.platform,
+                "tree_rss_bytes": sample["tree_rss_bytes"],
+                "process_count": sample["process_count"],
+                "processes": [
+                    {
+                        "pid": pid, "ppid": row[0], "rss_bytes": row[1],
+                        "session_id": observed_processes[pid].session_id,
+                        "identity_parent_pid": observed_processes[pid].parent_pid,
+                        "process_start_time": list(observed_processes[pid].start_time),
+                    }
+                    for pid, row in tree.items()
+                ],
+            }
+            data = (json.dumps(frame, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+            if len(data) > _PROCESS_RSS_HISTORY_MAX_BYTES - self.complete_bytes:
+                self._stop("truncated", "byte_limit")
+                return
+            if self.stream is None:
+                operation = "open"
+                # Never replace an existing artifact or follow its symlink.
+                self.stream = self.path.open("xb")
+                self.created = True
+            operation = "write"
+            if self.stream.write(data) != len(data):
+                raise OSError("short process RSS history write")
+            operation = "flush"
+            self.stream.flush()
+            self.complete_bytes += len(data)
+            self.samples_written += 1
+        except Exception as exc:
+            self._stop("write_failed", operation, exc)
+
+    def close(self, *, samples_produced=None) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        self.samples_produced = (
+            self.samples_seen if samples_produced is None else samples_produced
+        )
+        if self.stream is not None:
+            try:
+                self.stream.close()
+            except Exception as exc:
+                self._stop("write_failed", "close", exc)
+        if self.status == "recording":
+            if self.samples_produced > self.samples_seen:
+                self._stop("incomplete", "unrecorded_produced_samples")
+            else:
+                self.status = "complete"
+
+    def receipt(self) -> dict[str, object]:
+        return {
+            "schema": "pcc.process-rss-history.v1", "path": str(self.path),
+            "status": self.status, "reason": self.reason,
+            "error_type": self.error_type,
+            "max_bytes": _PROCESS_RSS_HISTORY_MAX_BYTES,
+            "max_samples": _PROCESS_RSS_HISTORY_MAX_SAMPLES,
+            "samples_seen": self.samples_seen, "samples_written": self.samples_written,
+            "samples_produced": self.samples_produced,
+            "samples_missed": (
+                None if self.samples_produced is None
+                else max(0, self.samples_produced - self.samples_seen)
+            ),
+            "complete_bytes": self.complete_bytes,
+            "scope": "sampled owned-process RSS; not exact peaks or admission-consumption evidence",
+            "completion_scope": "all produced samples retained, independent of target outcome",
+        }
 
 
 class _ProcessIdentity(NamedTuple):
@@ -1233,6 +1353,10 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     interrupted = False
     memory_limited = False
     sampler_error = ""
+    process_rss_history = (
+        _ProcessRssHistory(Path(str(result_path) + ".process-rss.jsonl"))
+        if getattr(args, "process_rss_history", False) else None
+    )
     largest_process_observed: dict[str, object] = {
         "pid": 0,
         "ppid": 0,
@@ -1268,6 +1392,10 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             _terminate_owned_processes(process, observed_processes)
 
     with contextlib.ExitStack() as launch_context:
+        if process_rss_history is not None:
+            launch_context.callback(
+                lambda: process_rss_history.close(samples_produced=len(samples))
+            )
         try:
             launch_context.enter_context(lock_context)
         except Exception as exc:
@@ -1312,6 +1440,10 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     )
                     process_table_retry_count += retries
                     tree = _owned_tree_rows(table, observed_processes)
+                    history_identities = (
+                        {pid: observed_processes[pid] for pid in tree}
+                        if process_rss_history is not None else None
+                    )
                     known_pids.update(tree)
                     tree_rss = sum(row[1] for row in tree.values())
                     if args.max_tree_rss_bytes > 0:
@@ -1416,44 +1548,53 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                                 ),
                             }
                         )
+                        if process_rss_history is not None:
+                            payload["process_rss_history"] = process_rss_history.receipt()
                         _persist(result_path, payload)
-                    if (
-                        args.max_tree_rss_bytes > 0
-                        and tree_rss > args.max_tree_rss_bytes
-                    ):
-                        memory_limited = True
-                        terminate_with_evidence()
-                        returncode = process.returncode
-                        break
-                    returncode = process.poll()
-                    if returncode is not None:
-                        # A wrapper can exit while one of its children keeps
-                        # running in a different process group. Only select
-                        # recorded live sessions, including private sessions
-                        # created by nested build harnesses.
-                        after_exit, retries = _process_table(
-                            timeouts_s=process_table_timeouts,
-                            include_command=False,
-                        )
-                        process_table_retry_count += retries
-                        remaining = _owned_session_pids(
-                            process.pid, observed_processes, after_exit,
-                        )
-                        if remaining:
-                            known_pids.update(remaining)
-                            payload["post_exit_cleanup_pids"] = sorted(remaining)
+                    try:
+                        if (
+                            args.max_tree_rss_bytes > 0
+                            and tree_rss > args.max_tree_rss_bytes
+                        ):
+                            memory_limited = True
                             terminate_with_evidence()
-                        break
-                    if _INTERRUPT_REQUESTED:
-                        interrupted = True
-                        terminate_with_evidence()
-                        returncode = process.returncode
-                        break
-                    if now >= deadline:
-                        timed_out = True
-                        terminate_with_evidence()
-                        returncode = process.returncode
-                        break
+                            returncode = process.returncode
+                            break
+                        returncode = process.poll()
+                        if returncode is not None:
+                            # A wrapper can exit while one of its children keeps
+                            # running in a different process group. Only select
+                            # recorded live sessions, including private sessions
+                            # created by nested build harnesses.
+                            after_exit, retries = _process_table(
+                                timeouts_s=process_table_timeouts,
+                                include_command=False,
+                            )
+                            process_table_retry_count += retries
+                            remaining = _owned_session_pids(
+                                process.pid, observed_processes, after_exit,
+                            )
+                            if remaining:
+                                known_pids.update(remaining)
+                                payload["post_exit_cleanup_pids"] = sorted(remaining)
+                                terminate_with_evidence()
+                            break
+                        if _INTERRUPT_REQUESTED:
+                            interrupted = True
+                            terminate_with_evidence()
+                            returncode = process.returncode
+                            break
+                        if now >= deadline:
+                            timed_out = True
+                            terminate_with_evidence()
+                            returncode = process.returncode
+                            break
+                    finally:
+                        # Preserve this iteration's decision order and clock.
+                        # Synchronous evidence I/O can delay later samples and
+                        # therefore subsequent cap/timeout enforcement.
+                        if process_rss_history is not None:
+                            process_rss_history.record(sampled_at, sample, tree, history_identities)
                     time.sleep(args.interval)
             except KeyboardInterrupt:
                 terminate_with_evidence()
@@ -1503,6 +1644,10 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     )
     if sampler_error:
         payload["error"] = sampler_error
+    if process_rss_history is not None:
+        payload["process_rss_history"] = process_rss_history.receipt()
+        if process_rss_history.created:
+            payload["artifacts"]["process_rss_history"] = str(process_rss_history.path)
     if worker_manifest_evidence is not None:
         payload["worker_manifest_evidence"] = worker_manifest_evidence
     if terminal_argv_evidence is not None:
@@ -1533,6 +1678,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, required=True)
     parser.add_argument("--interval", type=float, default=0.25)
     parser.add_argument("--progress-interval", type=float, default=30.0)
+    parser.add_argument(
+        "--process-rss-history", action="store_true",
+        help="retain already-sampled process rows in a bounded optional JSONL sidecar",
+    )
     tree_cap = parser.add_mutually_exclusive_group()
     tree_cap.add_argument(
         "--max-tree-rss-bytes",

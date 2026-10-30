@@ -19,6 +19,19 @@ def emit(func, dest, ret_type, callee, args, windows=False):
         return result
     if callee == "llvm.assume":
         return []
+    if callee in ("llvm.threadlocal.address", "llvm.threadlocal.address.p0"):
+        from .self_backend_x86_64_linux import _materialize_global_address, _tls_global
+
+        if (len(args) != 1 or not ret_type.is_ptr or not args[0][0].is_ptr
+                or not args[0][1].startswith("@") or _tls_global(args[0][1]) is None):
+            raise BackendUnavailable(
+                "llvm.threadlocal.address requires one thread-local global pointer"
+            )
+        if dest is None or dest not in func.value_slots:
+            return []
+        lines = _materialize_global_address(args[0][1], "r11")
+        lines.extend(_store_reg_to_slot("r11", func.value_slots[dest].offset, ret_type))
+        return lines
     if callee.startswith("llvm.frameaddress."):
         # Every prologue pushes the caller's rbp and points rbp at it.
         if len(args) != 1 or args[0][1] != "0":

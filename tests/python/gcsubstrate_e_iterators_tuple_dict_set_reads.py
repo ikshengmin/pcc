@@ -490,11 +490,16 @@ def test_backend4_dict_read_hash_and_equality_callbacks_reload_relocated_owner(
 def test_set_contains_uses_rooted_restartable_hash_equality_lookup():
 
     py_source = (RUNTIME_DIR / "py" / "py_set.py").read_text(encoding="utf-8")
-    py_read = py_source.split("def _set_lookup_rooted(s, item, mode: int) -> int:", 1)[
-        1
-    ].split("def _rehash_find_empty_slot", 1)[0]
+    py_read = py_source.split(
+        "def _set_lookup_rooted(s, item, mode: int, hash_val: int, "
+        "hash_known: int) -> int:",
+        1,
+    )[1].split("def _rehash_find_empty_slot", 1)[0]
     assert py_read.count("_set_read_prepare_root(") == 3
-    hash_at = py_read.index("hash_val: int = py_obj_hash(item)")
+    # A caller that already hashed the item passes the hash in; otherwise
+    # the lookup hashes the rooted item and reloads both roots afterwards.
+    hash_at = py_read.index("hash_val = py_obj_hash(item)")
+    assert py_read.index("if hash_known == 0:") < hash_at
     assert py_read.index("_set_read_reload_root(set_slot", hash_at) > hash_at
     eq_at = py_read.index("equal: int = py_obj_eq(entry_key, item)")
     assert py_read.index("_set_read_reload_root(set_slot", eq_at) > eq_at
@@ -664,7 +669,7 @@ def test_set_remove_commits_tombstone_and_size_before_decref_finish():
     )[0]
     plan = py_remove.index("pcc_gc_store_ptr_plan_init")
     lock = py_remove.index("pcc_py_gc_minor_graph_lock()", plan)
-    commit = py_remove.index("pcc_gc_store_ptr_plan_commit_locked", lock)
+    commit = py_remove.index("pcc_gc_store_ptr_plan_commit_sentinel_aware_locked", lock)
     size = py_remove.index("store_i64(s, 16, size - 1)", commit)
     unlock = py_remove.index("pcc_py_gc_minor_graph_unlock()", size)
     finish = py_remove.index("pcc_gc_store_ptr_plan_finish", unlock)
@@ -679,7 +684,7 @@ def test_set_add_commits_key_hash_and_counters_under_graph_lock():
     )[0]
     plan = py_add.index("pcc_gc_store_ptr_plan_init")
     lock = py_add.index("pcc_py_gc_minor_graph_lock()", plan)
-    commit = py_add.index("pcc_gc_store_ptr_plan_commit_locked", lock)
+    commit = py_add.index("pcc_gc_store_ptr_plan_commit_sentinel_aware_locked", lock)
     entry_hash = py_add.index("store_i64(entries, slot_off, hash_val)", commit)
     size = py_add.index("store_i64(s, 16, size + 1)", entry_hash)
     unlock = py_add.index("pcc_py_gc_minor_graph_unlock()", size)
@@ -951,9 +956,7 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
         threaded=True,
         stem="backend4_set_remove_split_commit",
         source_text=(
-            "#define PCC_PROBE_STRICT "
-            + ("1\n")
-            + r'''
+            r'''
             #include "Python.h"
             #include <stdint.h>
 
@@ -1067,13 +1070,10 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
                 if (pcc_gc_backend4_remap_and_retire_stopped_world() <= 0) {
                     return 14;
                 }
-#if PCC_PROBE_STRICT
-                if (dealloc_count != 0) return 10;
-                if (observed_len != -1 || observed_contains != -1) return 11;
-#else
+                // The set held the only reference: removal deallocates the key
+                // at once, and its finalizer already sees the committed absence.
                 if (dealloc_count != 1) return 10;
                 if (observed_len != 0 || observed_contains != 0) return 11;
-#endif
                 if (pcc_gc_scheduler_root_count() != 1) return 12;
                 Py_DECREF(query_key);
                 set_root = pcc_gc_load_ptr(NULL, &set_root);

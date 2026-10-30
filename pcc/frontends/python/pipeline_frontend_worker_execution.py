@@ -42,7 +42,7 @@ def _direct_owned_pass_names(module_name: str) -> list[str]:
     return names
 
 
-def _release_direct_frontend_state(codegen) -> None:
+def _release_direct_frontend_state(codegen, collect: bool = True) -> None:
     """Release frontend-only graphs after the direct module is frozen."""
     frontend_module = codegen.module
     frontend_module._functions.clear()
@@ -60,9 +60,10 @@ def _release_direct_frontend_state(codegen) -> None:
     # Function <-> Block and codegen <-> ClassLowering are intentional host
     # object cycles.  The direct backend owns only compact seed/kernel data;
     # collect the now-unreachable frontend graph before it competes for cache.
-    import gc
+    if collect:
+        import gc
 
-    gc.collect()
+        gc.collect()
 
 
 def _freeze_worker_survivors() -> None:
@@ -179,6 +180,7 @@ def run_export_worker(
     mark_function_object_exports,
     write_native_exports_wire,
     write_reexport_edges_wire,
+    owned_export_metadata=None,
 ) -> int:
     import gc
 
@@ -198,6 +200,7 @@ def run_export_worker(
             mark_function_object_exports=mark_function_object_exports,
             write_native_exports_wire=write_native_exports_wire,
             write_reexport_edges_wire=write_reexport_edges_wire,
+            owned_export_metadata=owned_export_metadata,
         )
     finally:
         if collector_was_enabled:
@@ -246,6 +249,7 @@ def _run_export_worker(
     mark_function_object_exports,
     write_native_exports_wire,
     write_reexport_edges_wire,
+    owned_export_metadata=None,
 ) -> int:
     worker_timing = worker_timing_enabled()
     total_started = time.monotonic() if worker_timing else 0.0
@@ -279,19 +283,27 @@ def _run_export_worker(
         subset_srcs,
         module_names,
     )
-    module_dependencies = closed_world_module_dependencies(
-        parsed_modules,
-        subset_names,
-        subset_srcs,
-        module_names,
-    )
-    function_object_uses = mark_function_object_exports(
-        parsed_modules,
-        subset_names,
-        subset_srcs,
-        native_exports,
-        known_module_names=module_names,
-    )
+    owned_metadata = None
+    if owned_export_metadata is not None:
+        owned_metadata = owned_export_metadata(
+            parsed_modules, subset_names, subset_srcs, module_names, native_exports,
+        )
+    if owned_metadata is None:
+        module_dependencies = closed_world_module_dependencies(
+            parsed_modules,
+            subset_names,
+            subset_srcs,
+            module_names,
+        )
+        function_object_uses = mark_function_object_exports(
+            parsed_modules,
+            subset_names,
+            subset_srcs,
+            native_exports,
+            known_module_names=module_names,
+        )
+    else:
+        module_dependencies, function_object_uses = owned_metadata
     exports_path = os.path.join(
         ir_dir,
         "exports_" + os.path.basename(result_path) + ".json",
@@ -871,7 +883,9 @@ def run_codegen_worker(
                                 # for the ordinary IR/result protocol, but AST,
                                 # frontend owners and their cycles can die now.
                                 phase_started = phase_timing.start() if phase_timing is not None else 0
-                                _release_direct_frontend_state(codegen)
+                                # Collect once below, after the final local
+                                # owners are gone, rather than before and after.
+                                _release_direct_frontend_state(codegen, collect=False)
                                 parsed_modules[index] = None
                                 del ast_module
                                 del typed_module
@@ -942,7 +956,7 @@ def run_codegen_worker(
                             direct_transport = (
                                 emit_aarch64_darwin_indexed_transport(
                                     direct_module,
-                                    optimize=False,
+                                    optimize=True,
                                     # Both host and native workers emit final
                                     # machine records through the owned encoder.
                                     structured_instructions=True,
@@ -987,7 +1001,7 @@ def run_codegen_worker(
                             phase_started = phase_timing.start() if phase_timing is not None else 0
                             direct_asm = emit_indexed_assembly(
                                 direct_module,
-                                optimize=False,
+                                optimize=True,
                                 stack_map_plans_out=(
                                     direct_stack_map_plans
                                     if direct_packed_stack_maps else None
@@ -1156,7 +1170,7 @@ def run_codegen_worker(
                         from pcc.backend.self_backend_parse import parse_self_backend_target_triple
                         text_target = parse_self_backend_target_triple(ir_text)
                         if is_aarch64_darwin_triple(text_target) or text_target == "unknown-unknown-unknown":
-                            text_asm = emit_aarch64_darwin_asm(ir_text, optimize=False)
+                            text_asm = emit_aarch64_darwin_asm(ir_text, optimize=True)
                         else:
                             text_asm = emit_self_asm(ir_text)
                         if worker_timing:

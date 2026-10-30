@@ -29,7 +29,7 @@ def test_iterator_results_publish_before_cleanup(expression, site):
     body = _function(text)
     assert 'strict.nolib.stub' not in text
     calls = list(re.finditer(
-        r'(%[^ ]+) = call ptr [^\n]*@py_(?:obj_iter|obj_next|iter_callable_new)\([^\n]*\)\n', body,
+        r'(%[^ ]+) = call ptr [^\n]*@py_(?:obj_iter|obj_next|obj_iter_next|iter_callable_new)\([^\n]*\)\n', body,
     ))
     assert calls, body
     for call in calls:
@@ -46,7 +46,7 @@ def test_next_evaluates_default_before_advancing():
         'def probe():\n    return next(source(), default())\n'
     ))
     assert body.index('@user_binding_source(') < body.index('@user_binding_default(')
-    assert body.index('@user_binding_default(') < body.index('@py_obj_next(')
+    assert body.index('@user_binding_default(') < body.index('@py_obj_iter_next(')
 
 
 def test_filter_evaluates_predicate_then_iterable_then_default():
@@ -59,7 +59,7 @@ def test_filter_evaluates_predicate_then_iterable_then_default():
     ))
     positions = [body.index(symbol) for symbol in (
         '@user_binding_factory(', '@user_binding_source(', '@py_obj_iter(',
-        '@user_binding_default(', '@py_obj_next(', '@py_obj_call(',
+        '@user_binding_default(', '@py_obj_iter_next(', '@py_obj_call(',
     )]
     assert positions == sorted(positions)
 

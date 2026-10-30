@@ -26,6 +26,8 @@ from pcc.extern import (
 )
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_CLASS_ATTRS_EXPOSED,
+    PY_FLAG_CLASS_DICT_SUBCLASS,
+    PY_FLAG_CLASS_SLOTS_ONLY,
     PY_FLAG_FUNC_BUILTIN,
     PY_TYPE_NONE,
     PYSTROBJECT_BYTE_LEN_OFFSET,
@@ -213,6 +215,8 @@ py_str_tailmatch_range = extern(
     "py_str_tailmatch_range", (c_ptr, c_ptr, c_int64, c_int64, c_int64), c_int64
 )
 py_str_count_range = extern("py_str_count_range", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_str_find_range = extern("py_str_find_range", (c_ptr, c_ptr, c_int64, c_int64), c_int64)
+py_str_len = extern("py_str_len", (c_ptr,), c_int64)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
 pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
@@ -331,9 +335,8 @@ def _ptr_is_class_of_validated_instance(cls) -> bool:
 
     The caller has just proved `o` is a managed object whose type tag says
     instance.  `py_instance_new` only ever stores a validated class there, the
-    slot is documented as a borrowed uncounted class pointer, and classes carry
-    PY_FLAG_IMMORTAL -- so reading this header is safe on the strength of the
-    instance being valid.  Probing again cost a second lock plus hash probe on
+    slot holds a counted reference (py_instance_dealloc releases it last) -- so
+    reading this header is safe on the strength of the instance being valid.  Probing again cost a second lock plus hash probe on
     the hottest path in the runtime: every attribute access and method dispatch
     ran `_ptr_is_instance`, which paid the probe once for the instance and once
     more for its class.
@@ -374,7 +377,8 @@ def _dealloc_ptr_is_instance(o) -> bool:
     # so the radix-walk ``_ptr_can_have_header`` probe is skipped.
     o = pcc_gc_note_relocation_read(o)
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag != PY_TYPE_INSTANCE:
+    # A valuebox is an instance of its class too, with the same layout.
+    if tag != PY_TYPE_INSTANCE and tag != PY_TYPE_VALUEBOX:
         if tag < PY_TYPE_USER_CLASS_START:
             return False
     cls = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
@@ -1294,7 +1298,7 @@ def _attr_res_store_dict_only(cls, name, epoch: int) -> None:
     nothing from the class, so no method, ``__getattr__`` or dict-subclass
     fallback may exist. The class epoch retires the entry when that changes.
     """
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         return
     if ptr_is_null(_class_lookup_in_mro(cls, name)) == 0:
         return
@@ -1475,7 +1479,7 @@ def _dynamic_attr_slot(inst):
         return null()
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (flags & 2) != 0:
+    if (flags & PY_FLAG_CLASS_SLOTS_ONLY) != 0:
         return null()
     return _instance_reserved_owner_slot(inst, cls)
 
@@ -1498,7 +1502,7 @@ def _copy_instance_reserved_owner(obj, dst, cls) -> None:
 def _instance_dict_of(inst, cls):
     """The instance dict of a validated instance of `cls` (borrowed), or NULL:
     `_dynamic_attr_slot` without validating `inst` a second time."""
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_SLOTS_ONLY) != 0:
         return null()
     n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if n_fields < 0:
@@ -2652,8 +2656,8 @@ def py_class_set_metaclass(cls, metaclass) -> None:
         if not _ptr_is_class(metaclass):
             return
         metaclass = pcc_gc_note_relocation_read(metaclass)
-    # A metaclass is a real class owner, even while user classes remain
-    # immortal. The retaining store also retires the previous relation.
+    # A metaclass is a counted class owner. The retaining store also retires
+    # the previous relation.
     pcc_gc_store_ptr(
         cls, ptr_add(cls, PYCLASSOBJECT_METACLASS_OFFSET), metaclass,
     )
@@ -2685,6 +2689,9 @@ def py_instance_new(cls) -> c_ptr:
     type_tag_alloc: int = load_i32(cls, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET)
     store_i32(inst, PYOBJECTHEADER_TYPE_TAG_OFFSET, type_tag_alloc)
     store_ptr(inst, PYINSTANCEOBJECT_CLS_OFFSET, cls)
+    # An instance owns its class, as a CPython object owns its heap type;
+    # py_instance_dealloc releases it last.
+    py_incref(cls)
     py_gc_track(inst)
     # The freshly allocated instance is already a new reference; keep this as
     # a raw pointer expression so return lowering does not retain it again.
@@ -3278,11 +3285,11 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         return py_instance_bind_method(method, inst, name)
     # dict-subclass inherited method fallback (get / keys / values / items /
     # pop / setdefault / clear). User methods/attrs above win; this only fires
-    # for names the user class did not define. PY_CLASS_FLAG_DICT_SUBCLASS is
-    # bit 2 (value 4) in the class header flags at offset 12. Returns a bound
-    # native callable, or NULL -> fall through to __getattr__ / AttributeError.
+    # for names the user class did not define (PY_FLAG_CLASS_DICT_SUBCLASS).
+    # Returns a bound native callable, or NULL -> fall through to __getattr__
+    # / AttributeError.
     ds_flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (ds_flags & 4) != 0:
+    if (ds_flags & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         dm = py_dict_subclass_getattr(inst, name)
         if ptr_is_null(dm) == 0:
             return dm
@@ -3309,7 +3316,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
     if py_err_occurred() != 0:
         return null()
     if ptr_is_null(getattr_method) != 0:
-        if (ds_flags & 4) == 0 and idx < 0:
+        if (ds_flags & PY_FLAG_CLASS_DICT_SUBCLASS) == 0 and idx < 0:
             # No class attribute, field or method answered and the instance
             # dict (checked above) did not either.
             _attr_res_store(cls, name, _ATTR_RES_ABSENT, 0, outcome_epoch)
@@ -4119,7 +4126,7 @@ def _object_getstate_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     if _object_call_check(slots, cstr("__getstate__"), 1, 0) == 0:
         receiver = load_ptr(slots, 0)
         cls = _object_receiver_class(receiver)
-        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) != 0:
+        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_SLOTS_ONLY) != 0:
             py_raise_owned(py_exc_new(11, cstr(
                 "object.__getstate__() of a __slots__ instance is not implemented natively")))
         else:
@@ -4411,7 +4418,7 @@ def _mro_builtin_defines(cls, name) -> int:
     """Whether a builtin base of ``cls`` (dict included) defines ``name`` in CPython."""
     if not _ptr_is_class(cls):
         return 0
-    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+    if (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         if _names_contain(_builtin_type_names(PY_TYPE_DICT), name) != 0:
             return 1
     n_mro: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
@@ -4806,7 +4813,7 @@ def _dict_member_storage(receiver, kind: int, name):
         return receiver
     if _ptr_is_instance(receiver):
         cls = _object_receiver_class(receiver)
-        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
             return py_dict_subclass_storage(receiver, 1)
     if py_err_occurred() == 0:
         _member_receiver_error(kind, cstr("dict"), name, receiver)
@@ -4820,7 +4827,7 @@ def _dict_like_storage(value):
         return value
     if _ptr_is_instance(value):
         cls = _object_receiver_class(value)
-        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+        if ptr_is_null(cls) == 0 and (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
             return py_dict_subclass_storage(value, 1)
     return null()
 
@@ -5471,7 +5478,7 @@ def _builtin_mro_member(cls, name, include_type: int):
     if include_type != 0 and ptr_eq(cls, global_load_ptr("pcc_type_cls_dict")) != 0:
         return _builtin_namespace_get(2, name)
     flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (flags & 4) != 0:
+    if (flags & PY_FLAG_CLASS_DICT_SUBCLASS) != 0:
         return _builtin_namespace_get(2, name)
     if ((flags & 16777216) == 0 and include_type == 0) or _names_contain(_builtin_namespace_names(0), name) == 0:
         return null()
@@ -5629,7 +5636,7 @@ def py_super_getattr(start_cls, from_cls, receiver, name):
     blocked = null()
     blocked_name = null()
     root = global_load_ptr("py_object_root_cache")
-    dict_base: int = load_i32(start_cls, PYOBJECTHEADER_FLAGS_OFFSET) & 4
+    dict_base: int = load_i32(start_cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS
     j: int = start + 1
     while ptr_is_null(found) != 0 and ptr_is_null(blocked) != 0 and j < n_mro:
         m = pcc_gc_load_ptr(start_cls, ptr_add(mro, j * C_POINTER_SIZE))
@@ -5715,8 +5722,17 @@ def py_class_dealloc(o) -> None:
     if ptr_is_null(attrs) == 0:
         store_ptr(o, PYCLASSOBJECT_ATTRS_OFFSET, null())
         py_decref(attrs)
+    # The class owns its bases (py_class_new), as CPython's tp_bases.
     bases = load_ptr(o, PYCLASSOBJECT_BASES_OFFSET)
     if ptr_is_null(bases) == 0:
+        store_ptr(o, PYCLASSOBJECT_BASES_OFFSET, null())
+        n_bases: int = load_i32(o, PYCLASSOBJECT_N_BASES_OFFSET)
+        base_index: int = 0
+        while base_index < n_bases:
+            base = pcc_gc_load_ptr(bases, ptr_add(bases, base_index * C_POINTER_SIZE))
+            if ptr_is_null(base) == 0:
+                py_decref(base)
+            base_index = base_index + 1
         free(bases)
     mro = load_ptr(o, PYCLASSOBJECT_MRO_OFFSET)
     if ptr_is_null(mro) == 0:
@@ -5814,6 +5830,12 @@ def py_instance_dealloc(o) -> None:
         payload_slot = _instance_builtin_payload_slot(o, cls)
         if ptr_is_null(payload_slot) == 0:
             pcc_gc_store_ptr(o, payload_slot, null())
+        # Release the class (py_instance_new) once its layout is no longer
+        # read. Reload it: the releases above may have run code that moved it.
+        owner_class = pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
+        store_ptr(o, PYINSTANCEOBJECT_CLS_OFFSET, null())
+        if ptr_is_null(owner_class) == 0:
+            py_decref(owner_class)
     delayed_zpage_note: int = 0
     if _gc_backend_selected_fast() == 4:
         if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & 65536) != 0:
@@ -6041,10 +6063,6 @@ def _class_construct_finish(roots, borrowed, success: int):
         result = pcc_gc_load_ptr(null(), roots)
         prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
         pcc_gc_pin(result)
-    else:
-        value = pcc_gc_load_ptr(null(), roots)
-        if ptr_is_null(value) == 0:
-            atomic_rmw_i32("and", value, PYOBJECTHEADER_FLAGS_OFFSET, ~PY_FLAG_IMMORTAL, "relaxed")
     store_ptr(borrowed, 0, null())
     store_ptr(borrowed, 8, null())
     index: int = 4
@@ -6122,9 +6140,9 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
             py_raise_owned(py_exc_new(3, cstr("struct sequence type is not an acceptable base type")))
             return _class_construct_finish(roots, borrowed, 0)
         base_index = base_index + 1
-    # The class keeps its name for its immortal life, like the bases and
-    # field names copied below. type(name, bases, namespace) passes a str's
-    # bytes, which die or move with the str.
+    # The class keeps its own copies of its name, bases and field names for
+    # its life. type(name, bases, namespace) passes a str's bytes, which die
+    # or move with the str.
     own_name = null()
     if ptr_is_null(name) == 0:
         name_size: int = strlen(name) + 1
@@ -6145,7 +6163,6 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     memset(ptr_add(c, PYCLASSOBJECT_NAME_OFFSET), 0, PYCLASSOBJECT_SIZE - PYCLASSOBJECT_NAME_OFFSET)
     store_i64(c, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
     store_i32(c, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_CLASS)
-    store_i32(c, PYOBJECTHEADER_FLAGS_OFFSET, load_i32(c, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_IMMORTAL)
     store_ptr(c, PYCLASSOBJECT_NAME_OFFSET, own_name)
     store_i32(c, PYCLASSOBJECT_N_BASES_OFFSET, n_bases)
     store_i32(c, PYCLASSOBJECT_N_FIELDS_OFFSET, n_fields)
@@ -6171,7 +6188,11 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
         owners = pcc_gc_load_ptr(null(), ptr_add(roots, 8))
         index = 0
         while index < n_bases:
-            store_ptr(copied, index * C_POINTER_SIZE, pcc_gc_load_ptr(owners, ptr_add(owners, 24 + index * C_POINTER_SIZE)))
+            base = pcc_gc_load_ptr(owners, ptr_add(owners, 24 + index * C_POINTER_SIZE))
+            # A class owns its bases, as CPython's tp_bases does; released in
+            # py_class_dealloc.
+            py_incref(base)
+            store_ptr(copied, index * C_POINTER_SIZE, base)
             index = index + 1
         store_ptr(c, PYCLASSOBJECT_BASES_OFFSET, copied)
         pcc_gc_backend4_zpage_register_owner_payload_span(c, copied, n_bases * C_POINTER_SIZE)
@@ -6326,7 +6347,24 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
     pcc_gc_store_root(doc_slot, global_load_ptr("py_None"))
     if py_class_write_namespace_slots(roots, cstr("__doc__"), doc_slot, 0) != 0:
         return _class_construct_finish(roots, borrowed, 0)
+    # A class is a collectable container, as a CPython heap type is: its
+    # namespace usually refers back to it (methods, __class__ cells).
+    py_gc_track(pcc_gc_load_ptr(null(), roots))
     return _class_construct_finish(roots, borrowed, 1)
+
+
+@c_abi_export("py_class_new_builtin")
+def py_class_new_builtin(name, bases, n_bases: int, field_names, n_fields: int):
+    """A class the runtime keeps in a raw global for the whole run, such as a
+    builtin type: immortal and untracked, as a CPython static type is. Every
+    class a program defines comes from py_class_new and is collectable."""
+    cls = py_class_new(name, bases, n_bases, field_names, n_fields)
+    if ptr_is_null(cls) == 0:
+        py_gc_untrack(cls)
+        # Immortal, not pinned: a relocating collector may still move it, as
+        # it moved every class before program classes became collectable.
+        atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed")
+    return cls
 
 
 # type(name, bases, namespace) protects every operand before allocations.
@@ -6406,8 +6444,9 @@ def _class_new_from_objects_body(slots: c_ptr, tokens: c_ptr) -> int:
     status: int = _class_apply_namespace_bound(ptr_add(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE),
                                               ptr_add(slots, _CLASS_OBJECTS_NAMESPACE * C_POINTER_SIZE), 0)
     if status != 0:
-        # This fresh class has not escaped. Classes remain immortal, so a
-        # decref alone would leave the partially installed namespace alive.
+        # This fresh class has not escaped. Its partially installed namespace
+        # may refer back to it, so detach it now instead of leaving the cycle
+        # to the collector.
         py_class_abort_definition_slots(ptr_add(slots, _CLASS_OBJECTS_RESULT * C_POINTER_SIZE))
     return status
 
@@ -6455,10 +6494,11 @@ def py_class_new_from_objects(name_obj, bases_obj, namespace):
 
 @c_abi_export("py_class_mark_slots_only")
 def py_class_mark_slots_only(cls) -> None:
+    # A tracked class's header flags are shared with the collectors, so the
+    # marker is set atomically, on its own class-specific bit.
     if ptr_is_null(cls) != 0:
         return
-    flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET, flags | 2)
+    atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_CLASS_SLOTS_ONLY, "relaxed")
 
 
 # Set once at class creation on a class whose ancestors include a builtin
@@ -6477,13 +6517,12 @@ def py_class_mark_exception_subclass(cls) -> None:
 
 @c_abi_export("py_class_mark_dict_subclass")
 def py_class_mark_dict_subclass(cls) -> None:
-    # Set PY_CLASS_FLAG_DICT_SUBCLASS (bit 2, value 4): this class subclasses
-    # the builtin ``dict``, so dict-inherited item storage / methods are routed
-    # to a backing dict in the instance's __dict__ slot (see py_protocol.c).
+    # PY_FLAG_CLASS_DICT_SUBCLASS: this class subclasses the builtin
+    # ``dict``, so dict-inherited item storage / methods are routed to a
+    # backing dict in the instance's __dict__ slot (py_protocol_runtime.py).
     if ptr_is_null(cls) != 0:
         return
-    flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET, flags | 4)
+    atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_CLASS_DICT_SUBCLASS, "relaxed")
 
 
 @c_abi_export("py_instance_method_call_direct")
@@ -6590,6 +6629,19 @@ def py_obj_call_method(method, self_obj, args):
     return out
 
 
+@c_abi_export("py_obj_call_loaded_method")
+def py_obj_call_loaded_method(method, receiver, args, has_self: int):
+    """Call what `py_obj_load_method` loaded for an operand's receiver.
+
+    The compiled caller keeps the receiver, the loaded method and the
+    argument tuple in its registered roots and passes them freshly loaded;
+    `has_self` says whether `py_obj_load_method` stored the receiver as the
+    method's `self`."""
+    if has_self == 0:
+        return py_obj_call_method(method, null(), args)
+    return py_obj_call_method(method, receiver, args)
+
+
 @c_abi_export("py_obj_call_method_kwargs")
 def py_obj_call_method_kwargs(method, self_obj, args, kwargs):
     """`py_obj_call_method` with a keywords dict (or NULL).
@@ -6671,18 +6723,28 @@ pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
+pcc_gc_register_continuation_root_node = extern(
+    "pcc_gc_register_continuation_root_node", (c_ptr, c_ptr), c_ptr
+)
+pcc_gc_unregister_continuation_root_node = extern(
+    "pcc_gc_unregister_continuation_root_node", (c_ptr,), c_void
+)
+
+
 def _special_open(slots, tokens, handles) -> int:
+    # Root-group state in handles: an owning map in word 0, the checked node
+    # in word 1. Both live until close; registration always sees empty roots.
+    # The existing mapped-root visitor covers all collectors, including GC0
+    # with optional compiler-frame registration disabled.
     memset(slots, 0, 14 * C_POINTER_SIZE)
     memset(tokens, 0, 14 * C_POINTER_SIZE)
-    memset(handles, 0, 14 * C_POINTER_SIZE)
-    count: int = 0
-    while count < 14:
-        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
-        if ptr_is_null(handle) != 0:
-            return count
-        store_ptr(handles, count * C_POINTER_SIZE, handle)
-        count = count + 1
-    return count
+    memset(handles, 0, 2 * C_POINTER_SIZE)
+    store_i32(handles, 0, 14)
+    node = pcc_gc_register_continuation_root_node(handles, slots)
+    if ptr_is_null(node) != 0:
+        return 0
+    store_ptr(handles, C_POINTER_SIZE, node)
+    return 14
 
 
 def _special_error(message) -> int:
@@ -6749,10 +6811,10 @@ def _special_close(slots, tokens, handles, count: int, suspended: int) -> None:
             py_tls_exc_swap_slot(ptr_add(slots, 13 * C_POINTER_SIZE))
         else:
             py_tls_exc_swap_slot(slots)
-    index = 0
-    while index < count:
-        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
-        index = index + 1
+    if count != 0:
+        node = load_ptr(handles, C_POINTER_SIZE)
+        store_ptr(handles, C_POINTER_SIZE, null())
+        pcc_gc_unregister_continuation_root_node(node)
 
 
 def _special_name_equal(key, name, length: int) -> int:
@@ -8601,7 +8663,7 @@ def _tuple_type_fill(slots, tokens) -> int:
     if ptr_is_null(global_load_ptr("pcc_type_cls_tuple")) == 0:
         return _special_copy(slots, tokens, _TUPLE_TYPE_RESULT, global_addr("pcc_type_cls_tuple"), 0)
     store_ptr(slots, _TUPLE_TYPE_CLASS * C_POINTER_SIZE,
-        py_class_new(cstr("tuple"), null(), 0, null(), 0))
+        py_class_new_builtin(cstr("tuple"), null(), 0, null(), 0))
     if _special_adopt(slots, tokens, _TUPLE_TYPE_CLASS) != 0:
         return -1
     if ptr_is_null(load_ptr(slots, _TUPLE_TYPE_CLASS * C_POINTER_SIZE)) != 0:
@@ -9024,7 +9086,7 @@ def py_tuple_getattr(receiver, name):
 
 
 
-# First-class string search descriptors. These are the supported family, not
+# First-class string descriptors. These are the supported family, not
 # a claim that the complete str namespace has been implemented.
 _STR_METHOD_RECEIVER = 1
 _STR_METHOD_ARGS = 2
@@ -9039,6 +9101,8 @@ _STR_METHOD_RESULT = 12
 _STR_METHOD_COUNT = 0
 _STR_METHOD_STARTSWITH = 1
 _STR_METHOD_ENDSWITH = 2
+_STR_METHOD_FIND = 3
+_STR_METHOD_LEN = 4
 
 define_global_i32("pcc_str_method_borrowed_map", -1)
 define_global_i32("pcc_str_method_result_map", 1)
@@ -9090,18 +9154,32 @@ def _str_method_body(slots, tokens, operation: int) -> int:
             nargs = py_tuple_len(args)
     # The namespace function is unbound; ordinary descriptor binding prepends
     # exactly one receiver. Its signature is entirely positional-only.
-    if nargs < 2 or nargs > 4:
+    if operation == _STR_METHOD_LEN:
+        if nargs != 1:
+            py_raise_owned(py_exc_new(3, cstr("str.__len__ requires exactly one receiver")))
+            return -1
+    elif nargs < 2 or nargs > 4:
         py_raise_owned(py_exc_new(3, cstr("string search method requires 1 to 3 arguments")))
         return -1
     if _special_tuple_item(slots, tokens, _STR_METHOD_RECEIVER, _STR_METHOD_ARGS, 0) != 0:
         return -1
     if _str_method_payload(slots, tokens, _STR_METHOD_RECEIVER, _STR_METHOD_TEXT) != 0:
         return -1
+    if operation == _STR_METHOD_LEN:
+        # The canonical descriptor is inherited through ordinary C3 special
+        # lookup, so user __len__ overrides and their errors remain selected.
+        # Read codepoints from the separately owned payload, never __str__ or
+        # the byte length. Keep that payload leased through result adoption.
+        length: int = py_str_len(load_ptr(slots, _STR_METHOD_TEXT * C_POINTER_SIZE))
+        if py_err_occurred() != 0:
+            return -1
+        store_ptr(slots, _STR_METHOD_RESULT * C_POINTER_SIZE, py_int_from_i64(length))
+        return _special_adopt(slots, tokens, _STR_METHOD_RESULT)
     if _special_tuple_item(slots, tokens, _STR_METHOD_ARGUMENT, _STR_METHOD_ARGS, 1) != 0:
         return -1
-    # count validates its string argument before invoking either __index__;
+    # count/find validate their string argument before invoking either __index__;
     # startswith/endswith validate their prefix only after both bounds.
-    if operation == _STR_METHOD_COUNT:
+    if operation == _STR_METHOD_COUNT or operation == _STR_METHOD_FIND:
         if _str_method_payload(slots, tokens, _STR_METHOD_ARGUMENT, _STR_METHOD_NEEDLE) != 0:
             return -1
     start: int = 0
@@ -9119,7 +9197,13 @@ def _str_method_body(slots, tokens, operation: int) -> int:
         if py_err_occurred() != 0:
             return -1
     result: int = 0
-    if operation == _STR_METHOD_COUNT:
+    if operation == _STR_METHOD_FIND:
+        result = py_str_find_range(load_ptr(slots, _STR_METHOD_TEXT * C_POINTER_SIZE),
+            load_ptr(slots, _STR_METHOD_NEEDLE * C_POINTER_SIZE), start, end)
+        if py_err_occurred() != 0:
+            return -1
+        store_ptr(slots, _STR_METHOD_RESULT * C_POINTER_SIZE, py_int_from_i64(result))
+    elif operation == _STR_METHOD_COUNT:
         # The older counting primitive takes boxed machine bounds. Normalize
         # through the shared slice protocol first, while every source is leased.
         _special_drop(slots, tokens, _STR_METHOD_START)
@@ -9212,6 +9296,10 @@ def _str_type_install_method(slots, tokens, operation: int) -> int:
         name = cstr("startswith")
     elif operation == _STR_METHOD_ENDSWITH:
         name = cstr("endswith")
+    elif operation == _STR_METHOD_FIND:
+        name = cstr("find")
+    elif operation == _STR_METHOD_LEN:
+        name = cstr("__len__")
     if _special_tuple_new(slots, tokens, _STR_TYPE_CAPTURES, 1) != 0:
         return -1
     py_tuple_set_item(load_ptr(slots, _STR_TYPE_CAPTURES * C_POINTER_SIZE), 0, py_int_from_i64(operation))
@@ -9241,13 +9329,13 @@ def _str_type_fill(slots, tokens) -> int:
     if ptr_is_null(global_load_ptr("pcc_type_cls_str")) == 0:
         return _special_copy(slots, tokens, _STR_TYPE_RESULT, global_addr("pcc_type_cls_str"), 0)
     store_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE,
-        py_class_new(cstr("str"), null(), 0, null(), 0))
+        py_class_new_builtin(cstr("str"), null(), 0, null(), 0))
     if _special_adopt(slots, tokens, _STR_TYPE_CLASS) != 0:
         return -1
     if ptr_is_null(load_ptr(slots, _STR_TYPE_CLASS * C_POINTER_SIZE)) != 0:
         return _special_error(cstr("str type allocation failed"))
     operation: int = _STR_METHOD_COUNT
-    while operation <= _STR_METHOD_ENDSWITH:
+    while operation <= _STR_METHOD_LEN:
         if _str_type_install_method(slots, tokens, operation) != 0:
             return -1
         operation = operation + 1
@@ -9511,7 +9599,9 @@ def py_str_getattr(receiver: c_ptr, name: c_ptr) -> c_ptr:
     # Do not expose a base-object fallback as an unimplemented str descriptor.
     if (_strs_eq(name, cstr("count")) == 0
             and _strs_eq(name, cstr("startswith")) == 0
-            and _strs_eq(name, cstr("endswith")) == 0):
+            and _strs_eq(name, cstr("endswith")) == 0
+            and _strs_eq(name, cstr("find")) == 0
+            and _strs_eq(name, cstr("__len__")) == 0):
         return null()
     # Exact str only. Subclasses retain ordinary hooks, instance attributes,
     # overrides, and C3 lookup through their namespace-owned base descriptors.
@@ -9717,7 +9807,7 @@ def py_class_mark_structseq(cls) -> None:
     if not _ptr_is_class(cls) or py_class_is_tuple_subclass(cls) == 0:
         py_raise_owned(py_exc_new(3, cstr("struct sequence requires a tuple subtype")))
         return
-    if load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & 2) == 0:
+    if load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET) != 0 or (load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_SLOTS_ONLY) == 0:
         py_raise_owned(py_exc_new(3, cstr("struct sequence requires an empty slots-only layout")))
         return
     atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, _STRUCTSEQ_CLASS_FLAG, "relaxed")

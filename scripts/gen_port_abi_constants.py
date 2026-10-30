@@ -57,6 +57,7 @@ STRUCT_FIELDS: dict[str, tuple[str, ...]] = {
     "PyMemoryViewObject": ("base",),
     "PyStrObject": ("byte_len", "cp_len", "hash", "data"),
     "PyListObject": ("length", "capacity", "items"),
+    "PyInlineGenObject": ("length", "items"),
     "PyTupleObject": ("len", "items"),
     "PyDictObject": ("size", "capacity", "indices", "entries", "entries_used"),
     "DictEntry": ("hash", "key", "value"),
@@ -121,10 +122,12 @@ _DEFINE_TYPE_TAG_RE = re.compile(
 FLAGS: tuple[str, ...] = (
     "PY_FLAG_FINALIZED", "PY_FLAG_GC_TRACKED", "PY_FLAG_IMMORTAL",
     "PY_FLAG_GC_MALLOC_ALLOC", "PY_FLAG_GC_PINNED",
+    "PY_FLAG_GC_DEALLOCATING",
     "PY_FLAG_FUNC_AUTO_PARK", "PY_FLAG_FUNC_TRANSPARENT_CALL",
-    "PY_FLAG_GEN_SOURCE", "PY_FLAG_FUNC_CONTINUATION_FACTORY",
+    "PY_FLAG_GEN_SOURCE", "PY_FLAG_GEN_INLINE_FRAME", "PY_FLAG_FUNC_CONTINUATION_FACTORY",
     "PY_FLAG_EXC_SUPPRESS_CONTEXT", "PY_FLAG_EXC_UNICODE_PAYLOAD",
     "PY_FLAG_EXC_OS_PAYLOAD", "PY_FLAG_FUNC_BUILTIN", "PY_FLAG_CLASS_ATTRS_EXPOSED",
+    "PY_FLAG_CLASS_SLOTS_ONLY", "PY_FLAG_CLASS_DICT_SUBCLASS",
 )
 
 RUNTIME_ABI_CONSTANTS: tuple[str, ...] = (

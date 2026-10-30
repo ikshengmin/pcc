@@ -207,7 +207,6 @@ pcc/runtime/libpy_runtime_pcc.a.target
 
 .playwright-mcp/
 .playwright-cli/
-projects/python-proxy/pproxy/diagnostic_log.py
 pcc-cpu-flamegraph.svg
 /pcc/runtime/build_owned/
 /pcc/runtime/.pcc-runtime-build.lock/

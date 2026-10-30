@@ -199,6 +199,7 @@ def inline_module(
     new_text = _inline_calls(ir_text, candidates)
     if include_definitions:
         new_text = _inline_multiblock_call_sites(new_text, candidates)
+        new_text = _drop_acyclic_inlined_polls(new_text)
     else:
         new_text = _inline_multiblock_return_callers(new_text, candidates)
     changed = new_text != ir_text
@@ -547,6 +548,160 @@ def _inline_multiblock_call_sites(ir_text: str, candidates: dict[str, dict]) -> 
             # Skip cloned calls this round, but process subsequent original
             # calls that moved into the continuation.
             block_index += len(cloned) + 1
+            changed = True
+    return module.serialize() if changed else ir_text
+
+
+_POLL_FLAG_RE = re.compile(
+    r"^\s*%(?P<flag>[\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested acquire, align 4\s*$"
+)
+_POLL_NEED_RE = re.compile(r"^\s*%(?P<need>[\w.$-]+) = icmp ne i32 %(?P<flag>[\w.$-]+), 0\s*$")
+_POLL_BRANCH_RE = re.compile(
+    r"^\s*br i1 %(?P<need>[\w.$-]+), label %(?P<slow>[\w.$-]+), label %(?P<cont>[\w.$-]+)\s*$"
+)
+_POLL_CALL_RE = re.compile(r"^\s*call void \(\) @pcc_thread_safepoint(?:_gate)?\(\)\s*$")
+_LABEL_REF_RE = re.compile(r"\blabel %([\w.$-]+)")
+_PHI_PRED_RE = re.compile(r",\s*%([\w.$-]+)\s*\]")
+_LOCAL_REF_RE = re.compile(r"%([\w.$-]+)")
+
+
+def _poll_tail(block: BasicBlock):
+    """(flag, need, slow, cont) when ``block`` ends in a thread-safepoint poll."""
+    insts = block.instructions
+    if len(insts) < 3:
+        return None
+    branch = _POLL_BRANCH_RE.match(insts[-1].text)
+    need = _POLL_NEED_RE.match(insts[-2].text)
+    flag = _POLL_FLAG_RE.match(insts[-3].text)
+    if branch is None or need is None or flag is None:
+        return None
+    if branch.group("need") != need.group("need") or need.group("flag") != flag.group("flag"):
+        return None
+    return flag.group("flag"), need.group("need"), branch.group("slow"), branch.group("cont")
+
+
+def _blocks_on_cycles(fn) -> set[str]:
+    """Names of blocks on some CFG cycle (iterative Tarjan SCC)."""
+    successors: dict[str, list[str]] = {}
+    for block in fn.blocks:
+        term = block.terminator
+        successors[block.name] = _LABEL_REF_RE.findall(term.text) if term is not None else []
+    index_of: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    cyclic: set[str] = set()
+    counter = 0
+    for root in successors:
+        if root in index_of:
+            continue
+        work: list[tuple[str, int]] = [(root, 0)]
+        while work:
+            node, child = work.pop()
+            if child == 0:
+                index_of[node] = counter
+                low[node] = counter
+                counter += 1
+                stack.append(node)
+                on_stack.add(node)
+            edges = successors.get(node, [])
+            descended = False
+            while child < len(edges):
+                target = edges[child]
+                child += 1
+                if target not in successors:
+                    continue
+                if target not in index_of:
+                    work.append((node, child))
+                    work.append((target, 0))
+                    descended = True
+                    break
+                if target in on_stack and index_of[target] < low[node]:
+                    low[node] = index_of[target]
+            if descended:
+                continue
+            if work:
+                parent = work[-1][0]
+                if low[node] < low[parent]:
+                    low[parent] = low[node]
+            if low[node] == index_of[node]:
+                component: list[str] = []
+                member = ""
+                while member != node:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    component.append(member)
+                if len(component) > 1 or node in successors.get(node, []):
+                    for member_name in component:
+                        cyclic.add(member_name)
+    return cyclic
+
+
+def _drop_acyclic_inlined_polls(ir_text: str) -> str:
+    """Remove inlined callees' entry polls that lie on no cycle.
+
+    Functions poll for a stop on entry and on loop back-edges; an inlined
+    callee brings its own entry poll into the caller. When the caller's entry
+    block already ends in a poll and the inlined block is on no cycle, only
+    bounded acyclic work separates the two, so the inner poll adds a flag load
+    and branch without shortening any wait. Loop polls and polls the frontend
+    emitted for the function itself stay.
+    """
+    if "inl.cfg." not in ir_text or "@pcc_thread_stop_requested" not in ir_text:
+        return ir_text
+    module = MutableModule.parse(ir_text)
+    changed = False
+    for fn in module.functions:
+        if not fn.blocks or _poll_tail(fn.blocks[0]) is None:
+            continue
+        inlined_polls = []
+        for block in fn.blocks[1:]:
+            if block.name.startswith("inl.cfg."):
+                parts = _poll_tail(block)
+                if parts is not None:
+                    inlined_polls.append((block, parts))
+        if not inlined_polls:
+            continue
+        cyclic = _blocks_on_cycles(fn)
+        blocks_by_name: dict[str, BasicBlock] = {}
+        for block in fn.blocks:
+            blocks_by_name[block.name] = block
+        label_refs: dict[str, int] = {}
+        phi_preds: set[str] = set()
+        local_uses: dict[str, int] = {}
+        for block in fn.blocks:
+            for inst in block.instructions:
+                for target in _LABEL_REF_RE.findall(inst.text):
+                    label_refs[target] = label_refs.get(target, 0) + 1
+                if inst.opcode == "phi":
+                    for predecessor in _PHI_PRED_RE.findall(inst.text):
+                        phi_preds.add(predecessor)
+                for operand in inst.operand_names():
+                    local_uses[operand] = local_uses.get(operand, 0) + 1
+        dropped: set[str] = set()
+        for block, parts in inlined_polls:
+            flag, need, slow, cont = parts
+            if block.name in cyclic or slow in phi_preds or label_refs.get(slow, 0) != 1:
+                continue
+            if local_uses.get(flag, 0) != 1 or local_uses.get(need, 0) != 1:
+                continue
+            slow_block = blocks_by_name.get(slow)
+            if slow_block is None or len(slow_block.instructions) != 2:
+                continue
+            if _POLL_CALL_RE.match(slow_block.instructions[0].text) is None:
+                continue
+            if slow_block.instructions[1].text.strip() != "br label %" + cont:
+                continue
+            block.instructions = list(block.instructions[:-3]) + [
+                llvm_line("  br label %" + cont + "\n")
+            ]
+            dropped.add(slow)
+        if dropped:
+            kept_blocks = []
+            for block in fn.blocks:
+                if block.name not in dropped:
+                    kept_blocks.append(block)
+            fn.blocks = kept_blocks
             changed = True
     return module.serialize() if changed else ir_text
 

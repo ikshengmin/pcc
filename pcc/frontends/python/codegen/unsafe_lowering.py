@@ -1227,7 +1227,7 @@ class UnsafeIntrinsicMixin:
         if intrinsic in ("atomic_store_i32", "atomic_store_i64"):
             self._unsafe_expect_arity(intrinsic, expr, 4)
             addr = self._unsafe_typed_addr(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 self._unsafe_i64_arg(expr.args[1]),
                 width_ty,
             )
@@ -1250,7 +1250,7 @@ class UnsafeIntrinsicMixin:
                     + ", ".join(_ATOMIC_RMW_OPS)
                 )
             addr = self._unsafe_typed_addr(
-                self._unsafe_ptr_arg(expr.args[1]),
+                self._unsafe_address_arg(expr.args[1]),
                 self._unsafe_i64_arg(expr.args[2]),
                 width_ty,
             )
@@ -1279,7 +1279,7 @@ class UnsafeIntrinsicMixin:
         if intrinsic in ("atomic_cas_i32", "atomic_cas_i64"):
             self._unsafe_expect_arity(intrinsic, expr, 6)
             addr = self._unsafe_typed_addr(
-                self._unsafe_ptr_arg(expr.args[0]),
+                self._unsafe_address_arg(expr.args[0]),
                 self._unsafe_i64_arg(expr.args[1]),
                 width_ty,
             )
@@ -2079,7 +2079,7 @@ class UnsafeIntrinsicMixin:
             )
         if intrinsic == "page_free":
             self._unsafe_expect_arity(intrinsic, expr, 2)
-            ptr = self._unsafe_ptr_arg(expr.args[0])
+            ptr = self._unsafe_address_arg(expr.args[0])
             size = self._unsafe_i64_arg(expr.args[1])
             platform_name = self._target_sys_platform_text()
             machine = self._target_machine_text()
@@ -2189,6 +2189,22 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             symbol = self._unsafe_symbol_literal_arg(expr.args[0])
             gv = self._declare_external_global(symbol, _I8)
+            if gv.storage_class == "thread_local":
+                # A TLS address is a value in the calling thread, not a
+                # process-global constant to rematerialize at every use.
+                address_fn = self.module.globals.get("llvm.threadlocal.address.p0")
+                if address_fn is None:
+                    address_fn = ir.Function(
+                        self.module,
+                        ir.FunctionType(_CSTR, [_CSTR]),
+                        name="llvm.threadlocal.address.p0",
+                    )
+                address_arg = gv
+                if not self._ir_type_matches(gv.type, _CSTR):
+                    address_arg = self.builder.bitcast(gv, _CSTR)
+                return self.builder.call(
+                    address_fn, [address_arg], name=self._fresh("unsafe.tls.address"),
+                )
             if self._ir_type_matches(gv.type, _CSTR):
                 return gv
             return self.builder.bitcast(
@@ -2239,15 +2255,22 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             symbol = self._unsafe_symbol_literal_arg(expr.args[0])
             gv = self._declare_external_global(symbol, _CSTR)
+            # global_addr may have introduced an opaque byte declaration.
+            # The operation determines the access width, not declaration order.
+            addr = self._unsafe_typed_addr(gv, ir.Constant(_I64, 0), _CSTR)
             return self.builder.load(
-                gv,
+                addr,
                 name=self._fresh("unsafe.global.load.ptr"),
             )
         if intrinsic == "global_store_ptr":
             self._unsafe_expect_arity(intrinsic, expr, 2)
             symbol = self._unsafe_symbol_literal_arg(expr.args[0])
             gv = self._declare_external_global(symbol, _CSTR)
-            self.builder.store(self._unsafe_ptr_arg(expr.args[1]), gv)
+            # Evaluate the value before resolving the storage address, including
+            # TLS addresses when an argument evaluation can suspend/migrate.
+            value = self._unsafe_ptr_arg(expr.args[1])
+            addr = self._unsafe_typed_addr(gv, ir.Constant(_I64, 0), _CSTR)
+            self.builder.store(value, addr)
             return self._unsafe_void_result()
         if intrinsic == "malloc":
             self._unsafe_expect_arity(intrinsic, expr, 1)
@@ -2286,7 +2309,7 @@ class UnsafeIntrinsicMixin:
             return self.builder.call(
                 realloc_fn,
                 [
-                    self._unsafe_ptr_arg(expr.args[0]),
+                    self._unsafe_address_arg(expr.args[0]),
                     self._unsafe_i64_arg(expr.args[1]),
                 ],
                 name=self._fresh("unsafe.realloc"),
@@ -2584,20 +2607,24 @@ class UnsafeIntrinsicMixin:
             return self._unsafe_void_result()
         if intrinsic == "memset":
             self._unsafe_expect_arity(intrinsic, expr, 3)
+            # Keep source evaluation order and the C pointer-return contract.
+            # The intrinsic exposes exact byte writes to owned lowering;
+            # small zero fills already have a bounded unaligned store path.
+            destination = self._unsafe_address_arg(expr.args[0])
+            value = self._unsafe_i64_arg(expr.args[1])
+            if isinstance(value, ir.Constant) and isinstance(value.value, int):
+                byte = ir.Constant(_I8, value.value & 255)
+            else:
+                byte = self.builder.trunc(value, _I8, name=self._fresh("unsafe.memset.byte"))
+            size = self._unsafe_i64_arg(expr.args[2])
             memset_fn = self._declare_external_function(
-                "memset",
-                _CSTR,
-                [_CSTR, _I32, _I64],
+                "llvm.memset.p0.i64", _VOID,
+                [_CSTR, _I8, _I64, ir.IntType(1)],
             )
-            return self.builder.call(
-                memset_fn,
-                [
-                    self._unsafe_address_arg(expr.args[0]),
-                    self._unsafe_i32_arg(expr.args[1]),
-                    self._unsafe_i64_arg(expr.args[2]),
-                ],
-                name=self._fresh("unsafe.memset"),
+            self.builder.call(
+                memset_fn, [destination, byte, size, ir.Constant(ir.IntType(1), 0)],
             )
+            return destination
         if intrinsic in ("memcpy", "memmove"):
             self._unsafe_expect_arity(intrinsic, expr, 3)
             copy_fn = self._declare_external_function(
@@ -2628,7 +2655,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 4 if writing else 2)
             fd = self._unsafe_i32_arg(expr.args[0])
             if writing:
-                buffer = self._unsafe_ptr_arg(expr.args[1])
+                buffer = self._unsafe_address_arg(expr.args[1])
                 size = self._unsafe_i64_arg(expr.args[2])
                 offset = self._unsafe_i64_arg(expr.args[3])
             else:
@@ -2667,7 +2694,7 @@ class UnsafeIntrinsicMixin:
         if intrinsic in ("read", "write"):
             self._unsafe_expect_arity(intrinsic, expr, 3)
             fd = self._unsafe_i32_arg(expr.args[0])
-            buf = self._unsafe_ptr_arg(expr.args[1])
+            buf = self._unsafe_address_arg(expr.args[1])
             size = self._unsafe_i64_arg(expr.args[2])
             if self._target_sys_platform_text() == "darwin":
                 io_fn = self._declare_external_function(

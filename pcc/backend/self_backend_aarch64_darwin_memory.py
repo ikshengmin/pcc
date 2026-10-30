@@ -22,6 +22,8 @@ from .self_backend_aarch64_darwin_materialize import (
     store_large_aggregate_literal_to_address,
 )
 from .self_backend_aarch64_darwin_regalloc import (
+    aarch64_cmpxchg_scalar_projection,
+    allocated_register_name,
     allocated_scalar_register_indexed,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
@@ -114,6 +116,39 @@ _ATOMIC_RMW_COMPUTE = {
     "and": "and",
     "or": "orr",
 }
+
+_ACQUIRE_OR_STRONGER = ("acquire", "acq_rel", "seq_cst")
+_RELEASE_OR_STRONGER = ("release", "acq_rel", "seq_cst")
+
+
+def _exclusive_pair_ops(func, kind: str, ordering: str, suffix: str) -> tuple[str, str]:
+    """Load/store-exclusive mnemonics for one LL/SC loop of ``ordering``.
+
+    The C/C++11 -> ARMv8 mapping LLVM's AtomicExpand uses without LSE: an
+    acquire-or-stronger ordering takes LDAXR, a release-or-stronger one takes
+    STLXR, and monotonic needs only exclusivity. LDAXR/STLXR is RCsc, so the
+    acq_rel pair also implements seq_cst.
+    """
+    if ordering not in ("monotonic",) + _ACQUIRE_OR_STRONGER + ("release",):
+        raise BackendUnavailable(
+            f"self backend {kind} ordering {ordering!r} is not supported in {func.name!r}"
+        )
+    load_op = "ldaxr" if ordering in _ACQUIRE_OR_STRONGER else "ldxr"
+    store_op = "stlxr" if ordering in _RELEASE_OR_STRONGER else "stxr"
+    return load_op + suffix, store_op + suffix
+
+
+def _cmpxchg_merged_ordering(success: str, failure: str) -> str:
+    # LLVM's AtomicCmpXchgInst::getMergedOrdering: one LL/SC loop carries
+    # both orderings, so its load-exclusive must also meet the failure order.
+    if failure == "seq_cst":
+        return "seq_cst"
+    if failure == "acquire":
+        if success == "monotonic":
+            return "acquire"
+        if success == "release":
+            return "acq_rel"
+    return success
 
 
 def _indexed_scalar_mem_load_op(type_header: CompilerInt4) -> str:
@@ -490,13 +525,36 @@ def emit_memory_instruction_by_id(
         if not (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             return []
         _atomic_width_check(func, "load_atomic", value_type)
+        # A load may read its address register and define that same register
+        # in one instruction. No address copy is needed for an allocated base.
+        address_register = None
         if indexed_kernel is not None and isinstance(data, int):
-            lines = materialize_scalar_value_indexed(
-                func, indexed_kernel, ptr_name, record.second, 9, module_symbols,
-                value_id=record.third,
+            base_register = allocated_scalar_register_indexed(
+                indexed_kernel, record.third, record.second,
             )
+            if base_register >= 0:
+                address_register = "x" + str(base_register)
         else:
-            lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+            address_register = allocated_register_name(func, ptr_name, _ptr_type)
+        lines = []
+        if address_register is None:
+            address_register = "x9"
+            if indexed_kernel is not None and isinstance(data, int):
+                lines = materialize_scalar_value_indexed(
+                    func, indexed_kernel, ptr_name, record.second, 9, module_symbols,
+                    value_id=record.third,
+                )
+            else:
+                lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+        result_register_name = None
+        if indexed_kernel is not None and isinstance(data, int) and value_type.is_int:
+            result_register = allocated_scalar_register_indexed(
+                indexed_kernel, indexed_dest_id, record.first,
+            )
+            if result_register >= 0:
+                result_register_name = reg_name(value_type, result_register)
+        elif value_type.is_int:
+            result_register_name = allocated_register_name(func, dest, value_type)
         load_op = (
             "ldar" + _atomic_size_suffix(value_type)
             if ordering in ("acquire", "seq_cst") else mem_load_op(value_type)
@@ -504,11 +562,12 @@ def emit_memory_instruction_by_id(
         lines.append(
             emitted_memory_instruction_line(
                 load_op,
-                reg_name(value_type, 10),
-                "x9",
+                result_register_name if result_register_name is not None else reg_name(value_type, 10),
+                address_register,
             )
         )
-        lines.extend(store_value_regs_to_value_slot(func, dest, 10))
+        if result_register_name is None:
+            lines.extend(store_value_regs_to_value_slot(func, dest, 10))
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_STORE_ATOMIC:
@@ -548,28 +607,39 @@ def emit_memory_instruction_by_id(
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_ATOMICRMW:
-        dest, op, _ptr_type, ptr_name, value_type, value, _ordering = data
+        dest, op, _ptr_type, ptr_name, value_type, value, ordering = data
         _atomic_width_check(func, "atomicrmw", value_type, allow_pointer=op == "xchg")
-        # ldaxr/stlxr is acquire+release on every iteration — always at least
-        # as strong as the requested ordering, and it is what LLVM itself
-        # emits for atomicrmw at -O0 on AArch64 without LSE.
-        lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+        load_exclusive, store_exclusive = _exclusive_pair_ops(
+            func, "atomicrmw", ordering, _atomic_size_suffix(value_type)
+        )
+        address_register = allocated_register_name(func, ptr_name, _ptr_type)
+        lines = []
+        if address_register is None:
+            address_register = "x9"
+            lines = materialize_pointer(func, ptr_name, 9, module_symbols)
         lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
         r_val = reg_name(value_type, 10)
         r_old = reg_name(value_type, 11)
         r_new = reg_name(value_type, 12)
-        ex_suffix = _atomic_size_suffix(value_type)
         label = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
         lines.append(f"{label}:")
-        lines.append(f"  ldaxr{ex_suffix} {r_old}, [x9]")
+        lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
         if op == "xchg":
             lines.append(emitted_move_register_line(r_new, r_val))
         else:
             lines.append(f"  {_ATOMIC_RMW_COMPUTE[op]} {r_new}, {r_old}, {r_val}")
-        lines.append(f"  stlxr{ex_suffix} w13, {r_new}, [x9]")
+        lines.append(f"  {store_exclusive} w13, {r_new}, [{address_register}]")
         lines.append(emitted_branch_line("cbnz", label, "w13"))
-        if (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
-            lines.extend(store_value_regs_to_value_slot(func, dest, 11))
+        used = (indexed_kernel.value_is_used(indexed_dest_id) if indexed_kernel is not None
+                else value_has_uses(func, dest))
+        if (not value_type.is_int or used) and (
+            indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)
+        ):
+            allocated = allocated_register_name(func, dest, value_type) if value_type.is_int else None
+            if allocated is None:
+                lines.extend(store_value_regs_to_value_slot(func, dest, 11))
+            else:
+                lines.append(emitted_move_register_line(allocated, r_old))
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_CMPXCHG:
@@ -581,28 +651,59 @@ def emit_memory_instruction_by_id(
             value_type,
             expected,
             desired,
-            _success,
-            _failure,
+            success,
+            failure,
         ) = data
         _atomic_width_check(func, "cmpxchg", value_type)
-        lines = materialize_pointer(func, ptr_name, 9, module_symbols)
-        lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
-        lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
+        load_exclusive, store_exclusive = _exclusive_pair_ops(
+            func, "cmpxchg", _cmpxchg_merged_ordering(success, failure),
+            _atomic_size_suffix(value_type),
+        )
+        projection: CompilerInt4 = aarch64_cmpxchg_scalar_projection(func, block_id, instruction_index)
+        projected_register = -1
+        if projection.first >= 0 and indexed_kernel is not None:
+            projected_register = allocated_scalar_register_indexed(
+                indexed_kernel, projection.first, projection.second,
+            )
         r_exp = reg_name(value_type, 10)
         r_des = reg_name(value_type, 11)
-        r_old = reg_name(value_type, 12)
-        ex_suffix = _atomic_size_suffix(value_type)
+        old_register = projected_register if projection.first >= 0 and projection.third == 0 and projected_register >= 0 else 12
+        r_old = reg_name(value_type, old_register)
+        address_register = allocated_register_name(func, ptr_name, _ptr_type)
+        lines = []
+        # Register donation may put the observed result in the address's old
+        # home. Preserve that address for the store/retry before overwriting it.
+        if address_register is None or address_register == "x" + str(old_register):
+            address_register = "x9"
+            lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+        lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
+        lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
         base = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
         lines.append(f"{base}_retry:")
-        lines.append(f"  ldaxr{ex_suffix} {r_old}, [x9]")
+        lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
         lines.append(emitted_compare_register_line(r_old, r_exp))
         lines.append(emitted_branch_line("b.ne", base + "_fail"))
-        lines.append(f"  stlxr{ex_suffix} w13, {r_des}, [x9]")
+        lines.append(f"  {store_exclusive} w13, {r_des}, [{address_register}]")
         lines.append(emitted_branch_line("cbnz", base + "_retry", "w13"))
         lines.append(emitted_branch_line("b", base + "_done"))
         lines.append(f"{base}_fail:")
         lines.append("  clrex")
         lines.append(f"{base}_done:")
+        if projection.first >= 0 and indexed_kernel is not None:
+            projected_name = indexed_kernel.value_name(projection.first)
+            if projection.third == 0:
+                if projected_register < 0:
+                    lines.extend(store_value_regs_to_value_slot(func, projected_name, old_register))
+            else:
+                flag_register = projected_register if projected_register >= 0 else 14
+                lines.append(emitted_cset_line("w" + str(flag_register), "eq"))
+                if projected_register < 0:
+                    lines.extend(store_value_regs_to_value_slot(func, projected_name, flag_register))
+            return lines
+        used = (indexed_kernel.value_is_used(indexed_dest_id) if indexed_kernel is not None
+                else value_has_uses(func, dest))
+        if not used:
+            return lines
         lines.append(emitted_cset_line("w14", "eq"))
         if (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             lines.extend(emit_value_slot_base_address(func, dest, "x15"))

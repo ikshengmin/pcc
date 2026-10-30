@@ -121,7 +121,7 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
         backend_command += " ".join(shell_quote_arg(part) for part in (sidecar, output, "PCO"))
         all_commands.append(backend_command)
         all_tasks.append({
-            "class": task["class"] + "|host-indexed-backend-v2|PCO|optimize=0",
+            "class": task["class"] + "|host-indexed-backend-v2|PCO|optimize=1",
             "inputs": [0] * 47,
             "estimate_bytes": 0,
             "report_path": output + ".rss",

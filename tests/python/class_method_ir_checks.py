@@ -1,6 +1,8 @@
 """Read-only control-flow checks for class method owner frames."""
 import re
 
+from tests.python.root_copy_ir import root_copy_calls
+
 from ir_pointer_aliases import (
     canonical_pointer,
     function_bodies,
@@ -40,7 +42,7 @@ def check_method_frames(text):
             stack, dirty = list(incoming), set(dirty_before)
             successors = []
             for line in blocks[block]:
-                entered = re.search(r'@pcc_gc_frame_enter_lifo\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
+                entered = re.search(r'@pcc_gc_frame_enter_lifo(?:_mapped)?\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
                 if entered:
                     root = canonical(entered[1])
                     assert root not in stack, (name, block, 'double registration', root)
@@ -51,9 +53,8 @@ def check_method_frames(text):
                     if 'class.method.' in root:
                         if stored[1] == 'null': dirty.discard(root)
                         else: dirty.add(root)
-                copied = re.search(r'@pcc_gc_root_copy(?:_borrowed)?_lease\(ptr (%[\w.$]+),', line)
-                if copied:
-                    root = canonical(copied[1])
+                for copied in root_copy_calls(line):
+                    root = canonical(copied.destination)
                     if 'class.method.' in root: dirty.add(root)
                 cleared = re.search(r'@pcc_gc_store_root\(ptr (%[\w.$]+), ptr null\)', line)
                 if cleared:
@@ -68,7 +69,7 @@ def check_method_frames(text):
                 )
                 if disposed:
                     dirty.discard(canonical(disposed[1]))
-                leaving = re.search(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.$]+)\)', line)
+                leaving = re.search(r'@pcc_gc_frame_leave_lifo(?:_mapped)?\(ptr (%[\w.$]+)\)', line)
                 if leaving:
                     root = canonical(leaving[1])
                     assert stack and stack[-1] == root, (name, block, 'non-LIFO release', root, stack)
@@ -97,8 +98,8 @@ def method_owner_copies(text):
         aliases = pointer_bitcast_aliases(body)
         def canonical(value):
             return canonical_pointer(value, aliases)
-        for dest, source in re.findall(r'@pcc_gc_root_copy_lease\(ptr (%[^ ,]+), ptr (%[^ ,)]+)\)', body):
-            dest, source = canonical(dest), canonical(source)
+        for copied in root_copy_calls(body, borrowed=False):
+            dest, source = canonical(copied.destination), canonical(copied.source)
             if 'class.method.publication' in dest and 'class.method.publication' in source:
                 copies.append((name, dest, source))
     return copies

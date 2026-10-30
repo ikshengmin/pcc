@@ -453,9 +453,14 @@ class CoercionLoweringMixin:
         if self._is_object(to_ty) and self._is_native_scalar_type(from_ty):
             if isinstance(v.type, ir.PointerType):
                 return v
-            return marshal.marshal_to_object(
+            boxed = marshal.marshal_to_object(
                 self.builder, self.module, self.runtime, v, from_ty
             )
+            if isinstance(from_ty, (BoolType, NoneType)):
+                # py_bool_from_bit and the py_None load answer immortal
+                # singletons: no pin, root or release protects anything.
+                self._note_never_gc_object(boxed)
+            return boxed
         # Object -> native unbox.
         if self._is_native_scalar_type(to_ty) and self._is_object(from_ty):
             # A ``DynType`` value may already carry a native scalar at

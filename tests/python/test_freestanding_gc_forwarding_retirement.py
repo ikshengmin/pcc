@@ -52,6 +52,7 @@ LOCAL_HELPER_SYMBOLS = {
 DEFINED_SYMBOLS = OWNED_SYMBOLS | LOCAL_HELPER_SYMBOLS
 RAW_FUNCTION_IMPORTS = {
     "free",
+    "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_dealloc_cascade_active",
     "pcc_gc_backend",
     "pcc_gc_backend4_remap_referents",

@@ -21,6 +21,7 @@ DIAGNOSTIC_ENV = (
     "PCC_DEBUG_CODEGEN_PHASES", "PCC_DIRECT_INDEXED_KERNEL_CAPTURE",
     "PCC_DIRECT_INDEXED_KERNEL_EMIT", "PCC_TEXT_INDEXED_KERNEL_EMIT",
     "PCC_DIRECT_INDEXED_KERNEL_VALIDATE",
+    "PCC_KNOWN_ROOT_STORES",
 )
 
 
@@ -60,6 +61,10 @@ def _production_generation():
             self.triple = "unknown-unknown-unknown"
             self.data_layout = ""
             self._direct_indexed_retain_text = False
+            self.globals = {
+                "pcc_gc_store_root": object(),
+                "pcc_gc_store_root_take": object(),
+            }
 
         def __str__(self):
             events.append("render")
@@ -83,6 +88,7 @@ def _production_generation():
         "classify_vthread_park_boundaries": operation("boundaries", {}),
         "compute_bounded_int_abi_function_names": operation("bounded_int", []),
         "postprocess_varargs_ir": lambda text: text,
+        "debug_source_path": lambda module, fallback="": fallback or "timing_fixture.py",
         "L1CodegenError": RuntimeError,
         "_is_import_stmt": lambda statement: False,
         "_is_import_from_stmt": lambda statement: False,
@@ -98,9 +104,11 @@ def _production_generation():
             block = node("If", cond=None, body=(block_function, block_class), else_body=())
             body = () if freestanding else (function, klass, block)
             self.ast_module = node("Module", name="timing_fixture", body=body)
+            self._module_source_path = "timing_fixture.py"
             self.module = IRModule("timing_fixture")
             self.module.triple = "selected-target"
             self.module.data_layout = "selected-layout"
+            self.runtime = dict(self.module.globals)
             self._skip_program_main = skip_main
             self._freestanding_module = freestanding
             self._runtime_port_module = False

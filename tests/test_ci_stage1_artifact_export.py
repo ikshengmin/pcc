@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import struct
 from pathlib import Path
 import shlex
 import shutil
@@ -13,11 +15,14 @@ import tarfile
 import pytest
 
 from scripts import ci_stage1_artifact_export as exporter
+from scripts import ci_stage1_bundle as bundle
 
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "a" * 40
 SOURCE = "b" * 64
+# Independent producer contract, not a copy of the exporter's acceptance policy.
+RUNTIME_CONFIG = {"threads": True, "refcount": "atomic"}
 SHARED = "build/platform-qualification/shared/"
 RUNTIME = "build/worker-prior-gate/runtime/libpy_runtime_pcc_py.a"
 STAGE_RECEIPT = "build/worker-prior-gate/stage1.json"
@@ -35,13 +40,41 @@ def _save(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
+def _native_header(platform_id="linux-x86_64"):
+    if platform_id.startswith("linux"):
+        data = bytearray(128)
+        data[:16] = b"\x7fELF\x02\x01\x01" + b"\0" * 9
+        struct.pack_into("<HHIQQQIHHHHHH", data, 16,
+                         2, 183 if platform_id.endswith("aarch64") else 62, 1,
+                         0x400078, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+        struct.pack_into("<IIQQQQQQ", data, 64, 1, 5, 0, 0x400000, 0, 128, 128, 4096)
+    elif platform_id == "macos-arm64":
+        data = bytearray(64)
+        struct.pack_into("<IIIIIIII", data, 0, 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
+    else:
+        data = bytearray(512)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 60, 128)
+        data[128:132] = b"PE\0\0"
+        struct.pack_into("<HH", data, 132, 0x8664, 1)
+        struct.pack_into("<HHH", data, 148, 240, 2, 0x20b)
+    return bytes(data)
+
+
+@pytest.fixture(autouse=True)
+def lease_env(monkeypatch):
+    for key, value in {"GITHUB_REPOSITORY": "owner/pcc", "GITHUB_WORKFLOW_REF": "owner/pcc/.github/workflows/pcc1-package-parity.yml@refs/heads/master",
+                       "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_SHA": COMMIT}.items():
+        monkeypatch.setenv(key, value)
+
+
 @pytest.fixture
 def admitted(tmp_path, monkeypatch):
     compiler = tmp_path / "build/platform-qualification/shared/pcc1"
     runtime = tmp_path / "build/worker-prior-gate/runtime/libpy_runtime_pcc_py.a"
     compiler.parent.mkdir(parents=True)
     runtime.parent.mkdir(parents=True)
-    compiler.write_bytes(b"tiny host-only compiler fixture; never executed\n")
+    compiler.write_bytes(_native_header())
     compiler.chmod(0o755)
     hashes = {}
     for suffix in ("", ".provenance.json", ".capi_syms"):
@@ -57,7 +90,7 @@ def admitted(tmp_path, monkeypatch):
         "phase": "stage1", "status": "PASS", "source": source,
         "compiler": {"path": str(compiler), "sha256": _sha(compiler.read_bytes())},
         "runtime": {"path": str(runtime), "target": exporter.TARGET,
-                    "config": exporter.CONFIG.copy(), "hashes": hashes},
+                    "config": RUNTIME_CONFIG.copy(), "hashes": hashes},
     }
     shared = {
         "source": source, "compiler_path": str(compiler), "target": exporter.TARGET,
@@ -71,6 +104,7 @@ def admitted(tmp_path, monkeypatch):
         path = compiler.parent / name
         path.write_bytes(b"" if name.endswith((".log", ".resources.jsonl"))
                          else ("tiny canary fixture " + name).encode())
+    (compiler.parent / "canary1").write_bytes(_native_header())
     (compiler.parent / "canary1").chmod(0o755)
     (compiler.parent / "canary1-run.log").write_bytes(b"synthetic canary output\n")
     shared["stages"][0]["canary"] = {
@@ -86,12 +120,16 @@ def admitted(tmp_path, monkeypatch):
         raise AssertionError("export must not invoke a subprocess")
     for name in ("run", "Popen", "check_call", "check_output"):
         monkeypatch.setattr(subprocess, name, forbidden)
+    for name in ("system", "fork", "forkpty", "posix_spawn", "posix_spawnp"):
+        if hasattr(os, name):
+            monkeypatch.setattr(os, name, forbidden)
+    monkeypatch.setattr(exporter, "_admit_runtime", lambda root, archive, target: None)
     return tmp_path, runtime, compiler, stage_path, shared_path
 
 
 def _export(admitted, **kwargs):
     root, runtime, *_ = admitted
-    return exporter.export_bundle(root, runtime, kwargs.get("source", SOURCE), kwargs.get("commit", COMMIT))
+    return exporter.export_bundle(root, runtime, kwargs.get("source", SOURCE), kwargs.get("commit", COMMIT), platform_id="linux-x86_64")
 
 
 def _assert_unpublished(admitted):
@@ -101,6 +139,11 @@ def _assert_unpublished(admitted):
 
 
 def test_export_preserves_exact_bytes_modes_receipts_and_whitelist(admitted, monkeypatch):
+    from pcc.frontends.python.owned_runtime_build import runtime_build_config
+
+    monkeypatch.setenv("PCC_WITH_THREADS", "1")
+    monkeypatch.setenv("PCC_REFCOUNT_KIND", "atomic")
+    assert runtime_build_config() == RUNTIME_CONFIG
     root, runtime, compiler, stage_path, shared_path = admitted
     omitted = compiler.parent / "huge-intermediate.pco"
     omitted.write_bytes(b"excluded intermediate")
@@ -126,10 +169,10 @@ def test_export_preserves_exact_bytes_modes_receipts_and_whitelist(admitted, mon
     directory = root / exporter.OUTPUT_DIRECTORY
     assert set(path.name for path in directory.iterdir()) == {exporter.ARCHIVE_NAME, "manifest.json"}
     assert set(result["files"]) == set(inputs)
-    assert result["schema"] == "pcc.ci-stage1-bundle.v1"
+    assert result["schema"] == "pcc.ci-stage1-bundle.v2"
     assert result["claim"] == "Stage1 identity only; not five-GC, prior, wheel or fixed-point qualification"
     assert result["source"] == {"commit": COMMIT, "source_sha256": SOURCE, "clean_commit": True}
-    assert result["target"] == exporter.TARGET and result["runtime_config"] == exporter.CONFIG
+    assert result["target"] == exporter.TARGET and result["runtime_config"] == RUNTIME_CONFIG
     manifest_bytes = (directory / "manifest.json").read_bytes()
     assert json.loads(manifest_bytes) == result
     with tarfile.open(directory / exporter.ARCHIVE_NAME, "r:gz") as archive:
@@ -197,7 +240,7 @@ def test_export_rejects_missing_whitelisted_files(admitted, member):
 def test_export_rejects_changed_payload_hash_and_removes_partial_tar(admitted, member):
     path = admitted[2] if member == "pcc1" else Path(str(admitted[1]) + member)
     data = path.read_bytes()
-    path.write_bytes(b"X" + data[1:])
+    path.write_bytes(data[:-1] + b"X")
     with pytest.raises(ValueError, match="hash or size mismatch"):
         _export(admitted)
     _assert_unpublished(admitted)
@@ -215,11 +258,15 @@ def test_export_rejects_canary_bytes_that_differ_from_producer_hashes(admitted, 
 def test_export_rechecks_log_bytes_after_capturing_their_manifest_hash(admitted, monkeypatch):
     path = admitted[2].parent / "stage1.log"
     path.write_bytes(b"original")
+    original_stat = path.stat()
     original_add = tarfile.TarFile.addfile
 
     def changed(archive, header, *args, **kwargs):
         if header.name == SHARED + "pcc1":
             path.write_bytes(b"modified")  # same length, different bytes
+            # Keep this a hash-specific oracle despite the earlier metadata
+            # stability guard; unchanged metadata must not admit changed bytes.
+            os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
         return original_add(archive, header, *args, **kwargs)
 
     monkeypatch.setattr(tarfile.TarFile, "addfile", changed)
@@ -243,7 +290,7 @@ def test_export_rejects_disagreeing_receipt_hashes(admitted, member):
 
 
 @pytest.mark.parametrize("field,value", (("path", "/other/runtime.a"), ("target", "aarch64-unknown-linux-gnu"),
-                                        ("config", {"threads": True, "refcount": "atomic"})))
+                                        ("config", {"threads": False, "refcount": "atomic"})))
 def test_export_rejects_wrong_runtime_identity(admitted, field, value):
     path = admitted[3]
     record = json.loads(path.read_text())
@@ -302,7 +349,7 @@ def test_export_never_overwrites_an_existing_export(admitted):
 def test_cli_uses_admission_arguments_and_reports_actual_fixture_size(admitted, monkeypatch, capsys):
     monkeypatch.setattr(exporter, "ROOT", admitted[0])
     monkeypatch.setattr(exporter.sys, "platform", "linux")
-    monkeypatch.setattr(exporter.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(bundle.platform, "machine", lambda: "x86_64")
     monkeypatch.setenv("GITHUB_SHA", COMMIT)
     exporter.main(["--runtime-archive", str(admitted[1]), "--source-sha256", SOURCE])
     record = json.loads(capsys.readouterr().out)
@@ -314,11 +361,11 @@ def test_cli_uses_admission_arguments_and_reports_actual_fixture_size(admitted, 
 
 
 @pytest.mark.parametrize("system,machine", (("linux", "aarch64"), ("darwin", "arm64"), ("win32", "AMD64")))
-def test_cli_rejects_platforms_outside_linux_x86_64(admitted, monkeypatch, system, machine):
+def test_cli_rejects_explicit_platform_different_from_native_host(admitted, monkeypatch, system, machine):
     monkeypatch.setattr(exporter.sys, "platform", system)
-    monkeypatch.setattr(exporter.platform, "machine", lambda: machine)
-    with pytest.raises(ValueError, match="restricted to Linux x86-64"):
-        exporter.main(["--runtime-archive", str(admitted[1]), "--source-sha256", SOURCE])
+    monkeypatch.setattr(bundle.platform, "machine", lambda: machine)
+    with pytest.raises(ValueError, match="platform differs from native host"):
+        exporter.main(["--platform", "linux-x86_64", "--runtime-archive", str(admitted[1]), "--source-sha256", SOURCE])
     _assert_unpublished(admitted)
 
 
@@ -391,7 +438,8 @@ def test_exported_relocated_tree_passes_the_real_platform_consumer(tmp_path, mon
     _save(root / STAGE_RECEIPT, {
         "phase": "stage1", "status": "PASS", "source": shared["source"],
         "compiler": {"path": shared["compiler_path"], "sha256": shared["stages"][0]["sha256"]},
-        "runtime": {"path": str(runtime), "target": exporter.TARGET, "config": exporter.CONFIG,
+        "runtime": {"path": str(runtime), "target": exporter.TARGET,
+                    "config": shared["configuration"]["runtime"].copy(),
                     "hashes": {suffix: shared["runtime"][key] for suffix, key in (
                         ("", "sha256"), (".provenance.json", "provenance_sha256"),
                         (".capi_syms", "capi_inventory_sha256"))}},
@@ -404,7 +452,7 @@ def test_exported_relocated_tree_passes_the_real_platform_consumer(tmp_path, mon
     monkeypatch.setattr(producer, "run", forbidden)
     monkeypatch.setattr(producer.subprocess, "Popen", forbidden)
     monkeypatch.setattr(owned_runtime_build, "ensure_target_runtime", forbidden)
-    exporter.export_bundle(root, runtime, shared["source"]["source_sha256"], COMMIT)
+    exporter.export_bundle(root, runtime, shared["source"]["source_sha256"], COMMIT, platform_id="linux-x86_64")
     relocated = tmp_path / "downloaded"
     relocated.mkdir()
     with tarfile.open(root / exporter.OUTPUT_DIRECTORY / exporter.ARCHIVE_NAME) as archive:
@@ -427,29 +475,32 @@ def test_exported_relocated_tree_passes_the_real_platform_consumer(tmp_path, mon
     assert receipt.read_bytes() == original_receipt
 
 
-def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_test():
+def test_workflow_packages_stage1_without_another_native_build():
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    assert "scripts/ci_stage1_artifact_export.py --platform" in workflow
+    assert "scripts/ci_stage1_artifact_export.py" in workflow
+    assert "tests/test_ci_stage1_artifact_export.py" in workflow
+    assert "tests/test_ci_stage1_bundle.py" in workflow
+    assert "build/stage1-native-export/stage1-native.tar.gz" in workflow
+    assert "build/stage1-native-export/manifest.json" in workflow
+    assert "github.run_attempt" in workflow
+
+
+def test_export_rejects_stale_current_runtime_admission(admitted, monkeypatch):
+    calls = []
+    def stale(root, archive, target):
+        calls.append((root, archive, target))
+        raise ValueError("explicit test runtime is stale for current codegen")
+    monkeypatch.setattr(exporter, "_admit_runtime", stale)
+    with pytest.raises(ValueError, match="stale for current codegen"):
+        _export(admitted)
+    assert calls == [(admitted[0], admitted[1], exporter.TARGET)]
+    _assert_unpublished(admitted)
+
+
+def test_workflow_retains_original_host_regressions_and_default_workers():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     job = workflow.split("  other-platform-native-wheel:\n", 1)[1].split("  pcc1-package-parity:\n", 1)[0]
-    packing = job.split("      - name: Export the admitted Linux x86-64 Stage1 identity\n", 1)[1].split("      - name:", 1)[0]
-    upload = job.split("      - name: Preserve the existing Linux x86-64 Stage1 bundle\n", 1)[1].split("      - name:", 1)[0]
-    assert "matrix.platform == 'linux-x86_64'" in packing
-    assert "steps.platform_qualification.outcome == 'success'" in packing
-    assert "steps.platform_runtime.outputs.ready == 'true'" in packing
-    assert "PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}" in packing
-    assert "PCC_STAGE1_EXPORT_SOURCE_SHA256: ${{ steps.platform_runtime.outputs.source_sha256 }}" in packing
-    assert "--runtime-archive \"$PCC_RUNTIME_ARCHIVE\" --source-sha256 \"$PCC_STAGE1_EXPORT_SOURCE_SHA256\"" in packing
-    assert 'output.write("source_sha256=" + source["source_sha256"] + "\\n")' in job
-    assert job.index("id: platform_runtime") < job.index("id: stage1_export") < job.index("Verify the compiled sibling platform machine provider")
-    assert job.index("id: stage1_export") < job.index("Verify GC4 relocation") < job.index("Verify the new pcc1")
-    assert "matrix.platform == 'linux-x86_64'" in upload
-    assert "steps.stage1_export.outcome == 'success'" in upload
-    assert "uses: actions/upload-artifact@v4" in upload
-    assert "compression-level: 0" in upload and "retention-days: 7" in upload
-    assert "if-no-files-found: error" in upload
-    assert "${{ github.sha }}-${{ github.run_attempt }}" in upload
-    assert upload.split("          path: |\n", 1)[1].strip().splitlines() == [
-        "build/stage1-native-export/stage1-native.tar.gz", "            build/stage1-native-export/manifest.json",
-    ]
     host = job.split("      - name: Verify host Stage2 export-retention", 1)[1].split("      #", 1)[0]
     host_tests = (
         "tests/python/test_stage2_export_capture.py",
@@ -498,3 +549,148 @@ def test_workflow_exports_only_admitted_x64_before_later_gates_and_runs_this_tes
         "tests/python/test_pipeline_ir_frame_maps.py",
     ):
         assert workflow.count('      - "' + path + '"') == 2
+
+
+def _stat_fields(info, **changes):
+    from types import SimpleNamespace
+    values = {key: getattr(info, key) for key in
+              ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")}
+    return SimpleNamespace(**(values | changes))
+
+
+def _as_windows_product(admitted):
+    """Synthetic PE payloads; only filesystem/archive operations are real."""
+    root, runtime, compiler, stage_path, shared_path = admitted
+    stage = json.loads(stage_path.read_text())
+    shared = json.loads(shared_path.read_text())
+    compiler = compiler.rename(compiler.with_suffix(".exe"))
+    canary = (compiler.parent / "canary1").rename(compiler.parent / "canary1.exe")
+    for path in (compiler, canary):
+        path.write_bytes(_native_header("windows-x86_64"))
+        path.chmod(0o777)
+    stage["compiler"] = {"path": str(compiler), "sha256": _sha(compiler.read_bytes())}
+    stage["runtime"]["target"] = bundle.PLATFORMS["windows-x86_64"]["target"]
+    shared["compiler_path"] = str(compiler)
+    shared["target"] = stage["runtime"]["target"]
+    shared["stages"][0]["sha256"] = stage["compiler"]["sha256"]
+    shared["stages"][0]["canary"]["executable_sha256"] = _sha(canary.read_bytes())
+    _save(stage_path, stage)
+    _save(shared_path, shared)
+    return root, runtime, compiler, stage_path, shared_path
+
+
+def _windows_fd_modes(monkeypatch, paths, mutation=None):
+    """Model CPython's filename-independent Windows fstat, not native execution."""
+    original = os.fstat
+    identities = {(p.stat().st_dev, p.stat().st_ino) for p in paths}
+    calls = {}
+
+    def fstat(fd):
+        info = original(fd)
+        identity = (info.st_dev, info.st_ino)
+        if identity not in identities:
+            return info
+        calls[identity] = calls.get(identity, 0) + 1
+        info = _stat_fields(info, st_mode=0o100666)
+        return mutation(info, calls[identity]) if mutation else info
+
+    monkeypatch.setattr(exporter.os, "fstat", fstat)
+    return calls
+
+
+@pytest.mark.parametrize("platform_id", tuple(bundle.PLATFORMS))
+def test_opened_identity_binds_stat_channels_without_masking_modes(platform_id):
+    from types import SimpleNamespace
+    path = SimpleNamespace(st_dev=7, st_ino=11, st_mode=0o100777,
+                           st_size=512, st_mtime_ns=123456789)
+    exporter._require_opened_identity(path, path, "fixture", platform_id)
+    fd = _stat_fields(path, st_mode=0o100666)
+    if platform_id == "windows-x86_64":
+        exporter._require_opened_identity(path, fd, "fixture", platform_id)
+    else:
+        with pytest.raises(ValueError, match="opened file differs"):
+            exporter._require_opened_identity(path, fd, "fixture", platform_id)
+    for key, value in (("st_dev", 8), ("st_ino", 12), ("st_mode", 0o040777),
+                       ("st_size", 513), ("st_mtime_ns", 123456790)):
+        with pytest.raises(ValueError, match="opened file differs"):
+            exporter._require_opened_identity(path, _stat_fields(path, **{key: value}),
+                                              "fixture", platform_id)
+
+
+def test_windows_path_and_fd_mode_channels_roundtrip_without_rewriting(admitted, monkeypatch):
+    admitted = _as_windows_product(admitted)
+    root, runtime, compiler, *_ = admitted
+    canary = compiler.parent / "canary1.exe"
+    calls = _windows_fd_modes(monkeypatch, (compiler, canary))
+    manifest = exporter.export_bundle(root, runtime, SOURCE, COMMIT,
+                                      platform_id="windows-x86_64")
+    originals = {name: (root / name).read_bytes() for name in manifest["files"]}
+    directory = root / exporter.OUTPUT_DIRECTORY
+    with tarfile.open(directory / exporter.ARCHIVE_NAME) as archive:
+        for path in (compiler, canary):
+            name = path.relative_to(root).as_posix()
+            assert path.stat().st_mode & 0o7777 == manifest["files"][name]["mode"] == 0o777
+            assert archive.getmember(name).mode == 0o777
+            assert archive.extractfile(name).read() == originals[name]
+    assert len(calls) == 2 and set(calls.values()) == {4}
+    for name in originals:
+        (root / name).unlink()
+    actual = bundle.import_bundle(root, directory, COMMIT, "windows-x86_64",
+                                  bundle.workflow_lease())
+    assert actual == manifest
+    assert all((root / name).read_bytes() == data for name, data in originals.items())
+
+
+@pytest.mark.parametrize("platform_id", ("linux-x86_64", "windows-x86_64"))
+@pytest.mark.parametrize("change", ("mode", "mtime", "replacement", "size", "hash", "symlink"))
+def test_export_still_rejects_path_changes_before_packing(admitted, monkeypatch, platform_id, change):
+    if platform_id == "windows-x86_64":
+        admitted = _as_windows_product(admitted)
+    root, runtime, compiler, *_ = admitted
+    target = compiler.parent / ("canary1.exe" if platform_id == "windows-x86_64" else "canary1")
+    if platform_id == "windows-x86_64":
+        _windows_fd_modes(monkeypatch, (compiler, target))
+
+    def mutate(*args):
+        original = target.stat()
+        if change == "mode":
+            target.chmod(0o444)
+        elif change == "mtime":
+            os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns + 1_000_000_000))
+        elif change in ("replacement", "symlink"):
+            moved = target.with_name(target.name + ".original")
+            target.rename(moved)
+            if change == "symlink":
+                target.symlink_to(moved)
+            else:
+                target.write_bytes(moved.read_bytes())
+                target.chmod(original.st_mode & 0o7777)
+                os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+        else:
+            content = target.read_bytes()
+            target.write_bytes(content + b"extra" if change == "size" else content[:-1] + bytes([content[-1] ^ 1]))
+            # Same-length/content mutation must still fail the receipt hash,
+            # even if the publisher preserved the recorded mtime.
+            os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    monkeypatch.setattr(exporter, "_admit_runtime", mutate)
+    with pytest.raises(ValueError, match="changed|hash or size mismatch|regular, non-symlink"):
+        exporter.export_bundle(root, runtime, SOURCE, COMMIT, platform_id=platform_id)
+    _assert_unpublished(admitted)
+
+
+@pytest.mark.parametrize("call", (2, 3, 4))
+@pytest.mark.parametrize("field,value", (("st_mode", 0o100444), ("st_mode", 0o040666),
+                                         ("st_ino", -1), ("st_mtime_ns", -1)))
+def test_windows_fd_changes_rejected_during_admission_and_packing(admitted, monkeypatch, call, field, value):
+    admitted = _as_windows_product(admitted)
+    root, runtime, compiler, *_ = admitted
+    canary = compiler.parent / "canary1.exe"
+
+    def mutate(info, number):
+        return _stat_fields(info, **{field: value}) if number == call else info
+
+    _windows_fd_modes(monkeypatch, (canary,), mutate)
+    with pytest.raises(ValueError, match="changed|opened file differs"):
+        exporter.export_bundle(root, runtime, SOURCE, COMMIT, platform_id="windows-x86_64")
+    _assert_unpublished(admitted)

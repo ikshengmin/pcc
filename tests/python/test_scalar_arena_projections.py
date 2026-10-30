@@ -190,28 +190,30 @@ def _reference_text_sha256(content):
     return hashlib.sha256(content.replace(b"\r\n", b"\n")).hexdigest()
 
 
-def test_frozen_source_oracle_and_complete_site_inventory():
-    reference = REFERENCE.read_bytes()
-    assert _reference_text_sha256(reference) == REFERENCE_SHA256
-    lf = reference.replace(b"\r\n", b"\n")
-    crlf = lf.replace(b"\n", b"\r\n")
-    assert _reference_text_sha256(lf) == _reference_text_sha256(crlf) == REFERENCE_SHA256
-    for changed in (lf + b" ", lf.replace(b"\n", b"\r", 1), lf.replace(b"1afe", b"0afe", 1)):
-        assert changed != lf
-        assert _reference_text_sha256(changed) != REFERENCE_SHA256
-    assert [sum(site["group"] == group for site in SITES) for group in "ABC"] == [5, 40, 10]
-    assert len({site["path"] for site in SITES}) == 10
-    for site in SITES:
-        assert site["window_offset"] in (0, 4)
-        assert site["window_offset"] <= site["cell_offset"] <= site["window_offset"] + 3
+def _assert_scalar_snapshot_inventory(functions):
     # Keep snapshot locals on their original four-cell representation. The
     # native frontend inventories the first value-bearing local assignment;
     # a fast-path None store before the fallback allocates an object slot.
-    owners = {(site["path"], site["owner"]) for site in SITES}
     projections = 0
     bindings = 0
-    for path, owner in owners:
-        function = _function(path, owner)
+    atomic_bindings = 0
+    atomic_contract = ast.parse(
+        "if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:\n"
+        "    header: CompilerInt4 = kernel.type_header(raw.first)\n"
+        "    return raw.first if header.first == TYPE_KIND_INT else -1\n"
+    ).body[0]
+    for (path, owner), function in functions.items():
+        atomic_snapshot = None
+        if (path, owner) == (
+            "pcc/backend/self_backend_aarch64_darwin_regalloc.py",
+            "_candidate_indexed_definition_type_id",
+        ):
+            # Atomic integer loads gained a separate full snapshot after the
+            # frozen projection change. Its shared local name is not another
+            # projection or fallback; keep its exact shape checked separately.
+            atomic_branch = function.body[1]
+            assert ast.dump(atomic_branch) == ast.dump(atomic_contract)
+            atomic_snapshot = atomic_branch.body[0]
         guards = [node for node in ast.walk(function)
                   if isinstance(node, ast.If) and isinstance(node.test, ast.Name)
                   and node.test.id.endswith("_is_scalar")]
@@ -232,8 +234,69 @@ def test_frozen_source_oracle_and_complete_site_inventory():
                 if isinstance(target, ast.Name) and target.id in names:
                     assert isinstance(node.value, ast.Call)
                     assert isinstance(node.value.func, ast.Attribute)
-                    bindings += 1
-    assert (len(owners), projections, bindings) == (35, 55, 111)
+                    if node is atomic_snapshot:
+                        atomic_bindings += 1
+                    else:
+                        bindings += 1
+    assert (len(functions), projections, bindings) == (35, 55, 111)
+    assert atomic_bindings == 1
+
+
+def test_frozen_source_oracle_and_complete_site_inventory():
+    reference = REFERENCE.read_bytes()
+    assert _reference_text_sha256(reference) == REFERENCE_SHA256
+    lf = reference.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    assert _reference_text_sha256(lf) == _reference_text_sha256(crlf) == REFERENCE_SHA256
+    for changed in (lf + b" ", lf.replace(b"\n", b"\r", 1), lf.replace(b"1afe", b"0afe", 1)):
+        assert changed != lf
+        assert _reference_text_sha256(changed) != REFERENCE_SHA256
+    assert [sum(site["group"] == group for site in SITES) for group in "ABC"] == [5, 40, 10]
+    assert len({site["path"] for site in SITES}) == 10
+    for site in SITES:
+        assert site["window_offset"] in (0, 4)
+        assert site["window_offset"] <= site["cell_offset"] <= site["window_offset"] + 3
+    owners = {(site["path"], site["owner"]) for site in SITES}
+    functions = {key: _function(*key) for key in owners}
+    _assert_scalar_snapshot_inventory(functions)
+
+    # Mutations exercise the inventory guard itself without importing or
+    # executing production compiler code, and without changing node counts.
+    atomic_owner = (
+        "pcc/backend/self_backend_aarch64_darwin_regalloc.py",
+        "_candidate_indexed_definition_type_id",
+    )
+    for mutation in (
+        "missing", "duplicate", "none", "annotation", "accessor",
+        "return", "ordinary-fallback-none",
+    ):
+        changed = functions.copy()
+        function = copy.deepcopy(functions[atomic_owner])
+        changed[atomic_owner] = function
+        branch = function.body[1]
+        if mutation == "missing":
+            del function.body[1]
+        elif mutation == "duplicate":
+            function.body.insert(2, copy.deepcopy(branch))
+        elif mutation == "none":
+            branch.body[0].value = ast.Constant(value=None)
+        elif mutation == "annotation":
+            branch.body[0].annotation = ast.Name(id="object", ctx=ast.Load())
+        elif mutation == "accessor":
+            branch.body[0].value.func.attr = "value_header"
+        elif mutation == "return":
+            branch.body[1].value.orelse = ast.Constant(value=0)
+        else:
+            fallback = next(
+                node for node in ast.walk(function)
+                if isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "header"
+                and node is not branch.body[0]
+            )
+            fallback.value = ast.Constant(value=None)
+        with pytest.raises(AssertionError):
+            _assert_scalar_snapshot_inventory(changed)
 
 
 @pytest.mark.parametrize("site", SITES, ids=lambda site: site["group"] + "-" + Path(site["path"]).stem + "-" + str(site["line"]))

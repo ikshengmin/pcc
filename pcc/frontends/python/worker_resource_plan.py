@@ -166,6 +166,103 @@ def estimated_task_bytes(task, observations) -> int:
     return estimate
 
 
+def _modeled_observation_ratio(observations, execution_class, model):
+    """Fold a plain modeled snapshot, or defer all validation to the reader.
+
+    This is only an acceleration hint while computing one sort's keys. Never
+    reject here: legacy envelopes, malformed rows and non-builtin objects
+    retain the original estimator's lazy validation and exception ordering.
+    Only immutable class/model/peak/prior fields participate in the ratio;
+    modeled observations do not read their mutable input-envelope list.
+    """
+    if type(observations) is not list and type(observations) is not tuple:
+        return None
+    numerator = 0
+    denominator = 1
+    for sample in observations:
+        if type(sample) is not tuple or len(sample) not in (3, 4):
+            return None
+        if type(sample[0]) is not str:
+            return None
+        if sample[0] != execution_class:
+            continue
+        if len(sample) != 4:
+            return None
+        fitted = sample[3]
+        peak = sample[2]
+        if (type(fitted) is not tuple or len(fitted) != 2
+                or type(fitted[0]) is not str or fitted[0] != model
+                or type(fitted[1]) is not int or fitted[1] <= 0
+                or type(peak) is not int or peak <= 0):
+            return None
+        padded = peak_reservation(peak)
+        if padded * denominator > numerator * fitted[1]:
+            numerator = padded
+            denominator = fitted[1]
+    return numerator, denominator
+
+
+def _choose_task_estimate(task, observations, ratio_cache) -> int:
+    """Keep exact whole-prior forecasts without rescanning modeled history."""
+    if type(task) is not dict:
+        ratio_cache.clear()
+        return estimated_task_bytes(task, observations)
+    model = task.get("startup_prior_model", "")
+    execution_class = task.get("class")
+    if (type(model) is not str or not model
+            or type(execution_class) is not str):
+        ratio_cache.clear()
+        return estimated_task_bytes(task, observations)
+    inputs = task.get("inputs")
+    if ((type(inputs) is not list and type(inputs) is not tuple)
+            or any(type(value) is not int for value in inputs)
+            or type(task.get("estimate_bytes")) is not int
+            or type(task.get("incomplete_peak_bytes", 0)) is not int
+            or type(task.get("input_ready", False)) is not bool
+            or type(task.get("prior_input_bytes", 0)) is not int):
+        # Custom conversions/iterators may mutate history while being read.
+        # Do not let that compatibility path leave a cached ratio behind.
+        ratio_cache.clear()
+        return estimated_task_bytes(task, observations)
+    key = execution_class, model
+    if key not in ratio_cache:
+        ratio_cache[key] = _modeled_observation_ratio(
+            observations, execution_class, model,
+        )
+    ratio = ratio_cache[key]
+    if ratio is None:
+        ratio_cache.clear()
+        return estimated_task_bytes(task, observations)
+    prior = task_startup_prior_bytes(task)
+    estimate = max(0, int(task["estimate_bytes"]), prior)
+    incomplete_peak = int(task.get("incomplete_peak_bytes", 0))
+    if incomplete_peak > 0:
+        estimate = max(estimate, peak_reservation(incomplete_peak))
+    # ceil is monotone, so max(ceil(P * each ratio)) equals this one ceil.
+    # Keep arbitrary-precision cross products and the existing raw/fixed floors.
+    numerator, denominator = ratio
+    return max(estimate, (prior * numerator + denominator - 1) // denominator)
+
+
+
+def _sort_modeled_tasks(pending, tasks, observations):
+    """Share modeled ratios only while computing this sort's integer keys.
+
+    After the sort, guards and selection re-read the original observations.
+    Custom sequence/index callbacks retain the uncached sorting path too.
+    """
+    if ((type(pending) is not list and type(pending) is not tuple)
+            or (type(tasks) is not list and type(tasks) is not tuple)
+            or any(type(index) is not int for index in pending)):
+        return sorted(pending, key=lambda index: (
+            -estimated_task_bytes(tasks[index], observations), index,
+        ))
+    ratio_cache = {}
+    return sorted(pending, key=lambda index: (
+        -_choose_task_estimate(tasks[index], observations, ratio_cache), index,
+    ))
+
+
 def minimum_task_bytes(task) -> int:
     """Retain explicit reservations and this task's observed lower bound.
 
@@ -401,9 +498,7 @@ def choose_task(pending, tasks, observations, active_reservations,
         # Re-evaluate after dependency/input preparation and after every live
         # observation. Select the largest fitting ready forecast, not a stale
         # initial ordering with zero-sized backend placeholders.
-        pending = sorted(pending, key=lambda index: (
-            -estimated_task_bytes(tasks[index], observations), index,
-        ))
+        pending = _sort_modeled_tasks(pending, tasks, observations)
         if (pending and guarded_calibration and available > 0
                 and tasks[pending[0]].get("startup_prior_model", "")
                 and estimated_task_bytes(tasks[pending[0]], observations) > available):

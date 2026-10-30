@@ -11,10 +11,15 @@ import pytest
 # (``call ptr (ptr) @f(...)``); these assertions were written against the
 # short form, which carries the same callee and operands.
 _EXPLICIT_CALL_TYPE = re.compile(r"\bcall (\S+) \((?:[^()]|\([^()]*\))*\) @")
+# A proven pcc owner is consumed through pcc_gc_release_known, the same
+# one-reference release with its managed-object check already discharged.
+# Fold it into pcc_gc_release so every "released" and "not released"
+# assertion below covers both spellings.
+_KNOWN_RELEASE = re.compile(r"@pcc_gc_release_known\(")
 
 
 def _normalize_call_types(ir_text: str) -> str:
-    return _EXPLICIT_CALL_TYPE.sub(r"call \1 @", ir_text)
+    return _KNOWN_RELEASE.sub("@pcc_gc_release(", _EXPLICIT_CALL_TYPE.sub(r"call \1 @", ir_text))
 
 
 def _compile_to_ir(tmp_path, source: str) -> str:

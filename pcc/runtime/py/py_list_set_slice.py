@@ -55,6 +55,7 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_scheduler_root_register_handle = extern(
     "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
 )
@@ -444,12 +445,16 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         return -1
     repl_len: int = load_i64(snapshot, 16)
     backend: int = pcc_gc_backend()
+    # Replacing the item array without the graph lock is single-threaded only.
+    unlocked: int = 0
+    if backend == 0 and pcc_threads_enabled() == 0:
+        unlocked = 1
     lo_out = stack_alloc(8)
     hi_out = stack_alloc(8)
     attempt: int = 0
     while attempt < 8:
         attempt = attempt + 1
-        if backend == 0:
+        if unlocked != 0:
             lst = _reload_moving_root(list_slot, list_handle_slot)
             old_len: int = load_i64(lst, 16)
             old_capacity: int = load_i64(lst, 24)
@@ -522,7 +527,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 idx = idx + step_v
                 i = i + 1
 
-        if backend == 0:
+        if unlocked != 0:
             built: int = 0
             i = 0
             while i < new_len:

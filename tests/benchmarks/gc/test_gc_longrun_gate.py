@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -125,6 +128,7 @@ def test_resource_budget_keeps_the_gc4_retained_gap_byte_pinned() -> None:
 def test_run_gate_executes_alternating_repeats_and_aggregates(monkeypatch) -> None:
     calls: list[tuple[int, int]] = []
 
+    monkeypatch.setattr(longrun_gate, "_child_cpu_usage_us", lambda: (1250000, 500000))
     monkeypatch.setattr(
         longrun_gate,
         "build_workload",
@@ -188,3 +192,102 @@ def test_run_gate_rejects_unbounded_repeat_counts(monkeypatch, repeats) -> None:
             backend_timeout=1,
             repeats=repeats,
         )
+
+
+def test_helpers_import_without_resource(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "resource", None)
+    spec = importlib.util.spec_from_file_location(
+        "_pcc_longrun_without_resource", longrun_gate.__file__
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert not module.manual_gate_enabled({})
+    assert module._parse_backends("0,4") == (0, 4)
+    with pytest.raises(module.GCLongrunGateError, match="child CPU usage"):
+        module._child_cpu_usage_us()
+
+
+@pytest.mark.parametrize("capability", ["module", "getrusage", "RUSAGE_CHILDREN"])
+def test_missing_child_cpu_capability_fails_closed(monkeypatch, capability) -> None:
+    resource = SimpleNamespace(getrusage=lambda _: None, RUSAGE_CHILDREN=-1)
+    if capability == "module":
+        resource = None
+    else:
+        delattr(resource, capability)
+    monkeypatch.setitem(sys.modules, "resource", resource)
+
+    with pytest.raises(GCLongrunGateError, match="child CPU usage"):
+        longrun_gate._child_cpu_usage_us()
+
+
+@pytest.mark.parametrize("error", [OSError("unavailable"), NotImplementedError()])
+def test_child_cpu_measurement_failure_fails_closed(monkeypatch, error) -> None:
+    def getrusage(_who):
+        raise error
+
+    monkeypatch.setitem(
+        sys.modules,
+        "resource",
+        SimpleNamespace(getrusage=getrusage, RUSAGE_CHILDREN=-1),
+    )
+    with pytest.raises(GCLongrunGateError, match="child CPU usage") as raised:
+        longrun_gate._child_cpu_usage_us()
+    assert raised.value.__cause__ is error
+
+
+def test_child_cpu_measurement_preserves_user_and_system_values(monkeypatch) -> None:
+    children = object()
+    calls = []
+
+    def getrusage(who):
+        calls.append(who)
+        return SimpleNamespace(ru_utime=1.25, ru_stime=0.5)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "resource",
+        SimpleNamespace(getrusage=getrusage, RUSAGE_CHILDREN=children),
+    )
+    assert longrun_gate._child_cpu_usage_us() == (1_250_000, 500_000)
+    assert calls == [children]
+
+
+def test_missing_child_cpu_measurement_rejects_gate_before_build(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "resource", None)
+    monkeypatch.setattr(
+        longrun_gate,
+        "build_workload",
+        lambda **_kwargs: pytest.fail("unsupported measurement reached the build"),
+    )
+    with pytest.raises(GCLongrunGateError, match="child CPU usage"):
+        run_gate(rounds=600, backends=(0,), build_timeout=1, backend_timeout=1)
+
+
+def test_missing_child_cpu_measurement_rejects_backend_before_launch(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "resource", None)
+    monkeypatch.setattr(
+        longrun_gate,
+        "_run_checked",
+        lambda *_args, **_kwargs: pytest.fail("unsupported measurement launched"),
+    )
+    with pytest.raises(GCLongrunGateError, match="child CPU usage"):
+        longrun_gate.run_backend(Path("unused"), backend=0, rounds=600, timeout=1)
+
+
+def test_missing_child_cpu_measurement_cli_writes_no_manifest(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.setitem(sys.modules, "resource", None)
+    monkeypatch.setattr(
+        longrun_gate,
+        "build_workload",
+        lambda **_kwargs: pytest.fail("unsupported measurement reached the build"),
+    )
+    output = tmp_path / "manifest.json"
+    assert longrun_gate.main(["--rounds", "600", "--output", str(output)]) == 2
+    captured = capsys.readouterr()
+    assert "child CPU usage measurement is unavailable" in captured.err
+    assert captured.out == ""
+    assert not output.exists()

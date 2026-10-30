@@ -21,6 +21,7 @@ class MaterializeMemory(DictMemory):
         self.retired_tables = set()
         self.frames = []
         self.ns.update(
+            i64=int,
             pcc_gc_frame_enter=self.frame_enter,
             pcc_gc_frame_leave=self.frame_leave,
             pcc_gc_pin=self.pin,
@@ -29,8 +30,15 @@ class MaterializeMemory(DictMemory):
             py_list_new=self.new_list,
             py_tuple_new=self.new_tuple,
             py_list_append=self.append_list,
+            py_list_append_from_slots=self.append_from_slots,
+            pcc_gc_root_copy_owned_prepare_locked=self.copy_owned_prepare,
+            pcc_gc_store_root_plan_finish=self.copy_finish,
             py_tuple_set_item=self.set_tuple,
+            pcc_tuple_from_owned_roots_lease=self.tuple_from_owned_roots,
             pcc_gc_store_root=self.store_root,
+            # This model is the general slot protocol; the GC0 transaction
+            # is test_dict_materialize_gc0_transaction's.
+            _dict_gc0_materialize=lambda receiver, kind, output: 0,
         )
         tree = ast.parse(PORT.read_text())
         for node in tree.body:
@@ -75,6 +83,22 @@ class MaterializeMemory(DictMemory):
             return
         super().set_tuple(obj,index,value)
 
+    def tuple_from_owned_roots(self, sources, count, output):
+        pair = self.new_tuple(count)
+        if pair is None:
+            return -1
+        self.write(output, 0, pair)
+        for index in range(count):
+            if self.fail('pair' + str(index)):
+                return -1
+            source = self.read(sources, index * abi.C_POINTER_SIZE)
+            value = self.read(source, 0)
+            if isinstance(value, Object):
+                assert value.leases == 0
+            pair.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
+            self.write(source, 0, None)
+        return self.acquire(output)
+
     def append_list(self, obj, value):
         self.collect('callback')
         if self.fail('append'):
@@ -82,6 +106,36 @@ class MaterializeMemory(DictMemory):
         super().append_list(obj,value)
         if self.after_append:
             callback,self.after_append=self.after_append,None
+            callback()
+
+    def copy_owned_prepare(self, destination, source, plan):
+        token = self.copy_prepare(destination, source, 0, plan)
+        if token < 0:
+            return token
+        value = self.read(destination, 0)
+        if isinstance(value, Object):
+            value.leases -= token
+        return 0
+
+    def append_from_slots(self, destination, source, borrowed):
+        assert borrowed == 0
+        token = self.acquire(destination)
+        self.collect('callback')
+        failed = self.fail('append')
+        if not failed:
+            self.lock()
+            obj, value = self.read(destination, 0), self.read(source, 0)
+            assert obj.alive and obj.leases > 0
+            count = obj.fields[abi.PYLISTOBJECT_LENGTH_OFFSET]
+            self.write(obj.fields[abi.PYLISTOBJECT_ITEMS_OFFSET], count * 8, value)
+            obj.fields[abi.PYLISTOBJECT_LENGTH_OFFSET] += 1
+            if isinstance(value, Object):
+                assert value.alive and value.refs > 0
+                value.refs += 1
+            self.unlock()
+        self.release(destination, token)
+        if not failed and self.after_append:
+            callback, self.after_append = self.after_append, None
             callback()
 
     def drop(self, obj):
@@ -185,11 +239,17 @@ def test_failed_source_or_pair_copy_does_not_leak_a_lease(failed_copy):
     assert result is None and model.error
 
 
-@pytest.mark.parametrize('registration',[1,2,8,16])
-def test_partial_frame_registration_is_balanced(registration):
-    model=MaterializeMemory('register',fail_register=registration)
+@pytest.mark.parametrize('failed', [False, True])
+def test_materialization_root_group_registration_is_balanced(failed):
+    model=MaterializeMemory('register',fail_register=1 if failed else 0)
     result,_=model.materialize({'a':'first'},'items')
-    assert result is None and model.error
+    assert model.registrations == 1
+    assert not model.root_groups
+    if failed:
+        assert result is None and model.error
+    else:
+        assert model.unwrap(result) == [('a', 'first')]
+        assert model.error is None
 
 
 @pytest.mark.parametrize('kind',['keys','values','items'])
@@ -225,7 +285,8 @@ def test_table_replacement_does_not_leave_a_borrowed_payload_address(kind):
 
 
 @pytest.mark.parametrize('failed',[False,True])
-def test_output_cleanup_preserves_selected_or_entry_exception(failed):
+@pytest.mark.parametrize('kind', ['keys', 'values', 'items'])
+def test_output_cleanup_preserves_selected_or_entry_exception(failed, kind):
     model=MaterializeMemory('release')
     receiver=model.wrap({'a':'first'})
     caller=model.input_roots([receiver,None]);result=model.add(caller,8)
@@ -240,9 +301,121 @@ def test_output_cleanup_preserves_selected_or_entry_exception(failed):
         if isinstance(old,Object) and old.tag==abi.PY_TYPE_DICT and value is None:
             model.error=cleanup
     model.ns['pcc_gc_store_root']=drop_with_error
-    assert model.ns['_dict_materialize_bound'](caller,result,2)==(-1 if failed else 0)
+    assert model.ns['_dict_materialize_bound'](caller,result,{'keys':0,'values':1,'items':2}[kind])==(-1 if failed else 0)
     assert model.error==((19,'append') if failed else previous)
     assert len(model.roots)==2
+
+
+@pytest.mark.parametrize('kind', ['keys', 'values', 'items'])
+@pytest.mark.parametrize('phase', ['register', 'copy', 'acquire', 'release', 'drop', 'callback', 'lock', 'move', 'unregister'])
+def test_materialization_only_retains_and_drops_requested_children(kind, phase):
+    model = MaterializeMemory(phase)
+    prepared = []
+    finished = []
+    dropped = []
+    prepare = model.ns['pcc_gc_root_copy_owned_prepare_locked']
+    finish = model.ns['pcc_gc_store_root_plan_finish']
+    drop = model.ns['_dict_slot_drop']
+
+    def prepare_selected(destination, source, plan):
+        prepared.append((model.location(destination, 0)[1] // abi.C_POINTER_SIZE, plan))
+        return prepare(destination, source, plan)
+
+    def finish_selected(plan):
+        finished.append(plan)
+        finish(plan)
+
+    def drop_selected(slots, tokens, index):
+        dropped.append(index)
+        drop(slots, tokens, index)
+
+    model.ns.update(
+        pcc_gc_root_copy_owned_prepare_locked=prepare_selected,
+        pcc_gc_store_root_plan_finish=finish_selected,
+        _dict_slot_drop=drop_selected,
+    )
+    result, source = model.materialize({'a': 'first', 'b': 'second'}, kind)
+    roles = {'keys': [3], 'values': [4], 'items': [3, 4]}[kind]
+    assert [role for role, _ in prepared] == roles * 2
+    assert finished == [plan for _, plan in prepared]
+    assert model.copies == 1 + len(roles) * 2  # receiver plus selected children
+    # close() still visits its fixed scratch frame exactly once; the per-item
+    # cleanup must not visit the unused sibling or a nonexistent pair.
+    for role in (3, 4, 5):
+        per_item = (role in roles if kind != 'items' else role == 5)
+        assert dropped.count(role) == 1 + (2 if per_item else 0)
+    assert model.unwrap(result) == {
+        'keys': ['a', 'b'], 'values': ['first', 'second'],
+        'items': [('a', 'first'), ('b', 'second')],
+    }[kind]
+    assert model.unwrap(model.read(source, 0)) == {'a': 'first', 'b': 'second'}
+    assert result.refs == 1 and model.error is None
+
+
+@pytest.mark.parametrize('kind', ['keys', 'values'])
+@pytest.mark.parametrize('failed_copy', [2, 3])
+def test_selected_child_transfer_failure_cleans_partial_materialization(kind, failed_copy):
+    model = MaterializeMemory('release', fail_copy=failed_copy)
+    result, source = model.materialize({'a': 'first', 'b': 'second'}, kind)
+    assert result is None and model.error
+    assert model.unwrap(model.read(source, 0)) == {'a': 'first', 'b': 'second'}
+    assert all(obj.refs == 0 for obj in model.objects
+               if obj.alive and obj.tag in (abi.PY_TYPE_LIST, abi.PY_TYPE_TUPLE))
+
+
+@pytest.mark.parametrize('kind', ['keys', 'values', 'items'])
+def test_entry_replacement_can_retire_unused_sibling_after_unlock(kind):
+    model = MaterializeMemory('release')
+    receiver = model.wrap({'a': 'first', 'b': 'second'})
+    # wrap() keeps its fixture-construction references in addition to the
+    # dictionary owners. Retire those so replacing an unselected child really
+    # destroys its final owner, rather than merely decrementing a live object.
+    entries = receiver.fields[abi.PYDICTOBJECT_ENTRIES_OFFSET]
+    for index in range(2):
+        for offset in (abi.DICTENTRY_KEY_OFFSET, abi.DICTENTRY_VALUE_OFFSET):
+            model.drop(entries.fields[index * abi.DICTENTRY_SIZE + offset])
+    caller = model.input_roots([receiver, None])
+    result = model.add(caller, abi.C_POINTER_SIZE)
+    finish = model.ns['pcc_gc_store_root_plan_finish']
+    replaced = []
+    retired = []
+
+    def replace_after_selection(plan):
+        finish(plan)
+        if replaced:
+            return
+        replaced.append(True)
+        assert model.depth == 0
+        current = model.read(caller, 0)
+        old = current.fields[abi.PYDICTOBJECT_ENTRIES_OFFSET]
+        replacement = Block()
+        replacement.fields = old.fields.copy()
+        for offset, value in ((abi.DICTENTRY_KEY_OFFSET, 'new-key'),
+                              (abi.DICTENTRY_VALUE_OFFSET, 'new-value')):
+            previous = replacement.fields[offset]
+            # Transfer the new object's construction reference to the table.
+            replacement.fields[offset] = model.wrap(value)
+            model.drop(previous)
+            if previous.refs == 0:
+                assert previous.leases == 0
+                previous.alive = False
+                retired.append(previous.value)
+        current.fields[abi.PYDICTOBJECT_ENTRIES_OFFSET] = replacement
+        model.retired_tables.add(old)
+
+    model.ns['pcc_gc_store_root_plan_finish'] = replace_after_selection
+    model.runtime_active = True
+    assert model.ns['_dict_materialize_bound'](
+        caller, result, {'keys': 0, 'values': 1, 'items': 2}[kind]) == 0
+    assert retired == {'keys': ['first'], 'values': ['a'], 'items': []}[kind]
+    assert model.unwrap(model.read(result, 0)) == {
+        'keys': ['a', 'b'], 'values': ['first', 'second'],
+        'items': [('a', 'first'), ('b', 'second')],
+    }[kind]
+    assert model.unwrap(model.read(caller, 0)) == {'new-key': 'new-value', 'b': 'second'}
+    assert len(model.roots) == 2 and not model.root_groups and model.depth == 0
+    assert all(obj.leases == 0 for obj in model.objects if obj is not model.none)
+    assert model.error is None
 
 
 def test_terminal_return_lease_failure_preserves_error_while_dropping_output():
@@ -264,3 +437,23 @@ def test_terminal_return_lease_failure_preserves_error_while_dropping_output():
     result,_=model.materialize({'a':'first'},'items',raw=True)
     assert result is None
     assert model.error==(15,'dictionary result return lease failed')
+
+
+def test_materialization_slot_indices_stay_in_machine_ir(tmp_path):
+    """Two scratch-slot indices must not introduce Python integer protocols."""
+    import re
+
+    from pcc.frontends.python.owned_runtime_build import _compile_runtime_module
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    output = tmp_path / 'dict-runtime.ll'
+    _compile_runtime_module('py_dict', str(PORT), str(output), host_target_triple())
+    match = re.search(
+        r'^define [^\n]*@user_py_dict__dict_materialize_body\([^\n]*\)[^\n]*\{.*?^}',
+        output.read_text(), re.M | re.S,
+    )
+    assert match is not None
+    calls = re.findall(r'\bcall\b[^\n]*@([^ (]+)\(', match.group(0))
+    assert 'pcc_tuple_from_owned_roots_lease' in calls
+    assert not any(name.startswith('py_int_') for name in calls), calls
+    assert 'pcc_gc_frame_enter_mapped' not in calls

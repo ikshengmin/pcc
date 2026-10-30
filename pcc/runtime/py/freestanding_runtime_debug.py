@@ -123,12 +123,6 @@ def pcc_debug_bad_incref(obj, tag: int) -> None:
     _fatal(cstr("[BAD_INCREF]\n"))
 
 
-@c_abi_export("pcc_null_callee_trap")
-def pcc_null_callee_trap() -> None:
-    # The self backend lowers IR calls through a constant null callee here.
-    _fatal(cstr("[NULL_CALL]\n"))
-
-
 @c_abi_export("pcc_debug_bad_dict_slot")
 def pcc_debug_bad_dict_slot(
     dictionary, index: int, offset: int, obj, tag: int

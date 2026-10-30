@@ -29,6 +29,9 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.call_object_lowering import stable_parameter_operand_source
+from pcc.frontends.python.codegen.static_object_operands import emit_nonmoving_literal_operand
+from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
     PY_TYPE_LIST,
     PY_TYPE_TUPLE,
@@ -38,6 +41,70 @@ _I1 = ir.IntType(1)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
+
+def _append_from_caller_slots(host, receiver, item, span, permanent_item=False):
+    borrowed = getattr(host, "_slot_call_borrowed_operands", {})
+    mask = 1 if borrowed.get(id(receiver)) is receiver else 0
+    if permanent_item or borrowed.get(id(item)) is item:
+        mask |= 2
+    host.builder.call(
+        host.runtime["py_list_append_from_slots"],
+        [host._as_gc_ptr(receiver), host._as_gc_ptr(item), ir.Constant(_I64, mask)],
+    )
+    host._emit_post_call_err_check(span)
+
+
+def _stable_parameter_exact_list_guard(host, receiver, span):
+    """Memoize only exact-list membership of an unchanged parameter.
+
+    A native builtin list cannot change its class or acquire an instance
+    append attribute. Other objects stay on dynamic lookup even if their
+    class/descriptor changes. C retyping invalidates the predicate through
+    its mutation epoch. No raw address or bound method is cached.
+    """
+    borrowed = getattr(host, "_slot_call_borrowed_operands", {})
+    if borrowed.get(id(receiver)) is not receiver:
+        return None
+    guards = host._exact_list_parameter_guards
+    entry = guards.get(id(receiver))
+    if entry is None or entry[0] is not receiver or entry[1] is not host.current_function:
+        ready = host._alloca_in_entry(_I1, name=host._fresh("list.parameter.guard.ready"))
+        value = host._alloca_in_entry(_I1, name=host._fresh("list.parameter.guard.value"))
+        host._store_entry_initializer(ready, ir.Constant(_I1, 0))
+        host._store_entry_initializer(value, ir.Constant(_I1, 0))
+        epoch = host._alloca_in_entry(_I64, name=host._fresh("list.parameter.guard.epoch"))
+        host._store_entry_initializer(epoch, ir.Constant(_I64, 0))
+        entry = (receiver, host.current_function, ready, value, epoch)
+        guards[id(receiver)] = entry
+    ready, value, epoch = entry[2], entry[3], entry[4]
+    current_epoch = host.builder.load_atomic(
+        declare_runtime_global(host.module, "pcc_object_type_epoch"), "acquire", 8,
+        name=host._fresh("list.parameter.guard.current_epoch"),
+    )
+    same_epoch = host.builder.icmp_signed("==", current_epoch, host.builder.load(epoch))
+    active_epoch = host.builder.icmp_signed(
+        ">=", current_epoch, ir.Constant(_I64, 0),
+    )
+    reusable = host.builder.and_(
+        host.builder.load(ready), host.builder.and_(same_epoch, active_epoch),
+    )
+    function = host.current_function
+    query = function.append_basic_block(host._fresh("list.parameter.guard.query"))
+    done = function.append_basic_block(host._fresh("list.parameter.guard.done"))
+    host.builder.cbranch(reusable, done, query)
+    host.builder.position_at_end(query)
+    # A failing query leaves the entry invalid. Read the version before the
+    # query so a mutation during a callback cannot validate an older result.
+    host.builder.store(ir.Constant(_I1, 0), ready)
+    host.builder.store(current_epoch, epoch)
+    tag = host._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=span)
+    exact = host.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_LIST))
+    host.builder.store(exact, value)
+    host.builder.store(ir.Constant(_I1, 1), ready)
+    host.builder.branch(done)
+    host.builder.position_at_end(done)
+    return host.builder.load(value, name=host._fresh("list.parameter.guard.result"))
+
 
 # Sentinel "end" for the 2-arg ``list.index(x, start)`` form: py_list_index_range
 # clamps any ``end > length`` down to ``length``, so a value safely larger than
@@ -491,7 +558,7 @@ class ListMethodLoweringMixin:
             self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("list.pop.output"))
-            return self._take_slot_call_root(output)
+            return self._take_slot_call_root(output, source_expr=expr)
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
@@ -590,7 +657,7 @@ class ListMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("dyn.count.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_owned_list_extend(self, expr):
         """Keep the iterable owned and propagate errors before releasing call leases."""
@@ -685,7 +752,7 @@ class ListMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("list.extend.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_dyn_list_method_with_runtime_guard(
         self,
@@ -704,13 +771,26 @@ class ListMethodLoweringMixin:
             # None singleton or an arbitrary user-method result. Publish both
             # arms into the consumer's authoritative root before any cleanup;
             # a raw PHI cannot inherit one arm's ownership or singleton proof.
-            # Without a consumer root (a direct-call argument, a return, an
-            # assignment or a statement) the result gets its own root, taken
-            # as an owned value at the end, as list.extend does.
+            # Other consumers receive a temporary owned root, as list.extend
+            # does. A statement with a borrowed receiver can omit that root
+            # on the exact-list branch; dynamic results still have an owner.
             sink = self._slot_call_result_sink(expr)
+            discarded = -1
+            sinks = self._slot_call_result_sinks
+            for index in range(len(sinks) - 1, -1, -1):
+                if sinks[index][0] is expr:
+                    if sinks[index][1] is None:
+                        discarded = index
+                    break
+            # Only an unchanged borrowed receiver has no operation-owned
+            # frame to retire. Keep the existing output/receiver cleanup
+            # order for all other shapes, including generator operands.
+            receiver = (stable_parameter_operand_source(self, attr.obj)
+                        if discarded >= 0 else None)
+            discard_builtin = receiver is not None
             output = sink
             roots = []
-            if output is None:
+            if output is None and not discard_builtin:
                 output = self._new_slot_call_root("list.append.result")
                 roots.append(output)
             previous = self._current_try_err_block()
@@ -719,17 +799,20 @@ class ListMethodLoweringMixin:
             try:
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver")
+                if receiver is None:
+                    receiver = self._emit_slot_call_operand(attr.obj, "list.append.receiver", borrow_stable=True)
                 roots.append(receiver)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                tag = self._slot_call_runtime_call(
-                    "py_obj_type_tag", (receiver,), span=expr.span,
-                )
-                is_list = self.builder.icmp_signed(
-                    "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
-                    name=self._fresh("list.append.is_list"),
-                )
+                is_list = _stable_parameter_exact_list_guard(self, receiver, expr.span)
+                if is_list is None:
+                    tag = self._slot_call_runtime_call(
+                        "py_obj_type_tag", (receiver,), span=expr.span,
+                    )
+                    is_list = self.builder.icmp_signed(
+                        "==", tag, ir.Constant(_I64, PY_TYPE_LIST),
+                        name=self._fresh("list.append.is_list"),
+                    )
                 function = self.current_function
                 list_block = function.append_basic_block(self._fresh("list.append.list"))
                 generic_block = function.append_basic_block(self._fresh("list.append.generic"))
@@ -737,16 +820,27 @@ class ListMethodLoweringMixin:
                 self.builder.cbranch(is_list, list_block, generic_block)
 
                 self.builder.position_at_end(list_block)
-                item = self._emit_slot_call_operand(expr.args[0], "list.append.item")
-                self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
-                self._cpy_operand_cleanup_block = self._try_err_block
-                self._slot_call_runtime_call(
-                    "py_list_append", (receiver, item), span=expr.span,
-                )
-                none_value = self._emit_none_literal()
-                self._publish_slot_call_owned(output, none_value, label="list append result")
+                constant = emit_nonmoving_literal_operand(self, expr.args[0])
+                item = None
+                if constant is None:
+                    item = self._emit_slot_call_operand(expr.args[0], "list.append.item", borrow_stable=True)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (item,), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    _append_from_caller_slots(self, receiver, item, expr.span)
+                else:
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    # This exact literal producer denotes permanent image
+                    # storage or a tagged value; it needs no owning root.
+                    source = self._alloca_in_entry(_CSTR, name=self._fresh("list.append.static.source"))
+                    self.builder.store(constant, source)
+                    _append_from_caller_slots(self, receiver, source, expr.span, permanent_item=True)
+                if not discard_builtin:
+                    none_value = self._emit_none_literal()
+                    self._publish_slot_call_owned(output, none_value, label="list append result")
                 self._emit_post_call_err_check(expr.span)
-                self._release_slot_call_roots((item,))
+                if item is not None:
+                    self._release_slot_call_roots((item,))
                 self.builder.branch(done_block)
 
                 self.builder.position_at_end(generic_block)
@@ -755,8 +849,14 @@ class ListMethodLoweringMixin:
                 # Attribute resolution precedes argument evaluation. In particular,
                 # subclass overrides and user descriptors retain their existing binding
                 # and validation behavior through the ordinary callable protocol.
+                branch_roots = list(roots)
+                if discard_builtin:
+                    output = self._new_slot_call_root("list.append.result")
+                    branch_roots.append(output)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
                 method = self._new_slot_call_root("list.append.method")
-                branch_roots = list(roots) + [method]
+                branch_roots.append(method)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(branch_roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_runtime_call(
@@ -790,14 +890,21 @@ class ListMethodLoweringMixin:
                 self.builder.position_at_end(done_block)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                self._slot_call_note_published(output)
-                self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+                if not discard_builtin:
+                    self._slot_call_note_published(output)
+                    self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
+            if discard_builtin:
+                # The exact-list branch returns an unobservable None. The
+                # generic branch has already retired its owned result, so
+                # statement lowering must not release this placeholder.
+                sinks[discarded] = (expr, None, True)
+                return ir.Constant(_CSTR, None)
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("list.append.output"))
-            return self._take_slot_call_root(output)
+            return self._take_slot_call_root(output, source_expr=expr)
 
         if attr.name == "pop" and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_list_pop(expr)
@@ -930,7 +1037,7 @@ class ListMethodLoweringMixin:
                 self._cpy_operand_cleanup_block = saved_cpy
             if sink is not None:
                 return self.builder.load(output, name=self._fresh("dyn.index.output"))
-            return self._take_slot_call_root(output)
+            return self._take_slot_call_root(output, source_expr=expr)
 
         recv = self._emit_expr(attr.obj)
         if recv in getattr(self, "_cpy_values", ()):
@@ -1856,7 +1963,7 @@ class ListMethodLoweringMixin:
             name=self._fresh("sortkey.item"),
         )
 
-    def _emit_sorted_with_key_lambda(self, expr, key_lambda, reverse_const):
+    def _emit_sorted_with_key_lambda(self, expr, key_lambda, reverse_const, reverse_expr=None):
         """Evaluate the iterable before the key and use the rooted sort ABI."""
         elem_hint = None
         if isinstance(key_lambda, NoneLit):
@@ -1865,10 +1972,12 @@ class ListMethodLoweringMixin:
                 elem_hint = self.env_list_elem_class_hint.get(expr.args[0].ident)
         return self._emit_sorted_with_lifetimes(
             expr, None, key_lambda, reverse_const, elem_hint,
+            reverse_expr=reverse_expr,
         )
 
     def _emit_sorted_with_lifetimes(
         self, expr, key_spec, key_expr, reverse_const, elem_hint=None,
+        reverse_expr=None,
     ):
         """Keep source, optional callables, and output authoritative throughout."""
         previous = self._current_try_err_block()
@@ -1888,11 +1997,19 @@ class ListMethodLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             key = None
-            if key_expr is not None:
-                key = self._emit_slot_call_operand(key_expr, "sorted.key")
-                roots.append(key)
-                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-                self._cpy_operand_cleanup_block = self._try_err_block
+            reverse = None
+            for keyword, value in expr.kwargs or ():
+                operand = None
+                if keyword == "key" and key_expr is not None:
+                    key = self._emit_slot_call_operand(value, "sorted.key")
+                    operand = key
+                elif keyword == "reverse" and reverse_expr is not None:
+                    reverse = self._emit_slot_call_operand(value, "sorted.reverse")
+                    operand = reverse
+                if operand is not None:
+                    roots.append(operand)
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
             compare = None
             if elem_hint is not None and (key_expr is None or isinstance(key_expr, NoneLit)):
                 # Preserve the valueclass wrapper lane: its boxes do not use
@@ -1916,12 +2033,17 @@ class ListMethodLoweringMixin:
                     roots.pop()
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
+            runtime_name = "py_obj_sorted_slots"
+            reverse_argument = ir.Constant(_I64, 1 if reverse_const else 0)
+            if reverse is not None:
+                runtime_name = "py_obj_sorted_reverse_slots"
+                reverse_argument = self._as_gc_ptr(reverse)
             status = self.builder.call(
-                self.runtime["py_obj_sorted_slots"],
+                self.runtime[runtime_name],
                 [self._as_gc_ptr(source),
                  self._as_gc_ptr(key) if key is not None else ir.Constant(_CSTR, None),
                  self._as_gc_ptr(compare) if compare is not None else ir.Constant(_CSTR, None),
-                 ir.Constant(_I64, 1 if reverse_const else 0), self._as_gc_ptr(output)],
+                 reverse_argument, self._as_gc_ptr(output)],
                 name=self._fresh("sorted.status"),
             )
             self._slot_call_note_published(output)
@@ -1929,7 +2051,7 @@ class ListMethodLoweringMixin:
             self._emit_post_call_err_check(expr.span)
             self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh("sorted.current"))
         finally:
             self._try_err_block = previous

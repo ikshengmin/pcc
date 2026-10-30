@@ -109,6 +109,7 @@ def _effective_backend_configuration() -> str:
         resolve_self_target_pass_transport,
     )
     from pcc.backend.self_backend_aarch64_darwin_regalloc import (
+        boolean_register_lowering_enabled,
         call_result_registers_enabled,
         callee_saved_registers_enabled,
         function_live_intervals_enabled,
@@ -121,10 +122,14 @@ def _effective_backend_configuration() -> str:
     transport = resolve_self_target_pass_transport()
     return json.dumps(
         [
+            # Routing lives outside the backend source identity. Separate
+            # old application objects emitted with the forced O0 policy.
+            ["application-emitter-optimize", True],
             ["target-pass-transport", transport],
             ["target-passes", resolve_self_target_pass_names(transport=transport)],
             ["call-result-registers", call_result_registers_enabled()],
             ["callee-saved-registers", callee_saved_registers_enabled()],
+            ["boolean-register-lowering", boolean_register_lowering_enabled()],
             ["function-live-intervals", function_live_intervals_enabled()],
             ["branch-protection", branch_protection_enabled()],
             ["precise-stackmap-tables", precise_stackmap_tables_enabled()],
@@ -173,7 +178,7 @@ def _plan_enabled(worker_items: list[tuple[str, str, str]], target_id: str,
                     status = "hit"
                 else:
                     os.unlink(object_path)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             status = "miss"
         finally:
             if lease:

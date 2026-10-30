@@ -752,6 +752,7 @@ class ExceptionLoweringMixin:
             name=self._fresh(f"exc.{exc_name}"),
         )
         self.builder.call(self.runtime["py_raise"], [exc])
+        self._gc_release(exc)  # TLS retained the NEW constructor result.
         frame_exc = self.builder.call(
             self.runtime["py_current_exception"],
             [],
@@ -1548,11 +1549,13 @@ class ExceptionLoweringMixin:
         ] = (),
         pinned_release_on_error: tuple[tuple[ir.Value, bool], ...] = (),
         lifo_owned_root_slots_on_error: tuple[ir.Value, ...] = (),
+        error_value: Optional[ir.Value] = None,
     ) -> None:
         """After any call that could raise a Python exception, emit
         `if (py_err_occurred()) goto err_target` where err_target is
         the try's handler block or (fallback) the function's
-        err-exit epilogue.
+        err-exit epilogue. ``error_value`` is a pointer result whose NULL
+        is the callee's exception signal: the edge then tests it instead.
 
         Suppressed inside @c_abi_export-marked runtime functions: they
         may be invoked while TLS already holds a pending exception
@@ -1568,26 +1571,34 @@ class ExceptionLoweringMixin:
         function_exit_edge = err_target is None
         if function_exit_edge:
             err_target = self._ensure_fn_err_exit()
-        err_fn = self.runtime.get("py_err_occurred")
-        if err_fn is None:
-            # Declare lazily: i64 (void). i64 matches the pcc-Python
-            # port's default `int` lowering so the runtime-abi table
-            # and the Python-emitted function agree.
-            err_ty = ir.FunctionType(_I64, [])
-            err_fn = ir.Function(self.module, err_ty, name="py_err_occurred")
-            err_fn.linkage = "external"
-            self.runtime["py_err_occurred"] = err_fn
-        is_err = self.builder.call(
-            err_fn,
-            [],
-            name=self._fresh("err.flag"),
-        )
-        cmp = self.builder.icmp_signed(
-            "!=",
-            is_err,
-            ir.Constant(_I64, 0),
-            name=self._fresh("err.cmp"),
-        )
+        if error_value is not None:
+            cmp = self.builder.icmp_unsigned(
+                "==",
+                error_value,
+                ir.Constant(error_value.type, None),
+                name=self._fresh("err.null"),
+            )
+        else:
+            err_fn = self.runtime.get("py_err_occurred")
+            if err_fn is None:
+                # Declare lazily: i64 (void). i64 matches the pcc-Python
+                # port's default `int` lowering so the runtime-abi table
+                # and the Python-emitted function agree.
+                err_ty = ir.FunctionType(_I64, [])
+                err_fn = ir.Function(self.module, err_ty, name="py_err_occurred")
+                err_fn.linkage = "external"
+                self.runtime["py_err_occurred"] = err_fn
+            is_err = self.builder.call(
+                err_fn,
+                [],
+                name=self._fresh("err.flag"),
+            )
+            cmp = self.builder.icmp_signed(
+                "!=",
+                is_err,
+                ir.Constant(_I64, 0),
+                name=self._fresh("err.cmp"),
+            )
         needs_cleanup = bool(
             release_on_error
             or cpy_release_on_error

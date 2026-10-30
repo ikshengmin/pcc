@@ -30,9 +30,16 @@ def test_staged_replays_share_one_canonical_name_tuple(tmp_path, monkeypatch):
         expected_view, compact_budget=expected_budget,
     )
     original_rows = host._logical_staged_rows
+    original_count = host._count_logical_staged_rows
     original_name = macho_link._relocation_symbol_name
     original_check = host._Ledger.check
-    caches, fallbacks, charges = [], [], {}
+    caches, count_caches, fallbacks, charges = [], [], [], {}
+
+    def observed_count(data, sections, symbols, names=None):
+        assert type(names) is tuple
+        assert all(name is symbol["name"] for name, symbol in zip(names, symbols))
+        count_caches.append(names)
+        return original_count(data, sections, symbols, names)
 
     def observed_rows(data, sections, symbols, names=None):
         assert type(names) is tuple
@@ -58,6 +65,7 @@ def test_staged_replays_share_one_canonical_name_tuple(tmp_path, monkeypatch):
     def observe_source(event):
         if event == "source_view_begin":
             monkeypatch.setattr(host, "_logical_staged_rows", observed_rows)
+            monkeypatch.setattr(host, "_count_logical_staged_rows", observed_count)
             monkeypatch.setattr(macho_link, "_relocation_symbol_name", observed_name)
             monkeypatch.setattr(host._Ledger, "check", observed_check)
 
@@ -66,8 +74,10 @@ def test_staged_replays_share_one_canonical_name_tuple(tmp_path, monkeypatch):
     view = host.prepare_executable_from_paths(
         paths, compact_budget=budget, _staged_rows=True, _phase_callback=observe_source,
     )
-    assert len(caches) == 3 * len(view.sections())
+    assert len(caches) == 2 * len(view.sections())
     assert all(cache is caches[0] for cache in caches)
+    assert len(count_caches) == len(view.sections())
+    assert all(cache is caches[0] for cache in count_caches)
     # __eh_frame's shape validator does not consume its iterator: only the
     # counting and semantic passes fold each of its two SUBTRACTOR pairs.
     assert fallbacks.count("SUBTRACTOR relocation") == 4

@@ -23,10 +23,29 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 
 PIN_SYMBOLS = {"pcc_gc_pin", "pcc_gc_unpin"}
 TRANSFER_SYMBOLS = {"pcc_gc_take_pinned_slot"}
-LEASE_SYMBOLS = {"pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}
+LEASE_SYMBOLS = {"pcc_gc_borrowed_lease_acquire", "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}
 HANDLED_SYMBOLS = {"py_handled_context_push", "py_handled_context_pop", "py_handled_context_swap", "py_handled_exception_slot"}
-OWNED_DATA_SYMBOLS = {"pcc_gc_foreign_lease_active", "pcc_tls_handled_exception_context"}
+OWNED_DATA_SYMBOLS = {
+    "pcc_gc_foreign_lease_active",
+    "pcc_gc_mode_lease_shards",
+    "pcc_gc_static_literal_keys", "pcc_gc_static_literal_low",
+    "pcc_gc_static_literal_high",
+    # Stack-region sharded pin balance and allocation count.
+    "pcc_gc_metric_shards",
+    "pcc_gc_foreign_lease_active_isolation_before",
+    "pcc_gc_foreign_lease_active_isolation_after",
+    "pcc_tls_handled_exception_context",
+}
 OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS | {
+    "pcc_gc_release_nonterminal_tail",
+    "pcc_gc_mode_leases_freeze",
+    "pcc_gc_mode_leases_thaw",
+    "pcc_gc_foreign_lease_count_quiescent",
+    "pcc_gc_mode_lease_shard_index",
+    "pcc_gc_mode_lease_reserve_shard",
+    "pcc_gc_mode_lease_release_shard",
+    "pcc_gc_try_init_ptr_locked",
+    "pcc_gc_slot_lease_acquire",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_gray_count_load_acquire",
@@ -35,17 +54,35 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
     "pcc_gc_set_mark_color",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_resolve_root_slot_unlocked",
+    "pcc_gc_metric_shard",
+    "pcc_gc_metric_shard_sum",
+    "pcc_gc_metric_shard_reset",
+    "pcc_gc_metric_pin_balance",
+    "pcc_gc_metric_allocation_count",
+    "pcc_gc_static_literal_probe", "pcc_gc_static_literal_contains",
+    "pcc_gc_static_literal_record",
 }
 RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_forwarding_index_find",
     "pcc_gc_object_index_find",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
+    # The Darwin thread-local descriptor bootstrap of the handled-context slot.
+    "tlv_bootstrap",
     "py_decref", "py_incref", "pcc_gc_config_ensure",
     "pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock",
     "pcc_gc_granule_is_object_start", "pcc_gc_managed_pointer_index_contains",
+    "pcc_gc_managed_pointer_index_seen",
+    "pcc_gc_granule_span",
 }
-RAW_GLOBAL_IMPORTS = {"pcc_gc_backend_selected", "pcc_gc_gray_count", "pcc_gc_metric_pin"}
+RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend_selected", "pcc_gc_gray_count",
+    # The atomic refcount mode admitted by the pin and lease paths.
+    "pcc_gc_refcount_atomic", "pcc_diagnostics_runtime_log_fast_state",
+    # Exact static singleton addresses; no header or object-index read.
+    "py_none_storage", "py_true_storage", "py_false_storage",
+    "py_notimplemented_storage", "py_ellipsis_storage",
+}
 
 
 def _exported_symbols(source: str) -> set[str]:
@@ -93,10 +130,36 @@ def test_root_operations_have_one_strict_source_owner():
     assert "freestanding_gc_root_operations" in makefile
     assert _exported_symbols(pin_caller).isdisjoint(PIN_SYMBOLS)
     for symbol in OWNED_SYMBOLS:
-        if symbol == "pcc_gc_set_mark_color":
+        if symbol == "pcc_gc_foreign_lease_count_quiescent":
+            header = (RUNTIME_DIR / "include/py_runtime.h").read_text()
+            assert re.search(
+                r"\bint64_t\s+pcc_gc_foreign_lease_count_quiescent\s*\(\s*void\s*\)\s*;",
+                header,
+            ), "the diagnostic query must have its exact public declaration"
+            continue
+        elif symbol in {
+            "pcc_gc_mode_lease_shard_index", "pcc_gc_mode_lease_reserve_shard",
+            "pcc_gc_mode_lease_release_shard",
+        }:
+            # Strict direct calls use the Python helper name; the ABI name
+            # occurs on its export decorator, not on an imported extern.
+            python_name = "_" + symbol.removeprefix("pcc_gc_")
+            assert len(re.findall(r"\b" + python_name + r"\(", strict)) > 1
             caller = strict
+        elif symbol in ("pcc_gc_set_mark_color", "pcc_gc_slot_lease_acquire", "pcc_gc_metric_shard_sum"):
+            caller = strict
+        elif symbol in ("pcc_gc_static_literal_probe", "pcc_gc_static_literal_contains"):
+            caller = strict
+        elif symbol in ("pcc_gc_metric_pin_balance", "pcc_gc_metric_allocation_count"):
+            caller = (RUNTIME_DIR / "py/py_gc_telemetry.py").read_text()
+        elif symbol == "pcc_gc_release_nonterminal_tail":
+            caller = (RUNTIME_DIR / "py/py_obj_dealloc.py").read_text()
+        elif symbol == "pcc_gc_try_init_ptr_locked":
+            caller = (RUNTIME_DIR / "py/py_list.py").read_text()
         elif symbol in LEASE_SYMBOLS:
             caller = (REPO_ROOT / "pcc/frontends/python/codegen/extern_lowering.py").read_text()
+            if symbol == "pcc_gc_borrowed_lease_acquire":
+                caller = (REPO_ROOT / "pcc/frontends/python/codegen/call_object_lowering.py").read_text()
             if symbol == "pcc_gc_object_is_address_pinned":
                 caller = managed
         elif symbol in HANDLED_SYMBOLS:
@@ -124,7 +187,13 @@ def test_strict_gc3_known_object_gate_rejects_deallocating_header_state():
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
 def test_root_operations_object_has_exact_raw_closure(tmp_path: Path, emitter: str):
     obj = _compile_object(tmp_path, emitter)
-    assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
+    # This control word belongs to the diagnostic runtime,
+    # not the GC global inventory. The exact object import check below
+    # still rejects every unlisted dependency.
+    control_globals = {
+        "pcc_diagnostics_runtime_log_fast_state",
+    }
+    assert RAW_GLOBAL_IMPORTS - control_globals <= FREESTANDING_GC_RUNTIME_GLOBALS
     undefined_result = subprocess.run(
         ["nm", "-u", str(obj)], capture_output=True, text=True, timeout=30
     )

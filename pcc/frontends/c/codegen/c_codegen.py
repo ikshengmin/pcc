@@ -1148,6 +1148,14 @@ class CCodeGenerator(
     def _is_unsigned_pointee(self, val):
         return getattr(val, "_pcc_unsigned_pointee", False)
 
+    def _tag_unsigned_loaded_value(self, val):
+        # Loading through a pointer chain preserves the base C pointee's
+        # unsignedness until a scalar is actually read. Pointer signedness
+        # itself is not that promise.
+        if isinstance(val.type, ir.PointerType):
+            return self._tag_unsigned_pointee(val)
+        return self._tag_unsigned(val)
+
     def _tag_unsigned_return(self, val):
         try:
             val._pcc_unsigned_return = True
@@ -2379,7 +2387,7 @@ class CCodeGenerator(
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                 result_ptr
             ):
-                self._tag_unsigned(result)
+                self._tag_unsigned_loaded_value(result)
 
         elif node.op == "&":
             if isinstance(node.expr, c_ast.StructRef) and self._is_offsetof_like_structref(
@@ -4604,6 +4612,18 @@ class CCodeGenerator(
             return expr, ptr
 
         self._validate_explicit_cast(expr.type, dest_ir_type)
+        if isinstance(expr.type, ir.PointerType) and isinstance(dest_ir_type, ir.PointerType):
+            unsigned_pointee = self._has_unsigned_scalar_pointee(node.to_type.type)
+            if unsigned_pointee != self._is_unsigned_pointee(expr):
+                # Signed/unsigned pointees share an IR type. Give the cast
+                # its own value so changing this view cannot retag the source.
+                if self._same_ir_type_semantics(expr.type, dest_ir_type):
+                    result = self.builder.gep(expr, [ir.Constant(int64_t, 0)], name="castptr")
+                else:
+                    result = self._implicit_convert(expr, dest_ir_type)
+                result._pcc_unsigned_pointee = unsigned_pointee
+                self._tag_value_from_decl_type(result, node.to_type.type)
+                return result, None
         # Check if casting to unsigned type
         is_unsigned = False
         if isinstance(node.to_type.type, c_ast.TypeDecl) and isinstance(
@@ -5851,7 +5871,7 @@ class CCodeGenerator(
         ordering = self._atomic_ordering(node.args.exprs[1], is_store=False)
         result = self.builder.load_atomic(ptr, ordering, align)
         if self._is_unsigned_pointee(ptr):
-            self._tag_unsigned(result)
+            self._tag_unsigned_loaded_value(result)
         return result, ptr
 
     def _codegen_builtin_atomic_store(self, node):
@@ -5907,7 +5927,7 @@ class CCodeGenerator(
         else:
             result = old
         if self._is_unsigned_pointee(ptr):
-            self._tag_unsigned(result)
+            self._tag_unsigned_loaded_value(result)
         return result, None
 
     def _codegen_builtin_atomic_compare_exchange(self, node):
@@ -6128,7 +6148,7 @@ class CCodeGenerator(
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                 name_ptr
             ):
-                self._tag_unsigned(value_result)
+                self._tag_unsigned_loaded_value(value_result)
             node.ir_type = value_ir_type
             return value_result, elem_ptr
 
@@ -6142,7 +6162,7 @@ class CCodeGenerator(
             elem_ptr = self.builder.gep(ptr, [subscript_ir], name="ptridx")
             value_result = self._safe_load(elem_ptr)
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(ptr):
-                self._tag_unsigned(value_result)
+                self._tag_unsigned_loaded_value(value_result)
             node.ir_type = (
                 elem_ptr.type.pointee
                 if isinstance(elem_ptr.type, ir.PointerType)
@@ -6186,7 +6206,7 @@ class CCodeGenerator(
                 if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                     name_ptr
                 ):
-                    self._tag_unsigned(value_result)
+                    self._tag_unsigned_loaded_value(value_result)
                 node.ir_type = value_ir_type
                 return value_result, elem_ptr
 
@@ -6213,7 +6233,7 @@ class CCodeGenerator(
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                 name_ptr
             ):
-                self._tag_unsigned(value_result)
+                self._tag_unsigned_loaded_value(value_result)
             node.ir_type = value_ir_type
             return value_result, value_ptr
 

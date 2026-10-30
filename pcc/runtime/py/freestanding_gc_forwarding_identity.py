@@ -8,12 +8,15 @@ retirement deliberately live in their backend policy modules.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i64,
+    atomic_store_i64,
     abi_constant,
     calloc,
     free,
     global_addr,
     global_load_ptr,
     global_store_ptr,
+    int_to_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -21,6 +24,7 @@ from pcc.unsafe import (
     malloc,
     null,
     ptr_add,
+    ptr_diff,
     ptr_eq,
     ptr_is_null,
     store_i32,
@@ -165,7 +169,11 @@ def _identity_find(obj: c_ptr) -> c_ptr:
 
 @c_abi_export("pcc_gc_identity_set_head")
 def _set_identity_head(head: c_ptr) -> None:
-    global_store_ptr("pcc_gc_identity_head", head)
+    # Publish the authoritative identity list for terminal-free emptiness
+    # checks. New identity creation requires a live owner; a last-owner free
+    # cannot race creation of an identity for that same object.
+    head_bits: i64 = ptr_diff(head, null())
+    atomic_store_i64(global_addr("pcc_gc_identity_head"), 0, head_bits, "release")
 
 
 @c_abi_export("pcc_gc_identity_assign")
@@ -281,7 +289,8 @@ def pcc_gc_forwarding_clear_all() -> None:
 
 @c_abi_export("pcc_gc_identity_list_head")
 def pcc_gc_identity_head() -> c_ptr:
-    return global_load_ptr("pcc_gc_identity_head")
+    head_bits: i64 = atomic_load_i64(global_addr("pcc_gc_identity_head"), 0, "acquire")
+    return int_to_ptr(head_bits)
 
 
 @c_abi_export("pcc_gc_identity_ensure")

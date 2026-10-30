@@ -7,6 +7,41 @@ import pytest
 from pcc.backend.self_backend_value_arena import CompilerIntArena
 
 
+@pytest.mark.parametrize("count", (0, 1, 127, 128, 129, 4095, 4096, 4097, 8193))
+@pytest.mark.parametrize("prefix", ((), (13,)))
+def test_compiler_int_arena_zero_span_preserves_prefix_and_tail(count, prefix):
+    arena = CompilerIntArena(1)
+    for value in prefix:
+        arena.append(value)
+    shared_values = arena._values
+    arena.append_zeros(count)
+    arena.append(-7)
+    assert arena._values is shared_values
+    assert len(arena) == len(prefix) + count + 1
+    assert arena.diagnostic_values() == list(prefix) + [0] * count + [-7]
+    with pytest.raises(ValueError, match="nonnegative"):
+        arena.append_zeros(-1)
+    arena.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        arena.append_zeros(0)
+
+
+def test_compiler_int_arena_zero_span_preserves_custom_append_callbacks():
+    calls = []
+
+    class ObservedValues(list):
+        def append(self, value):
+            calls.append(value)
+            super().append(value)
+
+    arena = CompilerIntArena(1)
+    arena._values = ObservedValues()
+    arena.append_zeros(4097)
+    assert calls == [0] * 4097
+    assert arena.diagnostic_values() == [0] * 4097
+    arena.close()
+
+
 def test_compiler_int_arena_host_oracle_grows_reads_writes_and_closes() -> None:
     arena = CompilerIntArena(1)
     assert not arena.uses_native_storage

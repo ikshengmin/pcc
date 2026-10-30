@@ -18,6 +18,26 @@ python-proxy
 
 HTTP/HTTP2/HTTP3/Socks4/Socks5/Shadowsocks/SSH/Redirect/Pf/QUIC TCP/UDP asynchronous tunnel proxy implemented in Python3 asyncio.
 
+macOS process routing (optional native package)
+----------------------------------------------
+
+``--process-rules rules.json`` enables the bundled macOS transparent proxy provider.
+Ordered application/executable/path/Bundle-ID rules select TCP and UDP traffic,
+which enters the existing local SOCKS5 listener and uses ``-r`` / ``-ur`` upstreams.
+No separate ProxyBridge installation or ZeroOmega integration is required.
+
+.. code:: bash
+
+  python -m pproxy -l http+socks5://127.0.0.1:8082 \
+    -r socks5://remote:8084 -ur socks5://remote:8084 \
+    --process-rules macos/examples/process-rules.json
+
+See `macOS package and process-rule documentation <macos/README.md>`_ for rules,
+build/signing requirements, installation, and qualification limits. Ordinary proxy
+operation remains available without the native package. The current development
+package is for compile/configuration checks; installed-provider WebRTC/HTTP3 tests
+remain pending.
+
 QuickStart
 ----------
 
@@ -111,7 +131,7 @@ Protocols
 +-------------------+------------+------------+------------+------------+--------------+
 | socks4            | ✔          | ✔          |            |            | socks4://    |
 +-------------------+------------+------------+------------+------------+--------------+
-| socks5            | ✔          | ✔          | ✔ udp-only | ✔ udp-only | socks5://    |
+| socks5            | ✔          | ✔          | ✔          | ✔          | socks5://    |
 +-------------------+------------+------------+------------+------------+--------------+
 | socks5 over TLS   | ✔          | ✔          |            |            | socks5+ssl://|
 +-------------------+------------+------------+------------+------------+--------------+
@@ -593,6 +613,137 @@ Examples
 
     $ pproxy -ul tunnel{8.8.8.8}://:53
     $ nslookup google.com localhost
+
+- SOCKS5 UDP ASSOCIATE and ProxyBridge
+
+  A SOCKS5 TCP listener also accepts standard RFC 1928 UDP ASSOCIATE requests.
+  It returns a dedicated UDP relay address and keeps that relay alive until
+  the TCP control connection closes. No separate ``-ul`` listener is needed:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy -l socks5://127.0.0.1:1080 -v
+
+  Run this from ``projects/python-proxy``. With no upstream configured, both
+  TCP and UDP leave from the machine running pproxy. To send both through a
+  remote SOCKS5 server that supports UDP ASSOCIATE:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy -l socks5://127.0.0.1:1080 \
+      -r socks5://proxy.example:1080 -ur socks5://proxy.example:1080 -v
+
+  ``-r`` selects the TCP route; ``-ur`` selects the UDP route. If ``-r`` is
+  present without ``-ur``, UDP ASSOCIATE is rejected instead of using an
+  unexpected direct exit. Select ``-ur direct://`` to explicitly use direct
+  UDP alongside a TCP upstream. Credentials use the existing quoted URI
+  suffix, for example ``'socks5://proxy.example:1080#username:password'``.
+
+  In ProxyBridge, add SOCKS5 server ``127.0.0.1:1080`` and route the browser
+  and its network helper processes to it for both TCP and UDP. ProxyBridge's
+  system extension must be enabled; an OS HTTP/SOCKS proxy setting is not
+  required. Its UDP support check should receive a successful association.
+
+  IPv4, IPv6, domain destinations, authentication, and standard UDP request
+  and response headers are supported. Each association keeps one direct
+  outbound socket per address family, so STUN checks against different
+  destinations see the same source port. Replies retain the actual source
+  address. The client IP must match the TCP peer; a specified client port is
+  enforced, otherwise the first valid UDP sender's port is pinned. Malformed
+  packets and SOCKS fragments (``FRAG != 0``) are dropped.
+
+  Standard associations support direct and standalone SOCKS5 ``-ur`` routes.
+  Other upstream protocols and URI ``__`` jump chains are rejected for these
+  associations. Separate pproxy instances can be chained with ``-ur socks5://``.
+  The older ``-ul`` datagram listeners remain available for explicit UDP
+  tunnels; they do not establish or authenticate a TCP-controlled association.
+  SOCKS5 UDP replies now include their standard address header.
+
+  The ``Connection(...).udp_sendto`` API and SOCKS5 ``-ur`` route used by UDP
+  listeners also negotiate UDP ASSOCIATE. Reuse a ``local_addr`` session key
+  and one callback for multiple API sends in the same association, and use
+  ``await connection.udp_close()`` to release these client associations.
+  These API/listener client associations expire after 120 seconds without
+  traffic in either direction and retain the existing ``UDP_LIMIT`` cap.
+  TCP-controlled incoming associations instead live until their control
+  connection ends, with no shared 30-client eviction limit.
+
+  Local integration tests exercise the ProxyBridge request bytes, independent
+  SOCKS5 peers and STUN binding responses. They do not certify a particular
+  browser, remote proxy, NAT/firewall, or live WebRTC audio/video session.
+
+- Chrome WebRTC over the existing local UDP proxy
+
+  The companion ZeroOmega Chrome feature configures matching pages to use
+  ``turn:127.0.0.1:8082?transport=udp`` with relay-only ICE. It does not disable
+  UDP or install a native messaging host. A UDP tunnel in the existing local
+  pproxy process carries TURN packets over SOCKS5 UDP to a TURN listener in the
+  existing remote pproxy process. Ordinary web requests retain their TCP route.
+
+  On each remote host, keep its SOCKS5 listener and add authenticated TURN/UDP.
+  The TURN control listener can stay on loopback because the remote SOCKS5
+  server reaches it locally. Replace ``REMOTE_BIND_IP`` with an IP assigned to
+  the remote host and choose a dedicated TURN password:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy \
+      -l socks5://0.0.0.0:8084 \
+      -ul 'turn://127.0.0.1:3478#webrtc:CHANGE_ME' \
+      --turn-relay-address REMOTE_BIND_IP \
+      --turn-min-port 49160 --turn-max-port 49200 -v
+
+  Use the remote host's existing SOCKS5 port (for example 8089 instead of 8084
+  on the second host). Peers must be able to reach the relay IP and configured
+  UDP port range. Behind port-preserving NAT, set
+  ``--turn-external-address PUBLIC_IP`` as well. The advertised IP must have
+  the same address family as the relay bind IP. A listener supports one relay
+  address family; the current Chrome feature can use the IPv4 relay path.
+
+  On the local host, add UDP settings to the same process as the TCP listener:
+
+  .. code:: sh
+
+    uv run --no-sync python -m pproxy \
+      -l http+socks5://:8082 \
+      -r socks://t-arm1:8084 -r socks://t-us1:8089 \
+      -ul 'tunnel{127.0.0.1:3478}://127.0.0.1:8082' \
+      -ur socks://t-arm1:8084 -ur socks://t-us1:8089 \
+      --udp-idle 900 -a 10 -v
+
+  Here the tunnel target ``127.0.0.1:3478`` is reached by the remote SOCKS5
+  server, not directly by the local machine. TCP and UDP can share the numeric
+  port 8082. The longer UDP idle lifetime preserves a TURN mapping between
+  allocation refreshes. Health checks also cover SOCKS5 UDP upstreams, and a
+  matching but unavailable UDP route is dropped rather than sent directly.
+  Switching an upstream cannot preserve an existing TURN allocation; a failed
+  call may need an ICE restart or reconnect.
+
+  TURN/UDP supports long-term username/password authentication, nonce renewal,
+  Allocate/Refresh, CreatePermission, Send/Data indications and ChannelBind /
+  ChannelData. Repeated requests reuse their responses and allocations;
+  permissions, channels and allocations expire. Allocation count and relay
+  ports are bounded. TCP/TLS TURN, EVEN-PORT reservations and dual-family
+  allocations are not implemented. Unsupported required attributes receive
+  explicit TURN errors. Loopback peers are denied unless
+  ``--turn-allow-loopback`` is selected for isolated local testing.
+
+  For a local browser test with two pproxy instances, a TURN server and a
+  deliberate unproxied-STUN detector, run:
+
+  .. code:: sh
+
+    uv run --no-sync python tests/webrtc_udp_fixture.py
+
+  The fixture prints random loopback ports, temporary test credentials, and a
+  page URL. Configure the built ZeroOmega extension with the printed TURN URL
+  and credentials, then open the page and click Run. It verifies data-channel
+  bytes, generated audio/video, relay-only UDP candidates and that the page's
+  original STUN server receives no direct packets. It accesses no camera or
+  microphone and touches no existing 8082 listener. Stop it with Ctrl-C.
+  Local Chrome evidence does not certify remote NAT/firewall reachability or
+  compatibility with every website. Chrome's site permissions can also limit
+  access to loopback/local-network endpoints.
 
 - UDP more complicated example
 

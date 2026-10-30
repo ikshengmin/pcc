@@ -86,6 +86,14 @@ def dataclasses_field_runtime_names(module):
                 pending.append(_py_ast_field_value(node, field_name, None))
     return tuple(runtime)
 
+# Stable classifier identity; a replaced reader keeps the uncached route.
+_FIELD_DISCOVERY_RUNTIME_NAMES = dataclasses_field_runtime_names
+
+
+def _field_discovery_classifier_is_original():
+    return dataclasses_field_runtime_names is _FIELD_DISCOVERY_RUNTIME_NAMES
+
+
 COMPILE_TIME_ONLY_IMPORT_MODULES = frozenset(
     {"__future__", "typing", "click", "abc"}
 )

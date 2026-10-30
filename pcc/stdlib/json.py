@@ -207,8 +207,10 @@ def _encode_array(
         buf.append("[]")
         return
     buf.append("[")
-    inner = "\n" + pad * (depth + 1)
-    closing = "\n" + pad * depth
+    # The indentation text exists only when there is a newline to follow.
+    inner = ""
+    if newline:
+        inner = "\n" + pad * (depth + 1)
     for i, item in enumerate(arr):
         if i > 0:
             buf.append(item_sep)
@@ -219,8 +221,27 @@ def _encode_array(
             ensure_ascii, allow_nan,
         )
     if newline:
-        buf.append(closing)
+        buf.append("\n" + pad * depth)
     buf.append("]")
+
+
+def _key_text(key, allow_nan) -> str:
+    """A key's JSON text, converted as CPython's encoder converts it."""
+    if isinstance(key, str):
+        return key
+    if isinstance(key, float):
+        return _float_text(key, allow_nan)
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(int(key))
+    raise TypeError(
+        f"keys must be str, int, float, bool or None, not {type(key).__name__}"
+    )
 
 
 def _encode_object(
@@ -231,22 +252,29 @@ def _encode_object(
         buf.append("{}")
         return
     buf.append("{")
-    inner = "\n" + pad * (depth + 1)
-    closing = "\n" + pad * depth
-    keys = sorted(obj.keys()) if sort_keys else list(obj.keys())
-    for i, k in enumerate(keys):
-        if i > 0:
+    # The indentation text exists only when there is a newline to follow.
+    inner = ""
+    if newline:
+        inner = "\n" + pad * (depth + 1)
+    # Items, sorted by key when asked, as CPython's encoder walks them: each
+    # value comes with its key instead of a second lookup.
+    items = sorted(obj.items()) if sort_keys else list(obj.items())
+    first = True
+    for key, value in items:
+        if first:
+            first = False
+        else:
             buf.append(item_sep)
         if newline:
             buf.append(inner)
-        _encode_str(str(k), buf, ensure_ascii)
+        _encode_str(_key_text(key, allow_nan), buf, ensure_ascii)
         buf.append(key_sep)
         _encode(
-            obj[k], buf, pad, depth + 1, sort_keys, item_sep, key_sep, newline,
+            value, buf, pad, depth + 1, sort_keys, item_sep, key_sep, newline,
             ensure_ascii, allow_nan,
         )
     if newline:
-        buf.append(closing)
+        buf.append("\n" + pad * depth)
     buf.append("}")
 
 

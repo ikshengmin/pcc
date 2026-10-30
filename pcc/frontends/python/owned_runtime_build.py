@@ -33,13 +33,20 @@ _RUNTIME_IR_OUTPUT_ENV = (
 
 
 def runtime_build_config() -> dict:
+    from pcc.backend.self_backend_aarch64_darwin_regalloc import (
+        boolean_register_lowering_enabled,
+    )
+
     # Every runtime is threaded; the single-thread kernel was removed.
     reject_single_thread_runtime_request()
     threads = True
     refcount = str(os.environ.get("PCC_REFCOUNT_KIND", "") or "").strip().lower() or "atomic"
     if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in refcount):
         raise ValueError("invalid refcount configuration for runtime cache")
-    return {"threads": threads, "refcount": refcount}
+    config = {"threads": threads, "refcount": refcount}
+    if boolean_register_lowering_enabled():
+        config["boolean_register_lowering"] = True
+    return config
 
 
 # The Makefile compiles these modules with automatic safepoint polls off

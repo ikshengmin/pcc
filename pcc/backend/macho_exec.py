@@ -31,8 +31,8 @@ import sys
 from dataclasses import dataclass
 
 from pcc.unsafe import (
-    abi_constant, darwin_libsystem_symbol, free, load_i8, load_i32, malloc,
-    null, ptr_is_null, store_i8, store_i32,
+    abi_constant, darwin_libsystem_symbol, free, load_i8, load_i32, load_i64,
+    malloc, null, ptr_is_null, store_i8, store_i32, store_i64,
 )
 
 from . import macho_spec as spec
@@ -197,6 +197,38 @@ def _write_patch_word(data: bytearray, offset: int, value: int) -> None:
     store_i32(data, abi_constant("object.bytearray.data_offset") + offset, value)
 
 
+def _read_patch_signed64(data: bytearray, offset: int) -> int:
+    """Read a little-endian pointer addend without a temporary struct tuple."""
+    if (
+        not _NATIVE_PATCH_WORDS or sys.byteorder != "little"
+        or type(data) is not bytearray or type(offset) is not int
+        or offset < 0 or offset > len(data) - 8
+    ):
+        return struct.unpack_from("<q", data, offset)[0]
+    return load_i64(data, abi_constant("object.bytearray.data_offset") + offset)
+
+
+def _write_patch_u64(data: bytearray, offset: int, value: int) -> None:
+    """Patch an exact eight-byte field without allocating a packed payload.
+
+    Keep struct's coercion, negative-offset and error behavior for everything
+    outside the already-valid native scalar case. The rooted bytearray is
+    passed directly to the intrinsic; no derived payload pointer survives a
+    managed operation. Raw i64 stores use the signed two's-complement value.
+    """
+    if (
+        not _NATIVE_PATCH_WORDS or sys.byteorder != "little"
+        or type(data) is not bytearray or type(offset) is not int
+        or type(value) is not int or offset < 0 or offset > len(data) - 8
+        or value < 0 or value >= (1 << 64)
+    ):
+        struct.pack_into("<Q", data, offset, value)
+        return
+    if value >= (1 << 63):
+        value -= 1 << 64
+    store_i64(data, abi_constant("object.bytearray.data_offset") + offset, value)
+
+
 def _text_span_report_wanted(setting, margin: int) -> bool:
     """PCC_LINK_REPORT_TEXT_SPAN: "0", "off" or "" never reports, any other
     value always does, and unset reports only a margin under a quarter of
@@ -346,7 +378,7 @@ def _build_seg_info(fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output=No
                 if _owned_output is not None:
                     _owned_output.patch_word(out, off, base_word | (nxt << 51))
                     continue
-            struct.pack_into("<Q", out.data, off, base_word | (nxt << 51))
+            _write_patch_u64(out.data, off, base_word | (nxt << 51))
     info = struct.pack("<IHHQIH", 22 + page_count * 2, PAGE,
                        DYLD_CHAINED_PTR_64_OFFSET, seg_file_off, 0,
                        page_count)
@@ -577,6 +609,7 @@ def prepare_executable_object(
     _source_view: bool = False,
     archive_selections=None,
     compact_budget=None,
+    coordinator_timing=None,
 ):
     """Resolve a final link job into its reusable relocatable state.
 
@@ -589,8 +622,16 @@ def prepare_executable_object(
     ``_consume_inputs`` transfers the caller's mutable input list. The owned
     CLI uses it to retire decoded inputs after the merge; ordinary API calls
     borrow the list and preserve its contents.
+
+    Optional coarse phases separate original-input validation, the complete
+    archive census/selection boundary, and relocatable merging. They are
+    nested within ``macho_prepare_inputs``; do not add them to that parent's
+    inclusive duration. Semantic layout, if requested, follows the merge.
     """
 
+    validate_started = 0
+    if coordinator_timing is not None:
+        validate_started = coordinator_timing.begin("macho_prepare_validate")
     if _source_view and (not _consume_inputs or semantic_manifest is not None):
         raise LinkError("source view requires an owned final link without semantic layout")
     # Semantic layout decodes and re-encodes a version 2 table after the merge,
@@ -611,6 +652,10 @@ def prepare_executable_object(
     # otherwise a malformed/foreign input can escape this final-link boundary
     # as a low-level parser exception instead of a deterministic LinkError.
     _validate_input_load_commands(resolved_objects)
+    archives_started = 0
+    if coordinator_timing is not None:
+        coordinator_timing.complete("macho_prepare_validate", validate_started)
+        archives_started = coordinator_timing.begin("macho_prepare_archives")
     if archives:
         already_defined, pending = _external_symbol_state(resolved_objects)
         for archive_index, archive in enumerate(archives):
@@ -641,11 +686,28 @@ def prepare_executable_object(
                 list(pulled),
                 start_index=len(resolved_objects),
             ))
-            already_defined, pending = _external_symbol_state(resolved_objects)
+            # Only the next archive consumes this rebuilt state. For exact
+            # built-in sequences, avoid materialising all symbol tables once
+            # more after the final archive. Keep the original iteration and
+            # error order for custom/unsized collections, without lookahead.
+            if ((type(archives) is not list and type(archives) is not tuple)
+                    or archive_index + 1 < len(archives)):
+                already_defined, pending = _external_symbol_state(resolved_objects)
         # Archive members are inputs too.  Validate the selected set before the
         # relocatable core consumes it; unselected members were already parsed
         # by read_archive and a malformed member failed above.
         _validate_input_load_commands(resolved_objects)
+        # Selection and its receipt callbacks are finished. The resolved
+        # objects now own every selected member's bytes; retaining the private
+        # census or pulled list would keep those bytes alive after the consuming
+        # merge retires its inputs, along with every unused member of the last
+        # archive. Leave the caller's archive collection and buffers untouched.
+        members = pulled = selected_members = member = None
+        already_defined = pending = None
+    merge_started = 0
+    if coordinator_timing is not None:
+        coordinator_timing.complete("macho_prepare_archives", archives_started)
+        merge_started = coordinator_timing.begin("macho_prepare_merge")
     # Even one input goes through the relocatable core: that is where CPU,
     # symbol-provenance, companion-relocation, and section-target contracts
     # are normalized and checked. A one-object fast path must not bypass them.
@@ -664,6 +726,8 @@ def prepare_executable_object(
             compact_budget=compact_budget,
             _final_executable=semantic_manifest is None,
         )
+    if coordinator_timing is not None:
+        coordinator_timing.complete("macho_prepare_merge", merge_started)
     if semantic_manifest is not None:
         # Imported lazily so the ordinary linker path and compiled-stage
         # closure do not acquire semantic-layout policy or JSON machinery.
@@ -739,6 +803,7 @@ def link_prepared_executable(
     identifier: bytes = b"pcc-linked",
     phase_callback=None,
     compact_budget=None,
+    coordinator_timing=None,
 ) -> bytes:
     """Finalize one validated, already-merged object as an executable.
 
@@ -749,7 +814,12 @@ def link_prepared_executable(
     if compact_budget is None:
         plan = _prepare_executable_image(merged, entry=entry, minos=minos,
                                          identifier=identifier)
-        return _finish_executable_image(plan, identifier, phase_callback)
+        if coordinator_timing is None:
+            return _finish_executable_image(plan, identifier, phase_callback)
+        return _finish_executable_image(
+            plan, identifier, phase_callback,
+            coordinator_timing=coordinator_timing,
+        )
     plan = _prepare_executable_image(
         merged, entry=entry, minos=minos, identifier=identifier,
         compact_budget=compact_budget,
@@ -757,9 +827,15 @@ def link_prepared_executable(
     # An owned source view retires its payloads while the image is prepared,
     # so measure what the source still keeps alive afterwards.
     retained_source_bytes = _compact_source_raw_bytes(merged)
+    if coordinator_timing is None:
+        return _finish_executable_image(
+            plan, identifier, phase_callback, compact_budget=compact_budget,
+            retained_source_bytes=retained_source_bytes,
+        )
     return _finish_executable_image(
         plan, identifier, phase_callback, compact_budget=compact_budget,
         retained_source_bytes=retained_source_bytes,
+        coordinator_timing=coordinator_timing,
     )
 
 
@@ -1468,7 +1544,7 @@ def _prepare_executable_image(
                         relative = stored - old_address
                         if not 0 <= relative < len(target_out.data):
                             raise LinkError("DWARF address is outside its code section")
-                        struct.pack_into("<Q", out_data, reloc_address, target_out.addr + relative)
+                        _write_patch_u64(out_data, reloc_address, target_out.addr + relative)
                         continue
                     raise LinkError(
                         "section-target relocations must be normalized to a "
@@ -1565,7 +1641,7 @@ def _prepare_executable_image(
                             # Descriptor thunk: a chained-fixup bind to the import
                             # (e.g. __tlv_bootstrap). Field is zeroed; dyld fills
                             # it via the chain.
-                            struct.pack_into("<Q", out_data, at_off, 0)
+                            _write_patch_u64(out_data, at_off, 0)
                             import sys as execution_runtime
                             if execution_runtime.implementation.name == "cpython":
                                 if _owned_output is not None:
@@ -1576,13 +1652,13 @@ def _prepare_executable_image(
                             name in import_ordinal
                             and out.segname in ("__DATA", "__DATA_CONST")
                         ):
-                            addend, = struct.unpack_from("<q", out_data, at_off)
+                            addend = _read_patch_signed64(out_data, at_off)
                             if not 0 <= addend < (1 << 8):
                                 raise LinkError(
                                     f"import {name!r} data pointer addend {addend} "
                                     "does not fit a chained bind"
                                 )
-                            struct.pack_into("<Q", out_data, at_off, 0)
+                            _write_patch_u64(out_data, at_off, 0)
                             import sys as execution_runtime
                             if execution_runtime.implementation.name == "cpython":
                                 if _owned_output is not None:
@@ -1594,17 +1670,16 @@ def _prepare_executable_image(
                     elif in_tlv_desc and name in thread_block_offset:
                         # Descriptor offset field: the variable's offset within
                         # the thread block, not its vmaddr.
-                        struct.pack_into("<Q", out_data, at_off,
-                                         thread_block_offset[name])
+                        _write_patch_u64(out_data, at_off, thread_block_offset[name])
                     else:
-                        inline, = struct.unpack_from("<q", out_data, at_off)
+                        inline = _read_patch_signed64(out_data, at_off)
                         absolute = target + inline
                         # Store the offset from the image base; the rebase fixup
                         # below adds the runtime base back (surviving ASLR). Only
                         # data sections carry rebases — a pointer in __TEXT would
                         # be in a read-only, non-fixup segment.
                         if out.segname == "__DWARF":
-                            struct.pack_into("<Q", out_data, at_off, absolute)
+                            _write_patch_u64(out_data, at_off, absolute)
                         elif out.segname in ("__DATA", "__DATA_CONST"):
                             import sys as execution_runtime
                             if execution_runtime.implementation.name == "cpython":
@@ -1612,8 +1687,7 @@ def _prepare_executable_image(
                                     _owned_output.reserve_fixup()
                             rebase_sites.append(
                                 (out, at_off, absolute - TEXT_BASE))
-                            struct.pack_into("<Q", out_data, at_off,
-                                             absolute - TEXT_BASE)
+                            _write_patch_u64(out_data, at_off, absolute - TEXT_BASE)
                         else:
                             raise LinkError(
                                 f"absolute pointer relocation in "
@@ -2177,6 +2251,7 @@ def _prepare_executable_image(
 def _finish_executable_image(
     plan, identifier, phase_callback, *, compact_budget=None,
     retained_source_bytes: int = 0,
+    coordinator_timing=None,
 ) -> bytes:
     """Materialise, sign and return the image in one buffer.
 
@@ -2214,10 +2289,14 @@ def _finish_executable_image(
     if phase_callback is not None:
         phase_callback("sign_begin")
     try:
+        if coordinator_timing is not None:
+            sign_phase_started = coordinator_timing.begin("macho_sign")
         blob = build_signature(
             memoryview(image)[:sig_off], identifier=identifier,
             exec_seg_base=0, exec_seg_limit=text_filesize, exec_seg_flags=1,
         )
+        if coordinator_timing is not None:
+            coordinator_timing.complete("macho_sign", sign_phase_started)
     finally:
         if phase_callback is not None:
             phase_callback("sign_end")

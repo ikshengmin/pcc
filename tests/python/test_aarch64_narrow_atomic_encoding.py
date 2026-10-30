@@ -45,6 +45,32 @@ def test_narrow_atomic_words_match_independent_reference(instruction, encoding):
     assert assembled.relocations == []
 
 
+# Same upstream file: the exclusive pair without acquire/release (o0 clear).
+@pytest.mark.parametrize("instruction, encoding", [
+    ("ldxr w0, [x1]", "207c5f88"),
+    ("ldxr x0, [x1]", "207c5fc8"),
+    ("ldxrb w4, [x5]", "a47c5f08"),
+    ("ldxrh w5, [x6]", "c57c5f48"),
+    ("stxr w1, w4, [x3]", "647c0188"),
+    ("stxr w1, x4, [x3]", "647c01c8"),
+    ("stxrb w4, w5, [x6]", "c57c0408"),
+    ("stxrh w5, w6, [x7]", "e67c0548"),
+])
+def test_plain_exclusive_words_match_independent_reference(instruction, encoding):
+    assembled = assemble_text(instruction)
+    assert assembled.code == bytes.fromhex(encoding)
+    assert assembled.relocations == []
+
+
+@pytest.mark.parametrize("instruction", [
+    "ldxrb x2, [x4]", "ldxrh x2, [x4]", "ldxr x2, [x4, #8]", "ldxr x2, [x4]!",
+    "stxr x1, x4, [x3]", "stxrb w1, x4, [x3]", "stxr w1, x4, [x3, #8]",
+])
+def test_plain_exclusive_operands_fail_closed(instruction):
+    with pytest.raises(EncodeError):
+        assemble_text(instruction)
+
+
 @pytest.mark.parametrize("mnemonic", ["ldarb", "ldarh", "ldaxrh", "stlrh"])
 @pytest.mark.parametrize("operands", ["x2, [x4]", "w2, [w4]", "w2, [x4, #1]", "w2, [x4]!"])
 def test_narrow_atomic_operands_fail_closed(mnemonic, operands):

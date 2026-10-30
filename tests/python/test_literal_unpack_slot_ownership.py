@@ -7,6 +7,9 @@ import re
 
 import pytest
 
+from pcc.frontends.python.codegen.call_object_lowering import (
+    CallObjectLoweringMixin,
+)
 from pcc.frontends.python.codegen.assignment_statement_lowering import AssignmentStatementLoweringMixin
 from pcc.frontends.python.codegen.assignment_store_lowering import AssignmentStoreLoweringMixin
 from pcc.frontends.python.py_ast import Assign, Call, DynType, Name, TupleExpr, TupleType
@@ -56,6 +59,10 @@ def test_container_target_keeps_rhs_address_leased_during_publication(target):
 
 class MovingModel(AssignmentStatementLoweringMixin, AssignmentStoreLoweringMixin):
     """Execute the production literal branch and local transfer under relocation."""
+    _emit_root_slot_move = CallObjectLoweringMixin._emit_root_slot_move
+    _slot_call_root_is_registered = CallObjectLoweringMixin._slot_call_root_is_registered
+    _slot_call_root_record = CallObjectLoweringMixin._slot_call_root_record
+
     def __init__(self, bindings, results, fail_at=None):
         self.events=[]; self.generation=0; self.serial=0; self.results=results
         self.fail_at=fail_at; self.evaluations=0
@@ -95,7 +102,7 @@ class MovingModel(AssignmentStatementLoweringMixin, AssignmentStoreLoweringMixin
     def _ir_type_matches(self,a,b):return str(a)==str(b)
     def _alloca_in_entry(self,ty,*,name,init_null):
         slot=self._fresh(name);self.values[slot]=None;return slot
-    def _ensure_local_gc_frame_root(self,name,slot,ty):self.registry.add(slot);self.collect()
+    def _ensure_local_gc_frame_root(self,name,slot,ty,*,allow_module=False):self.registry.add(slot);self.collect()
     def _owned_local_flag_for(self,name,slot):return name if name in self.flags else None
     def _ensure_owned_local_flag(self,name,slot):self.flags.setdefault(name,False);return ('flag',name)
     def _emit_release_owned_local_if_flagged(self,name,slot):

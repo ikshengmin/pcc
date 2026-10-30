@@ -32,7 +32,7 @@ import pytest
 from pcc.backend import macho_spec as spec
 
 _CC = shutil.which(os.environ.get("CC", "cc"))
-_IS_DARWIN = os.uname().sysname == "Darwin"
+_IS_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin"
 _GATE = None if (_CC and _IS_DARWIN) else "needs cc and a Darwin SDK"
 
 pytestmark = pytest.mark.pcc_gate(unavailable=_GATE)

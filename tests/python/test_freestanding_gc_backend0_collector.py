@@ -15,6 +15,12 @@ STRICT_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_backend0_collector.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_obj_gc.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 OWNED_SYMBOLS = {
+    "pcc_gc_backend0_subset_node",
+    "pcc_gc_backend0_subset_prepare",
+    "pcc_gc_backend0_subset_finish",
+    "pcc_gc_backend0_subset_recompute",
+    "pcc_gc_backend0_collect_candidates",
+    "pcc_gc_backend0_collect_impl",
     "pcc_gc_backend0_dealloc_unreachable",
     "pcc_gc_backend0_mapped_root_count",
     "pcc_gc_backend0_mark_root_slot",
@@ -27,6 +33,12 @@ OWNED_SYMBOLS = {
     "py_gc_collect",
 }
 RAW_IMPORTS = {
+    "pcc_gc_backend0_subset_active",
+    "pcc_gc_backend0_subset_pairs",
+    "pcc_gc_backend0_subset_count",
+    "pcc_gc_backend_selected",
+    "py_gc_index_find",
+    "pcc_gc_reclaim_retired_index_tables",
     "free",
     "malloc",
     "pcc_capi_dealloc_cext_object",
@@ -158,10 +170,13 @@ def test_backend0_collector_preserves_ordering_and_graph_contract():
     assert collect.index("pcc_gc_default_drain_deferred_nodes()") < collect.index(
         'store_i32(collecting_slot, 0, 0)'
     )
-    assert collect.index('store_i32(collecting_slot, 0, 0)') < collect.index(
+    # Wrong-backend candidate calls leave before publishing collecting. The
+    # admitted cleanup paths clear collecting before releasing either lock.
+    admitted = collect[collect.index('store_i32(collecting_slot, 0, 1)'):]
+    assert admitted.index('store_i32(collecting_slot, 0, 0)') < admitted.index(
         "pcc_gc_default_table_unlock()"
     )
-    assert collect.index("pcc_gc_default_table_unlock()") < collect.index(
+    assert admitted.index("pcc_gc_default_table_unlock()") < admitted.index(
         "pcc_resume_world()"
     )
 

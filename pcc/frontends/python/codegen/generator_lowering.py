@@ -8,7 +8,52 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BinOp, BoolType, Call, ClassDef, Compare, DynType, Expr, ExprStmt, For, FuncDef, If, IntType, Name, NoneType, Return, Stmt, ExceptHandler, Try, TupleExpr, While, With
+from pcc.frontends.python.py_ast import (
+    Assign,
+    Attr,
+    AugAssign,
+    BinOp,
+    BoolExpr,
+    BoolLit,
+    BoolType,
+    BytesLit,
+    Call,
+    ClassDef,
+    Compare,
+    ComplexLit,
+    ComplexType,
+    DictExpr,
+    DynType,
+    ExceptHandler,
+    Expr,
+    ExprStmt,
+    FloatLit,
+    FloatType,
+    For,
+    FuncDef,
+    If,
+    IfExpr,
+    IntLit,
+    IntType,
+    Lambda,
+    ListExpr,
+    ListType,
+    Name,
+    NoneLit,
+    NoneType,
+    Raise,
+    RawPointerType,
+    Return,
+    Slice,
+    Stmt,
+    StrLit,
+    Subscript,
+    Try,
+    TupleExpr,
+    UnaryOp,
+    While,
+    With,
+)
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names as _ast_field_names
@@ -124,13 +169,21 @@ def register_generator_operand_root(host, name, slot, flag) -> None:
     # before these restores and dominating every saved continuation edge.
     host.builder.position_before(ctx["dispatch_bb"]._instrs[-1])
     frame = host.builder.load(ctx["frame_root"], name=host._fresh("gen.operand.frame"))
-    current = host.builder.call(
-        host._generator_frame_helper("get"), [frame, ir.Constant(_I64, index)],
-        name=host._fresh("gen.operand.restore"),
-    )
+    current = host._generator_frame_take(frame, index, host._fresh("gen.operand.restore"))
     host.builder.store(current, slot)
     host.builder.store(ir.Constant(_I1, 1), flag)
     host.builder.position_at_end(saved)
+
+
+def _inline_generator_frames(host) -> bool:
+    # Only the managed-object frame helpers accept the coallocated frame view.
+    return (
+        host._generator_frame_helper("get").name == "py_gen_frame_get"
+        and str(os.environ.get("PCC_INLINE_GENERATOR_FRAMES", "1")).strip().lower()
+        in ("1", "true", "yes", "on")
+        and str(os.environ.get("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "0")).strip().lower()
+        not in ("1", "true", "yes", "on")
+    )
 
 
 def emit_generator_terminal_frame_clear(host) -> None:
@@ -158,7 +211,8 @@ def emit_generator_terminal_frame_clear(host) -> None:
     # Later-emitted operands can extend the frame after an earlier return
     # was lowered. Retire the actual fixed frame length, not the partial
     # compile-time inventory visible at this return site.
-    length = host.builder.call(host.runtime["py_list_len"], [frame])
+    length_helper = "py_gen_frame_len" if _inline_generator_frames(host) else "py_list_len"
+    length = host.builder.call(host.runtime[length_helper], [frame])
     index_slot = host._alloca_in_entry(_I64, name=host._fresh("gen.terminal.index"))
     host.builder.store(ir.Constant(_I64, 0), index_slot)
     test = host.current_function.append_basic_block(host._fresh("gen.terminal.test"))
@@ -406,14 +460,22 @@ def emit_generator_may_park_child(
     propagate_bb = parent_fn.append_basic_block(
         name=host._fresh("vthread.delegate.propagate")
     )
+    returned_bb = parent_fn.append_basic_block(
+        name=host._fresh("vthread.delegate.returned")
+    )
+    unreturned_bb = parent_fn.append_basic_block(
+        name=host._fresh("vthread.delegate.unreturned")
+    )
     fast_completed = str(
         os.environ.get("PCC_FAST_COMPLETED_CONTINUATIONS", "1") or "1"
     ).strip().lower() in ("1", "true", "yes", "on")
-    result_ready_bb = None
-    if fast_completed:
-        result_ready_bb = parent_fn.append_basic_block(
-            name=host._fresh("vthread.delegate.result.ready")
-        )
+    # The returned, immediate and StopIteration completions join here.
+    result_ready_bb = parent_fn.append_basic_block(
+        name=host._fresh("vthread.delegate.result.ready")
+    )
+    returned_slot = host._alloca_in_entry(
+        _I64, name=host._fresh("vthread.delegate.returned.flag")
+    )
 
     host.builder.branch(next_bb)
     host.builder.position_at_end(next_bb)
@@ -452,11 +514,32 @@ def emit_generator_may_park_child(
             [ir.Constant(_CSTR, None), host._as_gc_ptr(child_slot)],
             name=host._fresh("vthread.delegate.step.child"),
         )
+    # The child's return is delivered to this driver, not raised as a
+    # StopIteration: then the result is a new reference to the value.
     yielded = host.builder.call(
-        host.runtime["py_gen_next"],
-        [current_child],
+        host.runtime["py_gen_next_direct"],
+        [current_child, host._as_gc_ptr(returned_slot)],
         name=host._fresh("vthread.delegate.value"),
     )
+    returned = host.builder.load(
+        returned_slot, name=host._fresh("vthread.delegate.returned.value")
+    )
+    host.builder.cbranch(
+        host.builder.icmp_signed(
+            "!=", returned, ir.Constant(_I64, 0),
+            name=host._fresh("vthread.delegate.is_returned"),
+        ),
+        returned_bb,
+        unreturned_bb,
+    )
+    host.builder.position_at_end(returned_bb)
+    # The slot takes this owner and releases the completed child.
+    host.builder.call(
+        host.runtime["pcc_gc_store_root_take"],
+        [host._as_gc_ptr(child_slot), yielded],
+    )
+    host.builder.branch(result_ready_bb)
+    host.builder.position_at_end(unreturned_bb)
     is_stopped = host.builder.icmp_unsigned(
         "==",
         yielded,
@@ -560,11 +643,32 @@ def emit_generator_may_park_child(
         [result_root_ptr, result_or_none],
     )
     host.builder.call(host.runtime["py_clear_exception"], [])
-    if fast_completed:
-        host.builder.branch(result_ready_bb)
-        host.builder.position_at_end(result_ready_bb)
+    host.builder.branch(result_ready_bb)
+    host.builder.position_at_end(result_ready_bb)
+    result_root_ptr = host._as_gc_ptr(
+        child_slot, name=host._fresh("vthread.delegate.result.ready.root")
+    )
+    return generator_frame_result_value(
+        host, expr, callee_name, child_slot, result_root_ptr,
+    )
+
+
+def generator_frame_result_value(
+    host,
+    expr: Call,
+    callee_name: str,
+    child_slot,
+    result_root_ptr=None,
+) -> ir.Value:
+    """Return the call result held in ``child_slot`` as the call's value.
+
+    The hidden frame slot owns the result object. An object result moves to
+    an independent owner; another representation is restored from it, and
+    the slot is cleared.
+    """
+    if result_root_ptr is None:
         result_root_ptr = host._as_gc_ptr(
-            child_slot, name=host._fresh("vthread.delegate.result.ready.root")
+            child_slot, name=host._fresh("vthread.delegate.result.root")
         )
     rooted_result = host.builder.call(
         host.runtime["pcc_gc_load_ptr"],
@@ -838,6 +942,789 @@ def _dataclass_field_names(obj):
     if isinstance(obj, Stmt):
         return _ast_field_names(obj)
     return ()
+
+
+# A resumable function suspends inside an expression wherever a call parks:
+# its resume edge enters after the park, where no SSA value computed before
+# it is defined, and every operand Python evaluated before the park must keep
+# that value. A simple statement therefore evaluates those operands, and the
+# parking operand itself, into operand roots of the generator frame first, in
+# Python evaluation order, and lowers the rest of the statement from them.
+
+_SPILL_LITERALS = (IntLit, FloatLit, ComplexLit, BoolLit, NoneLit, StrLit, BytesLit)
+_SPILL_WRAPPERS = ("*", "__starred__", "**")
+_SPILL_SCALAR_TYPES = (IntType, FloatType, BoolType, ComplexType)
+# Receivers whose method lookup cannot observe argument evaluation.
+_SPILL_FIXED_METHOD_TYPES = ("list", "dict", "set", "frozenset", "str", "bytes",
+                             "bytearray", "tuple", "int", "float", "bool", "complex")
+
+
+def generator_call_suspends(host, node, fd, owner_class_name) -> bool:
+    """Whether ``node`` can park its resumable caller.
+
+    The classification is frame planning's: source yields and awaits,
+    virtual-thread primitives and callbacks, proven may-park functions and
+    methods, and (in a module with parking callables) threading primitives
+    that park through their receiver.
+    """
+    if not isinstance(node, Call):
+        return False
+    if host._yield_sentinel_call(node) is not None:
+        return True
+    func = node.func
+    if isinstance(func, Name) and func.ident == "__await__":
+        return True
+    if host._vthread_suspension_call(node, fd):
+        return True
+    if host._vthread_dynamic_callback_call(node, fd):
+        return True
+    cache = getattr(host, "_vthread_binding_cache", None)
+    may_park_names = getattr(host, "_vthread_may_park_func_names", set())
+    may_park_method_keys = getattr(host, "_vthread_may_park_method_keys", set())
+    if isinstance(func, Name):
+        return vthread_proven_direct_name_call(fd, node, may_park_names, cache) is not None
+    if isinstance(func, Attr):
+        receiver_type = getattr(getattr(func.obj, "ty", None), "name", "")
+        if (func.name in ("acquire", "wait", "join")
+                and (may_park_names or may_park_method_keys)
+                and not isinstance(func.obj, StrLit) and not isinstance(func.obj, BytesLit)
+                and receiver_type not in ("str", "bytes")):
+            return True
+        if vthread_proven_method_call_key(
+            node,
+            owner_class_name,
+            may_park_method_keys,
+            host.ast_module,
+            fd,
+            proof_cache=cache,
+        ) is not None:
+            return True
+        return vthread_proven_export_method_call_key(
+            node, getattr(host, "_native_module_exports", None), host.ast_module, cache,
+        ) is not None
+    return False
+
+
+def generator_expr_suspends(host, expr, fd, owner_class_name) -> bool:
+    """Whether evaluating ``expr`` can park its resumable function."""
+    work = [expr]
+    while work:
+        node = work.pop()
+        if node is None:
+            continue
+        if isinstance(node, tuple):
+            for item in node:
+                work.append(item)
+            continue
+        if isinstance(node, FuncDef) or isinstance(node, ClassDef) or isinstance(node, Lambda):
+            continue
+        if isinstance(node, Call) and generator_call_suspends(host, node, fd, owner_class_name):
+            return True
+        for field in _dataclass_field_names(node):
+            if field != "span" and field != "ty":
+                work.append(_dataclass_field_value(node, field, None))
+    return False
+
+
+def _spill_wrapped_operand(node):
+    if (isinstance(node, Call) and isinstance(node.func, Name)
+            and node.func.ident in _SPILL_WRAPPERS
+            and len(node.args) == 1 and not node.kwargs):
+        return node.args[0]
+    return None
+
+
+def _spill_placeholder(host, operand, state):
+    """Record ``operand`` for evaluation into a frame root; return its name."""
+    ty = getattr(operand, "ty", None)
+    if isinstance(ty, RawPointerType) or (ty is not None and host._is_valueclass_payload_type(ty)):
+        state["refused"] = True
+        return operand
+    if ty is None or isinstance(ty, _SPILL_SCALAR_TYPES):
+        # A root holds the boxed object of a scalar operand.
+        ty = DynType(name="dyn")
+    ident = host._fresh("pcc.spill")
+    state["hoists"].append((ident, operand))
+    return Name(span=operand.span, ty=ty, ident=ident)
+
+
+def _spill_ordered(host, operands, fd, owner, state):
+    """Spill every operand up to the last one that can park; None if none can."""
+    last = -1
+    for index, operand in enumerate(operands):
+        if operand is None:
+            continue
+        inner = _spill_wrapped_operand(operand)
+        if generator_expr_suspends(host, inner if inner is not None else operand, fd, owner):
+            last = index
+    if last < 0:
+        return None
+    for index, operand in enumerate(operands):
+        if (index < last and _spill_wrapped_operand(operand) is not None
+                and operand.func.ident == "**"):
+            # The keyword binder must expand and merge this mapping before
+            # the later operand, including duplicate-key errors. Leave this
+            # group intact; its nested values spill at their operand boundary.
+            # Do not refuse the enclosing plan: its earlier receiver/operands
+            # still need roots while this entire call is evaluated.
+            return None
+    result = []
+    for index, operand in enumerate(operands):
+        if operand is None or index > last or state["refused"]:
+            result.append(operand)
+            continue
+        inner = _spill_wrapped_operand(operand)
+        if inner is not None and index < last:
+            # Python expands the iterable before the later park: spill a
+            # list of its items then, and expand that list afterwards.
+            starred = Call(span=operand.span, ty=operand.ty, func=operand.func,
+                           args=(_spill_normalize(host, inner, fd, owner, state),), kwargs=())
+            items = ListExpr(span=operand.span, ty=ListType(name="list", elem=DynType(name="dyn")),
+                             elems=(starred,))
+            result.append(Call(span=operand.span, ty=operand.ty, func=operand.func,
+                               args=(_spill_placeholder(host, items, state),), kwargs=()))
+            continue
+        target = inner if inner is not None else operand
+        if index < last and isinstance(target, _SPILL_LITERALS):
+            result.append(operand)
+            continue
+        spilled = _spill_placeholder(
+            host, _spill_normalize(host, target, fd, owner, state), state,
+        )
+        if inner is not None:
+            spilled = Call(span=operand.span, ty=operand.ty, func=operand.func,
+                           args=(spilled,), kwargs=())
+        result.append(spilled)
+    return result
+
+
+def _spill_static_namespace(host, obj) -> bool:
+    """A module or class whose attribute lowering is static, not a value."""
+    if not isinstance(obj, Name) or obj.ident in host.env:
+        return False
+    if host._native_module_name_for_object_expr(obj) is not None:
+        return True
+    ident = obj.ident
+    for aliases in (
+        getattr(host, "_native_builtin_module_aliases", {}),
+        getattr(host, "_native_module_aliases", {}),
+        getattr(host, "_native_module_object_aliases", {}),
+    ):
+        if ident in aliases:
+            return True
+    return ident in host.class_lowering.classes
+
+
+def _spill_receiver_lookup_is_fixed(host, obj) -> bool:
+    """Whether the method lookup on ``obj`` may follow argument evaluation."""
+    if host._class_hint_for_expr(obj) is not None:
+        return True
+    ty = getattr(obj, "ty", None)
+    return ty is not None and getattr(ty, "name", "") in _SPILL_FIXED_METHOD_TYPES
+
+
+def _spill_call(host, call, fd, owner, state):
+    func = call.func
+    operands = []
+    func_kind = ""
+    if isinstance(func, Attr):
+        if not _spill_static_namespace(host, func.obj):
+            if _spill_receiver_lookup_is_fixed(host, func.obj):
+                func_kind = "receiver"
+                operands.append(func.obj)
+            else:
+                # Python looks the method up before the arguments run.
+                func_kind = "bound"
+                operands.append(func)
+    elif not isinstance(func, Name):
+        func_kind = "callable"
+        operands.append(func)
+    if call.is_set_literal:
+        if len(call.args) != 1 or not isinstance(call.args[0], ListExpr):
+            return call
+        elems = call.args[0].elems
+        spilled = _spill_ordered(host, list(elems), fd, owner, state)
+        if spilled is None:
+            return call
+        listed = ListExpr(span=call.args[0].span, ty=call.args[0].ty, elems=tuple(spilled))
+        return Call(span=call.span, ty=call.ty, func=call.func, args=(listed,),
+                    kwargs=call.kwargs, operand_order=call.operand_order,
+                    is_set_literal=True)
+    order = []
+    if call.operand_order:
+        for kind, index in call.operand_order:
+            if kind == "arg" or kind == "kw":
+                order.append((kind, index))
+    else:
+        for index in range(len(call.args)):
+            order.append(("arg", index))
+        for index in range(len(call.kwargs)):
+            order.append(("kw", index))
+    for kind, index in order:
+        if kind == "arg":
+            operands.append(call.args[index])
+        else:
+            operands.append(call.kwargs[index][1])
+    spilled = _spill_ordered(host, operands, fd, owner, state)
+    if spilled is None:
+        return call
+    position = 0
+    new_func = func
+    if func_kind == "receiver":
+        new_func = Attr(span=func.span, ty=func.ty, obj=spilled[0], name=func.name)
+        position = 1
+    elif func_kind == "bound" or func_kind == "callable":
+        new_func = spilled[0]
+        position = 1
+    args = list(call.args)
+    kwargs = list(call.kwargs)
+    for kind, index in order:
+        value = spilled[position]
+        position += 1
+        if kind == "arg":
+            args[index] = value
+        else:
+            kwargs[index] = (kwargs[index][0], value)
+    return Call(span=call.span, ty=call.ty, func=new_func, args=tuple(args),
+                kwargs=tuple(kwargs), operand_order=call.operand_order,
+                is_set_literal=call.is_set_literal)
+
+
+def _spill_normalize(host, expr, fd, owner, state):
+    """``expr`` with no SSA value live across a park inside it.
+
+    Operands evaluated before the last parking operand, and that operand,
+    move into ``state["hoists"]``; evaluating the result can still park, but
+    only at its own root. Conditional expressions become a shared root whose
+    selected branch is emitted as a statement; nested scopes stay in place.
+    """
+    if expr is None or state["refused"]:
+        return expr
+    if not generator_expr_suspends(host, expr, fd, owner):
+        return expr
+    if isinstance(expr, Call):
+        if host._vthread_dynamic_callback_call(expr, fd):
+            # vt.call keeps its callable and argument list in frame roots
+            # while a later argument parks.
+            return expr
+        return _spill_call(host, expr, fd, owner, state)
+    if isinstance(expr, Attr):
+        spilled = _spill_ordered(host, [expr.obj], fd, owner, state)
+        if spilled is None:
+            return expr
+        return Attr(span=expr.span, ty=expr.ty, obj=spilled[0], name=expr.name)
+    if isinstance(expr, Subscript):
+        index = expr.idx
+        if isinstance(index, Slice):
+            spilled = _spill_ordered(
+                host, [expr.obj, index.lo, index.hi, index.step], fd, owner, state,
+            )
+            if spilled is None:
+                return expr
+            sliced = Slice(span=index.span, ty=index.ty, lo=spilled[1],
+                           hi=spilled[2], step=spilled[3])
+            return Subscript(span=expr.span, ty=expr.ty, obj=spilled[0], idx=sliced)
+        spilled = _spill_ordered(host, [expr.obj, index], fd, owner, state)
+        if spilled is None:
+            return expr
+        return Subscript(span=expr.span, ty=expr.ty, obj=spilled[0], idx=spilled[1])
+    if isinstance(expr, BinOp):
+        spilled = _spill_ordered(host, [expr.lhs, expr.rhs], fd, owner, state)
+        if spilled is None:
+            return expr
+        return BinOp(span=expr.span, ty=expr.ty, op=expr.op, lhs=spilled[0], rhs=spilled[1])
+    if isinstance(expr, Compare):
+        spilled = _spill_ordered(host, [expr.lhs, expr.rhs], fd, owner, state)
+        if spilled is None:
+            return expr
+        return Compare(span=expr.span, ty=expr.ty, op=expr.op, lhs=spilled[0], rhs=spilled[1])
+    if isinstance(expr, UnaryOp):
+        spilled = _spill_ordered(host, [expr.operand], fd, owner, state)
+        if spilled is None:
+            return expr
+        return UnaryOp(span=expr.span, ty=expr.ty, op=expr.op, operand=spilled[0])
+    if isinstance(expr, BoolExpr):
+        return _spill_placeholder(host, expr, state)
+    if isinstance(expr, IfExpr):
+        return _spill_placeholder(host, expr, state)
+    if isinstance(expr, ListExpr):
+        spilled = _spill_ordered(host, list(expr.elems), fd, owner, state)
+        if spilled is None:
+            return expr
+        return ListExpr(span=expr.span, ty=expr.ty, elems=tuple(spilled))
+    if isinstance(expr, TupleExpr):
+        spilled = _spill_ordered(host, list(expr.elems), fd, owner, state)
+        if spilled is None:
+            return expr
+        return TupleExpr(span=expr.span, ty=expr.ty, elems=tuple(spilled))
+    if isinstance(expr, DictExpr):
+        operands = []
+        for key, value in expr.pairs:
+            unpack = isinstance(key, Name) and key.ident == "**"
+            operands.append(None if unpack else key)
+            operands.append(value)
+        spilled = _spill_ordered(host, operands, fd, owner, state)
+        if spilled is None:
+            return expr
+        pairs = []
+        for index, pair in enumerate(expr.pairs):
+            key = pair[0] if spilled[2 * index] is None else spilled[2 * index]
+            pairs.append((key, spilled[2 * index + 1]))
+        return DictExpr(span=expr.span, ty=expr.ty, pairs=tuple(pairs))
+    return expr
+
+
+def _spill_plain_local(host, fd, ident) -> bool:
+    """A local only this activation can rebind while it is parked."""
+    if ident not in host.env or ident in getattr(host, "_current_global_names", set()):
+        return False
+    boxed = getattr(host, "_closure_boxed_params", {}).get(fd.name, ())
+    return ident not in boxed
+
+
+def _spill_function(host):
+    """The resumable function being lowered and its method owner, or None."""
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if not contexts or contexts[-1].get("resume_function") is not host.current_function:
+        return None
+    fd = host.current_func_def
+    if fd is None:
+        return None
+    owner = vthread_method_owner_for_funcdef(
+        host.ast_module, fd, getattr(host, "_vthread_binding_cache", None),
+    )
+    return fd, owner
+
+
+def synchronous_generator_statement_context(host, stmt):
+    """Keep production frame policy until a diagnostic candidate wins A/B.
+
+    The statement-wide trial reduced the request frame by three cells but
+    increased complete-request instructions. Its proof remains available for
+    explicit tests without changing generated production code.
+    """
+    return None
+
+
+def diagnostic_synchronous_generator_statement_context(host, stmt):
+    """Prove a complete temporary-root lifetime within one resume activation.
+
+    Real local bindings keep their existing frame storage. Only operand roots
+    created while emitting this expression/assignment use lexical storage.
+    Keep control flow, target callbacks, payload scopes and nested definitions
+    on their existing paths; the caller also checks emitted continuation state.
+    """
+    function = _spill_function(host)
+    if function is None:
+        return None
+    if isinstance(stmt, ExprStmt):
+        expr = stmt.expr
+    elif (isinstance(stmt, Assign) and stmt.has_value
+          and all(isinstance(target, Name) for target in stmt.targets)):
+        expr = stmt.value
+    else:
+        return None
+    # In particular, Lambda creation can evaluate defaults although the
+    # existing suspension walker deliberately does not descend into its body.
+    allowed = (Name, Call, Attr, Subscript, Slice, BinOp, UnaryOp, BoolExpr,
+               Compare, IfExpr, ListExpr, TupleExpr, DictExpr,
+               StrLit, BytesLit, IntLit, FloatLit, ComplexLit, BoolLit, NoneLit)
+    pending = [expr]
+    while pending:
+        node = pending.pop()
+        if node is None:
+            continue
+        if isinstance(node, tuple):
+            pending.extend(node)
+            continue
+        if isinstance(node, Expr) and not isinstance(node, allowed):
+            return None
+        if (isinstance(node, Call) and isinstance(node.func, Name)
+                and node.func.ident in ("_walrus", "__walrus__")):
+            return None
+        for field in _dataclass_field_names(node):
+            if field != "span" and field != "ty":
+                pending.append(_dataclass_field_value(node, field, None))
+    fd, owner = function
+    if generator_expr_suspends(host, expr, fd, owner):
+        return None
+    return host._generator_ctx_stack[-1]
+
+
+def plan_generator_expression_spills(host, expr):
+    """``(hoists, expression)`` for one truth test that parks after
+    evaluating other operands, else None; see the statement plan."""
+    function = _spill_function(host)
+    if function is None:
+        return None
+    fd, owner = function
+    state = {"hoists": [], "refused": False}
+    rebuilt = _spill_normalize(host, expr, fd, owner, state)
+    if state["refused"] or not state["hoists"]:
+        return None
+    return state["hoists"], rebuilt
+
+
+# py_obj_inplace_op's operator codes (PyNumber_InPlace* order).
+_SPILL_INPLACE_CODES = {
+    "+": 0,
+    "-": 1,
+    "*": 2,
+    "/": 3,
+    "//": 4,
+    "%": 5,
+    "|": 6,
+    "&": 7,
+    "^": 8,
+    "<<": 9,
+    ">>": 10,
+    "**": 11,
+    "@": 12,
+}
+
+
+def _spill_target_operands(host, target, state):
+    """Spill an attribute or subscript target's operands; the new target."""
+    if isinstance(target, Attr):
+        obj = target.obj
+        if not _spill_static_namespace(host, obj):
+            obj = _spill_placeholder(host, obj, state)
+        return Attr(span=target.span, ty=target.ty, obj=obj, name=target.name)
+    index = target.idx
+    obj = _spill_placeholder(host, target.obj, state)
+    if isinstance(index, Slice):
+        parts = []
+        for part in (index.lo, index.hi, index.step):
+            if part is None or isinstance(part, _SPILL_LITERALS):
+                parts.append(part)
+            else:
+                parts.append(_spill_placeholder(host, part, state))
+        index = Slice(span=index.span, ty=index.ty, lo=parts[0], hi=parts[1], step=parts[2])
+    elif not isinstance(index, _SPILL_LITERALS):
+        index = _spill_placeholder(host, index, state)
+    return Subscript(span=target.span, ty=target.ty, obj=obj, idx=index)
+
+
+def plan_generator_statement_spills(host, stmt):
+    """Return ``(hoists, statement, inplace)`` for a statement that parks
+    after evaluating other operands, else None.
+
+    ``hoists`` lists ``(name, operand)`` in Python evaluation order; the
+    statement reads each spilled operand through its name. A ``for``
+    statement keeps the roots of its iterable's operands until the loop
+    ends, as its iterator usually keeps those values alive anyway.
+    ``inplace`` describes an augmented assignment whose target's current
+    value was spilled; it replaces ``statement``.
+    """
+    if not (isinstance(stmt, ExprStmt) or isinstance(stmt, Assign) or isinstance(stmt, Return)
+            or isinstance(stmt, Raise) or isinstance(stmt, AugAssign)
+            or isinstance(stmt, For)):
+        return None
+    function = _spill_function(host)
+    if function is None:
+        return None
+    fd, owner = function
+    state = {"hoists": [], "refused": False}
+    rebuilt = None
+    inplace = None
+    if isinstance(stmt, ExprStmt):
+        rebuilt = ExprStmt(span=stmt.span, expr=_spill_normalize(host, stmt.expr, fd, owner, state))
+    elif isinstance(stmt, Assign):
+        parked_targets = [target for target in stmt.targets
+                          if generator_expr_suspends(host, target, fd, owner)]
+        if not parked_targets:
+            rebuilt = Assign(span=stmt.span, targets=stmt.targets,
+                             value=_spill_normalize(host, stmt.value, fd, owner, state),
+                             annotation=stmt.annotation, has_value=stmt.has_value)
+        else:
+            # Python evaluates the value, then the target's operands, then
+            # stores; a later target's operands follow an earlier store, so
+            # only a single attribute or subscript target is rewritten.
+            target = stmt.targets[0]
+            if len(stmt.targets) != 1 or not (isinstance(target, Attr) or isinstance(target, Subscript)):
+                return None
+            operands = [stmt.value]
+            if isinstance(target, Attr):
+                operands.append(target.obj)
+            elif isinstance(target.idx, Slice):
+                operands.extend([target.obj, target.idx.lo, target.idx.hi, target.idx.step])
+            else:
+                operands.extend([target.obj, target.idx])
+            spilled = _spill_ordered(host, operands, fd, owner, state)
+            if spilled is None:
+                return None
+            if isinstance(target, Attr):
+                new_target = Attr(span=target.span, ty=target.ty, obj=spilled[1], name=target.name)
+            elif isinstance(target.idx, Slice):
+                new_target = Subscript(
+                    span=target.span, ty=target.ty, obj=spilled[1],
+                    idx=Slice(span=target.idx.span, ty=target.idx.ty,
+                              lo=spilled[2], hi=spilled[3], step=spilled[4]),
+                )
+            else:
+                new_target = Subscript(span=target.span, ty=target.ty, obj=spilled[1], idx=spilled[2])
+            rebuilt = Assign(span=stmt.span, targets=(new_target,), value=spilled[0],
+                             annotation=stmt.annotation, has_value=stmt.has_value)
+    elif isinstance(stmt, Return):
+        if stmt.value is None:
+            return None
+        rebuilt = Return(span=stmt.span, value=_spill_normalize(host, stmt.value, fd, owner, state))
+    elif isinstance(stmt, Raise):
+        spilled = _spill_ordered(host, [stmt.exc, stmt.cause], fd, owner, state)
+        if spilled is None:
+            return None
+        rebuilt = Raise(span=stmt.span, exc=spilled[0], cause=spilled[1])
+    elif isinstance(stmt, For):
+        if stmt.is_async or generator_expr_suspends(host, stmt.target, fd, owner):
+            return None
+        rebuilt = For(span=stmt.span, target=stmt.target,
+                      iter=_spill_normalize(host, stmt.iter, fd, owner, state),
+                      body=stmt.body, else_body=stmt.else_body, is_async=False)
+    else:
+        target = stmt.target
+        if (not generator_expr_suspends(host, stmt.value, fd, owner)
+                or generator_expr_suspends(host, target, fd, owner)):
+            return None
+        if isinstance(target, Name) and _spill_plain_local(host, fd, target.ident):
+            # The current value of a local that only this activation writes
+            # is the same before and after the park.
+            value = _spill_placeholder(
+                host, _spill_normalize(host, stmt.value, fd, owner, state), state,
+            )
+            rebuilt = AugAssign(span=stmt.span, target=target, op=stmt.op, value=value)
+        else:
+            # Python evaluates the target's operands and reads its current
+            # value before the value parks, then applies the in-place
+            # operator and stores into the same target.
+            code = _SPILL_INPLACE_CODES.get(stmt.op.rstrip("="))
+            if code is None:
+                return None
+            if isinstance(target, Name):
+                new_target = target
+            elif isinstance(target, Attr) or isinstance(target, Subscript):
+                new_target = _spill_target_operands(host, target, state)
+            else:
+                return None
+            current = _spill_placeholder(host, new_target, state)
+            value = _spill_placeholder(
+                host, _spill_normalize(host, stmt.value, fd, owner, state), state,
+            )
+            inplace = (code, current.ident, value.ident, new_target, stmt.span)
+    if state["refused"] or not state["hoists"]:
+        return None
+    return state["hoists"], rebuilt, inplace
+
+
+def _spill_root_owner_name(host, root):
+    for name, entry in host.env.items():
+        if entry[0] is root:
+            return name
+    raise L1CodegenError("spilled operand root has no frame binding")
+
+
+def emit_generator_unpack_assignment(host, stmt, target, source_root=None) -> bool:
+    """Unpack into frame owners before evaluating any suspending target.
+
+    The unpack itself precedes all target stores. Each destination then uses
+    ordinary statement lowering, so a later target sees earlier stores and
+    its operands can suspend without retaining pre-suspension SSA values.
+    """
+    function = _spill_function(host)
+    if function is None:
+        return False
+    fd, owner = function
+    if source_root is None and not generator_expr_suspends(host, target, fd, owner):
+        return False
+    roots = []
+    values = []
+    temporary_targets = []
+    for destination in target.elems:
+        root = host._new_slot_call_root("unpack.target")
+        roots.append(root)
+        value = Name(span=destination.span, ty=DynType(name="dyn"),
+                     ident=_spill_root_owner_name(host, root))
+        values.append(value)
+        if host._is_starred_unpack_expr(destination):
+            temporary_targets.append(Call(
+                span=destination.span, ty=destination.ty,
+                func=destination.func, args=(value,), kwargs=(),
+            ))
+        else:
+            temporary_targets.append(value)
+    temporary = TupleExpr(span=target.span, ty=target.ty,
+                          elems=tuple(temporary_targets))
+    previous = host._current_try_err_block()
+    error = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    host._try_err_block = host._slot_call_cleanup_block(tuple(roots), error)
+    host._cpy_operand_cleanup_block = host._try_err_block
+    try:
+        host._emit_stmt(Assign(span=stmt.span, targets=(temporary,), value=stmt.value))
+        if source_root is not None:
+            # This is the parent's private unpack owner, not a user binding.
+            # Once the nested elements have independent owners, consuming
+            # their temporary container lets each discarded item finalize
+            # before the next target is evaluated, as UNPACK_SEQUENCE does.
+            host._release_slot_call_roots((source_root,))
+        for index, destination in enumerate(target.elems):
+            if host._is_starred_unpack_expr(destination):
+                destination = destination.args[0]
+            assignment = Assign(span=stmt.span, targets=(destination,), value=values[index])
+            nested = False
+            if isinstance(destination, (TupleExpr, ListExpr)):
+                nested = emit_generator_unpack_assignment(
+                    host, assignment, destination, source_root=roots[index],
+                )
+            if not nested:
+                host._emit_stmt(assignment)
+            if not nested and not host._builder_block_is_terminated():
+                # A consumed item dies before the next target's side effects,
+                # even if a setter discards it instead of retaining it.
+                host._release_slot_call_roots((roots[index],))
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+    return True
+
+
+def _bind_spill_root(host, spills, ident, root, hint) -> None:
+    """Read ``ident`` from ``root`` exactly as the root's own frame binding."""
+    spills["roots"].append(root)
+    host._try_err_block = host._slot_call_cleanup_block(tuple(spills["roots"]), spills["target"])
+    host._cpy_operand_cleanup_block = host._try_err_block
+    owner_name = _spill_root_owner_name(host, root)
+    host.env[ident] = host.env[owner_name]
+    added = []
+    rooted = getattr(host, "_gc_rooted_local_names", None)
+    borrowed = getattr(host, "_borrowed_gc_rooted_local_names", None)
+    if rooted is not None and owner_name in rooted:
+        rooted.add(ident)
+        added.append(rooted)
+    if borrowed is not None and owner_name in borrowed:
+        borrowed.add(ident)
+        added.append(borrowed)
+    if hint is not None:
+        host.env_class_hint[ident] = hint
+    spills["bound"].append((ident, added, hint is not None))
+
+
+def _emit_conditional_spill(host, operand):
+    """Let each selected arm use statement spill planning and one owner.
+
+    Assign the root's actual owned-local name, not its read-only placeholder:
+    an alias has no independent ownership flag to update across suspension.
+    """
+    root = host._new_slot_call_root("spill.conditional")
+    target = Name(span=operand.span, ty=DynType(name="dyn"),
+                  ident=_spill_root_owner_name(host, root))
+    previous = host._current_try_err_block()
+    error = previous if previous is not None else host._ensure_fn_err_exit()
+    saved_cpy = host._cpy_operand_cleanup_block
+    host._try_err_block = host._slot_call_cleanup_block((root,), error)
+    host._cpy_operand_cleanup_block = host._try_err_block
+    try:
+        if isinstance(operand, IfExpr):
+            statement = If(
+                span=operand.span, cond=operand.cond,
+                body=(Assign(span=operand.span, targets=(target,), value=operand.then_e),),
+                else_body=(Assign(span=operand.span, targets=(target,), value=operand.else_e),),
+            )
+        else:
+            host._emit_stmt(Assign(span=operand.span, targets=(target,), value=operand.left))
+            # A discarded left temporary dies before evaluating the right
+            # operand, including before its side effects or first suspension.
+            right = (
+                Assign(span=operand.span, targets=(target,),
+                       value=NoneLit(span=operand.span, ty=NoneType(name="None"))),
+                Assign(span=operand.span, targets=(target,), value=operand.right),
+            )
+            statement = If(
+                span=operand.span, cond=target,
+                body=right if operand.op == "and" else (),
+                else_body=right if operand.op == "or" else (),
+            )
+        host._emit_stmt(statement)
+    finally:
+        host._try_err_block = previous
+        host._cpy_operand_cleanup_block = saved_cpy
+    return root
+
+
+def begin_generator_statement_spills(host, hoists):
+    """Evaluate each spilled operand into a frame root and bind its name."""
+    previous = host._current_try_err_block()
+    spills = {
+        "roots": [],
+        "bound": [],
+        "error": host._try_err_block,
+        "cpy": host._cpy_operand_cleanup_block,
+        "target": previous if previous is not None else host._ensure_fn_err_exit(),
+    }
+    for ident, operand in hoists:
+        hint = host._class_hint_for_expr(operand)
+        root = (_emit_conditional_spill(host, operand)
+                if isinstance(operand, (BoolExpr, IfExpr))
+                else host._emit_slot_call_operand(operand, "spill"))
+        _bind_spill_root(host, spills, ident, root, hint)
+    return spills
+
+
+def emit_generator_operand_spills(host, operand, label):
+    """Spill a nested operand when its enclosing binder must keep its order.
+
+    Keyword expansion, for example, must merge an earlier mapping and detect
+    duplicates before evaluating a later value. It cannot hoist the whole
+    call, but each value still needs the same suspension-safe expression plan.
+    """
+    plan = plan_generator_expression_spills(host, operand)
+    if plan is None:
+        return None
+    spills = begin_generator_statement_spills(host, plan[0])
+    try:
+        result = host._emit_slot_call_operand(plan[1], label)
+        finish_generator_statement_spills(host, spills)
+        return result
+    finally:
+        unbind_generator_statement_spills(host, spills)
+
+
+def emit_generator_spilled_inplace(host, spills, inplace):
+    """Apply a spilled augmented assignment's operator; the store statement.
+
+    The current value and the right operand are frame roots; the in-place
+    result is published into a third root that the returned assignment
+    stores into the target.
+    """
+    code, current, value, target, span = inplace
+    result = host._new_slot_call_root("spill.inplace")
+    host._slot_call_runtime_call(
+        "py_obj_inplace_op", (host.env[current][0], host.env[value][0]),
+        result_slot=result, suffix_args=(ir.Constant(_I64, code),), span=span,
+    )
+    ident = host._fresh("pcc.spill")
+    _bind_spill_root(host, spills, ident, result, None)
+    return Assign(span=span, targets=(target,), value=Name(span=span, ty=DynType(name="dyn"), ident=ident))
+
+
+def finish_generator_statement_spills(host, spills) -> None:
+    """Release the spilled operands once the statement completed normally.
+
+    An exception reaches the cleanup block installed for them, and a return
+    leaves them to the frame's owned-root cleanup.
+    """
+    if not host._builder_block_is_terminated():
+        host._release_slot_call_roots(tuple(spills["roots"]))
+
+
+def unbind_generator_statement_spills(host, spills) -> None:
+    host._try_err_block = spills["error"]
+    host._cpy_operand_cleanup_block = spills["cpy"]
+    for ident, added, hinted in spills["bound"]:
+        host.env.pop(ident, None)
+        for names in added:
+            names.discard(ident)
+        if hinted:
+            host.env_class_hint.pop(ident, None)
 
 
 class GeneratorLoweringMixin:
@@ -1526,11 +2413,11 @@ class GeneratorLoweringMixin:
         self._emit_application_safepoint()
 
         bulk_frame_init = str(
-            os.environ.get("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "1") or "1"
+            os.environ.get("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "0") or "0"
         ).strip().lower() not in ("1", "true", "yes", "on")
         if bulk_frame_init:
             frame = self.builder.call(
-                self.runtime["py_gen_frame_new"],
+                self.runtime["py_gen_inline_frame_new" if _inline_generator_frames(self) else "py_gen_frame_new"],
                 [ir.Constant(_I64, len(frame_names))],
                 name=self._fresh("gen.frame"),
             )
@@ -1613,7 +2500,7 @@ class GeneratorLoweringMixin:
             name=self._fresh(f"{fd.name}.resume.ptr"),
         )
         gen = self.builder.call(
-            self.runtime["py_gen_new"],
+            self.runtime["py_gen_from_inline_frame" if _inline_generator_frames(self) else "py_gen_new"],
             [resume_ptr, frame],
             name=self._fresh(f"{fd.name}.gen"),
         )
@@ -1775,10 +2662,8 @@ class GeneratorLoweringMixin:
                 # list read before the function has executed its first line.
                 item = self._emit_none_literal()
             else:
-                item = self.builder.call(
-                    self._generator_frame_helper("get"),
-                    [frame_current, ir.Constant(_I64, idx)],
-                    name=self._fresh(f"gen.frame.{local_name}"),
+                item = self._generator_frame_take(
+                    frame_current, idx, self._fresh(f"gen.frame.{local_name}"),
                 )
             self.builder.store(item, slot)
             self.env[local_name] = (slot, _CSTR, DynType(name="dyn"))
@@ -1802,10 +2687,8 @@ class GeneratorLoweringMixin:
             for local_name, (idx, slot) in frame_slots.items():
                 if local_name in argument_names:
                     continue
-                item = self.builder.call(
-                    self._generator_frame_helper("get"),
-                    [frame_current, ir.Constant(_I64, idx)],
-                    name=self._fresh(f"gen.frame.{local_name}"),
+                item = self._generator_frame_take(
+                    frame_current, idx, self._fresh(f"gen.frame.{local_name}"),
                 )
                 # This root still contains only its initial immortal None.
                 self.builder.store(item, slot)
@@ -1912,6 +2795,24 @@ class GeneratorLoweringMixin:
         )
         prefix = "py_gen_frame_" if proven else "py_list_"
         return self.runtime[prefix + operation]
+
+    def _generator_frame_take(self, frame: ir.Value, index: int, name: str) -> ir.Value:
+        """Move one saved owner out of the frame into the resumed activation.
+
+        The frame holds a generator's locals and operand roots only while it
+        is suspended; a copy would keep each value alive until the next
+        suspension or completion, after the body rebound or dropped it.
+        """
+        position = ir.Constant(_I64, index)
+        take = self._generator_frame_helper("get")
+        if take.name == "py_gen_frame_get":
+            return self.builder.call(self.runtime["py_gen_frame_take"], [frame, position], name=name)
+        value = self.builder.call(take, [frame, position], name=name)
+        self.builder.call(
+            self._generator_frame_helper("set"),
+            [frame, position, ir.Constant(_CSTR, None)],
+        )
+        return value
 
     def _emit_generator_save_frame(self) -> None:
         ctx = self._generator_ctx_stack[-1]

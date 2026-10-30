@@ -54,6 +54,8 @@ class IndexModel(SpecialCallModel):
             py_decref=self.drop_reference,
             py_class_lookup=lambda cls, name: 0,
             py_exc_new=self.new_error,
+            py_raise_type_named_error=self.type_named_error,
+            py_raise_conversion_result_error=self.conversion_result_error,
         )
         names = {"_type_of", "_is_user_instance", "_instance_class", "_lookup_dunder", "py_obj_index"}
         if not legacy:
@@ -76,6 +78,16 @@ class IndexModel(SpecialCallModel):
         result = self.exception(message)
         self.store(result, 32, kind)
         return result
+
+    def type_named_error(self, prefix, receiver, suffix):
+        # This model checks error ownership; concrete type-name rendering is
+        # the runtime helper's separate contract. Its raw receiver stays leased.
+        assert self.count(receiver) > 0
+        self.error = self.new_error(3, prefix + "model" + suffix)
+
+    def conversion_result_error(self, receiver, message, result):
+        assert self.count(receiver) > 0 and self.count(result) > 0
+        self.error = self.new_error(3, "model" + message + "model")
 
     def convert(self, value, overflow):
         assert value & 1 or self.count(value) > 0, "integer result needs its own counted lease"
@@ -357,13 +369,15 @@ def _emit_index_probe(source, *, cpython=False):
 
 def test_compiler_dynamic_index_copies_borrowed_parameter_slot_before_entry():
     from test_slot_call_operand_roots import _calls, _with_slot_origins
+    from tests.python.root_copy_ir import root_copy_calls
     text = _emit_index_probe("def run(index):\n    return index_probe(index)\n")
-    copies = _calls(text, "pcc_gc_root_copy_borrowed_lease")
-    assert len(copies) == 1 and "%index.addr" in _with_slot_origins(text, copies[0])
+    copies = root_copy_calls(text, local=True, borrowed=True)
+    assert len(copies) == 1 and copies[0].source.startswith("%index.addr")
     calls = _calls(text, "py_obj_index_i64_slots")
     assert len(calls) == 1 and ".operand" in _with_slot_origins(text, calls[0])
     assert not _calls(text, "py_obj_index_i64")
-    assert text.index(copies[0]) < text.index(calls[0])
+    assert copies[0].destination in _with_slot_origins(text, calls[0])
+    assert text.index(copies[0].line) < text.index(calls[0])
     assert _calls(text, "pcc_gc_store_root")
 
 

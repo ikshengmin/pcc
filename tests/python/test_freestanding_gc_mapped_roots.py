@@ -82,6 +82,9 @@ STACKMAP_HELPER_SYMBOLS = {
     "pcc_gc_stackmap_visit_runtime_record",
     "pcc_gc_stack_diff_write_text",
     "pcc_gc_stack_diff_write_decimal",
+    # Every mutator's walked stack, and one thread's from a frame record.
+    "pcc_gc_visit_walked_stack_roots",
+    "pcc_gc_stackmap_visit_frames_from",
 }
 ROOT_OPS_PROVIDER_SYMBOLS = {
     "pcc_gc_mark_root_gray_if_known",
@@ -98,6 +101,16 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = PROVIDER_SYMBOLS | INTERNAL_SYMBOLS | {
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend",
     "malloc",
+    # Walking every mutator's stopped frames: stop the world unless the
+    # caller owns it, collect the other threads' frames, mark GC0 roots.
+    "free",
+    "pcc_stop_the_world",
+    "pcc_resume_world",
+    "pcc_thread_live_count",
+    "pcc_thread_owns_stopped_world",
+    "pcc_thread_collect_stopped_frames",
+    "pcc_gc_backend0_mark_root_slot",
+    "pcc_platform_abort",
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_pointer_is_managed",
     "pcc_gc_promote_cached_frame_slot",

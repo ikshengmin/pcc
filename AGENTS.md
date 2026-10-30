@@ -53,9 +53,8 @@ These are required outcomes, not assertions that migration is complete. See
 - Preserve ordinary Python/C semantics, arbitrary-precision Python integers,
   identity, exceptions, finalizers, weakrefs and resurrection. Value layouts
   and fixed-width machine types are explicit. No package-specific shortcuts.
-- Preserve all five GC backends and their shared slot/root contract. Keep C
-  and pcc-Python migration mirrors differential-equal; the production runtime
-  target is pcc-Python over owned intrinsics and the platform ABI.
+- Preserve all five GC backends and their shared slot/root contract. The
+  runtime is pcc-Python over owned intrinsics and the platform ABI.
 - The self-host chain is host pcc0 -> pcc1 -> pcc2 -> pcc3. A stage1 build is
   not a new-source fixed point. Distinguish host/native, self-backed/LLVM-backed,
   no-libpython/libpython and pcc-native/cpython-compat evidence.
@@ -77,6 +76,11 @@ These are required outcomes, not assertions that migration is complete. See
   pull/rebase/integration. Trust conflict-free peers' committed validation;
   check our changes and actual conflict resolutions without repeating their
   suites merely because upstream changed.
+- Commit order for collaboration (user-directed, 2026-10-22): commit first,
+  then test, then commit the fixes. Once a code change runs on its own repro
+  and its new test, commit and push it at once so other agents see it; run the
+  focused suites after the push; land each test fix or follow-up fix as its
+  own commit and push.
 - Preserve other work. Re-read targets before narrow edits; no destructive
   restore/reset/revert/stash/clean or discarding branch switches without explicit
   user direction. Do not commit/push unless authorized in the current session.
@@ -190,7 +194,7 @@ gtimeout 1800s uv run pytest -x -vv -m integration tests/python/gc/test_pcc_boot
 | Python lowering/ownership | `pcc/frontends/python/codegen/`, `pcc/runtime/`; [debugging playbook](docs/debugging-playbook.md) |
 | Passes/self codegen | `pcc/frontends/python/pipeline_pass_driver.py`, `pcc/ir/optimization/`, `pcc/backend/`; performance rules above |
 | C semantics | `pcc/frontends/c/codegen/c_codegen.py`, `pcc/frontends/c/parse/`, `tests/c/`; check signedness and constant evaluation separately |
-| GC/ABI | `pcc/runtime/py/`, `src/`, `include/`, `tests/python/gc/`; verify layouts/barriers in code, consult relevant upstream reference |
+| GC/ABI | `pcc/runtime/py/`, `tests/python/gc/`; verify layouts/barriers in code, consult relevant upstream reference |
 | Bootstrap/performance | `scripts/run_pcc_*`, current receipts and tests; [tool index](docs/development-tools.md) |
 | Investigation history | Search [INDEX](docs/investigations/INDEX.md); use [investigation workflow](docs/investigation-workflow.md) when recording an experiment |
 | Domain vocabulary | [CONTEXT.md](CONTEXT.md) is a glossary only; requirements stay in [Project Intent](docs/project-intent.md) and [compiler-contract.md](docs/compiler-contract.md) |

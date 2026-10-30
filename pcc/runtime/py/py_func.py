@@ -501,8 +501,8 @@ define_global_ptr_null("pcc_builtin_function_cache")
 define_global_i64("pcc_builtin_function_cache_mutex_bits", 0)
 define_global_i32("pcc_builtin_function_cache_registered", 0)
 
-py_class_new = extern(
-    "py_class_new",
+py_class_new_builtin = extern(
+    "py_class_new_builtin",
     (c_ptr, c_ptr, c_int32, c_ptr, c_int32),
     c_ptr,
 )
@@ -716,7 +716,7 @@ def py_func_attach_code_metadata(func, signature, name) -> int:
 
     code_class = global_load_ptr("py_func_code_class_cache")
     if ptr_is_null(code_class):
-        code_class = py_class_new(cstr("code"), null(), 0, null(), 0)
+        code_class = py_class_new_builtin(cstr("code"), null(), 0, null(), 0)
         if ptr_is_null(code_class):
             py_decref(varnames)
             py_decref(names)

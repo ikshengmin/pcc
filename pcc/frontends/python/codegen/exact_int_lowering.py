@@ -162,9 +162,10 @@ def _collect_exact_int_assignment_candidates(stmts, out, box_iteration_ints: boo
                     out,
                 )
         elif isinstance(stmt, AugAssign) and isinstance(stmt.target, Name):
-            if isinstance(stmt.target.ty, IntType):
-                # Any integer augmented assignment can escape the i64 lane
-                # based on the incoming value (``x <<= n``, ``x *= y``, ...).
+            if isinstance(stmt.target.ty, IntType) and stmt.target.ty.name == "int":
+                # Ordinary Python integer augmented assignment can escape
+                # the i64 lane based on the incoming value (``x <<= n``,
+                # ``x *= y``, ...). Explicit machine integers retain their lane.
                 # Once a name is written this way, use one object projection
                 # on every control-flow edge rather than trying to prove a
                 # range from the RHS alone.
@@ -214,7 +215,7 @@ def _collect_exact_int_assignment_target(
     """Collect exact-int candidates from plain and destructuring targets."""
     if isinstance(target, Name):
         target_ty = annotation if annotation is not None else target.ty
-        if isinstance(target_ty, IntType):
+        if isinstance(target_ty, IntType) and target_ty.name == "int":
             out.append((target.ident, value_expr, False))
         return
     if not isinstance(target, TupleExpr):
@@ -232,7 +233,11 @@ def _collect_exact_int_assignment_target(
             child_value = value_elems[index]
             child_force = False
         child = target.elems[index]
-        if isinstance(child, Name) and isinstance(child.ty, IntType):
+        if (
+            isinstance(child, Name)
+            and isinstance(child.ty, IntType)
+            and child.ty.name == "int"
+        ):
             out.append((child.ident, child_value, child_force))
         elif isinstance(child, TupleExpr):
             _collect_exact_int_assignment_target(
@@ -348,7 +353,7 @@ def forced_exact_int_local_names(host, fd: FuncDef, global_names, box_int_abi: b
         if name not in binding_seen:
             binding_seen.add(name)
             binding_order.append(name)
-        if isinstance(binding_ty, IntType):
+        if isinstance(binding_ty, IntType) and binding_ty.name == "int":
             int_bindings.add(name)
         elif host._is_object(binding_ty):
             object_bindings.add(name)
@@ -509,12 +514,17 @@ class ExactIntLoweringMixin:
             #
             # Two primitives, picked by what is statically known:
             #   * `py_instance_get_field` when the container's class and the
-            #     field index are known -- BORROWED, so nothing to release.
+            #     field index are known;
             #   * `py_obj_getattr` otherwise (e.g. inside a function where the
-            #     class hint does not resolve) -- returns a NEW reference, so it
-            #     is registered as an owned dynamic-call value.
+            #     class hint does not resolve).
+            # Both return a NEW reference, registered as an owned dynamic-call
+            # value. A receiver the expression itself produced -- `items[0]`,
+            # `make()` -- is released once the field is read, on the error
+            # edge too, as the exact-container subscript does; kept, every
+            # such receiver leaked and its __del__ never ran.
             container = self._emit_expr(expr.obj)
             if isinstance(container.type, ir.PointerType):
+                release_receiver = self._owned_release_needed(container, expr.obj)
                 field_index = None
                 if isinstance(expr.obj, Name):
                     hint = self._class_hint_for_expr(expr.obj)
@@ -524,7 +534,7 @@ class ExactIntLoweringMixin:
                             field_index = self.class_lowering.lookup_field_index(
                                 class_info, expr.name
                             )
-                if field_index is not None:
+                if field_index is not None and not release_receiver:
                     got = self.builder.call(
                         self.runtime["py_instance_get_field"],
                         [container, ir.Constant(_I32, field_index)],
@@ -539,8 +549,18 @@ class ExactIntLoweringMixin:
                     [container, self._ptr_to_cstr(name_gv)],
                     name=self._fresh("exact.int.attr.obj"),
                 )
-                self._emit_post_call_err_check(getattr(expr, "span", None))
+                self._emit_post_call_err_check(
+                    getattr(expr, "span", None),
+                    release_on_error=(container,) if release_receiver else (),
+                )
                 self._note_owned_dynamic_call_value(got)
+                if release_receiver:
+                    # The release may run a finalizer or a collection; a
+                    # relocating backend must not move the field object held
+                    # only in this register.
+                    self._gc_pin(got)
+                    self._gc_release_if_owned(container, expr.obj)
+                    self._gc_unpin(got)
                 return got
         if isinstance(expr, Call) and self._call_is_int_builtin(expr):
             # `int(<str>)` has an object-returning form.  Taking it here keeps a

@@ -14,6 +14,7 @@ PyStrObject layout (from py_internal.h):
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
     PYBYTESOBJECT_BYTE_LEN_OFFSET,
@@ -114,6 +115,8 @@ py_mem_alloc = extern("py_mem_alloc", (c_int64,), c_ptr)
 py_mem_free = extern("py_mem_free", (c_ptr,), c_void)
 py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
@@ -407,34 +410,44 @@ def py_str_ord(s) -> int:
 
 
 def _utf8_ord_at_byte(s, byte_off: int) -> int:
-    byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
-    if byte_off < 0:
+    # This byte decoder assembles at most 21 payload bits. Explicit machine
+    # intermediates keep cold multibyte expressions from creating boxed
+    # integer roots on the ASCII path. Its public int-shaped ABI, bounds,
+    # truncation and continuation-byte masking remain unchanged.
+    offset: i64 = i64(byte_off)
+    byte_len: i64 = i64(load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET))
+    if offset < 0:
         return -1
-    if byte_off >= byte_len:
+    if offset >= byte_len:
         return -1
-    remaining: int = byte_len - byte_off
-    data = ptr_add(ptr_add(s, PYSTROBJECT_DATA_OFFSET), byte_off)
-    b0: int = load_i8(data, 0) & 255
+    remaining: i64 = byte_len - offset
+    data = ptr_add(ptr_add(s, PYSTROBJECT_DATA_OFFSET), offset)
+    b0: i64 = i64(load_i8(data, 0))
+    b0 = b0 & 255
     if b0 < 128:
-        return b0
+        return int(b0)
     if (b0 & 224) == 192:
         if remaining < 2:
             return -1
-        return ((b0 & 31) << 6) | (load_i8(data, 1) & 63)
+        b1_two: i64 = i64(load_i8(data, 1))
+        return int(((b0 & 31) << 6) | (b1_two & 63))
     if (b0 & 240) == 224:
         if remaining < 3:
             return -1
-        return (
-            ((b0 & 15) << 12) | ((load_i8(data, 1) & 63) << 6) | (load_i8(data, 2) & 63)
-        )
+        b1_three: i64 = i64(load_i8(data, 1))
+        b2_three: i64 = i64(load_i8(data, 2))
+        return int(((b0 & 15) << 12) | ((b1_three & 63) << 6) | (b2_three & 63))
     if (b0 & 248) == 240:
         if remaining < 4:
             return -1
-        return (
+        b1_four: i64 = i64(load_i8(data, 1))
+        b2_four: i64 = i64(load_i8(data, 2))
+        b3_four: i64 = i64(load_i8(data, 3))
+        return int(
             ((b0 & 7) << 18)
-            | ((load_i8(data, 1) & 63) << 12)
-            | ((load_i8(data, 2) & 63) << 6)
-            | (load_i8(data, 3) & 63)
+            | ((b1_four & 63) << 12)
+            | ((b2_four & 63) << 6)
+            | (b3_four & 63)
         )
     return -1
 
@@ -804,6 +817,13 @@ def _str_encode_codec(s, codec: int, mode: int):
             py_raise_owned(py_exc_new(15, cstr("encoded string is too long")))
             return null()
         capacity = byte_len * 10
+    # An ASCII string's code points are its stored bytes, and utf-8, ascii
+    # and latin-1 all encode them to exactly those bytes; no character can
+    # fail, so the error handler is never consulted. An unknown code point
+    # count (-1) is resolved by scanning the bytes.
+    cp_len: int = load_i64(s, PYSTROBJECT_CP_LEN_OFFSET)
+    if cp_len == byte_len or (cp_len < 0 and py_str_isascii(s) != 0):
+        return py_bytes_new(ptr_add(s, PYSTROBJECT_DATA_OFFSET), byte_len)
     buf = malloc(capacity + 1)
     if ptr_is_null(buf):
         py_raise_owned(py_exc_new(19, cstr("cannot allocate encoded string")))
@@ -2130,48 +2150,14 @@ def py_str_repeat(s, n):
     return out
 
 
-define_global_ptr_null("pcc_str_ascii_chars")
+pcc_ascii_image_char = extern("pcc_ascii_image_char", (c_int64,), c_ptr)
 
 
 @c_abi_export("pcc_str_ascii_char")
 def _ascii_char_str(c: int):
-    """The shared immortal one-character string for ASCII code point ``c``.
-
-    CPython hands out cached objects for one-character latin-1 strings, and
-    character-scanning loops (lexers, IR text passes, ``for ch in s``) build
-    one per step: they were over half of all allocations in a pcc1 compile.
-    The table and its strings are malloc'd immortal objects registered as
-    managed pointers, like the ``sys`` stream objects, so no collector moves,
-    traces or frees them.  A lost race only leaks one equivalent string.
-    """
-    table = global_load_ptr("pcc_str_ascii_chars")
-    if ptr_is_null(table) != 0:
-        table = malloc(128 * 8)
-        if ptr_is_null(table) != 0:
-            return null()
-        memset(table, 0, 128 * 8)
-        global_store_ptr("pcc_str_ascii_chars", table)
-    cached = load_ptr(table, c * 8)
-    if ptr_is_null(cached) == 0:
-        return cached
-    out = malloc(PYSTROBJECT_SIZE + 2)
-    if ptr_is_null(out) != 0:
-        return null()
-    memset(out, 0, PYSTROBJECT_SIZE + 2)
-    store_i64(out, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
-    store_i32(out, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_STR)
-    store_i32(
-        out, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC
-    )
-    if pcc_gc_pointer_register(out) < 0:
-        free(out)
-        return null()
-    store_i64(out, PYSTROBJECT_BYTE_LEN_OFFSET, 1)
-    store_i64(out, PYSTROBJECT_CP_LEN_OFFSET, 1)
-    store_i64(out, PYSTROBJECT_HASH_OFFSET, -1)
-    store_i8(out, PYSTROBJECT_DATA_OFFSET, c)
-    store_ptr(table, c * 8, out)
-    return out
+    # Keep this public entry's existing thread-poll/ABI behavior. The fixed
+    # storage and atomic registration words belong to the raw kernel.
+    return ptr_add(pcc_ascii_image_char(c), 0)
 
 
 @c_abi_export("py_str_index")
@@ -3095,6 +3081,143 @@ def py_str_split_maxsplit(s, sep, maxsplit: int):
     return out
 
 
+def _join_item_type_error(index: int, item) -> None:
+    """CPython's TypeError for a join item that is not a str."""
+    message = stack_alloc(320)
+    prefix = cstr("sequence item ")
+    at: int = 0
+    while load_i8(prefix, at) != 0:
+        store_i8(message, at, load_i8(prefix, at))
+        at = at + 1
+    digits = stack_alloc(24)
+    count: int = 0
+    value: int = index
+    if value == 0:
+        store_i8(digits, 0, 48)
+        count = 1
+    while value > 0:
+        store_i8(digits, count, 48 + value % 10)
+        value = value // 10
+        count = count + 1
+    while count > 0:
+        count = count - 1
+        store_i8(message, at, load_i8(digits, count))
+        at = at + 1
+    middle = cstr(": expected str instance, ")
+    k: int = 0
+    while load_i8(middle, k) != 0:
+        store_i8(message, at, load_i8(middle, k))
+        at = at + 1
+        k = k + 1
+    name = py_obj_type_name(item)
+    if ptr_is_null(name) == 0:
+        name_len: int = load_i64(name, PYSTROBJECT_BYTE_LEN_OFFSET)
+        if name_len > 240:
+            name_len = 240
+        memmove(ptr_add(message, at), ptr_add(name, PYSTROBJECT_DATA_OFFSET), name_len)
+        at = at + name_len
+        py_decref(name)
+    suffix = cstr(" found")
+    k = 0
+    while load_i8(suffix, k) != 0:
+        store_i8(message, at, load_i8(suffix, k))
+        at = at + 1
+        k = k + 1
+    store_i8(message, at, 0)
+    py_raise_owned(py_exc_new(3, message))  # 3 == PY_EXC_TYPEERROR
+
+
+def _str_join_list_size_locked(sep_len: int, lst, length_slot) -> int:
+    """Byte length of sep.join(lst) under the graph lock, or -1 if an item
+    is not an exact str. Stores the item count in length_slot.
+
+    A list item is a tagged int or a valid object, so its header tag is read
+    directly, without a provenance probe per item. An item that is not a str
+    returns -2 - its index; -1 means an overflowing length."""
+    length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+    store_i64(length_slot, 0, length)
+    items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+    total: int = 0
+    i: int = 0
+    while i < length:
+        e = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
+        if ptr_is_null(e) != 0 or is_tagged_int(e) != 0:
+            return -2 - i
+        if load_i32(e, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
+            return -2 - i
+        if i > 0:
+            if total > 9223372036854775807 - sep_len:
+                return -1
+            total = total + sep_len
+        elem_len: int = load_i64(e, PYSTROBJECT_BYTE_LEN_OFFSET)
+        if elem_len < 0 or total > 9223372036854775807 - elem_len:
+            return -1
+        total = total + elem_len
+        i = i + 1
+    return total
+
+
+def _str_join_list(sep, sep_len: int, lst):
+    """sep.join(lst) for a list another mutator may change meanwhile.
+
+    The items are read under the graph lock, where a replaced or removed
+    item cannot be released. The result is sized under the lock, allocated
+    outside it, then sized again and copied in one transaction: a list that
+    changed size in between is joined again, so the copy never outgrows the
+    allocation.
+    """
+    length_slot = stack_alloc(8)
+    while True:
+        pcc_py_gc_minor_graph_lock()
+        total: int = _str_join_list_size_locked(sep_len, lst, length_slot)
+        pcc_py_gc_minor_graph_unlock()
+        if total <= -2:
+            # Raise for the item still there; a str in its place joins again.
+            bad = py_list_get(lst, -2 - total)
+            if ptr_is_null(bad) == 0 and (is_tagged_int(bad) != 0 or
+                    load_i32(bad, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR):
+                _join_item_type_error(-2 - total, bad)
+                py_decref(bad)
+                return null()
+            if ptr_is_null(bad) == 0:
+                py_decref(bad)
+            total = -1
+            continue
+        if total < 0:
+            return null()
+        length: int = load_i64(length_slot, 0)
+        if length == 0:
+            return py_str_new(null(), 0)
+        out = _str_alloc(total)
+        if ptr_is_null(out) != 0:
+            return null()
+        # The allocation may run a relocating collector.
+        sep = pcc_gc_note_relocation_read(sep)
+        lst = pcc_gc_note_relocation_read(lst)
+        pcc_py_gc_minor_graph_lock()
+        if (_str_join_list_size_locked(sep_len, lst, length_slot) == total
+                and load_i64(length_slot, 0) == length):
+            out_data = ptr_add(out, PYSTROBJECT_DATA_OFFSET)
+            sep_data = ptr_add(sep, PYSTROBJECT_DATA_OFFSET)
+            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+            off: int = 0
+            i: int = 0
+            while i < length:
+                e = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
+                if i > 0 and sep_len > 0:
+                    memmove(ptr_add(out_data, off), sep_data, sep_len)
+                    off = off + sep_len
+                elem_len: int = load_i64(e, PYSTROBJECT_BYTE_LEN_OFFSET)
+                if elem_len > 0:
+                    memmove(ptr_add(out_data, off), ptr_add(e, PYSTROBJECT_DATA_OFFSET), elem_len)
+                    off = off + elem_len
+                i = i + 1
+            pcc_py_gc_minor_graph_unlock()
+            return out
+        pcc_py_gc_minor_graph_unlock()
+        py_decref(out)
+
+
 @c_abi_export("py_str_join")
 def py_str_join(sep, lst):
     if ptr_is_null(sep) != 0:
@@ -3118,9 +3241,9 @@ def py_str_join(sep, lst):
     if sep_len < 0:
         return null()
     if sequence_tag == PY_TYPE_LIST:
-        items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    else:
-        items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
+        return _str_join_list(sep, sep_len, lst)
+    # A tuple's items never change: size, allocate, then copy.
+    items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
     total: int = 0
     i: int = 0
     while i < length:
@@ -3129,6 +3252,7 @@ def py_str_join(sep, lst):
             return null()
         tag: int = _type_of(e)
         if tag != PY_TYPE_STR:
+            _join_item_type_error(i, e)
             return null()
         if i > 0:
             if total > 9223372036854775807 - sep_len:
@@ -3147,13 +3271,10 @@ def py_str_join(sep, lst):
         return null()
 
     # Result allocation may run a relocating collector.  Do not reuse the
-    # pre-allocation object or list-items pointers while copying the payload.
+    # pre-allocation object or item pointers while copying the payload.
     sep = pcc_gc_note_relocation_read(sep)
     lst = pcc_gc_note_relocation_read(lst)
-    if sequence_tag == PY_TYPE_LIST:
-        items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    else:
-        items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
+    items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
     out_data = ptr_add(out, PYSTROBJECT_DATA_OFFSET)
     sep_data = ptr_add(sep, PYSTROBJECT_DATA_OFFSET)
     off: int = 0

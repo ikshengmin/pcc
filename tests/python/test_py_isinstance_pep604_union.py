@@ -17,8 +17,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
-
 
 _SOURCE = '''
 def probe(x) -> str:
@@ -86,16 +84,6 @@ def test_union_classinfo_matches_cpython_without_libpython(tmp_path):
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "pcc does not model bool as a subclass of int in isinstance: "
-        "isinstance(True, int) and isinstance(True, (int, str)) are both "
-        "False, where CPython gives True.  Pre-existing and independent of "
-        "the union flattening -- the tuple spelling, which this change does "
-        "not touch, is wrong the same way.  All three lines must read True."
-    ),
-)
 def test_bool_is_an_int_subclass_for_isinstance(tmp_path):
     out = _build_and_run(tmp_path, "isinstance_bool_int", _BOOL_SOURCE)
     assert out.splitlines() == ["True", "True", "True"]

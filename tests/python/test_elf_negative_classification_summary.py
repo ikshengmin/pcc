@@ -89,7 +89,7 @@ def test_negative_summary_all_supported_types_and_default_parser_contract(tmp_pa
     obj = replace(obj, sections=sections)
     _path, store, _staged = _stage(tmp_path, obj)
     assert store.sources[0].classification_proof.section_bits == (
-        None, *(kind not in (283, 311, 312, 541, 542) for kind in kinds))
+        None, *(kind not in (283, 282, 311, 312, 541, 542) for kind in kinds))
     encoded = elf.emit_relocatable(obj)
     ordinary, ranges = elf._parse_relocatable_indexed(encoded)
     assert len(ranges) == len(sections)

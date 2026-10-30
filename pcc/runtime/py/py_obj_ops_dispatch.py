@@ -24,6 +24,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYPROPERTYOBJECT_FGET_OFFSET,
     PYPROPERTYOBJECT_FSET_OFFSET,
     PYPROPERTYOBJECT_FDEL_OFFSET,
+    PY_FLAG_CLASS_SLOTS_ONLY,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PY_FLAG_EXC_OS_PAYLOAD,
@@ -43,6 +44,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_FILE,
     PY_TYPE_FLOAT,
     PY_TYPE_FUNC,
+    PY_TYPE_GEN,
     PY_TYPE_INSTANCE,
     PY_TYPE_INT,
     PY_TYPE_LIST,
@@ -125,6 +127,10 @@ py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
 py_bytearray_from_obj = extern("py_bytearray_from_obj", (c_ptr,), c_ptr)
 py_complex_from_parts = extern("py_complex_from_parts", (c_ptr, c_ptr), c_ptr)
 py_obj_index_i64 = extern("py_obj_index_i64", (c_ptr,), c_int64)
+py_obj_has_index = extern("py_obj_has_index", (c_ptr,), c_int64)
+py_obj_index_slots = extern("py_obj_index_slots", (c_ptr, c_ptr), c_int64)
+py_slice_index_i64 = extern("py_slice_index_i64", (c_ptr, c_int64), c_int64)
+py_bytes_find_range = extern("py_bytes_find_range", (c_ptr, c_ptr, c_int64, c_int64), c_int64)
 
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_len = extern("py_str_len", (c_ptr,), c_int64)
@@ -234,7 +240,7 @@ py_set_symmetric_difference = extern(
     "py_set_symmetric_difference", (c_ptr, c_ptr), c_ptr
 )
 
-py_class_new = extern("py_class_new", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
+py_class_new_builtin = extern("py_class_new_builtin", (c_ptr, c_ptr, c_int32, c_ptr, c_int32), c_ptr)
 py_class_new_from_objects = extern("py_class_new_from_objects", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_exception_subclass_init_slots = extern(
     "py_exception_subclass_init_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
@@ -2400,7 +2406,7 @@ def py_slice_new(start, stop, step):
         step = none
     cls = global_load_ptr("pcc_slice_cls")
     if ptr_is_null(cls) != 0:
-        cls = py_class_new(cstr("slice"), null(), 0, null(), 0)
+        cls = py_class_new_builtin(cstr("slice"), null(), 0, null(), 0)
         if ptr_is_null(cls) != 0:
             return null()
         global_store_ptr("pcc_slice_cls", cls)
@@ -2435,49 +2441,49 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == -3:
         cls = global_load_ptr("pcc_type_cls_super")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("super"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("super"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_super", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_ELLIPSIS:
         cls = global_load_ptr("pcc_type_cls_ellipsis")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("ellipsis"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("ellipsis"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_ellipsis", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_NOTIMPLEMENTED:
         cls = global_load_ptr("pcc_type_cls_notimplemented")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("NotImplementedType"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("NotImplementedType"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_notimplemented", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_FUNC:
         cls = global_load_ptr("pcc_type_cls_function")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("function"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("function"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_function", cls)
         return _return_builtin_type(cls)
     if tag == -4:
         cls = global_load_ptr("pcc_type_cls_builtin_function")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("builtin_function_or_method"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("builtin_function_or_method"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_builtin_function", cls)
         return _return_builtin_type(cls)
     if tag == -5:
         cls = global_load_ptr("pcc_type_cls_method")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("method"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("method"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_method", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_NONE:  # PY_TYPE_NONE
         cls = global_load_ptr("pcc_type_cls_none")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("NoneType"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("NoneType"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_none", cls)
         return _return_builtin_type(cls)
@@ -2491,7 +2497,7 @@ def _builtin_type_class_for_tag(tag: int):
                 return null()
             bases = stack_alloc(8)
             store_ptr(bases, 0, int_cls)
-            cls = py_class_new(cstr("bool"), bases, 1, null(), 0)
+            cls = py_class_new_builtin(cstr("bool"), bases, 1, null(), 0)
             py_decref(int_cls)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bool", cls)
@@ -2499,14 +2505,14 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == PY_TYPE_INT:  # PY_TYPE_INT
         cls = global_load_ptr("pcc_type_cls_int")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("int"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("int"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_int", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_FLOAT:  # PY_TYPE_FLOAT
         cls = global_load_ptr("pcc_type_cls_float")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("float"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("float"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_float", cls)
         return _return_builtin_type(cls)
@@ -2515,14 +2521,14 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == PY_TYPE_LIST:  # PY_TYPE_LIST
         cls = global_load_ptr("pcc_type_cls_list")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("list"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("list"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_list", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_DICT:  # PY_TYPE_DICT
         cls = global_load_ptr("pcc_type_cls_dict")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("dict"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("dict"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_dict", cls)
         return _return_builtin_type(cls)
@@ -2531,70 +2537,70 @@ def _builtin_type_class_for_tag(tag: int):
     if tag == PY_TYPE_SET:  # PY_TYPE_SET
         cls = global_load_ptr("pcc_type_cls_set")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("set"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("set"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_set", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_CLASS:  # PY_TYPE_CLASS
         cls = global_load_ptr("pcc_type_cls_type")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("type"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("type"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_type", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_COMPLEX:  # PY_TYPE_COMPLEX
         cls = global_load_ptr("pcc_type_cls_complex")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("complex"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("complex"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_complex", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_BYTES:  # PY_TYPE_BYTES
         cls = global_load_ptr("pcc_type_cls_bytes")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("bytes"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("bytes"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bytes", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_BYTEARRAY:  # PY_TYPE_BYTEARRAY
         cls = global_load_ptr("pcc_type_cls_bytearray")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("bytearray"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("bytearray"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bytearray", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_MEMORYVIEW:  # PY_TYPE_MEMORYVIEW
         cls = global_load_ptr("pcc_type_cls_memoryview")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("memoryview"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("memoryview"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_memoryview", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_COROUTINE:  # PY_TYPE_COROUTINE
         cls = global_load_ptr("pcc_type_cls_coroutine")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("coroutine"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("coroutine"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_coroutine", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_STATICMETHOD:
         cls = global_load_ptr("pcc_type_cls_staticmethod")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("staticmethod"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("staticmethod"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_staticmethod", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_CLASSMETHOD:
         cls = global_load_ptr("pcc_type_cls_classmethod")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("classmethod"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("classmethod"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_classmethod", cls)
         return _return_builtin_type(cls)
     if tag == PY_TYPE_PROPERTY:
         cls = global_load_ptr("pcc_type_cls_property")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("property"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("property"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_property", cls)
         return _return_builtin_type(cls)
@@ -2606,7 +2612,7 @@ def _builtin_type_class_for_tag(tag: int):
         if ptr_is_null(cls) == 0:
             # Base object has no instance dictionary. Ordinary subclasses
             # receive independent flags from py_class_new and may have one.
-            atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, 2, "relaxed")
+            atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_CLASS_SLOTS_ONLY, "relaxed")
             global_store_ptr("pcc_type_cls_object", cls)
     return _return_builtin_type(cls)
 
@@ -2618,25 +2624,25 @@ def _file_type_class(o):
     if kind == 0:
         cls = global_load_ptr("pcc_type_cls_textiowrapper")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("TextIOWrapper"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("TextIOWrapper"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_textiowrapper", cls)
     elif kind == 1:
         cls = global_load_ptr("pcc_type_cls_bufferedreader")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("BufferedReader"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("BufferedReader"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bufferedreader", cls)
     elif kind == 2:
         cls = global_load_ptr("pcc_type_cls_bufferedwriter")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("BufferedWriter"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("BufferedWriter"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bufferedwriter", cls)
     else:
         cls = global_load_ptr("pcc_type_cls_bufferedrandom")
         if ptr_is_null(cls) != 0:
-            cls = py_class_new(cstr("BufferedRandom"), null(), 0, null(), 0)
+            cls = py_class_new_builtin(cstr("BufferedRandom"), null(), 0, null(), 0)
             if ptr_is_null(cls) == 0:
                 global_store_ptr("pcc_type_cls_bufferedrandom", cls)
     if ptr_is_null(cls) == 0 and ptr_is_null(_class_own_module(cls)) != 0:
@@ -3683,7 +3689,7 @@ def _py_dict_pop_bound(o):
     return fn
 
 
-# Every other dict and list method binds here when the compiler could not
+# Generic dict/list methods and exact bytes/bytearray.find bind here when the compiler could not
 # type the receiver (d.get, d.items, l.extend, getattr(d, "keys"), ...), as
 # CPython's method descriptors do. A call roots its receiver and arguments
 # in one frame and runs the runtime entry the typed lowering uses.
@@ -3787,7 +3793,7 @@ def _bound_method_finish(borrowed, slots, tokens, status: int):
     return pcc_gc_take_pinned_slot(result, prior)
 
 
-# Operations: dict 1..11, list 21..28.
+# Operations: dict 1..11, list 21..28, bytes/bytearray find 31.
 def _bound_method_operation(tag: int, name) -> int:
     if tag == PY_TYPE_DICT:
         if strcmp(name, cstr("get")) == 0:
@@ -3829,6 +3835,9 @@ def _bound_method_operation(tag: int, name) -> int:
             return 27
         if strcmp(name, cstr("clear")) == 0:
             return 28
+    elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
+        if strcmp(name, cstr("find")) == 0:
+            return 31
     return 0
 
 
@@ -3865,6 +3874,8 @@ def _bound_method_name(operation: int):
         return cstr("index")
     if operation == 25:
         return cstr("count")
+    if operation == 31:
+        return cstr("find")
     return cstr("reverse")
 
 
@@ -3880,7 +3891,7 @@ def _bound_method_arity(operation: int) -> int:
         return 111
     if operation == 22:
         return 322
-    if operation == 24:
+    if operation == 24 or operation == 31:
         return 213
     return 0
 
@@ -4076,6 +4087,42 @@ def _bound_method_body(slots, tokens) -> int:
     elif operation == 28:
         py_list_clear(receiver)
         returns_none = 1
+    elif operation == 31:
+        # Binary find binds both slice bounds before validating its needle.
+        # Each conversion can call user code; reload only from leased roots.
+        start: int = 0
+        stop: int = 9223372036854775807
+        if nargs >= 2:
+            start = py_slice_index_i64(load_ptr(slots, _BOUND_METHOD_ARG1 * C_POINTER_SIZE), 0)
+            if py_err_occurred() != 0:
+                return -1
+        if nargs >= 3:
+            stop = py_slice_index_i64(load_ptr(slots, _BOUND_METHOD_ARG2 * C_POINTER_SIZE), stop)
+            if py_err_occurred() != 0:
+                return -1
+        indexed: int = py_obj_has_index(load_ptr(slots, _BOUND_METHOD_ARG0 * C_POINTER_SIZE))
+        if py_err_occurred() != 0:
+            return -1
+        needle_index: int = _BOUND_METHOD_ARG0
+        if indexed != 0:
+            # Both scalar bounds are now final. Reuse the start owner slot for
+            # the exact arbitrary-precision index, keeping the original needle
+            # and args alive. The kernel rejects every out-of-byte-range int
+            # with ValueError, including values larger than a machine integer.
+            _bound_method_clear(slots, tokens, _BOUND_METHOD_ARG1)
+            if py_obj_index_slots(
+                    ptr_add(slots, _BOUND_METHOD_ARG0 * C_POINTER_SIZE),
+                    ptr_add(slots, _BOUND_METHOD_ARG1 * C_POINTER_SIZE)) != 0:
+                return -1
+            if _bound_method_adopt(slots, tokens, _BOUND_METHOD_ARG1) != 0:
+                return -1
+            needle_index = _BOUND_METHOD_ARG1
+        found_at: int = py_bytes_find_range(
+            load_ptr(slots, _BOUND_METHOD_RECEIVER * C_POINTER_SIZE),
+            load_ptr(slots, needle_index * C_POINTER_SIZE), start, stop)
+        if py_err_occurred() != 0:
+            return -1
+        result = py_int_from_i64(found_at)
     if py_err_occurred() != 0:
         return -1
     if returns_none != 0:
@@ -4302,7 +4349,8 @@ def py_obj_getattr(o, name):
             return _py_dict_pop_bound(o)
         if tag == PY_TYPE_SET:  # PY_TYPE_SET
             return _py_set_pop_bound(o)
-    if tag == PY_TYPE_DICT or tag == PY_TYPE_LIST:
+    if (tag == PY_TYPE_DICT or tag == PY_TYPE_LIST
+            or tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY):
         bound_operation: int = _bound_method_operation(tag, name)
         if bound_operation != 0:
             return _py_bound_method(o, bound_operation)
@@ -4398,6 +4446,13 @@ def py_obj_getattr(o, name):
         result = py_obj_getattr(target, name)
         py_decref(target)
         return result
+    if tag == PY_TYPE_GEN:
+        if _cstr_is_send(name) != 0:
+            return py_coroutine_bound_method(o, 0)
+        if strcmp(name, cstr("throw")) == 0:
+            return py_coroutine_bound_method(o, 1)
+        if strcmp(name, cstr("close")) == 0:
+            return py_coroutine_bound_method(o, 2)
     if tag == PY_TYPE_COROUTINE:  # PY_TYPE_COROUTINE
         result = null()
         if _cstr_is_dunder_class(name) != 0:

@@ -18,6 +18,7 @@ from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_IMMORTAL, PY_TYPE_CONTINUATION, PY_TYPE_INT, PY_TYPE_TASK
 from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_CLASS,
+    PY_FLAG_GEN_INLINE_FRAME,
     PY_TYPE_COROUTINE,
     PY_TYPE_EXC,
     PY_TYPE_GEN,
@@ -49,8 +50,8 @@ from pcc.unsafe import (
     store_ptr,
 )
 
-py_class_new = extern(
-    "py_class_new",
+py_class_new_builtin = extern(
+    "py_class_new_builtin",
     (c_ptr, c_ptr, c_int32, c_ptr, c_int32),
     c_ptr,
 )
@@ -149,7 +150,7 @@ def py_coroutine_class():
     cls = global_load_ptr("py_coroutine_class_cache")
     if not ptr_is_null(cls):
         return cls
-    cls = py_class_new(cstr("coroutine"), null(), 0, null(), 0)
+    cls = py_class_new_builtin(cstr("coroutine"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
         flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
         store_i32(
@@ -690,7 +691,10 @@ def _coroutine_throw_call(slots, pins) -> None:
         if resume_state <= _GEN_INITIAL_STATE:
             _raise_runtimeerror(cstr("coroutine has no suspended await state"))
             return
-        if _coroutine_slot_borrow(slots, pins, _CORO_TEMP, ptr_add(gen, _GEN_FRAME_OFFSET)) < 0:
+        frame_source = ptr_add(gen, _GEN_FRAME_OFFSET)
+        if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
+            frame_source = ptr_add(slots, _CORO_AUX)
+        if _coroutine_slot_borrow(slots, pins, _CORO_TEMP, frame_source) < 0:
             return
         store_i32(coro, _CORO_STATE_OFFSET, _CORO_EXECUTING_STATE)
         pcc_gc_store_ptr(gen, ptr_add(gen, _GEN_SEND_OFFSET), load_ptr(slots, _CORO_ARGS))
@@ -871,13 +875,24 @@ def _coroutine_method_entry(captures, args, operation: int):
     store_ptr(slots, _CORO_RECEIVER, py_tuple_get(load_ptr(slots, _CORO_TEMP), 0))
     _coroutine_slot_adopt(slots, pins, _CORO_RECEIVER)
     _coroutine_slot_drop(slots, pins, _CORO_TEMP)
+    generator: int = 1 if _type_of(load_ptr(slots, _CORO_RECEIVER)) == PY_TYPE_GEN else 0
     if operation == 0:
         store_ptr(slots, _CORO_OPERAND, py_tuple_get(load_ptr(slots, _CORO_ARGS), 0))
         _coroutine_slot_adopt(slots, pins, _CORO_OPERAND)
-        store_ptr(slots, _CORO_RESULT, py_coroutine_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), null()))
+        if generator != 0:
+            store_ptr(slots, _CORO_RESULT, py_gen_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
+        else:
+            store_ptr(slots, _CORO_RESULT, py_coroutine_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), null()))
     elif operation == 1:
-        _coroutine_throw_call(slots, pins)
-        return _coroutine_finish(slots, pins)
+        if generator != 0:
+            if _coroutine_normalize_throw(slots, pins, count) < 0:
+                return _coroutine_finish(slots, pins)
+            store_ptr(slots, _CORO_RESULT, py_gen_throw(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
+        else:
+            _coroutine_throw_call(slots, pins)
+            return _coroutine_finish(slots, pins)
+    elif generator != 0:
+        store_ptr(slots, _CORO_RESULT, py_gen_close(load_ptr(slots, _CORO_RECEIVER)))
     else:
         store_ptr(slots, _CORO_RESULT, py_coroutine_close(load_ptr(slots, _CORO_RECEIVER)))
     _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
@@ -898,6 +913,7 @@ def _coroutine_close_entry(captures, args):
 
 @c_abi_export("py_coroutine_bound_method")
 def py_coroutine_bound_method(coro, operation: int):
+    """Bind the shared send/throw/close protocol to a coroutine or generator."""
     borrowed = stack_alloc(8)
     store_ptr(borrowed, 0, coro)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_one_map"), borrowed)
@@ -1132,7 +1148,7 @@ def py_continuation_class():
     cls = global_load_ptr("py_continuation_class_cache")
     if not ptr_is_null(cls):
         return cls
-    cls = py_class_new(cstr("continuation"), null(), 0, null(), 0)
+    cls = py_class_new_builtin(cstr("continuation"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
         flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
         store_i32(

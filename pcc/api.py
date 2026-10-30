@@ -212,10 +212,17 @@ def _link_exe(ev, compiled_units, out_dir, link_args, opt_level):
     if is_aarch64_darwin_triple(ev.target_triple):
         from .backend.macho_shared import validate_link_args
 
-        validate_link_args(link_args)
-        # The owned executable already binds libSystem, including these
-        # explicitly validated Darwin C/math/thread/dl library constituents.
-        link_args = []
+        forwarded = []
+        for argument in link_args:
+            argument = os.fspath(argument)
+            if argument.startswith("-l"):
+                # These Darwin library constituents already bind libSystem.
+                validate_link_args([argument])
+            else:
+                # Let the executable publisher admit object/archive inputs
+                # and its finite options; shared-library policy is narrower.
+                forwarded.append(argument)
+        link_args = forwarded
     output = os.path.join(out_dir, "a.out")
     ev.emit_executable(compiled_units, output, optimize=opt_level, link_args=link_args)
     return output

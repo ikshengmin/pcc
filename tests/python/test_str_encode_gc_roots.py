@@ -62,7 +62,6 @@ class _EncoderMemory(_BytesMemory):
             self.write(slots, offset, None)
 
     def frame_enter(self, frame_map, slots):
-        self.gc("frame_before")
         count = 3 if "borrowed" in frame_map else 4
         handles = []
         for index in range(count):
@@ -70,8 +69,11 @@ class _EncoderMemory(_BytesMemory):
             self.handles[handle] = self.add(slots, index * 8)
             handles.append(handle)
         self.frames[slots] = handles
-        # Publication must precede this park. Incoming raw SSA copies are
-        # deliberately stale afterward, so the implementation must reload.
+        # The registry links the slots before entry can service a stop
+        # (test_frame_enter_publication_no_park.py), so a stop requested
+        # before or during entry runs here, after publication. Incoming raw
+        # SSA copies are deliberately stale afterward; the body must reload.
+        self.gc("frame_before")
         self.gc("frame_enter")
 
     def frame_leave(self, slots):
@@ -173,9 +175,11 @@ def test_direct_entry_reloads_before_leasing(phase, backend):
     memory.assert_closed()
 
 
-def test_direct_entry_frame_prepublication_can_park():
-    # This remains a required red until shared entry publication is reviewed.
-    # A real frame_enter may park before linking slots under graph contention.
+def test_direct_entry_stop_during_frame_entry_follows_publication():
+    # A contended graph lock used to service a stop before the borrowed frame
+    # was linked, while only its unpublished slots held the arguments. Frame
+    # entry now stays unparkable until the link, so that stop runs after
+    # publication and the arguments relocate with their rooted slots.
     memory = _EncoderMemory(phase="frame_before", backend=3)
     result = memory.encode_call()
     assert result is memory.latest["result"] and result.alive
@@ -251,13 +255,22 @@ def mutable(value: str):
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
-    for name, count in (("method", 3), ("immutable", 1), ("mutable", 2)):
+    for name, arguments, publications in (("method", 3, 0), ("immutable", 1, 1), ("mutable", 2, 2)):
         match = re.search(r"^define[^\n]*@user_encode_leases_" + name +
                           r"\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)
         assert match, name
         body = match[1]
         assert "strict.nolib.stub" not in body and "@py_cpy_" not in body
-        assert body.count("@pcc_gc_foreign_lease_acquire(") == count
+        assert body.count("@pcc_gc_foreign_lease_acquire(") == arguments + publications
+        assert len(re.findall(r"%call\.slot\.publish\.lease[^\n]*@pcc_gc_foreign_lease_acquire\(", body)) == publications
+        helpers = {"method": (), "immutable": ("py_str_utf8_encode",),
+                   "mutable": ("py_str_latin1_encode", "py_bytearray_from_obj")}[name]
+        for helper in helpers:
+            result = re.search(r"(%[^ ]+) = call ptr[^\n]*@" + helper + r"\([^\n]*\n([^\n]+)\n([^\n]+)", body)
+            assert result is not None
+            store = re.search(r"store ptr " + re.escape(result[1]) + r", ptr (%[^ ]+)", result[2])
+            assert store is not None, result[2]
+            assert "@pcc_gc_foreign_lease_acquire(ptr " + store[1] + ")" in result[3]
         assert "@pcc_gc_foreign_lease_release(" in body
         assert "@pcc_gc_take_pinned_slot(" in body
         assert "encode.lease.cleanup.error" not in body

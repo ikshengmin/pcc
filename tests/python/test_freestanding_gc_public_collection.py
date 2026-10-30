@@ -49,9 +49,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_stop_the_world",
     "pcc_threads_enabled",
     "pcc_thread_start",
-    "pcc_thread_safepoint",
+    "pcc_thread_safepoint_gate",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_cms_sweep_pending",
     "pcc_gc_backend_selected",
     "pcc_gc_refcount_fast",
     # GC0's inline atomic counts on every thread (b14e3f316).
@@ -187,16 +188,16 @@ def test_public_collection_preserves_config_and_collection_order():
     assert "pcc_resume_world()" not in worker
     worker_enabled = worker.index('global_addr("py_gc_enabled")')
     worker_threshold0 = worker.index('global_addr("py_gc_threshold0")')
-    worker_pending = worker.index('atomic_load_i32(pending, 0, "acquire") == 0')
+    worker_pending = worker.index('atomic_load_i32(sweep_pending, 0, "acquire") == 0')
     worker_due = worker.index("pcc_gc_tracing_debt_threshold()")
     worker_growth = worker.index('global_addr("py_gc_tracked_count")')
     worker_trace = worker.index("pcc_gc_tracing_step_cycle(512)")
     worker_discharge = worker.index("pcc_gc_tracing_discharge_debt(traced)")
-    worker_sweep = worker.index('atomic_store_i32(pending, 0, 1, "release")')
+    worker_sweep = worker.index('atomic_store_i32(pending, 0, 1, "release")', worker_discharge)
     assert max(worker_enabled, worker_threshold0) < worker_pending
     assert worker_pending < worker_due < worker_growth < worker_trace
     assert worker_trace < worker_discharge < worker_sweep
-    assert "pcc_thread_safepoint()" in worker
+    assert "pcc_thread_safepoint_gate()" in worker
 
     start = strict.split(
         '@c_abi_export("pcc_gc_maybe_start_cms_worker")', 1
@@ -330,6 +331,7 @@ int64_t pcc_platform_write(int64_t fd, void *data, int64_t length) {
 }
 void pcc_platform_abort(void) { abort(); }
 int64_t pcc_threads_enabled(void) { return 1; }
+int64_t pcc_gc_reclaim_retired_index_tables(void) { return 0; }
 int64_t pcc_thread_start(void **out, void *entry, void *arg) {
     WorkerHandle *handle = (WorkerHandle *)calloc(1, sizeof(*handle));
     if (handle == NULL) return -1;
@@ -348,7 +350,7 @@ int64_t pcc_thread_join(void *raw, void *result_out) {
     free(handle);
     return rc;
 }
-void pcc_thread_safepoint(void) {}
+void pcc_thread_safepoint_gate(void) {}
 int64_t pcc_platform_sleep_ns(int64_t ns) {
     struct timespec delay = { ns / 1000000000, ns % 1000000000 };
     return nanosleep(&delay, NULL);

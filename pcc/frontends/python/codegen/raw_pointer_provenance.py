@@ -21,6 +21,19 @@ _RAW_VIEW_INTRINSICS = frozenset({
 })
 
 
+def _is_typing_cast(expr):
+    """``cast(T, v)`` or ``typing.cast(T, v)``, which the call lowering takes
+    by name and lowers to ``v`` itself -- also where a program closure has
+    compiled typing and ``cast`` is a known imported function."""
+    if not isinstance(expr, Call) or len(expr.args) != 2 or expr.kwargs:
+        return False
+    func = expr.func
+    if isinstance(func, Name):
+        return func.ident == "cast"
+    return (isinstance(func, Attr) and func.name == "cast"
+            and isinstance(func.obj, Name) and func.obj.ident == "typing")
+
+
 def _binds(target, name):
     if isinstance(target, Name):
         return target.ident == name
@@ -114,6 +127,9 @@ def raw_abi_expression_provenance(host, expr, visiting=()):
     if isinstance(expr, IfExpr):
         return (raw_abi_expression_provenance(host, expr.then_e, visiting)
                 and raw_abi_expression_provenance(host, expr.else_e, visiting))
+    if _is_typing_cast(expr):
+        # cast(T, v) is v itself, so it carries v's provenance.
+        return raw_abi_expression_provenance(host, expr.args[1], visiting)
     if not isinstance(expr, Call) or not isinstance(expr.func, Name):
         return False
     name = expr.func.ident

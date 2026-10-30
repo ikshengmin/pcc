@@ -486,29 +486,41 @@ def test_unknown_boundaries_do_not_read_clock_or_write_diagnostics(monkeypatch, 
     assert sink.lines == [] and not timer.failed
 
 
-def test_coordinator_vocabulary_is_fourteen_fixed_flushed_pairs(monkeypatch):
+def test_coordinator_vocabulary_is_fixed_flushed_pairs(monkeypatch):
     labels = (
         "result_read", "runtime_verify", "artifact_link", "elf_stage_inputs",
         "elf_link_image", "elf_image_select_inputs", "elf_image_classify_layout",
         "elf_image_allocate_copy", "elf_image_resolve_relocate", "elf_image_finalize",
         "elf_verify_inputs", "elf_write_image",
+        "macho_stage_inputs", "macho_prepare_inputs",
+        "macho_prepare_validate", "macho_prepare_archives", "macho_prepare_merge",
+        "macho_merge_inputs", "macho_merge_stackmaps", "macho_merge_final_view",
+        "macho_link_image",
+        "macho_sign", "macho_verify_signature", "macho_write_image",
         "executable_publish", "artifact_cleanup",
     )
     assert tuple(timing_module._COORDINATOR_PARENTS) == labels
     sink = RecordingSink()
-    ticks = iter(range(100, 128))
+    ticks = iter(range(100, 100 + 2 * len(labels)))
     monkeypatch.setattr(timing_module.time, "perf_counter_ns", lambda: next(ticks))
     monkeypatch.setattr(timing_module.sys, "stderr", sink)
     timer = CoarsePhaseTiming()
     for label in labels:
         timer.complete(label, timer.begin(label))
-    assert len(sink.lines) == sink.flushes == 28
+    assert len(sink.lines) == sink.flushes == 2 * len(labels)
     assert set(vars(timer)) == {"failed", "gc_unavailable", "gc_starts"}
     for index, row in enumerate(_events(sink)):
         label = labels[index // 2]
         assert row["scope"] == "coordinator" and row["phase"] == label
         expected_parent = ("elf_link_image" if 5 <= index // 2 <= 9 else
-                           "artifact_link" if 3 <= index // 2 <= 12 else "none")
+                           "macho_prepare_inputs" if label in (
+                               "macho_prepare_validate", "macho_prepare_archives",
+                               "macho_prepare_merge") else
+                           "macho_prepare_merge" if label in (
+                               "macho_merge_inputs", "macho_merge_stackmaps",
+                               "macho_merge_final_view") else
+                           "macho_link_image" if label == "macho_sign" else
+                           "artifact_link" if 3 <= index // 2 < len(labels) - 1 else "none")
         assert row["parent"] == expected_parent
         assert row["event"] == ("begin" if index % 2 == 0 else "complete")
         assert row["clock_ok"] == "1" and "module" not in row
@@ -1094,7 +1106,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
 @pytest.mark.parametrize("direct", (False, True))
 @pytest.mark.parametrize("policy", (False, True))
 @pytest.mark.parametrize("defer", ("", "PCC_DEFER_SELF_LINK_PLAN", "PCC_DEFER_FRONTEND_CODEGEN_PLAN"))
-def test_coordinator_construction_uses_existing_linux_direct_policy_only(monkeypatch, platform, direct, policy, defer):
+def test_coordinator_construction_uses_existing_direct_policy_on_supported_hosts(monkeypatch, platform, direct, policy, defer):
     function = _source_function("pcc/frontends/python/pipeline.py", "compile_python_multi")
     blocks = [node for node in ast.walk(function) if isinstance(node, ast.If)
               and isinstance(node.test, ast.Name) and node.test.id == "direct_emit"
@@ -1115,7 +1127,7 @@ def test_coordinator_construction_uses_existing_linux_direct_policy_only(monkeyp
                      os=types.SimpleNamespace(environ={defer: "plan"} if defer else {}))
     module = ast.Module(body=blocks, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), "<coordinator policy>", "exec"), namespace)
-    expected = platform == "linux" and direct and policy and not defer
+    expected = platform in ("linux", "win32", "darwin") and direct and policy and not defer
     assert calls == (["construct"] if expected else [])
     assert namespace["coordinator_timing"] is (sentinel if expected else None)
     assert "PCC_INDEXED_PHASE_TIMING" not in ast.unparse(blocks[0])
@@ -1138,13 +1150,15 @@ def test_coordinator_setup_baseexception_cannot_change_build(monkeypatch, failur
         raise error
 
     _stub(monkeypatch, "pcc.backend.indexed_phase_timing", CoarsePhaseTiming=construct)
-    namespace = dict(direct_emit=True, out_path="out", coordinator_timing=None,
-                     _prepare_direct_native_object_dir=lambda path: "work",
-                     _python_frontend_worker_timing_enabled=policy,
-                     sys=types.SimpleNamespace(platform="linux"), os=types.SimpleNamespace(environ={}))
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[block], type_ignores=[])),
-                 "<coordinator setup failure>", "exec"), namespace)
-    assert namespace["coordinator_timing"] is None
+    for platform in ("linux", "win32", "darwin"):
+        namespace = dict(direct_emit=True, out_path="out", coordinator_timing=None,
+                         _prepare_direct_native_object_dir=lambda path: "work",
+                         _python_frontend_worker_timing_enabled=policy,
+                         sys=types.SimpleNamespace(platform=platform),
+                         os=types.SimpleNamespace(environ={}))
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[block], type_ignores=[])),
+                     "<coordinator setup failure>", "exec"), namespace)
+        assert namespace["coordinator_timing"] is None
 
 
 @pytest.mark.parametrize("enabled", (False, True))

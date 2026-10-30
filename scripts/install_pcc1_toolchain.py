@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import fcntl
+try:
+    import fcntl
+except ModuleNotFoundError as exc:
+    if exc.name != "fcntl":
+        raise
+    fcntl = None
 import hashlib
 import json
 import os
@@ -66,6 +71,28 @@ Qualification protocol (toolchain selection only; no package release claim):
 """
 
 
+def _require_directory_durability(operation: str):
+    if os.name != "posix":
+        raise NotImplementedError(
+            operation + " requires POSIX directory fsync; no Windows durability claim"
+        )
+
+
+def _require_activation_platform(operation: str):
+    _require_directory_durability(operation)
+    if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
+        raise NotImplementedError(operation + " requires POSIX flock and O_NOFOLLOW")
+
+
+def _require_native_process_platform(operation: str):
+    if os.name != "posix" or not (
+        sys.platform.startswith("linux") or sys.platform == "darwin"
+    ):
+        raise NotImplementedError(
+            operation + " requires the Linux/Darwin process-tree and POSIX launcher contract"
+        )
+
+
 def bootstrap_tools():
     # The existing standalone tools import one another by their script names.
     # Load that exact directory, including when this module is imported by pytest.
@@ -90,6 +117,7 @@ def run_logged(
     max_tree_rss_bytes: int = 0,
 ):
     """One watchdog owns the child tree and writes output before waiting."""
+    _require_native_process_platform("run_logged")
     _, sampler = bootstrap_tools()
     arguments = sampler._parser().parse_args(
         [
@@ -151,6 +179,7 @@ def prepare_runtime_source(frozen: Path, work: Path) -> Path:
 
 def build_from_source(source_root: Path):
     """Use the existing frozen bootstrap runners for a clean first install."""
+    _require_native_process_platform("build_from_source")
     sys.path.insert(0, str(REPO))
     from scripts import run_pcc_stage1_build as stage1
 
@@ -787,6 +816,7 @@ def file_reference(path: Path):
 
 def record_gate(request: dict, output: Path, store: Path):
     """Hash existing collection/execution artifacts; never run a second executor."""
+    _require_directory_durability("record_gate")
     identity = managed_identity(Path(request["candidate"]), store)
     if request["gate"] not in QUALIFICATION_GATES:
         raise ValueError("unknown qualification gate")
@@ -810,6 +840,7 @@ def record_gate(request: dict, output: Path, store: Path):
 
 
 def qualify(root: Path, gates: dict[str, Path], output: Path, store: Path):
+    _require_directory_durability("qualify")
     identity = managed_identity(root, store)
     payload = {
         "schema": "pcc.toolchain-qualification.v1",
@@ -824,6 +855,7 @@ def qualify(root: Path, gates: dict[str, Path], output: Path, store: Path):
 
 
 def sync_directory(path: Path):
+    _require_directory_durability("sync_directory")
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
@@ -832,6 +864,7 @@ def sync_directory(path: Path):
 
 
 def write_history(path: Path, payload: dict):
+    _require_directory_durability("write_history")
     with path.open("x") as stream:
         stream.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
         stream.flush()
@@ -841,6 +874,7 @@ def write_history(path: Path, payload: dict):
 
 @contextmanager
 def activation_lock(bin_dir: Path):
+    _require_activation_platform("activation_lock")
     bin_dir.mkdir(parents=True, exist_ok=True)
     state = bin_dir / ".pcc1-activation"
     if state.is_symlink():
@@ -875,6 +909,7 @@ def current_managed_entry(bin_dir: Path, store: Path):
 def replace_managed_entry(
     bin_dir, state, before, after, *, operation, qualification=None, reverses=None
 ):
+    _require_activation_platform("replace_managed_entry")
     transaction = uuid.uuid4().hex
     prepared = {
         "schema": "pcc.toolchain-activation.v1",
@@ -910,6 +945,7 @@ def replace_managed_entry(
 
 
 def promote(root: Path, qualification: Path, bin_dir: Path, store: Path):
+    _require_activation_platform("promote")
     identity = managed_identity(root, store)
     root = Path(identity["root"])
     qualified = verify_qualification(root, qualification.resolve(strict=True), identity)
@@ -933,6 +969,7 @@ def promote(root: Path, qualification: Path, bin_dir: Path, store: Path):
 
 
 def rollback(transaction: str, bin_dir: Path, store: Path):
+    _require_activation_platform("rollback")
     if len(transaction) != 32 or any(
         char not in "0123456789abcdef" for char in transaction
     ):
@@ -986,6 +1023,7 @@ def rollback(transaction: str, bin_dir: Path, store: Path):
 
 def activate_initial(root: Path, bin_dir: Path):
     """Atomically create the first entry; never overwrite an existing entry."""
+    _require_activation_platform("activate_initial")
     verify_installation(root)
     with activation_lock(bin_dir):
         target = bin_dir / "pcc1"
@@ -995,6 +1033,7 @@ def activate_initial(root: Path, bin_dir: Path):
 
 
 def install(args):
+    _require_native_process_platform("install")
     first = args.stage1_dir.resolve(strict=True)
     second = args.stage2_dir.resolve(strict=True)
     validated, stage_evidence = verify_bootstrap(first, second)

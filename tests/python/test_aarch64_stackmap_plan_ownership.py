@@ -22,6 +22,10 @@ from tests.python.test_precise_stackmap_abi import _stale_managed_ssa_ir
 
 _TARGETS = ("arm64-apple-darwin23.6.0", "aarch64-unknown-linux-gnu")
 _ROUTES = ("text", "structured-lines", "native-sink")
+_EMISSION_ARENAS = (
+    "reload_scalars", "entry_routes", "suffix_routes", "terminator_routes",
+    "entry_route_spans", "suffix_route_spans", "terminator_route_spans",
+)
 
 
 def _source(triple):
@@ -90,7 +94,8 @@ def test_table_policy_closes_real_packed_plans_and_preserves_code(
             return emit_function(func, plan, **kwargs)
 
         def observe_close(packed):
-            assert all(not arena._closed for arena in _arenas(packed))
+            assert all(getattr(packed, field)._closed for field in _EMISSION_ARENAS)
+            assert sum(arena._closed for arena in _arenas(packed)) == 7
             closed.append(packed)
             close_packed(packed)
 

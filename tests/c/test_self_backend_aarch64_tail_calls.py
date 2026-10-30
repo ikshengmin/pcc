@@ -1,4 +1,4 @@
-"""Proven scalar tail positions restore the frame before branching."""
+"""Proven scalar siblings restore needed frames and elide unchanged forwarders."""
 
 import sys
 import platform
@@ -25,7 +25,8 @@ entry:
 '''
     assembly = emit_aarch64_darwin_asm(source, optimize=True)
     assert "  bl _callee" not in assembly
-    assert "  autiasp\n  b _callee" in assembly
+    assert "  bti c" in assembly and "  b _callee" in assembly
+    assert "paciasp" not in assembly and "autiasp" not in assembly
     assert "  bl _callee" in emit_aarch64_darwin_asm(source, optimize=False)
 
 
@@ -116,6 +117,9 @@ entry:
   ret i32 %status
 }
 '''
+    # This wrapper reorders all inputs: it still owns and restores a signed
+    # return frame while staging the permutation before the sibling transfer.
+    assert "  autiasp\n  b _callee" in emit_aarch64_darwin_asm(source, optimize=True)
     for optimize in (False, True):
         _execute(source, tmp_path / ("arguments-" + str(optimize)), optimize)
 

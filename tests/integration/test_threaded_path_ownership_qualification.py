@@ -293,7 +293,7 @@ def test_supplied_archive_pin_unique_owner_and_actual_leaf_ir(path_toolchain, tm
         assert re.fullmatch(r"(?:i8\*|ptr)\s+[^,]+", args), (symbol, args)
         assert not re.search(r"\b(?:call|invoke|callbr)\b", body), (symbol, body)
         assert "load i32" in body and "store i32" in body, symbol
-        assert "@pcc_gc_metric_pin" in body, symbol
+        assert "@pcc_gc_metric_shards" in body, symbol
         assert not re.search(r"^define\b[^\n]*@" + symbol + r"\(", managed_ir, re.M)
         assert re.search(r"^declare\s+(?:external\s+)?void\s+@" + symbol + r"\(", managed_ir, re.M), symbol
     transfer = list(re.finditer(

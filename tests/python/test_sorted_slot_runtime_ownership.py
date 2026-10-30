@@ -11,7 +11,12 @@ class SortModel(_ExtensionModel):
         self.failure, self.reverse, self.key_alias = failure, reverse, key_alias
         self.key_calls = self.compare_calls = self.allocations = self.list_allocations = 0
         self.output_seen_at_disposal = False
-        self.external = 10000
+        self.external = 1000000
+        self.depth = 0
+        self.retargets = []
+        self.payload_registrations = []
+        self.retarget_status = 1
+        self.freed = set()
         self.source[0].payload = []
         for index, value in enumerate(values):
             obj = self.new('element-' + str(index), fresh=False)
@@ -24,9 +29,17 @@ class SortModel(_ExtensionModel):
             self.store(self.external, i * 8, value)
         self.ns.update({
             '_SORT_SOURCE': 0, '_SORT_KEY': 1, '_SORT_COMPARE': 2,
-            '_SORT_VALUES': 3, '_SORT_KEYS': 4, '_SORT_RESULT': 5,
-            '_SORT_ARGS': 6, '_SORT_ITEM': 7, '_SORT_LEFT': 8,
-            '_SORT_RIGHT': 9, '_SORT_ERROR': 10, '_SORT_COUNT': 11, '_SORT_BYTES': 8,
+            '_SORT_VALUES': 3, '_SORT_KEYS': 4,
+            '_SORT_ARGS': 5, '_SORT_ITEM': 6, '_SORT_LEFT': 7,
+            '_SORT_RIGHT': 8, '_SORT_REVERSE': 9, '_SORT_ERROR': 10, '_SORT_COUNT': 11, '_SORT_BYTES': 8,
+            'PYLISTOBJECT_LENGTH_OFFSET': 16,
+            'PYLISTOBJECT_CAPACITY_OFFSET': 24,
+            'PYLISTOBJECT_ITEMS_OFFSET': 32,
+            'pcc_py_gc_minor_graph_lock': self.lock,
+            'pcc_py_gc_minor_graph_unlock': self.unlock,
+            'pcc_gc_load_ptr': self.gc_load,
+            'pcc_gc_backend4_retarget_mutator_payload_locked': self.retarget,
+            'pcc_gc_backend4_zpage_register_owner_payload_span': self.register_payload,
             'global_addr': lambda name: 11,
             'pcc_gc_root_copy_lease': self.copy,
             'pcc_gc_root_move': self.move,
@@ -38,13 +51,92 @@ class SortModel(_ExtensionModel):
             'py_obj_lt': self.less,
             '_type_of': lambda pointer: 1, 'PY_TYPE_NONE': 0,
             'malloc': self.malloc, 'free': self.free,
+            # This model is the general protocol; the GC0 plain-order
+            # path is test_sorted_gc0_plain_order's.
+            '_sorted_gc0': lambda source_slot, reverse, result_slot: 0,
         })
         _functions(Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_obj_ops_compare.py',
                    {'_sorted_error', '_sorted_drop', '_sorted_adopt', '_sorted_copy',
                     '_sorted_arguments', '_sorted_prepare_keys', '_sorted_less',
-                    '_sorted_merge_indices', 'py_obj_sorted_slots'}, self.ns)
+                    '_sorted_merge_indices', '_sorted_reorder_values',
+                    '_sorted_slots_body', 'py_obj_sorted_slots'}, self.ns)
+
+    def alloc(self, size):
+        # Frames, payloads and index buffers must never overlap.
+        address = self.next_address
+        self.next_address += ((size + 7) // 8) * 8 + 64
+        return address
+
+    def load(self, base, offset):
+        if isinstance(base, tuple):
+            obj = self.check(base)[0]
+            if offset == 16:
+                return len(obj.payload)
+            if offset in (24, 32):
+                capacity = max(4, len(obj.payload))
+                if not hasattr(obj, 'capacity') or obj.capacity < capacity:
+                    obj.capacity = capacity
+                    obj.payload_base = self.alloc(capacity * 8)
+                if offset == 24:
+                    return obj.capacity
+                for index, value in enumerate(obj.payload):
+                    self.memory[obj.payload_base + index * 8] = value
+                return obj.payload_base
+            raise AssertionError(offset)
+        return super().load(base, offset)
+
+    def store(self, base, offset, value):
+        if isinstance(base, tuple):
+            assert self.depth == 1 and offset == 32
+            obj = self.check(base)[0]
+            obj.payload_base = value
+            obj.payload = [self.check(self.load(value, index * 8))
+                           for index in range(len(obj.payload))]
+            return
+        super().store(base, offset, value)
+
+    def lock(self):
+        assert self.depth == 0
+        self.boundary()
+        self.depth = 1
+
+    def unlock(self):
+        assert self.depth == 1
+        self.depth = 0
+
+    def gc_load(self, owner, slot):
+        assert self.depth == 1
+        self.check(owner)
+        return self.check(self.load(slot, 0))
+
+    def retarget(self, owner, old, old_size, new, new_size, pairs, count):
+        assert self.depth == 1
+        obj = self.check(owner)[0]
+        assert old_size == new_size == obj.capacity * 8
+        assert count == len(obj.payload)
+        destinations = []
+        for index, item in enumerate(obj.payload):
+            source = self.load(pairs, index * 16)
+            destination = self.load(pairs, index * 16 + 8)
+            assert source == old + index * 8  # Ascending old-slot index.
+            assert new <= destination < new + count * 8
+            assert self.check(self.load(source, 0)) == self.check(self.load(destination, 0)) == item
+            destinations.append(destination)
+        assert len(set(destinations)) == count
+        assert all(self.load(new, index * 8) is None for index in range(count, obj.capacity))
+        self.retargets.append((old, new))
+        return 0 if self.failure == 'retarget' else self.retarget_status
+
+    def register_payload(self, owner, base, size):
+        assert self.depth == 1 and self.retarget_status == 2
+        assert self.check(owner)[0].payload_base == base
+        self.payload_registrations.append((base, size))
+        return 0
 
     def boundary(self):
+        if getattr(self, 'depth', 0):
+            assert self.fresh is None
+            return
         super().boundary()
         if self.relocate:
             for obj in self.objects:
@@ -60,7 +152,8 @@ class SortModel(_ExtensionModel):
     def list_new(self, size):
         self.boundary()
         self.list_allocations += 1
-        if self.failure == 'list-allocation' and self.list_allocations == 3:
+        if ((self.failure == 'list-allocation' and self.list_allocations == 2)
+                or (self.failure == 'values-allocation' and self.list_allocations == 1)):
             return None
         obj = self.new('list')
         obj[0].payload = []
@@ -151,6 +244,12 @@ class SortModel(_ExtensionModel):
 
     def free(self, ptr):
         self.boundary()
+        if ptr is None:
+            return
+        assert ptr not in self.freed
+        assert all(ptr != getattr(obj, 'payload_base', None)
+                   for obj in self.objects if obj.refs > 0)
+        self.freed.add(ptr)
 
     def move(self, destination, source):
         self.boundary()
@@ -202,6 +301,11 @@ def test_sorted_slots_stable_owners(values, key, compare, key_alias, reverse, re
     observed = [(v[0].value, v[0].label) for v in result[0].payload]
     assert observed == sorted(zip(values, range(len(values))), key=lambda v: v[0], reverse=reverse)
     assert model.key_calls == (len(values) if key else 0)
+    assert model.list_allocations == (2 if key else 1)
+    assert result[0] is not model.source[0]
+    assert [v[0].value for v in model.source[0].payload] == values
+    assert len(model.retargets) == int(len(values) > 1)
+    assert model.depth == 0
     assert model.pending is None
     assert model.leases == {} and model.frames == {model.external: 4}
     assert all(v[0].refs == 2 for v in result[0].payload)
@@ -212,7 +316,7 @@ def test_sorted_slots_stable_owners(values, key, compare, key_alias, reverse, re
 
 
 @pytest.mark.parametrize('relocate', (False, True))
-@pytest.mark.parametrize('failure', ('iteration', 'key', 'compare', 'allocation', 'publish', 'copy-1', 'lease-list', 'list-allocation'))
+@pytest.mark.parametrize('failure', ('iteration', 'key', 'compare', 'allocation', 'publish', 'copy-1', 'lease-list', 'list-allocation', 'values-allocation', 'retarget'))
 def test_sorted_slots_error_preserves_primary_during_disposal(failure, relocate):
     model = SortModel([3, 1, 2], key=True, relocate=relocate, failure=failure)
     assert model.run() < 0
@@ -224,9 +328,25 @@ def test_sorted_slots_error_preserves_primary_during_disposal(failure, relocate)
         'copy-1': 'sorted: cannot retain input',
         'lease-list': 'sorted: cannot lease owned value',
         'list-allocation': 'sorted: missing owned value',
+        'values-allocation': 'sorted: missing owned value',
+        'retarget': 'sorted: cannot retarget work list payload',
     }[failure]
     assert model.leases == {} and model.frames == {model.external: 4}
     source = model.load(model.external, 0)
     assert all(v[0].refs == 1 for v in source[0].payload)
     assert all(obj.refs == 0 for obj in model.objects
                if obj.name in ('list', 'arguments', 'key-result', 'comparison-result'))
+
+
+@pytest.mark.parametrize('relocate', (False, True))
+def test_sorted_registers_a_previously_unregistered_gc4_payload(relocate):
+    model = SortModel([3, 1, 3, 0, 2], relocate=relocate)
+    model.retarget_status = 2
+    assert model.run() == 0
+    result = model.load(model.external, 24)[0]
+    assert [(v[0].value, v[0].label) for v in result.payload] == [
+        (0, 3), (1, 1), (2, 4), (3, 0), (3, 2),
+    ]
+    assert model.payload_registrations == [(result.payload_base, result.capacity * 8)]
+    assert result.payload_base not in model.freed
+    assert model.leases == {} and model.depth == 0

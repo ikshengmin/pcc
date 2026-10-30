@@ -227,14 +227,6 @@ def _normalize_raised(slot):
     )
 
 
-@c_abi_export("py_err_occurred")
-def py_err_occurred() -> int:
-    cur = py_tls_exc_get()
-    if ptr_is_null(cur):
-        return 0
-    return 1
-
-
 def _resolve_current_exception():
     cur = py_tls_exc_get()
     if ptr_is_null(cur):

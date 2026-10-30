@@ -3329,7 +3329,10 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             size, opc = (3 if t64 else 2), (1 if mn == "ldur" else 0)
         return _enc_ldst_unscaled(size, opc, rt, base, imm)
 
-    if mn in ("ldar", "ldaxr", "stlr", "ldarb", "ldarh", "ldaxrb", "ldaxrh", "stlrb", "stlrh"):
+    if mn in (
+        "ldar", "ldaxr", "ldxr", "stlr", "ldarb", "ldarh", "ldaxrb", "ldaxrh",
+        "ldxrb", "ldxrh", "stlrb", "stlrh",
+    ):
         rt, t64 = _reg(ops[0])
         base, imm, mode = _mem(ops[1])
         if imm or mode:
@@ -3341,6 +3344,7 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             base_op = {
                 "ldarb": 0x08DFFC00, "ldarh": 0x48DFFC00,
                 "ldaxrb": 0x085FFC00, "ldaxrh": 0x485FFC00,
+                "ldxrb": 0x085F7C00, "ldxrh": 0x485F7C00,
                 "stlrb": 0x089FFC00, "stlrh": 0x489FFC00,
             }[mn]
             return base_op | (base << 5) | rt
@@ -3349,9 +3353,12 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             return 0x88DFFC00 | sf_bit | (base << 5) | rt
         if mn == "ldaxr":
             return 0x885FFC00 | sf_bit | (base << 5) | rt
+        if mn == "ldxr":
+            # o0 (bit 15) clear: the load-exclusive without acquire.
+            return 0x885F7C00 | sf_bit | (base << 5) | rt
         return 0x889FFC00 | sf_bit | (base << 5) | rt
 
-    if mn in ("stlxr", "stlxrb", "stlxrh"):
+    if mn in ("stlxr", "stlxrb", "stlxrh", "stxr", "stxrb", "stxrh"):
         rs, s64 = _reg(ops[0])
         if s64:
             raise EncodeError(f"{mn} status register must be a W register: {line!r}")
@@ -3359,13 +3366,15 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         base, imm, mode = _mem(ops[2])
         if imm or mode:
             raise EncodeError(f"{mn} takes a bare [Xn] address: {line!r}")
-        if mn in ("stlxrb", "stlxrh"):
+        # o0 (bit 15) selects the release store-exclusive.
+        release_bit = 0x8000 if mn.startswith("stlxr") else 0
+        if mn.endswith("b") or mn.endswith("h"):
             if t64:
                 raise EncodeError(f"{mn} takes a W data register: {line!r}")
-            base_op = 0x0800FC00 if mn == "stlxrb" else 0x4800FC00
-            return base_op | (rs << 16) | (base << 5) | rt
+            base_op = 0x08007C00 if mn.endswith("b") else 0x48007C00
+            return base_op | release_bit | (rs << 16) | (base << 5) | rt
         sf_bit = 0x40000000 if t64 else 0
-        return 0x8800FC00 | sf_bit | (rs << 16) | (base << 5) | rt
+        return 0x88007C00 | release_bit | sf_bit | (rs << 16) | (base << 5) | rt
 
     if mn == "clrex":
         if ops:

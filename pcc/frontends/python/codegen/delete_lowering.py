@@ -4,7 +4,7 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
-    Attr, ByteArrayType, ClassType, Delete, DictType, DynType, IntType,
+    Attr, ByteArrayType, ClassType, Delete, DictType, DynType, FuncDef, IntType,
     ListType, Name, NoneLit, NoneType, Slice, Subscript,
 )
 from pcc.frontends.python.codegen import marshal
@@ -20,6 +20,48 @@ from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound,
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
 _CSTR = _I8.as_pointer()
+
+
+def _retire_module_function_caches(host, name: str) -> None:
+    """A deleted public definition must not survive in its compiler cache."""
+    module = host.ast_module.name or "mod"
+    prefix = "__pcc_native_func_value_cache_" + host._module_symbol_suffix(module) + "_"
+    safe_name = name.replace(".", "_").replace("-", "_")
+    for statement in host.ast_module.body:
+        if not isinstance(statement, FuncDef) or statement.name != name:
+            continue
+        function = host._funcdef_functions.get(id(statement))
+        if function is None:
+            continue
+        cache_name = prefix + safe_name
+        if name in host._duplicate_module_function_names:
+            cache_name += "." + function.name
+        cache = host.module.globals.get(cache_name)
+        if cache is None:
+            # Function bodies precede module-top emission. Declare the same
+            # cache the later definition constructor will use.
+            cache = ir.GlobalVariable(host.module, _CSTR, name=cache_name)
+            cache.linkage = "internal"
+            cache.initializer = ir.Constant(_CSTR, None)
+        root = host._new_slot_call_root("del.function.cache")
+        previous = host._current_try_err_block()
+        target = previous if previous is not None else host._ensure_fn_err_exit()
+        saved_cpy = host._cpy_operand_cleanup_block
+        host._try_err_block = host._slot_call_cleanup_block((root,), target)
+        host._cpy_operand_cleanup_block = host._try_err_block
+        try:
+            # Transfer the cache's one owner before dropping its address pin.
+            # The registered temporary, not an unrooted raw pointer, survives
+            # any collection/finalizer during the subsequent release.
+            value = host.builder.load(cache, name=host._fresh("del.function.cached"))
+            host.builder.store(value, root)
+            host.builder.store(ir.Constant(_CSTR, None), cache)
+            host._slot_call_note_published(root)
+            host._slot_call_runtime_call("pcc_gc_unpin", (root,))
+            host._release_slot_call_roots((root,))
+        finally:
+            host._try_err_block = previous
+            host._cpy_operand_cleanup_block = saved_cpy
 
 
 class DeleteLoweringMixin:
@@ -65,6 +107,7 @@ class DeleteLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block((root,), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             try:
+                _retire_module_function_caches(self, name)
                 status = self.builder.call(
                     self.runtime["py_module_attr_del"],
                     [self._pooled_cstr_ptr(self.ast_module.name or "__main__", ".pcc.module.del.name"),
@@ -84,6 +127,9 @@ class DeleteLoweringMixin:
             # ``del x`` on an unbound or already-deleted global is an error.
             self._emit_module_global_bound_check(name, None)
 
+        # Retire the raw pinned cache while the published binding still owns
+        # the function; subsequent namespace deletion owns the last release.
+        _retire_module_function_caches(self, name)
         if self._cpy_module_flags.get(name, False):
             value = self.builder.load(
                 gv, name=self._fresh(f"del.global.cpy.{name}")

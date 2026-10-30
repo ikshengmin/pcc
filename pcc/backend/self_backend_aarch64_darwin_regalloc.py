@@ -60,6 +60,9 @@ from .self_backend_kernel import (
 from .self_backend_ir import (
     I1,
     PARSED_INSTRUCTION_KIND_ALLOCA,
+    PARSED_INSTRUCTION_KIND_ATOMICRMW,
+    PARSED_INSTRUCTION_KIND_CMPXCHG,
+    PARSED_INSTRUCTION_KIND_EXTRACTVALUE,
     PARSED_INSTRUCTION_KIND_BINOP,
     PARSED_INSTRUCTION_KIND_BR,
     PARSED_INSTRUCTION_KIND_BR_COND,
@@ -68,6 +71,7 @@ from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_FREEZE,
     PARSED_INSTRUCTION_KIND_GEP,
     PARSED_INSTRUCTION_KIND_ICMP,
+    PARSED_INSTRUCTION_KIND_FCMP,
     PARSED_INSTRUCTION_KIND_LOAD,
     PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_RET,
@@ -143,6 +147,50 @@ def _type_mapping_get(
     return text_key_mapping_get(mapping, key)
 
 
+def aarch64_cmpxchg_scalar_projection(
+    func: ParsedFunction, block_id: int, position: int,
+) -> CompilerInt4:
+    """One adjacent, sole integer projection may consume the CAS registers.
+
+    A whole aggregate, another use, another block, or a different producer
+    retains the complete aggregate-slot ABI. No atomic operation is removed.
+    """
+    missing = CompilerInt4(-1, -1, -1, -1)
+    if block_id < 0 or position < 0:
+        return missing
+    kernel = get_indexed_function_kernel(func)
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if position + 1 >= block.second:
+        return missing
+    producer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
+    consumer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position + 1)
+    if (producer.first != PARSED_INSTRUCTION_KIND_CMPXCHG
+            or consumer.first != PARSED_INSTRUCTION_KIND_EXTRACTVALUE):
+        return missing
+    pair = kernel.defined_value_id(block_id, position)
+    if pair < 0 or kernel.last_use(block_id, pair) != position + 1:
+        return missing
+    if (kernel.instruction_use_count(block_id, position + 1) != 1
+            or kernel.instruction_use_id(block_id, position + 1, 0) != pair):
+        return missing
+    extraction = kernel.instruction_data(block_id, position + 1)
+    indices = extraction[3]
+    if len(indices) != 1 or indices[0] not in (0, 1):
+        return missing
+    source = kernel.instruction_data(block_id, position)
+    value_type = source[4]
+    result_type = extraction[4]
+    if not value_type.is_int or not result_type.is_int:
+        return missing
+    expected_width = value_type.width if indices[0] == 0 else 1
+    if result_type.width != expected_width:
+        return missing
+    result = kernel.defined_value_id(block_id, position + 1)
+    if result < 0 or kernel.value_slot_offset(result) < 0:
+        return missing
+    return CompilerInt4(result, kernel.value_type_id(result), indices[0], pair)
+
+
 def _candidate_definition_type(
     func: ParsedFunction,
     kind_id: int,
@@ -151,6 +199,12 @@ def _candidate_definition_type(
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
         _dest, value_type, _ptr_type, _ptr = data
         return value_type if _is_scalar_register_type(value_type) else None
+    if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+        value_type = data[1]
+        return value_type if value_type.is_int else None
+    if kind_id == PARSED_INSTRUCTION_KIND_ATOMICRMW:
+        value_type = data[4]
+        return value_type if value_type.is_int else None
     if kind_id == PARSED_INSTRUCTION_KIND_BINOP:
         _op, _dest, value_type, _lhs, _rhs = data
         return value_type if value_type.is_int else None
@@ -191,6 +245,9 @@ def _candidate_indexed_definition_type_id(
     dest_id: int,
 ) -> int:
     raw: CompilerInt4 = kernel.instruction_record(record_id)
+    if kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
+        header: CompilerInt4 = kernel.type_header(raw.first)
+        return raw.first if header.first == TYPE_KIND_INT else -1
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
         header_is_scalar = False
         if type(kernel) is IndexedFunctionKernel:
@@ -494,6 +551,12 @@ def _aarch64_madd_fusion_storage_is_safe(
 
 _FUNCTION_INTERVALS_ENV = "PCC_SELF_FUNCTION_LIVE_INTERVALS"
 _CALL_RESULTS_ENV = "PCC_SELF_CALL_RESULT_REGISTERS"
+
+
+def boolean_register_lowering_enabled() -> bool:
+    """Keep the throughput-rejected boolean lowering available for diagnostics."""
+    value = str(os.environ.get("PCC_SELF_BOOLEAN_REGISTER_LOWERING", "") or "").strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
 def call_result_registers_enabled() -> bool:
@@ -1269,6 +1332,27 @@ def _is_noop_word_cast(kernel, cast_record: CompilerInt4) -> bool:
     return True
 
 
+
+def zero_byte_gep_base(kernel: IndexedFunctionKernel, record_id: int) -> CompilerInt2:
+    """Return (pointer type, source ref) for an exact byte-address identity.
+
+    Only one literal-zero index is admitted. Dynamic offsets, other layouts
+    and reload destinations retain the existing allocation/emission paths.
+    """
+    header: CompilerInt4 = kernel.gep_header(record_id)
+    span: CompilerInt4 = kernel.gep_span(record_id)
+    element: CompilerInt4 = kernel.type_header(header.first)
+    if element.first != TYPE_KIND_INT or element.second != 8 or span.first != 1:
+        return CompilerInt2(-1, -1)
+    index: CompilerInt2 = kernel.gep_index(header.fourth)
+    index_type: CompilerInt4 = kernel.type_header(index.first)
+    if (index.second >= 0 or index_type.first != TYPE_KIND_INT
+            or not 0 < index_type.second <= 64
+            or kernel.call_texts[-index.second - 1] != "0"):
+        return CompilerInt2(-1, -1)
+    return CompilerInt2(header.second, header.third)
+
+
 def _alias_root(parent: dict[int, int], value_id: int) -> int:
     root = value_id
     while parent.get(root, root) != root:
@@ -1586,6 +1670,32 @@ def _fusable_branch_conditions(kernel) -> dict[int, int]:
     return fused
 
 
+
+def aarch64_zero_test_operand(kernel, icmp: CompilerInt4) -> int:
+    """SSA operand of an exact i32/i64/pointer eq/ne-zero comparison.
+
+    Only the already-proven sole-use terminal compare may use this result.
+    Narrow integers retain their existing normalization and compare path.
+    """
+    predicate = kernel.call_texts[icmp.first]
+    if predicate != "eq" and predicate != "ne":
+        return -1
+    header: CompilerInt4 = kernel.type_header(icmp.second)
+    if header.first == TYPE_KIND_PTR:
+        literal = "null"
+    elif header.first == TYPE_KIND_INT and (header.second == 32 or header.second == 64):
+        literal = "0"
+    else:
+        return -1
+    if icmp.fourth < 0 and icmp.third >= 0:
+        if kernel.call_texts[-icmp.fourth - 1] == literal:
+            return icmp.third
+    if icmp.third < 0 and icmp.fourth >= 0:
+        if kernel.call_texts[-icmp.third - 1] == literal:
+            return icmp.fourth
+    return -1
+
+
 _FRAMELESS_INSTRUCTION_KIND_IDS = (
     PARSED_INSTRUCTION_KIND_BINOP,
     PARSED_INSTRUCTION_KIND_CAST,
@@ -1593,6 +1703,7 @@ _FRAMELESS_INSTRUCTION_KIND_IDS = (
     PARSED_INSTRUCTION_KIND_GEP,
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_SELECT,
     PARSED_INSTRUCTION_KIND_STORE,
 )
@@ -1618,6 +1729,44 @@ def _value_needs_slot(func: ParsedFunction, kernel, value_id: int) -> bool:
     if value_id in func.aarch64_fused_branch_values:
         return False
     return aarch64_madd_fusion_for_product(func, kernel.value_name(value_id)) is None
+
+
+def _is_unchanged_argument_tail_call(func: ParsedFunction, kernel, call_id: int) -> bool:
+    """An already-proven sibling call forwards the original register ABI.
+
+    No argument permutation, coercion, attribute or stack argument is admitted.
+    The call never returns to this frame, so its clobber does not require
+    preserving these unchanged inputs in callee-saved registers.
+    """
+    if call_id not in func.aarch64_tail_call_ids or len(func.args) > 8:
+        return False
+    header: CompilerInt4 = kernel.call_header(call_id)
+    span: CompilerInt4 = kernel.call_span(call_id)
+    if span.first != len(func.args):
+        return False
+    for index in range(span.first):
+        actual: CompilerInt4 = kernel.call_arg(header.fourth + index)
+        formal = func.args[index]
+        if (actual.second != kernel.value_id(formal.name)
+                or actual.first != kernel.intern_type(formal.type)
+                or actual.third != -1 or actual.fourth):
+            return False
+    return True
+
+
+def _unchanged_tail_positions(func: ParsedFunction, kernel, block_base) -> set[int]:
+    positions: set[int] = set()
+    if not func.aarch64_tail_call_ids:
+        return positions
+    for block_id in range(len(kernel.block_names)):
+        block: CompilerInt4 = kernel.block_fact(block_id)
+        if block.second == 0:
+            continue
+        last: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + block.second - 1)
+        if last.first == PARSED_INSTRUCTION_KIND_CALL:
+            if _is_unchanged_argument_tail_call(func, kernel, last.second):
+                positions.add(block_base[block_id] + block.second - 1)
+    return positions
 
 
 def _is_frameless_leaf(func: ParsedFunction, kernel) -> bool:
@@ -1667,6 +1816,13 @@ def _is_frameless_leaf(func: ParsedFunction, kernel) -> bool:
         while instruction_index < block_fact.second:
             instruction_id = block_fact.first + instruction_index
             metadata: CompilerInt4 = kernel.instruction_metadata_by_id(instruction_id)
+            if metadata.first == PARSED_INSTRUCTION_KIND_CALL:
+                if not _is_unchanged_argument_tail_call(func, kernel, metadata.second):
+                    return False
+                # The sibling transfer materializes no result or return PC in
+                # this frame. Its old result slot is never addressed.
+                instruction_index += 1
+                continue
             if metadata.first not in _FRAMELESS_INSTRUCTION_KIND_IDS:
                 return False
             fact: CompilerInt4 = kernel.instruction_fact_by_id(instruction_id)
@@ -1782,6 +1938,11 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             hard_barriers,
             first_live,
         ) = _function_level_facts(kernel)
+        if callee_saved:
+            forwarding_positions = _unchanged_tail_positions(func, kernel, block_base)
+            if forwarding_positions:
+                call_barriers = [position for position in call_barriers
+                                 if position not in forwarding_positions]
         # A fused multiply reads its inputs at the consumer, not at the mul.
         # The per-block overrides below cover instruction results; arguments
         # and phis take their intervals straight from these last uses.
@@ -1909,12 +2070,9 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 is_call_result = True
             if is_call_result:
                 pass
-            elif kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC:
-                # Atomic loads remain outside this allocator's existing
-                # candidate set. Their fixed record needs no diagnostic row.
-                value_type_id = -1
             elif (
                 kind_id == PARSED_INSTRUCTION_KIND_LOAD
+                or kind_id == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
                 or kind_id == PARSED_INSTRUCTION_KIND_BINOP
                 or kind_id == PARSED_INSTRUCTION_KIND_ICMP
                 or kind_id == PARSED_INSTRUCTION_KIND_CAST
@@ -1926,6 +2084,11 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                     metadata.second,
                     dest_id,
                 )
+            elif kind_id == PARSED_INSTRUCTION_KIND_EXTRACTVALUE:
+                projection: CompilerInt4 = aarch64_cmpxchg_scalar_projection(
+                    func, block_id, position - 1,
+                )
+                value_type_id = projection.second if projection.first == dest_id else -1
             elif kind_id == PARSED_INSTRUCTION_KIND_ALLOCA:
                 value_type_id = -1
             elif kind_id == PARSED_INSTRUCTION_KIND_GEP:
@@ -1979,10 +2142,9 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 # ``note_aarch64_reload_destinations``.
                 position += 1
                 continue
-            # Preserve the established compare/cset/byte-slot/branch peephole
-            # for a boolean consumed directly by br_cond.  Other integer SSA
-            # values, including booleans used by scalar instructions, remain
-            # eligible for this block-local slice.
+            # Preserve comparison/branch fusion. Other branch-only booleans
+            # (select, and/or, casts) have no flags fusion and must remain
+            # eligible for registers rather than an unconditional byte spill.
             value_type_header: CompilerInt4 = kernel.type_header(value_type_id)
             term_header: CompilerInt4 = kernel.terminator_header(block_id)
             if (
@@ -1990,6 +2152,10 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 and value_type_header.second == 1
                 and term_header.first == PARSED_INSTRUCTION_KIND_BR_COND
                 and term_header.third == dest_id
+                and (
+                    not boolean_register_lowering_enabled()
+                    or kind_id in (PARSED_INSTRUCTION_KIND_ICMP, PARSED_INSTRUCTION_KIND_FCMP)
+                )
             ):
                 position += 1
                 continue
@@ -2047,6 +2213,10 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                         kernel, cast_record
                     ):
                         alias_pairs.append((dest_id, cast_record.third))
+                elif kind_id == PARSED_INSTRUCTION_KIND_GEP:
+                    zero_base: CompilerInt2 = zero_byte_gep_base(kernel, metadata.second)
+                    if zero_base.first >= 0 and zero_base.second >= 0:
+                        alias_pairs.append((dest_id, zero_base.second))
             elif function_level:
                 if _interval_touches_call(barrier_start, last_use, global_barriers):
                     position += 1
@@ -2244,6 +2414,7 @@ def commit_allocated_scalar_result_indexed(
 
 
 __all__ = [
+    "aarch64_cmpxchg_scalar_projection",
     "allocate_aarch64_block_registers",
     "call_result_registers_enabled",
     "allocated_scalar_register_indexed",

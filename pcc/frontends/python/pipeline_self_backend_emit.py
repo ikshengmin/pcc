@@ -17,6 +17,23 @@ class SelfBackendEmitError(RuntimeError):
     """A self-backend emitter worker contract was invalid."""
 
 
+def write_aarch64_linux_reference_object(target_id: str, asm_text: str,
+                                         obj_path: str) -> bool:
+    """Encode internal AArch64 text for an explicitly selected host linker."""
+    if target_id != "self-aarch64-linux-v0":
+        return False
+    # Reuse the same owned ELF assembler/serializer as CEvaluator's system-cc
+    # route. Internal section/@PAGE transport is not GNU assembler syntax.
+    # This converts one module, not its optimization or final linker owner.
+    from pcc.backend.owned_elf_link import assemble
+    from pcc.backend.elf_x86_64 import emit_relocatable
+
+    payload = emit_relocatable(assemble(asm_text, "aarch64-unknown-linux-gnu"))
+    with open(obj_path, "wb") as stream:
+        stream.write(payload)
+    return True
+
+
 def _worker_phase_timing_enabled() -> bool:
     return str(os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or "").strip().lower() in (
         "1", "true", "yes", "on",
@@ -123,7 +140,9 @@ def emit_in_process(
         from .pipeline_targets import self_backend_ir_text
         ir_text = self_backend_ir_text(ir_text, host_target_triple=triple)
     if target_supported(triple):
-        return "self-aarch64-darwin-v0", emit_asm(ir_text, False)
+        # Ordinary application emission uses the target optimizer, like the
+        # host subprocess route. The emitter disables it for source debug.
+        return "self-aarch64-darwin-v0", emit_asm(ir_text, True)
     from pcc.backend.self_backend_targets import resolve_self_backend_target
     from pcc.backend import BackendUnavailable
     try:
@@ -349,9 +368,11 @@ def run_emit_worker(
                 timing_phase = ""
             if cc:
                 if timing_enabled:
-                    timing_phase = "external_assemble"
+                    timing_phase = ("assemble_encode" if target_id == "self-aarch64-linux-v0"
+                                    else "external_assemble")
                     _worker_item_phase_diagnostic("begin", timing_phase, timing_pid, timing_item)
-                subprocess.run([cc, "-c", asm_path, "-o", obj_path], check=True)
+                if not write_aarch64_linux_reference_object(target_id, asm_text, obj_path):
+                    subprocess.run([cc, "-c", asm_path, "-o", obj_path], check=True)
                 if timing_enabled:
                     _worker_item_phase_diagnostic("complete", timing_phase, timing_pid, timing_item)
                     timing_phase = ""
@@ -1242,7 +1263,8 @@ def emit_objects_many_in_process(
             with open(asm_path, "w", encoding="utf-8") as f:
                 f.write(asm_text)
             if not internal_link:
-                subprocess.run([cc, "-c", asm_path, "-o", obj_path], check=True)
+                if not write_aarch64_linux_reference_object(target_id, asm_text, obj_path):
+                    subprocess.run([cc, "-c", asm_path, "-o", obj_path], check=True)
             else:
                 obj_path = asm_path
             pairs.append((target_id, obj_path))

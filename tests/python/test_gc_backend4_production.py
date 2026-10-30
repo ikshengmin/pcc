@@ -6159,6 +6159,9 @@ def test_backend4_thread_start_loads_forwarded_args_slot(tmp_path):
             if (loaded_args == args) return 9;
 
             if (py_threading_thread_start(thread_root) != 0) return 10;
+            /* start() returns once a real platform thread runs the target;
+               its reads, through the load barrier, are complete after join. */
+            if (py_threading_thread_join_args(thread_root, 0) != 0) return 30;
 
             ProbeThreadObject *loaded_thread = (ProbeThreadObject *)pcc_gc_load_ptr(
                 0,
@@ -7017,23 +7020,17 @@ def test_backend4_genzgc_store_buffer_drains_in_bounded_batches(tmp_path):
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BUFFER_BATCH_CAPACITY) != 8) return 8;
 
             pcc_gc_publish_initialized((PyObject *)owner);
-            if (pcc_gc_step(10) < 8) return 9;
-            if (pcc_gc_backend4_store_buffer_entries() != 2) return 10;
-            if (pcc_gc_backend4_store_buffer_drain_batches() != 1) return 11;
-            if (pcc_gc_backend4_store_buffer_drained_entries() != 8) return 12;
+            /* One step drains bounded batches until its budget or the buffer
+               runs out: eight entries under the lock, then the other two. */
+            if (pcc_gc_step(10) < 10) return 9;
+            if (pcc_gc_backend4_store_buffer_entries() != 0) return 10;
+            if (pcc_gc_backend4_store_buffer_drain_batches() != 2) return 11;
+            if (pcc_gc_backend4_store_buffer_drained_entries() != 10) return 12;
             if (pcc_gc_backend4_store_buffer_max_batch_size() != 8) return 13;
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BUFFER_MAX_BATCH_SIZE) != 8) return 14;
             if (pcc_gc_backend4_store_buffer_full_batches() != 1) return 15;
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BUFFER_FULL_BATCHES) != 1) return 16;
             if (pcc_gc_backend4_store_buffer_incomplete_drains() != 1) return 17;
-
-            if (pcc_gc_step(10) < 2) return 18;
-            if (pcc_gc_backend4_store_buffer_entries() != 0) return 19;
-            if (pcc_gc_backend4_store_buffer_drain_batches() != 2) return 20;
-            if (pcc_gc_backend4_store_buffer_drained_entries() != 10) return 21;
-            if (pcc_gc_backend4_store_buffer_max_batch_size() != 8) return 22;
-            if (pcc_gc_backend4_store_buffer_full_batches() != 1) return 23;
-            if (pcc_gc_backend4_store_buffer_incomplete_drains() != 1) return 24;
 
             for (int i = 0; i < 10; i++) {
                 pcc_gc_store_ptr((PyObject *)owner, &owner->items[i], 0);
@@ -7401,13 +7398,17 @@ def test_backend4_genzgc_remembered_set_tracks_unique_dirty_slots(tmp_path):
 
             pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child2);
             if (pcc_gc_backend4_remembered_set_entries() != 1) return 8;
-            if (pcc_gc_backend4_remembered_set_duplicate_skips() != 1) return 9;
+            /* The store buffer already holds items[0], so the repeat stops
+               there before it reaches the remembered set. */
+            if (pcc_gc_backend4_store_buffer_duplicate_skips()
+                + pcc_gc_backend4_remembered_set_duplicate_skips() != 1) return 9;
 
             pcc_gc_store_ptr((PyObject *)owner, &owner->items[1], child3);
             if (pcc_gc_backend4_remembered_set_entries() != 2) return 10;
             if (pcc_gc_backend4_remembered_set_high_water() != 2) return 11;
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_REMEMBERED_SET_ENTRIES) != 2) return 12;
-            if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_REMEMBERED_SET_DUPLICATE_SKIPS) != 1) return 13;
+            if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BUFFER_DUPLICATE_SKIPS)
+                + pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_REMEMBERED_SET_DUPLICATE_SKIPS) != 1) return 13;
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_REMEMBERED_SET_HIGH_WATER) != 2) return 14;
 
             pcc_gc_telemetry_reset();
@@ -7687,20 +7688,21 @@ def test_backend4_genzgc_store_buffer_keeps_value_snapshot_until_drain(tmp_path)
             PyObject *child2 = py_list_new(0);
             if (child2 == 0) return 16;
 
+            /* One entry per recorded slot, as ZGC remembers a field: it keeps
+               the snapshot of the value that dirtied the slot (child), and
+               the drain also promotes what the slot holds by then (child2).
+               Later stores into the pending slot add nothing. */
             pcc_gc_note_slot_write_barrier((PyObject *)owner, &owner->items[0], child);
+            owner->items[0] = child;
             pcc_gc_note_slot_write_barrier((PyObject *)owner, &owner->items[0], child2);
-            pcc_gc_note_slot_write_barrier((PyObject *)owner, &owner->items[0], child);
+            owner->items[0] = child2;
+            pcc_gc_note_slot_write_barrier((PyObject *)owner, &owner->items[0], child2);
             if ((owner->h.flags & PY_FLAG_GC_REMEMBERED) == 0) return 6;
-            if (pcc_gc_backend4_generation_barrier_score() != 2) return 7;
-            if (pcc_gc_backend4_store_buffer_entries() != 2) return 8;
-            if (owner->items[0] != 0) return 9;
+            if (pcc_gc_backend4_generation_barrier_score() != 1) return 7;
+            if (pcc_gc_backend4_store_buffer_entries() != 1) return 8;
+            if (pcc_gc_backend4_store_buffer_duplicate_skips() != 2) return 9;
 
             pcc_gc_publish_initialized((PyObject *)owner);
-            if (pcc_gc_step(1) < 1) return 10;
-            if ((owner->h.flags & PY_FLAG_GC_REMEMBERED) == 0) return 11;
-            if (pcc_gc_backend4_store_buffer_entries() != 1) return 12;
-            if (owner->items[0] != 0) return 13;
-
             if (pcc_gc_step(1) < 1) return 14;
             if ((((PyObjectHeader *)child)->flags & PY_FLAG_GC_OLD) == 0) return 15;
             if ((((PyObjectHeader *)child)->flags & PY_FLAG_GC_YOUNG) != 0) return 17;
@@ -7708,7 +7710,8 @@ def test_backend4_genzgc_store_buffer_keeps_value_snapshot_until_drain(tmp_path)
             if ((((PyObjectHeader *)child2)->flags & PY_FLAG_GC_YOUNG) != 0) return 19;
             if ((owner->h.flags & PY_FLAG_GC_REMEMBERED) != 0) return 20;
             if (pcc_gc_backend4_store_buffer_entries() != 0) return 21;
-            if (owner->items[0] != 0) return 22;
+            /* The raw stores above took no reference for the list. */
+            owner->items[0] = 0;
 
             pcc_gc_release(child);
             pcc_gc_release(child2);

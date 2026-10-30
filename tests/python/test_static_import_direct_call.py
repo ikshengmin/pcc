@@ -218,5 +218,8 @@ def test_exported_function_adapter_exists_when_module_execution_stops_early(tmp_
     codegen._native_function_object_exports = _closed_world_function_object_exports(exports, module.name)
     text = str(codegen.generate(typed))
     top = re.search(r"^define [^\n]*@_pcc_py_module_top_sicall_stopped\(.*?^}", text, re.M | re.S).group(0)
-    assert "@py_exc_new(i64 20," in top and "pcc.def.binding.publish" not in top
+    # A missing module raises ModuleNotFoundError, an ImportError subclass.
+    from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG
+    tag = BUILTIN_EXC_TAG["ModuleNotFoundError"]
+    assert f"@py_exc_new(i64 {tag}," in top and "pcc.def.binding.publish" not in top
     assert re.search(r"^define [^\n]*@user_sicall_stopped_stopped_native_adapter\(", text, re.M)

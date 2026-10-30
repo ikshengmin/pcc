@@ -1035,7 +1035,10 @@ class ForLoopLoweringMixin:
             self._cpy_operand_cleanup_block = self._try_err_block
             self._slot_call_runtime_call("py_dict_keys", (incoming,), result_slot=keys)
             incoming = keys
-        status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(source), self._as_gc_ptr(incoming)])
+        status = self._emit_root_slot_move(
+            source,
+            incoming,
+        )
         self._slot_call_check_status(status, "valueclass iterable move", iterable.span)
         self._slot_call_note_published(source)
         self._release_slot_call_roots(tuple(input_roots))
@@ -1082,7 +1085,10 @@ class ForLoopLoweringMixin:
                                      suffix_args=(index,), span=iterable.span)
         if object_target:
             self._emit_release_owned_local_if_flagged(target.ident, target_slot)
-            status = self.builder.call(self.runtime["pcc_gc_root_move"], [self._as_gc_ptr(target_slot), self._as_gc_ptr(element)])
+            status = self._emit_root_slot_move(
+                target_slot,
+                element,
+            )
             self._slot_call_check_status(status, "valueclass object loop target move", iterable.span)
             flag = self._ensure_owned_local_flag(target.ident, target_slot)
             self.builder.store(ir.Constant(_I1, 1), flag)
@@ -1165,11 +1171,14 @@ class ForLoopLoweringMixin:
                     iter_ty.elems, first
                 ):
                     elem_ty = first
-        n_val = self.builder.call(
-            self.runtime[len_helper],
-            [iter_obj],
-            name=self._fresh("for.len"),
-        )
+        n_val = None
+        if isinstance(iter_ty, TupleType):
+            # Tuple length is immutable; lists must observe each live step.
+            n_val = self.builder.call(
+                self.runtime[len_helper],
+                [iter_obj],
+                name=self._fresh("for.len"),
+            )
 
         idx_slot = self._alloca_in_entry(_I64, name="for.idx.addr")
         self.builder.store(ir.Constant(_I64, 0), idx_slot)
@@ -1223,26 +1232,55 @@ class ForLoopLoweringMixin:
 
         self.builder.position_at_end(cond_bb)
         cur = self.builder.load(idx_slot, name=self._fresh("for.idx"))
-        cond = self.builder.icmp_signed(
-            "<",
-            cur,
-            n_val,
-            name=self._fresh("for.cond"),
-        )
-        self.builder.cbranch(cond, body_bb, end_bb)
-
-        self.builder.position_at_end(body_bb)
-        iter_obj = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
-            name=self._fresh("for.lst.current"),
-        )
+        if isinstance(iter_ty, ListType):
+            iter_obj = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
+                name=self._fresh("for.lst.current"),
+            )
         target_alloca, target_ir_ty, _ = slot
-        if (
+        native_integer_step = (
             isinstance(iter_ty, ListType)
             and isinstance(elem_ty, IntType)
             and not isinstance(target_ir_ty, ir.PointerType)
-        ):
+        )
+        elem_obj = None
+        if isinstance(iter_ty, ListType) and not native_integer_step:
+            # The non-raising getter performs one live bounds/read operation.
+            # NULL means exhaustion; Python None remains a non-NULL object.
+            # Do not cache the initial size: callbacks can append or shrink.
+            elem_obj = self.builder.call(
+                self.runtime[get_helper],
+                [iter_obj, cur],
+                name=self._fresh("for.elem"),
+            )
+            self._emit_post_call_err_check(stmt.span)
+            cond = self.builder.icmp_unsigned(
+                "!=", elem_obj, ir.Constant(_CSTR, None),
+                name=self._fresh("for.cond"),
+            )
+        else:
+            if native_integer_step:
+                n_val = self.builder.call(
+                    self.runtime[len_helper],
+                    [iter_obj],
+                    name=self._fresh("for.len"),
+                )
+                self._emit_post_call_err_check(stmt.span)
+            cond = self.builder.icmp_signed(
+                "<", cur, n_val, name=self._fresh("for.cond"),
+            )
+        self.builder.cbranch(cond, body_bb, end_bb)
+
+        self.builder.position_at_end(body_bb)
+        if elem_obj is None:
+            # Length queries may park on moving collectors.
+            iter_obj = self.builder.call(
+                self.runtime["pcc_gc_load_ptr"],
+                [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
+                name=self._fresh("for.lst.current"),
+            )
+        if native_integer_step:
             # Native-i64 fast path: valid only when the loop-variable slot is
             # itself native i64. Under int-boxing (_int_exprs_are_boxed),
             # _storage_ir_type(IntType) is a PyObject* (boxed PyInt), so the
@@ -1258,12 +1296,13 @@ class ForLoopLoweringMixin:
             )
             self.builder.store(native_val, target_alloca)
         else:
-            elem_obj = self.builder.call(
-                self.runtime[get_helper],
-                [iter_obj, cur],
-                name=self._fresh("for.elem"),
-            )
-            self._emit_post_call_err_check(stmt.span)
+            if elem_obj is None:
+                elem_obj = self.builder.call(
+                    self.runtime[get_helper],
+                    [iter_obj, cur],
+                    name=self._fresh("for.elem"),
+                )
+                self._emit_post_call_err_check(stmt.span)
             if isinstance(target_ir_ty, ir.PointerType):
                 _for_store_owned_target(
                     self,
@@ -1617,10 +1656,13 @@ class ForLoopLoweringMixin:
                 _CSTR,
                 DynType(name="dyn"),
             )
-            self._ensure_owned_local_gc_root(
+            # A module-level loop still needs this private iterator rooted;
+            # its target may be global, but this slot never is.
+            self._ensure_local_gc_frame_root(
                 owned_iter_name,
                 iter_slot,
                 _CSTR,
+                allow_module=True,
             )
             self.builder.call(
                 self.runtime["pcc_gc_store_root_take"],
@@ -1667,7 +1709,7 @@ class ForLoopLoweringMixin:
                 name=self._fresh("for.obj.iter.cur"),
             )
         item = self.builder.call(
-            self.runtime["py_obj_next"],
+            self.runtime["py_obj_iter_next"],
             [iterator_cur],
             name=self._fresh("for.obj.item"),
         )
@@ -1698,6 +1740,12 @@ class ForLoopLoweringMixin:
             [],
             name=self._fresh("for.obj.cur_exc"),
         )
+        match_error_bb = fn.append_basic_block(self._fresh("for.obj.match_error"))
+        self.builder.cbranch(
+            self.builder.icmp_unsigned("==", current_exc, ir.Constant(_CSTR, None)),
+            end_bb, match_error_bb,
+        )
+        self.builder.position_at_end(match_error_bb)
         stop_cls = self.builder.call(
             self.runtime["py_exc_builtin_class"],
             [ir.Constant(_I64, _BUILTIN_EXC_TAG["StopIteration"])],

@@ -68,7 +68,7 @@ main()
 class DirMemory(Memory):
     def __init__(self, phase="none", failure=None):
         super().__init__(phase, fail_copy=1 if failure == "copy" else 0,
-                         fail_register=3 if failure == "register" else 0)
+                         fail_register=1 if failure == "register" else 0)
         self.failure = failure
         self.module_class = self.make("module", abi.PY_TYPE_CLASS)
         self.module_class.leases = 1000

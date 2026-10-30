@@ -160,10 +160,12 @@ def test_literal_dynamic_classinfo_uses_one_rooted_runtime_predicate(classinfo):
         r'(%[\w.$]+) = call ptr \(ptr, ptr\) @pcc_gc_load_ptr\(ptr null, ptr (%[\w.$]+)\)',
         body,
     ))
+    loads.update(re.findall(r'(%[\w.$]+) = load ptr, ptr (%[\w.$]+)', body))
     args = re.search(r'@py_obj_isinstance\(ptr (%[\w.$]+), ptr (%[\w.$]+)\)', body)
     operand_slot = canonical_pointer(loads[args[1]], aliases)
     classinfo_slot = canonical_pointer(loads[args[2]], aliases)
-    assert 'isinstance.operand' in operand_slot
+    assert 'value.addr' in operand_slot
+    assert '@pcc_gc_borrowed_lease_acquire(ptr ' + operand_slot + ')' in body
     assert 'isinstance.classinfo' in classinfo_slot
     takes = [value for value, slot in re.findall(
         r'(%[\w.$]+) = call ptr \(ptr, i64\) @pcc_gc_take_pinned_slot\(ptr (%[\w.$]+),',

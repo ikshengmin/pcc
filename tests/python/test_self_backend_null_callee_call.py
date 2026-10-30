@@ -22,7 +22,7 @@ from pcc.backend.macho_exec import link_executable
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.self_backend_parse import parse_self_backend_module
 
-_IS_ARM64_DARWIN = os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+_IS_ARM64_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 
 _LIBRARY_IR = (
     'target triple = "arm64-apple-darwin"\n'

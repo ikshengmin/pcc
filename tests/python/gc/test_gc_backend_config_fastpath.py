@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GC_BACKEND_PY = _REPO_ROOT / "pcc" / "runtime" / "py" / "py_gc_backend.py"
 _GC_PUBLIC_COLLECTION_PY = (
@@ -158,14 +160,64 @@ def test_hot_gc_paths_reuse_init_config_backend_value() -> None:
     note_alloc = _function_source(
         "pcc_gc_note_alloc", _GC_INCREMENTAL_CONCURRENT_SCHEDULER_PY
     )
-    marker = "backend: i64 = pcc_gc_config_ensure()"
-    assert marker in note_alloc
-    assert "pcc_gc_config_ensure()" not in note_alloc.split(marker, 1)[1]
+    assert note_alloc.count("pcc_gc_config_ensure()") == 1
 
     frame_leave = _function_source("pcc_gc_note_frame_leave", _GC_FRAME_REGISTRY_PY)
     marker = "backend: i64 = gc_backend_current()"
     assert marker in frame_leave
     assert "gc_backend_current()" not in frame_leave.split(marker, 1)[1]
+
+
+
+@pytest.mark.parametrize("initialized", (False, True))
+@pytest.mark.parametrize("backend", range(5))
+def test_note_alloc_reuses_ready_config_and_initializes_once(initialized, backend):
+    memory = {
+        "pcc_gc_config_initialized": int(initialized),
+        "pcc_gc_backend_selected": backend if initialized else 99,
+        # The allocation count is the offset-8 field of the caller's shard.
+        ("pcc_gc_metric_shards", 3 * 128 + 8): 7,
+        "pcc_gc_debt_bytes": 100,
+        "pcc_gc_backend4_auto_step_pending": 0,
+    }
+    events = []
+
+    def initialize():
+        events.append("initialize")
+        return backend
+
+    def store(address, offset, value, *order):
+        memory[address] = value
+
+    def rmw(operation, address, offset, value, order):
+        assert operation == "add"
+        old = memory[(address, offset)]
+        memory[(address, offset)] = old + value
+        return old
+
+    namespace = {
+        "i64": int,
+        "global_addr": lambda name: name,
+        "load_i32": lambda address, offset: memory[address],
+        "atomic_load_i64": lambda address, offset, order: memory[address],
+        "store_i32": store,
+        "atomic_store_i32": store,
+        "atomic_rmw_i64": rmw,
+        "pcc_gc_metric_shard": lambda: 3 * 128,
+        "pcc_gc_config_ensure": initialize,
+        "pcc_gc_maybe_start_cms_worker": lambda: events.append("start"),
+        "pcc_gc_cms_note_alloc": lambda size: events.append(("allocate", size)),
+        "pcc_gc_tracing_debt_threshold": lambda: 50,
+    }
+    source = _function_source("pcc_gc_note_alloc", _GC_INCREMENTAL_CONCURRENT_SCHEDULER_PY)
+    exec(compile(source, str(_GC_INCREMENTAL_CONCURRENT_SCHEDULER_PY), "exec"), namespace)
+    namespace["pcc_gc_note_alloc"](37)
+    expected = [] if initialized else ["initialize"]
+    if backend:
+        expected += ["start", ("allocate", 37)]
+    assert events == expected
+    assert memory[("pcc_gc_metric_shards", 3 * 128 + 8)] == 8
+    assert memory["pcc_gc_backend4_auto_step_pending"] == int(backend == 4)
 
 
 def test_gc1_auto_step_uses_selected_backend_without_exported_query() -> None:
@@ -187,8 +239,8 @@ def test_py_obj_hot_paths_use_steady_state_backend_fastpath() -> None:
     inlined_hot_functions = (
         "pcc_gc_load_ptr",
         "pcc_gc_store_ptr",
-        "py_incref",
-        "py_decref",
+        "_py_incref_prepare",
+        "_py_decref_prepare",
     )
     inline_markers = (
         'load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0',
@@ -200,6 +252,16 @@ def test_py_obj_hot_paths_use_steady_state_backend_fastpath() -> None:
         for marker in inline_markers:
             assert marker in body, name
         assert "backend: int = _gc_backend_fast()" not in body, name
+
+    for name in ("py_incref", "py_decref"):
+        entry = _function_source(name, _PY_OBJ_PY)
+        tail_name = "_" + name + "_checked_tail"
+        assert tail_name + "(o)" in entry
+        assert "pcc_gc_backend()" not in entry
+        tail = _function_source(tail_name, _PY_OBJ_PY)
+        assert "if _gc_backend_fast() != 0:" in tail
+        assert "_" + name + "_prepare(o, prepared)" in tail
+        assert "pcc_gc_backend()" not in tail
 
     helper_hot_functions = (
         "pcc_gc_release",

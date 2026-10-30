@@ -4,11 +4,19 @@ from pcc.frontends.c.passes.ssa_bootstrap import SSABootstrapPass
 from pcc.frontends.c.ssa import SSAPhi
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def test_ssa_bootstrap_pass_builds_supported_functions():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int choose(int x, int a, int b) {
             int y = a;
@@ -44,7 +52,7 @@ def test_ssa_bootstrap_pass_builds_supported_functions():
 def test_ssa_bootstrap_pass_records_skipped_unsupported_functions():
     # Use a goto/label pattern the SSA builder explicitly rejects;
     # Switch is now lowered through SSA.
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int dispatch(int n) {
             if (n) goto out;
@@ -69,7 +77,7 @@ def test_ssa_bootstrap_pass_records_skipped_unsupported_functions():
 
 
 def test_ssa_bootstrap_pass_skips_functions_with_static_local_storage():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int flip(void) {
             static int x = 0;
@@ -95,7 +103,7 @@ def test_ssa_bootstrap_pass_skips_functions_with_static_local_storage():
 
 
 def test_ssa_bootstrap_pass_skips_functions_with_nonlocal_assignment_targets():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int g;
 
@@ -125,7 +133,7 @@ def test_ssa_bootstrap_pass_skips_functions_with_nonlocal_assignment_targets():
 
 
 def test_ssa_bootstrap_pass_builds_short_circuit_condition_functions():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int helper(void);
 
@@ -151,7 +159,7 @@ def test_ssa_bootstrap_pass_builds_short_circuit_condition_functions():
 
 
 def test_ssa_bootstrap_pass_builds_short_circuit_value_expressions():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int helper(void);
 
@@ -176,7 +184,7 @@ def test_ssa_bootstrap_pass_builds_short_circuit_value_expressions():
 
 def test_ssa_bootstrap_pass_builds_local_struct_with_field_access():
     """Phase 4 MVP: local struct-value with field access builds via stack alloca."""
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         struct S { int arr[10]; };
         int f(int n) {
@@ -197,7 +205,7 @@ def test_ssa_bootstrap_pass_builds_local_struct_with_field_access():
 
 def test_ssa_bootstrap_pass_rejects_struct_value_call_argument():
     """Phase 4 MVP: passing a struct-alloca local by value to a call."""
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         struct S { int v; };
         int helper(struct S s);
@@ -226,7 +234,7 @@ def test_ssa_bootstrap_pass_rejects_struct_value_call_argument():
 def test_ssa_bootstrap_pass_builds_scalar_struct_copy_assignment():
     """Phase 4 MVP: scalar-only struct-to-struct copy (`s2 = s1`) is now
     supported as a field-by-field load/store chain."""
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         struct S { int v; };
         int f(int n) {
@@ -250,7 +258,7 @@ def test_ssa_bootstrap_pass_builds_scalar_struct_copy_assignment():
 def test_ssa_bootstrap_pass_builds_array_field_struct_copy():
     """Phase 4 MVP: struct-to-struct copy now extends to array fields
     via unrolled indexed load/store."""
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         struct S { int arr[3]; };
         int f(int n) {
@@ -274,7 +282,7 @@ def test_ssa_bootstrap_pass_builds_array_field_struct_copy():
 def test_ssa_bootstrap_pass_rejects_struct_value_return():
     """Phase 4 MVP: `return s` on a struct-alloca local needs value copy
     we don't yet model, so reject."""
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         struct S { int v; };
         struct S f(int n) {
@@ -300,7 +308,7 @@ def test_ssa_bootstrap_pass_rejects_struct_value_return():
 
 
 def test_ssa_bootstrap_pass_skips_nested_short_circuit_value_expressions():
-    ast = _PARSER.parse(
+    ast = _get_parser().parse(
         """
         int helper(void);
 

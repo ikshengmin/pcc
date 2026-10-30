@@ -13,17 +13,34 @@ from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_bindi
 _I32 = ir.IntType(32)
 
 
-def live_import_attribute_store(host, target):
+def rooted_attribute_store(host, target):
     # Keep the existing proven managed-provider cell+dictionary writer.
     # Other imported object receivers must use their actual current value.
-    return live_import_expr_binding(host, target.obj) and not (
-        isinstance(target.obj, Name)
-        and target.obj.ident in getattr(host, "_native_module_aliases", {})
+    if live_import_expr_binding(host, target.obj):
+        module_name = None
+        if isinstance(target.obj, Name):
+            module_name = getattr(host, "_native_module_aliases", {}).get(target.obj.ident)
+        info = (host._native_module_exports or {}).get(module_name, {}).get(target.name)
+        if info is None or info.get("kind") not in ("module_global", "constant"):
+            # Functions and other attributes have no managed value cell.
+            # Their actual module/object namespace owns a replacement value.
+            return True
+    if isinstance(target.obj, Name):
+        return False
+    # A computed receiver can produce a new owner and can run callbacks while
+    # evaluating. Root the RHS first, then the receiver, and retire both on
+    # normal and exceptional exits. Native values keep their existing field
+    # lowering; CPython handles keep their bridge-specific lifetime protocol.
+    return not (
+        getattr(host, "_freestanding_module", False)
+        or host._expr_looks_cpython(target.obj)
+        or host._expr_returns_unsafe_raw_pointer(target.obj)
+        or host._is_valueclass_payload_type(target.obj.ty)
     )
 
 
-def emit_live_import_attribute_store(host, target, value_root):
-    receiver = host._emit_slot_call_operand(target.obj, "import.store.receiver")
+def emit_rooted_attribute_store(host, target, value_root):
+    receiver = host._emit_slot_call_operand(target.obj, "attribute.store.receiver")
     previous = host._current_try_err_block()
     error = previous if previous is not None else host._ensure_fn_err_exit()
     saved_cpy = host._cpy_operand_cleanup_block
@@ -506,15 +523,15 @@ class AttrStoreLoweringMixin:
             self._class_attr_runtime_state[(info.name, runtime_attr_name)] = state
 
     def _emit_attr_store(self, target: Attr, value_expr: Expr) -> None:
-        if live_import_attribute_store(self, target):
-            value_root = self._emit_slot_call_operand(value_expr, "import.store.value")
+        if rooted_attribute_store(self, target):
+            value_root = self._emit_slot_call_operand(value_expr, "attribute.store.value")
             previous = self._current_try_err_block()
             error = previous if previous is not None else self._ensure_fn_err_exit()
             saved_cpy = self._cpy_operand_cleanup_block
             self._try_err_block = self._slot_call_cleanup_block((value_root,), error)
             self._cpy_operand_cleanup_block = self._try_err_block
             try:
-                emit_live_import_attribute_store(self, target, value_root)
+                emit_rooted_attribute_store(self, target, value_root)
                 self._release_slot_call_roots((value_root,))
             finally:
                 self._try_err_block = previous

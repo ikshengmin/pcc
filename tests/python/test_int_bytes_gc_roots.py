@@ -319,7 +319,7 @@ def decode(value, order, sign):
 
 _GC3_SOURCE = r'''
 import gc
-from pcc.extern import c_abi_export, c_obj
+from pcc.extern import c_abi_export, c_obj, c_int64, extern
 from pcc.unsafe import ptr_to_int, load_i32, store_i32, load_i64, global_addr
 
 @c_abi_export("bytes_gc_address")
@@ -338,9 +338,11 @@ def legacy_pin(value: c_obj, enabled: int) -> None:
     else:
         store_i32(value, 12, old & ~64)
 
+lease_count_quiescent = extern("pcc_gc_foreign_lease_count_quiescent", (), c_int64)
+
 @c_abi_export("bytes_gc_active_leases")
 def active_leases() -> int:
-    return load_i64(global_addr("pcc_gc_foreign_lease_active"), 0)
+    return lease_count_quiescent()
 
 def fresh_order(word):
     return ("@" + word)[1:]

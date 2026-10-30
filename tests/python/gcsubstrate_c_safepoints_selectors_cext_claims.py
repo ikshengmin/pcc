@@ -31,7 +31,11 @@ def test_gc_alloc_polls_thread_gate_without_non_threaded_gc_step():
 def test_python_codegen_emits_thread_safepoint_at_loop_backedges_and_function_entry():
     core_src = CORE_HELPERS.read_text(encoding="utf-8")
     assert "def _emit_thread_safepoint" in core_src
-    assert 'self.runtime["pcc_thread_safepoint"]' in core_src
+    # Runtime library code polls pcc_thread_safepoint; compiled program code
+    # polls the application gate, where a moving collector may relocate.
+    assert 'poll = "pcc_thread_safepoint"' in core_src
+    assert 'poll = "pcc_thread_safepoint_gate"' in core_src
+    assert "self.builder.call(self.runtime[poll], [])" in core_src
     core_poll = core_src.split("def _emit_thread_safepoint", 1)[1].split(
         "def _alloca_in_entry", 1
     )[0]
@@ -46,11 +50,18 @@ def test_python_codegen_emits_thread_safepoint_at_loop_backedges_and_function_en
         "self.loop_stack.append((latch_bb, end_bb, self._loop_finally_base()))"
         in while_src
     )
-    assert "self._emit_thread_safepoint()" in while_src
+    # Loop latches poll at an application gate, which is the thread poll
+    # followed by the automatic-collection check.
+    assert "self._emit_application_safepoint()" in while_src
+    application = core_src.split("def _emit_application_safepoint", 1)[1].split("def ", 1)[0]
+    assert application.lstrip('(self) -> None:').lstrip().split("\n", 2)[1].strip() == "self._emit_thread_safepoint()"
     assert "self.builder.branch(cond_bb)" in while_src
 
     for_src = FOR_LOOP_LOWERING.read_text(encoding="utf-8")
-    assert for_src.count("self._emit_thread_safepoint()") >= 8
+    assert (
+        for_src.count("self._emit_thread_safepoint()")
+        + for_src.count("self._emit_application_safepoint()")
+    ) >= 8
     for marker in [
         '"for.cpy.latch"',
         '"for.obj.latch"',
@@ -63,7 +74,9 @@ def test_python_codegen_emits_thread_safepoint_at_loop_backedges_and_function_en
     user_src = USER_FUNCTION_LOWERING.read_text(encoding="utf-8")
     assert "def _low_builder_thread_safepoint" in user_src
     assert '"pcc_thread_safepoint"' in user_src
-    assert "self._emit_thread_safepoint()" in user_src
+    # A user function polls at its entry gate (thread poll, then the
+    # automatic-collection check).
+    assert "self._emit_application_safepoint()" in user_src
     low_poll = user_src.split("def _emit_thread_safepoint_poll_llvm", 1)[1].split(
         "def _low_builder_branch", 1
     )[0]
@@ -447,7 +460,12 @@ def test_colored_relocation_selector_polls_after_graph_unlock_in_c_and_strict():
     )[1].split(
         '@c_abi_export("pcc_gc_relocation_selector_add_candidate_node")', 1
     )[0]
-    assert "(flags & (64 | 2048 | 8192 | 524288))" in strict_score
+    # Forwarded, relocation-target and dying objects are never candidates,
+    # nor is an address-pinned one (the pin table, not the header bit).
+    assert (
+        "(flags & (2048 | 8192 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0"
+        in strict_score
+    )
     assert 'global_load_ptr("pcc_gc_relocation_set_head")' not in strict_score
     assert 'global_load_ptr("pcc_gc_backend4_remembered_slots_head")' not in (
         strict_score
@@ -737,6 +755,7 @@ def test_colored_relocation_page_selector_polls_only_after_releasing_graph_lock(
             #include <stdio.h>
 
             extern int64_t pcc_gc_backend4_select_relocation_pages(int64_t);
+            extern void pcc_gc_set_mark_color(PyObject *obj, int64_t color);
 
             static int64_t worker_ready;
             static int64_t worker_result;
@@ -764,6 +783,9 @@ def test_colored_relocation_page_selector_polls_only_after_releasing_graph_lock(
                 for (int i = 0; i < 32; i++) {
                     objects[i] = py_list_new(0);
                     if (objects[i] == 0) return 5;
+                    /* Relocation admits only what a mark has reached; a
+                     * completed mark leaves these live objects black. */
+                    pcc_gc_set_mark_color(objects[i], 32);
                 }
 
                 PccThreadHandle *worker = 0;
@@ -854,6 +876,7 @@ def test_colored_relocation_object_drain_polls_only_after_releasing_graph_lock(
             #include <stdio.h>
 
             extern int64_t pcc_gc_backend4_select_relocation_pages(int64_t);
+            extern void pcc_gc_set_mark_color(PyObject *obj, int64_t color);
 
             static int64_t worker_ready;
             static int64_t worker_result;
@@ -878,6 +901,9 @@ def test_colored_relocation_object_drain_polls_only_after_releasing_graph_lock(
                 for (int i = 0; i < 32; i++) {
                     objects[i] = py_list_new(0);
                     if (objects[i] == 0) return 5;
+                    /* Relocation admits only what a mark has reached; a
+                     * completed mark leaves these live objects black. */
+                    pcc_gc_set_mark_color(objects[i], 32);
                 }
                 if (pcc_gc_backend4_select_relocation_pages(2) != 32) {
                     return 6;
@@ -958,6 +984,7 @@ def test_colored_relocation_page_drain_polls_only_after_releasing_graph_lock(
             #include <stdio.h>
 
             extern int64_t pcc_gc_backend4_select_relocation_pages(int64_t);
+            extern void pcc_gc_set_mark_color(PyObject *obj, int64_t color);
 
             static int64_t worker_ready;
             static int64_t worker_result;
@@ -982,6 +1009,9 @@ def test_colored_relocation_page_drain_polls_only_after_releasing_graph_lock(
                 for (int i = 0; i < 32; i++) {
                     objects[i] = py_list_new(0);
                     if (objects[i] == 0) return 5;
+                    /* Relocation admits only what a mark has reached; a
+                     * completed mark leaves these live objects black. */
+                    pcc_gc_set_mark_color(objects[i], 32);
                 }
                 if (pcc_gc_backend4_select_relocation_pages(2) != 32) {
                     return 6;
@@ -1355,7 +1385,10 @@ def test_generational_owner_referent_promotion_uses_bounded_logical_slot_worklis
         / "py"
         / "freestanding_gc_object_nodes.py"
     ).read_text(encoding="utf-8")
-    assert "malloc(80)" in strict_nodes
+    # 88 bytes: the 80-byte node plus the root-registration count at 80;
+    # the promotion worklist stays out of the per-object node.
+    assert "malloc(88)" in strict_nodes
+    assert "store_i64(node, 80, 0)" in strict_nodes
     assert "malloc(120)" not in strict_nodes
     assert "pcc_py_gc_minor_graph_lock()" in strict_drain
     assert "pcc_py_gc_minor_graph_unlock()" in strict_drain
@@ -1547,19 +1580,38 @@ def test_graph_lock_outermost_ownership_is_one_no_park_lease():
     strict_lock = strict.split("def pcc_py_gc_minor_graph_lock() -> None:", 1)[
         1
     ].split('@c_abi_export("pcc_py_gc_minor_graph_unlock")', 1)[0]
-    strict_cas = strict_lock.index("atomic_cas_i32(")
-    strict_registration = strict_lock.index("pcc_current_thread_id()")
-    strict_enter = strict_lock.index("pcc_thread_no_park_enter()")
-    strict_depth = strict_lock.index("store_i32(depth_slot, 0, 1)")
-    assert strict_registration < strict_cas < strict_enter < strict_depth
+    # The acquisition is the thread kernel's: the outermost one registers the
+    # thread, takes the word and then raises the no-park depth together with
+    # the lock's own depth, in the kernel's one thread state word.
+    assert "pcc_thread_graph_lock_acquire(" in strict_lock
+    kernel = (
+        RUNTIME_DIR / "py" / "freestanding_thread_kernel_pthread.py"
+    ).read_text(encoding="utf-8")
+    kernel_enter = kernel.split(
+        "def pcc_thread_graph_lock_acquire(lock_word) -> None:", 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_release")', 1)[0]
+    strict_registration = kernel_enter.index("pcc_current_thread_id()")
+    strict_cas = kernel_enter.index("atomic_cas_i32(lock_word")
+    strict_enter = kernel_enter.index("store_i64(state_slot, 0, state + 16777217)")
+    assert strict_registration < strict_cas < strict_enter
+    # The outermost release frees the word first; a deferred tripwire is
+    # handed back before the no-park exit, which the caller then performs
+    # after reporting it.
+    kernel_release = kernel.split(
+        "def pcc_thread_graph_lock_release(lock_word) -> int:", 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_depth")', 1)[0]
+    strict_physical = kernel_release.index('atomic_store_i32(lock_word, 0, 0, "release")')
+    strict_handback = kernel_release.index("return 1", strict_physical)
+    strict_own_exit = kernel_release.index("pcc_thread_safepoint()", strict_handback)
+    assert strict_physical < strict_handback < strict_own_exit
     strict_unlock = strict.split(
         "def pcc_py_gc_minor_graph_unlock() -> None:", 1
     )[1]
-    strict_physical = strict_unlock.index("atomic_store_i32(")
+    strict_release = strict_unlock.index("pcc_thread_graph_lock_release(")
     strict_deferred = strict_unlock.index(
-        "_finish_deferred_tripwire()", strict_physical
+        "_finish_deferred_tripwire()", strict_release
     )
     strict_exit = strict_unlock.index(
         "pcc_thread_no_park_exit()", strict_deferred
     )
-    assert strict_physical < strict_deferred < strict_exit
+    assert strict_release < strict_deferred < strict_exit

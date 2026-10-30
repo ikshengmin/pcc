@@ -20,9 +20,11 @@ def _fake_platform(tmp_path, monkeypatch):
     events = []
     lock = threading.Lock()
 
-    def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel=None):
+    def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel=None,
+            observe_stage1=False):
         with lock:
             events.append((list(command), dict(env), rss_limit, native, timeout))
+        assert observe_stage1 == (Path(log_path).name == "stage1.log" and not native)
         log_path = Path(log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if "pcc.frontends.python.owned_runtime_build" in command:
@@ -64,6 +66,9 @@ def test_all_gc_chains_build_runtime_and_stage1_once_and_verify_each_gc(tmp_path
 
 def test_separate_gc_gates_reuse_one_shared_preparation(tmp_path, monkeypatch):
     events = _fake_platform(tmp_path, monkeypatch)
+    # Exercise mocked provisioning only after replacing platform.run.
+    # The real guard and the enclosing launcher environment remain unchanged.
+    monkeypatch.delenv("PCC_TEST_NO_NATIVE_PROVISIONING", raising=False)
     for backend in ("0", "1"):
         assert platform.run_from_shared(backend, tmp_path / ("gc" + backend))["qualified"]
     assert sum("pcc.frontends.python.owned_runtime_build" in event[0] for event in events) == 1

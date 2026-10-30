@@ -41,6 +41,9 @@ void pcc_py_gc_minor_graph_unlock(void){if(--lock_depth)lock_errors++;}
 void pcc_thread_safepoint(void){polls++;if(lock_depth)lock_errors++;}
 int64_t pcc_current_thread_id(void){return 1;}
 int64_t pcc_threads_enabled(void){return threads;}
+/* This isolated harness never owns a stopped-world epoch. Threaded cases must
+ * retain the original registered-scan path, not the epoch-seed shortcut. */
+int64_t pcc_thread_world_stop_epoch_held(void){return -1;}
 static uint64_t hash(uint64_t h,uint64_t x){return (h^x)*1099511628211ULL;}
 static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
 int main(int argc,char **argv){

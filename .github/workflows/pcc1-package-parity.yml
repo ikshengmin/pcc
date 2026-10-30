@@ -4,13 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       full_chain:
-        description: "Linux/Windows: run every collector's Stage2/Stage3 fixed point after Stage1"
+        description: "Run fixed points once: Linux/Windows producer chains; macOS integration pytest"
         type: boolean
         default: false
+      pytest_selection:
+        description: "Complete pytest groups (both by default); full_chain requires not integration for non-Mac producers, with macOS integration mandatory"
+        type: choice
+        options: [both, integration, not integration]
+        default: both
   push:
     branches: [master]
     paths:
       - "pcc/**"
+      - "tests/**"
       - "hatch_build.py"
       - "pyproject.toml"
       - "tests/python/test_package_*.py"
@@ -27,7 +33,15 @@ on:
       - "tests/python/test_stage2_export_capture.py"
       - "tests/python/test_aarch64_call_target_reuse.py"
       - "tests/python/test_x86_jump_threading.py"
+      - "tests/python/test_aarch64_stackmap_emission_retirement.py"
       - "tests/python/test_aarch64_stackmap_plan_ownership.py"
+      - "tests/python/test_worker_estimate_ratio_fold.py"
+      - "tests/python/test_root_leave_identity_ledger.py"
+      - "tests/python/test_float_callback_movement_protocol.py"
+      - "tests/python/test_shared_pinned_return_cleanup.py"
+      - "scripts/regen_l1_codegen_static_methods.py"
+      - "tests/python/test_macho_coarse_link_timing.py"
+      - "tests/python/test_macho_sign_phase_timing.py"
       - "tests/python/test_native_func_top_level_identity.py"
       - "tests/python/test_owned_elf_assembler_dispatch.py"
       - "tests/python/test_platform_machine_provider.py"
@@ -55,6 +69,11 @@ on:
       - "tests/python/test_gc_phase_attribution.py"
       - "tests/python/test_gc_phase_counter_widths.py"
       - "tests/python/test_gc_mark_color_atomic.py"
+      - "tests/python/test_tuple_owned_root_factory.py"
+      - "tests/python/test_fixed_tuple_literal.py"
+      - "tests/python/test_fixed_call_argument_tuple.py"
+      - "tests/python/test_dict_materialization_owners.py"
+      - "tests/python/test_slot_call_operand_roots.py"
       - "tests/python/test_x86_64_windows_packed_stackmaps.py"
       - "tests/python/test_direct_indexed_worker_validation.py"
       - "tests/python/test_windows_symbol_immediates.py"
@@ -195,6 +214,14 @@ on:
       - "tests/python/test_native_float_callback_movement.py"
       - "tests/python/test_owned_fdopen_provider.py"
       - "tests/python/owned_regression_support.py"
+      - "tests/python/test_bound_find_protocol.py"
+      - "tests/python/test_find_runtime_slot_adapters.py"
+      - "tests/python/test_dyn_find_dispatch.py"
+      - "tests/python/test_str_method_slot_models.py"
+      - "tests/python/test_str_len_protocol.py"
+      - "tests/python/test_set_call_slot_roots.py"
+      - "tests/test_ci_native_find_protocol.py"
+      - "scripts/ci_native_find_protocol.py"
       - "tests/python/test_object_type_identity.py"
       - "tests/python/test_super_call_result_roots.py"
       - "tests/python/test_dict_method_result_ownership.py"
@@ -233,6 +260,12 @@ on:
       - "tests/python/test_native_ordering_semantics.py"
       - "tests/python/test_user_ordering_exhaustion.py"
       - "scripts/ci_stage1_artifact_export.py"
+      - "scripts/ci_pytest_markers.py"
+      - "tests/python/test_pcc_bootstrap_full.py"
+      - "tests/test_ci_stage1_bundle.py"
+      - "scripts/ci_stage1_bundle.py"
+      - "tests/test_ci_pytest_markers.py"
+      - "docs/pytest-markers.md"
       - "tests/test_ci_stage1_artifact_export.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
@@ -258,6 +291,7 @@ on:
   pull_request:
     paths:
       - "pcc/**"
+      - "tests/**"
       - "hatch_build.py"
       - "pyproject.toml"
       - "tests/python/test_package_*.py"
@@ -274,7 +308,15 @@ on:
       - "tests/python/test_stage2_export_capture.py"
       - "tests/python/test_aarch64_call_target_reuse.py"
       - "tests/python/test_x86_jump_threading.py"
+      - "tests/python/test_aarch64_stackmap_emission_retirement.py"
       - "tests/python/test_aarch64_stackmap_plan_ownership.py"
+      - "tests/python/test_worker_estimate_ratio_fold.py"
+      - "tests/python/test_root_leave_identity_ledger.py"
+      - "tests/python/test_float_callback_movement_protocol.py"
+      - "tests/python/test_shared_pinned_return_cleanup.py"
+      - "scripts/regen_l1_codegen_static_methods.py"
+      - "tests/python/test_macho_coarse_link_timing.py"
+      - "tests/python/test_macho_sign_phase_timing.py"
       - "tests/python/test_native_func_top_level_identity.py"
       - "tests/python/test_owned_elf_assembler_dispatch.py"
       - "tests/python/test_platform_machine_provider.py"
@@ -302,6 +344,11 @@ on:
       - "tests/python/test_gc_phase_attribution.py"
       - "tests/python/test_gc_phase_counter_widths.py"
       - "tests/python/test_gc_mark_color_atomic.py"
+      - "tests/python/test_tuple_owned_root_factory.py"
+      - "tests/python/test_fixed_tuple_literal.py"
+      - "tests/python/test_fixed_call_argument_tuple.py"
+      - "tests/python/test_dict_materialization_owners.py"
+      - "tests/python/test_slot_call_operand_roots.py"
       - "tests/python/test_x86_64_windows_packed_stackmaps.py"
       - "tests/python/test_direct_indexed_worker_validation.py"
       - "tests/python/test_windows_symbol_immediates.py"
@@ -442,6 +489,14 @@ on:
       - "tests/python/test_native_float_callback_movement.py"
       - "tests/python/test_owned_fdopen_provider.py"
       - "tests/python/owned_regression_support.py"
+      - "tests/python/test_bound_find_protocol.py"
+      - "tests/python/test_find_runtime_slot_adapters.py"
+      - "tests/python/test_dyn_find_dispatch.py"
+      - "tests/python/test_str_method_slot_models.py"
+      - "tests/python/test_str_len_protocol.py"
+      - "tests/python/test_set_call_slot_roots.py"
+      - "tests/test_ci_native_find_protocol.py"
+      - "scripts/ci_native_find_protocol.py"
       - "tests/python/test_object_type_identity.py"
       - "tests/python/test_super_call_result_roots.py"
       - "tests/python/test_dict_method_result_ownership.py"
@@ -480,6 +535,12 @@ on:
       - "tests/python/test_native_ordering_semantics.py"
       - "tests/python/test_user_ordering_exhaustion.py"
       - "scripts/ci_stage1_artifact_export.py"
+      - "scripts/ci_pytest_markers.py"
+      - "tests/python/test_pcc_bootstrap_full.py"
+      - "tests/test_ci_stage1_bundle.py"
+      - "scripts/ci_stage1_bundle.py"
+      - "tests/test_ci_pytest_markers.py"
+      - "docs/pytest-markers.md"
       - "tests/test_ci_stage1_artifact_export.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
@@ -509,24 +570,60 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
+  ci-plan:
+    name: Validate one fixed-point owner and complete pytest selection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      markers: ${{ steps.plan.outputs.markers }}
+    steps:
+      - name: Reject duplicate fixed-point ownership before any build
+        id: plan
+        shell: python {0}
+        env:
+          FULL_CHAIN: ${{ inputs.full_chain && 'true' || 'false' }}
+          PYTEST_SELECTION: ${{ inputs.pytest_selection || 'both' }}
+        run: |
+          import json, os
+          selection = os.environ['PYTEST_SELECTION']
+          assert selection in ('both', 'integration', 'not integration')
+          if os.environ['FULL_CHAIN'] == 'true' and selection != 'not integration':
+              raise SystemExit('full_chain=true requires pytest_selection="not integration": '
+                               'Linux/Windows producers own the real five-GC Stage2/3 fixed point in that explicit mode; '
+                               'macOS keeps its platform-local later-stage owner and integration remainder. '
+                               'Use full_chain=false (default) for both complete pytest groups; '
+                               'platform-local owners run the real later stages without a second Stage1 build.')
+          markers = ['not integration', 'integration'] if selection == 'both' else [selection]
+          if os.environ['FULL_CHAIN'] == 'true':
+              print('Fixed-point owners: Linux/Windows producers; mandatory macOS local owner and integration remainder. '
+                    'The explicit non-integration selection prevents duplicate Linux/Windows chains only.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('markers=' + json.dumps(markers) + '\n')
+
   macos-pcc0-regressions:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: macOS arm64 focused pcc0 native regressions
     runs-on: macos-15
     timeout-minutes: 25
     # Separate from Stage1: these exact programs use a threaded/atomic runtime.
     # Stage1 has its own runtime and deadline, independent of these tests.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            **/uv.lock
+            **/requirements*.txt
 
       - name: Install dependencies
         run: uv sync --dev
@@ -553,7 +650,7 @@ jobs:
 
       - name: Preserve Mac regression receipts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-pcc0-regression-receipts
           retention-days: 7
@@ -563,21 +660,26 @@ jobs:
           path: build/macos-regressions/evidence/
 
   macos-pcc0-float-doc-regressions:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: macOS arm64 pcc0 float and class-doc regressions
     runs-on: macos-15
     timeout-minutes: 25
     # Independent of the existing regression and Stage1 jobs.
     # Build a source-matched threaded/atomic runtime within this job's own cap.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            **/uv.lock
+            **/requirements*.txt
 
       - name: Install dependencies
         run: uv sync --dev
@@ -604,7 +706,7 @@ jobs:
 
       - name: Preserve float and class-doc receipts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-pcc0-float-doc-receipts
           retention-days: 7
@@ -614,21 +716,26 @@ jobs:
           path: build/macos-float-doc/evidence/
 
   macos-pcc0-indexed-split:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: macOS arm64 pcc0 indexed-stage bridge gate
     runs-on: macos-15
     timeout-minutes: 25
     # Real host child/object and compiler-owned helper lowering evidence.
     # No runtime build or native helper execution is claimed by this gate.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            **/uv.lock
+            **/requirements*.txt
 
       - name: Install dependencies
         run: uv sync --dev
@@ -669,7 +776,7 @@ jobs:
 
       - name: Preserve indexed-stage receipts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-pcc0-indexed-split-receipts
           retention-days: 7
@@ -678,6 +785,7 @@ jobs:
           path: build/macos-indexed-split/evidence/
 
   worker-prior-preflight:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: Worker prior and changed-module gate / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     # Separate hosted runners: no needs, artifact download or shared job-level
@@ -699,15 +807,19 @@ jobs:
           - { platform: linux-aarch64, runner: ubuntu-24.04-arm }
           - { platform: windows-x86_64, runner: windows-2022 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            **/uv.lock
+            **/requirements*.txt
 
       - name: Install locked development dependencies
         run: uv sync --frozen --dev
@@ -768,7 +880,7 @@ jobs:
 
       - name: Preserve independent preflight evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: worker-prior-preflight-${{ matrix.platform }}
           retention-days: 7
@@ -791,14 +903,15 @@ jobs:
             build/worker-prior-preflight/windows-exit-native/tests/**/metadata.exe
 
   windows-rss-publication:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: Windows RSS publication with a held reader
     runs-on: windows-2022
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
@@ -811,6 +924,7 @@ jobs:
         run: python -m pytest --noconftest -o "addopts=" -x -n6 --dist=loadgroup -vv --tb=short tests/python/test_worker_resource_publication.py tests/python/test_worker_resource_reader.py tests/python/test_worker_resource_publisher.py tests/python/test_worker_resource_native_windows.py tests/python/test_worker_resource_windows_filesystem.py
 
   other-platform-native-wheel:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: Native wheel / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
@@ -828,10 +942,10 @@ jobs:
           - { platform: linux-aarch64, runner: ubuntu-24.04-arm, docker_platform: linux/arm64 }
           - { platform: windows-x86_64, runner: windows-2022 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
@@ -839,7 +953,11 @@ jobs:
         run: python -m pip install build hatchling
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            **/uv.lock
+            **/requirements*.txt
 
       - name: Install locked development dependencies
         run: uv sync --frozen --dev
@@ -847,10 +965,10 @@ jobs:
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
         run: uv run --frozen --no-sync python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_x86_jump_threading.py tests/python/test_owned_elf_assembler_dispatch.py tests/python/test_elf_arm_branch_slot_defaults.py tests/python/test_gc_phase_attribution.py tests/python/test_gc_phase_counter_widths.py tests/test_ci_native_object_regressions.py tests/test_ci_native_ordering_gate.py tests/python/test_user_ordering_exhaustion.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_gc4_copy_page_probe_native.py tests/python/test_gc_relocation_membership_lifecycle.py tests/python/test_gc_remembered_membership_lifecycle.py tests/python/test_gc_remembered_membership_native.py tests/python/test_owned_runtime_pass_prefix.py tests/python/test_pipeline_ir_split.py tests/python/test_pipeline_ir_frame_maps.py tests/python/test_x86_64_branch_syntax_cache.py tests/python/test_x86_64_instruction_encoding_cache.py tests/python/test_x86_64_instruction_encoding_cache_lowering.py tests/python/test_x86_64_operand_cache.py' || '' }}
 
-      # A push qualifies Stage1 and the native canary under all five
-      # collectors. Stage2 codegen alone needs ~66k-116k pcc1 task-s today
-      # (8-14x Stage1 per module, docs/status.md), beyond this 6 h job; run
-      # the Stage2/Stage3 fixed point by manual dispatch with full_chain.
+      # Stage1 is built once. The local five-node owner below exposes later
+      # stages before unrelated postchecks. It and integration remainder share
+      # the original 1800s envelope; visibility is not a performance/coverage PASS.
+      # Explicit full_chain keeps its existing exclusive producer owner.
       - name: Build Stage1 and run the five-collector native canary
         id: platform_qualification
         env:
@@ -944,19 +1062,20 @@ jobs:
               output.write("archive=" + str(verified) + "\nready=true\n")
               output.write("source_sha256=" + source["source_sha256"] + "\n")
 
-      - name: Export the admitted Linux x86-64 Stage1 identity
+      - name: Export the admitted native Stage1 identity
         id: stage1_export
-        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outputs.ready == 'true' }}
+        if: ${{ !cancelled() && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outputs.ready == 'true' }}
         env:
           PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
           PCC_STAGE1_EXPORT_SOURCE_SHA256: ${{ steps.platform_runtime.outputs.source_sha256 }}
         # Retain the existing bytes before unrelated later gates can fail.
         # This package claims Stage1 identity, not complete qualification.
-        run: uv run --frozen --no-sync python scripts/ci_stage1_artifact_export.py --runtime-archive "$PCC_RUNTIME_ARCHIVE" --source-sha256 "$PCC_STAGE1_EXPORT_SOURCE_SHA256"
+        run: uv run --frozen --no-sync python scripts/ci_stage1_artifact_export.py --platform ${{ matrix.platform }}
 
-      - name: Preserve the existing Linux x86-64 Stage1 bundle
-        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.stage1_export.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+      - name: Preserve the existing native Stage1 bundle
+        id: stage1_bundle
+        if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
         with:
           name: stage1-native-${{ matrix.platform }}-${{ github.sha }}-${{ github.run_attempt }}
           retention-days: 7
@@ -966,14 +1085,32 @@ jobs:
             build/stage1-native-export/stage1-native.tar.gz
             build/stage1-native-export/manifest.json
 
+      # One integration budget, not 1800 seconds per collector. Same-run
+      # immutable Stage1 bytes are admitted in place; no native provisioning.
+      - name: Stage2 to Stage3 / five original bootstrap owners
+        id: bootstrap_owner
+        if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' && !inputs.full_chain && inputs.pytest_selection != 'not integration' }}
+        run: uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration --partition bootstrap --in-place --platform ${{ matrix.platform }} --bundle build/stage1-native-export --out build/bootstrap-owner
+
+      - name: Preserve platform-local bootstrap owner and consumed budget
+        if: ${{ !cancelled() && (steps.bootstrap_owner.outcome == 'success' || steps.bootstrap_owner.outcome == 'failure') }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: bootstrap-owner-${{ matrix.platform }}-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: build/bootstrap-owner
+
       - name: Verify the compiled sibling platform machine provider
+        id: machine_provider
         if: ${{ !cancelled() && steps.platform_runtime.outputs.ready == 'true' }}
         env:
           PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
           PCC_TEST_NO_NATIVE_PROVISIONING: "1"
         run: uv run --frozen --no-sync python -m pytest -x -q --junitxml=build/worker-prior-gate/platform-machine-provider.xml tests/python/test_platform_machine_provider.py
 
-      - name: Verify GC4 relocation with the existing single-thread runtime
+      - name: Verify GC4 relocation with one mutator in the admitted threaded runtime
+        id: gc4_relocation
         if: ${{ !cancelled() && startsWith(matrix.platform, 'linux-') && steps.platform_runtime.outputs.ready == 'true' }}
         timeout-minutes: 6
         shell: uv run --frozen --no-sync python {0}
@@ -993,16 +1130,17 @@ jobs:
           from scripts.ci_worker_size_prior_gate import run_pytest
 
           # Exact native execution, including after the canary fails. Reuse
-          # the verified archive; do not rebuild or substitute a threaded one.
+          # the verified threaded/atomic archive; do not rebuild or substitute it.
           # This is host-pcc0 C emission, not a native-pcc1 compiler result.
           run_pytest(
-              Path("build/worker-prior-gate"), "gc4-single-thread-relocation",
+              Path("build/worker-prior-gate"), "gc4-single-mutator-relocation",
               ["tests/python/test_gc_relocation_sweep_verdict.py::"
-               "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_thread"],
+               "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator"],
               os.environ.copy(), integration=True, timeout=300,
           )
 
       - name: Verify native object ownership and cleanup with the existing runtime
+        id: native_objects
         # A terminal Stage1 attempt is enough to reuse its admitted runtime.
         # Missing admission is a hard failure in this separate pcc0 gate.
         if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
@@ -1018,6 +1156,7 @@ jobs:
         run: uv run --frozen --no-sync python scripts/ci_native_object_regressions.py --out-dir build/worker-prior-gate
 
       - name: Verify native ordering with the existing runtime
+        id: native_ordering
         # This is host-pcc0-emitted execution, not a pcc1 compiler result.
         # Admission/receipt failures remain failures; no runtime is rebuilt.
         if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
@@ -1033,14 +1172,65 @@ jobs:
         run: uv run --frozen --no-sync python scripts/ci_native_ordering_gate.py --out-dir build/worker-prior-gate
 
       - name: Verify the new pcc1 on native prior worker shapes
+        if: ${{ !cancelled() && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outcome == 'success' && steps.stage1_export.outcome == 'success' && steps.stage1_bundle.outcome == 'success' && steps.machine_provider.outcome == 'success' && (steps.gc4_relocation.outcome == 'success' || steps.gc4_relocation.outcome == 'skipped') && steps.native_objects.outcome == 'success' && steps.native_ordering.outcome == 'success' }}
+        id: native_prior
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1
 
+      - name: Verify bound find with the existing pcc0 and pcc1 runtime
+        id: bound_find
+        # Prior retains its original budget and runs first. Its failure does
+        # not suppress this separate shape qualification after Stage1 passes.
+        if: ${{ !cancelled() && steps.platform_qualification.outcome == 'success' }}
+        timeout-minutes: 6
+        env:
+          PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+          PCC_NO_AUTO_PCC1: "1"
+          PCC_WITH_THREADS: "1"
+          PCC_REFCOUNT_KIND: "atomic"
+          PCC_PYTEST_AUTO_CLEAN: "0"
+          UV_PYTHON_DOWNLOADS: "never"
+        run: uv run --frozen --no-sync python scripts/ci_native_find_protocol.py --out-dir build/worker-prior-gate
+
       - name: Preserve platform qualification evidence
+        id: qualification_evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bootstrap-${{ matrix.platform }}
           path: |
+            build/platform-bootstrap/**/receipt.json
+            build/platform-bootstrap/**/failure.json
+            build/platform-bootstrap/**/progress.json
+            build/platform-bootstrap/gc0/stage2.log
+            build/platform-bootstrap/gc0/stage2.resources.jsonl
+            build/platform-bootstrap/gc0/stage2.windows-job.json
+            build/platform-bootstrap/gc0/stage3.log
+            build/platform-bootstrap/gc0/stage3.resources.jsonl
+            build/platform-bootstrap/gc0/stage3.windows-job.json
+            build/platform-bootstrap/gc1/stage2.log
+            build/platform-bootstrap/gc1/stage2.resources.jsonl
+            build/platform-bootstrap/gc1/stage2.windows-job.json
+            build/platform-bootstrap/gc1/stage3.log
+            build/platform-bootstrap/gc1/stage3.resources.jsonl
+            build/platform-bootstrap/gc1/stage3.windows-job.json
+            build/platform-bootstrap/gc2/stage2.log
+            build/platform-bootstrap/gc2/stage2.resources.jsonl
+            build/platform-bootstrap/gc2/stage2.windows-job.json
+            build/platform-bootstrap/gc2/stage3.log
+            build/platform-bootstrap/gc2/stage3.resources.jsonl
+            build/platform-bootstrap/gc2/stage3.windows-job.json
+            build/platform-bootstrap/gc3/stage2.log
+            build/platform-bootstrap/gc3/stage2.resources.jsonl
+            build/platform-bootstrap/gc3/stage2.windows-job.json
+            build/platform-bootstrap/gc3/stage3.log
+            build/platform-bootstrap/gc3/stage3.resources.jsonl
+            build/platform-bootstrap/gc3/stage3.windows-job.json
+            build/platform-bootstrap/gc4/stage2.log
+            build/platform-bootstrap/gc4/stage2.resources.jsonl
+            build/platform-bootstrap/gc4/stage2.windows-job.json
+            build/platform-bootstrap/gc4/stage3.log
+            build/platform-bootstrap/gc4/stage3.resources.jsonl
+            build/platform-bootstrap/gc4/stage3.windows-job.json
             build/platform-qualification/**/*.log
             build/platform-qualification/**/*.json
             build/platform-qualification/**/*.jsonl
@@ -1058,16 +1248,19 @@ jobs:
       # a 10-minute budget that a Stage1 build cannot fit. GITHUB_ENV reaches
       # only later steps, so the handoff is its own step.
       - name: Hand the Stage1 pcc1 to the wheel build
+        if: ${{ !cancelled() && steps.native_prior.outcome == 'success' && steps.bound_find.outcome == 'success' && steps.qualification_evidence.outcome == 'success' }}
+        id: wheel_handoff
         run: uv run --frozen --no-sync python scripts/ci_stage1_compiler.py
 
       - name: Build this machine's native wheel
+        if: ${{ !cancelled() && steps.wheel_handoff.outcome == 'success' }}
         id: build
         run: python -m build --wheel --no-isolation --outdir dist
 
       # The images install the wheel on the requires-python floor (3.13);
       # every other step runs the interpreter .python-version names.
       - name: Install and execute the Linux wheel inside Docker
-        if: startsWith(matrix.platform, 'linux-')
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && startsWith(matrix.platform, 'linux-') }}
         shell: bash
         run: |
           docker info --format '{{.OSType}} {{.Architecture}}'
@@ -1079,7 +1272,7 @@ jobs:
             python scripts/ci_native_wheel_gate.py dist
 
       - name: Install and execute the Windows wheel inside Docker
-        if: matrix.platform == 'windows-x86_64'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.platform == 'windows-x86_64' }}
         shell: pwsh
         run: |
           $service = Get-Service docker -ErrorAction SilentlyContinue
@@ -1096,6 +1289,7 @@ jobs:
         run: python scripts/ci_native_wheel_gate.py dist
 
   pcc1-package-parity:
+    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}
     name: macOS arm64 native pcc1 and installed wheel
     runs-on: macos-15
     # 20 min runtime + up to 120 min Stage1 + the existing 60 min allowance
@@ -1119,7 +1313,7 @@ jobs:
       # Keep phase/module timing in the retained process stderr on timeout.
       PCC_PY_FRONTEND_WORKER_TIMING: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Require macOS arm64 self-backend runner
         run: |
@@ -1127,39 +1321,129 @@ jobs:
           test "$(uname -m)" = "arm64"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            **/uv.lock
+            **/requirements*.txt
 
       - name: Install dependencies
         run: uv sync --frozen --dev
 
       - name: Build current pcc1
+        id: mac_stage1
         env:
           # Opt in only this Stage1 build; the bridge gate runs independently.
           PCC_HOST_INDEXED_PROCESS_SPLIT: "1"
           PCC_MACHO_LINK_PHASE_EVENTS: "1"
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1
 
+      - name: Export the admitted native Stage1 identity
+        id: stage1_export
+        if: ${{ !cancelled() && steps.mac_stage1.outcome == 'success' }}
+        run: uv run --frozen --no-sync python scripts/ci_stage1_artifact_export.py --platform macos-arm64
+
+      - name: Preserve the existing native Stage1 bundle
+        id: stage1_bundle
+        if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: stage1-native-macos-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            build/stage1-native-export/stage1-native.tar.gz
+            build/stage1-native-export/manifest.json
+
+      # One integration budget, not 1800 seconds per collector. Same-run
+      # immutable Stage1 bytes are admitted in place; no native provisioning.
+      - name: Stage2 to Stage3 / five original bootstrap owners
+        id: bootstrap_owner
+        if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' && (inputs.full_chain || inputs.pytest_selection != 'not integration') }}
+        run: uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration --partition bootstrap --in-place --platform macos-arm64 --bundle build/stage1-native-export --out build/bootstrap-owner
+
+      - name: Preserve platform-local bootstrap owner and consumed budget
+        if: ${{ !cancelled() && (steps.bootstrap_owner.outcome == 'success' || steps.bootstrap_owner.outcome == 'failure') }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: bootstrap-owner-macos-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: build/bootstrap-owner
+
       - name: Verify the new pcc1 on native prior worker shapes
+        if: ${{ !cancelled() && steps.mac_stage1.outcome == 'success' && steps.stage1_export.outcome == 'success' && steps.stage1_bundle.outcome == 'success' }}
+        id: native_prior
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1
 
+      - name: Verify bound find with the existing pcc0 and pcc1 runtime
+        id: bound_find
+        # Prior retains its original budget and runs first. Its failure does
+        # not suppress this separate shape qualification after Stage1 passes.
+        if: ${{ !cancelled() && steps.mac_stage1.outcome == 'success' }}
+        timeout-minutes: 6
+        env:
+          PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+          PCC_NO_AUTO_PCC1: "1"
+          PCC_WITH_THREADS: "1"
+          PCC_REFCOUNT_KIND: "atomic"
+          PCC_PYTEST_AUTO_CLEAN: "0"
+          UV_PYTHON_DOWNLOADS: "never"
+        run: uv run --frozen --no-sync python scripts/ci_native_find_protocol.py --out-dir build/worker-prior-gate
+
       - name: Preserve macOS bootstrap evidence
+        id: qualification_evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bootstrap-macos-arm64
           retention-days: 7
           if-no-files-found: warn
           path: |
+            build/bootstrap-pytest-self*/profile/stage*.result.json
+            build/bootstrap-pytest-self*/profile/stage*.process.*/result.json
+            build/bootstrap-pytest-self/profile/stage2.process.stdout
+            build/bootstrap-pytest-self/profile/stage2.process.stderr
+            build/bootstrap-pytest-self/profile/stage2.process.samples.tsv
+            build/bootstrap-pytest-self/profile/stage3.process.stdout
+            build/bootstrap-pytest-self/profile/stage3.process.stderr
+            build/bootstrap-pytest-self/profile/stage3.process.samples.tsv
+            build/bootstrap-pytest-self-gc1/profile/stage2.process.stdout
+            build/bootstrap-pytest-self-gc1/profile/stage2.process.stderr
+            build/bootstrap-pytest-self-gc1/profile/stage2.process.samples.tsv
+            build/bootstrap-pytest-self-gc1/profile/stage3.process.stdout
+            build/bootstrap-pytest-self-gc1/profile/stage3.process.stderr
+            build/bootstrap-pytest-self-gc1/profile/stage3.process.samples.tsv
+            build/bootstrap-pytest-self-gc2/profile/stage2.process.stdout
+            build/bootstrap-pytest-self-gc2/profile/stage2.process.stderr
+            build/bootstrap-pytest-self-gc2/profile/stage2.process.samples.tsv
+            build/bootstrap-pytest-self-gc2/profile/stage3.process.stdout
+            build/bootstrap-pytest-self-gc2/profile/stage3.process.stderr
+            build/bootstrap-pytest-self-gc2/profile/stage3.process.samples.tsv
+            build/bootstrap-pytest-self-gc3/profile/stage2.process.stdout
+            build/bootstrap-pytest-self-gc3/profile/stage2.process.stderr
+            build/bootstrap-pytest-self-gc3/profile/stage2.process.samples.tsv
+            build/bootstrap-pytest-self-gc3/profile/stage3.process.stdout
+            build/bootstrap-pytest-self-gc3/profile/stage3.process.stderr
+            build/bootstrap-pytest-self-gc3/profile/stage3.process.samples.tsv
+            build/bootstrap-pytest-self-gc4/profile/stage2.process.stdout
+            build/bootstrap-pytest-self-gc4/profile/stage2.process.stderr
+            build/bootstrap-pytest-self-gc4/profile/stage2.process.samples.tsv
+            build/bootstrap-pytest-self-gc4/profile/stage3.process.stdout
+            build/bootstrap-pytest-self-gc4/profile/stage3.process.stderr
+            build/bootstrap-pytest-self-gc4/profile/stage3.process.samples.tsv
             build/bootstrap/stage*.process.*/result.json
             build/bootstrap/stage*.process.*/samples.tsv
             build/bootstrap/stage*.process.*/target.stdout
             build/bootstrap/stage*.process.*/target.stderr
             build/bootstrap/stage*.process.*/result.json.worker-rss.tsv
+            build/bootstrap/stage*.process.*/result.json.process-rss.jsonl
             build/bootstrap/stage*.json
             build/worker-prior-gate/**/*.json
             build/worker-prior-gate/**/*.jsonl
@@ -1170,11 +1454,14 @@ jobs:
             build/worker-prior-gate/**/*.xml
 
       - name: Build, install, and execute the native wheel
+        if: ${{ !cancelled() && steps.native_prior.outcome == 'success' && steps.bound_find.outcome == 'success' && steps.qualification_evidence.outcome == 'success' }}
+        id: native_wheel
         run: |
           env -u LC_ALL uv run pytest -x -n0 -vv --tb=short -m integration \
             tests/integration/test_uv_pcc_project_environment.py::test_uv_installed_pcc_and_pcc1_share_private_overlay
 
       - name: Run pcc1 package parity hard gate
+        if: ${{ !cancelled() && steps.native_wheel.outcome == 'success' }}
         run: |
           env -u LC_ALL uv run pytest -x -q -n0 \
             tests/python/test_package_pcc1_parity_gate.py \
@@ -1189,3 +1476,113 @@ jobs:
             tests/python/test_package_wheel_repo.py \
             tests/python/test_package_build_plan.py \
             tests/python/test_package_array_core.py
+
+
+  pytest-markers:
+    name: Complete pytest / ${{ matrix.platform.id }} / ${{ matrix.marker }}
+    needs: [ci-plan, other-platform-native-wheel, pcc1-package-parity]
+    # A later prior/wheel failure does not invalidate a completed Stage1 export.
+    # Missing/failed exports fail download/admission; they are never a test pass.
+    if: ${{ !cancelled() && needs.ci-plan.result == 'success' }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        marker: ${{ fromJSON(needs.ci-plan.outputs.markers) }}
+        # Legacy full_chain belongs to non-Mac producers only. Keep the Mac
+        # integration remainder even in its explicit non-integration subset mode.
+        include: ${{ inputs.full_chain && fromJSON('[{"platform":{"id":"macos-arm64","runner":"macos-15"},"marker":"integration"}]') || fromJSON('[]') }}
+        platform:
+          - { id: macos-arm64, runner: macos-15 }
+          - { id: linux-x86_64, runner: ubuntu-24.04 }
+          - { id: linux-aarch64, runner: ubuntu-24.04-arm }
+          - { id: windows-x86_64, runner: windows-2022 }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download only this run attempt's native Stage1 input
+        uses: actions/download-artifact@v7
+        with:
+          name: stage1-native-${{ matrix.platform.id }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: build/pytest-marker-input
+
+      - name: Download this platform's original integration owner receipt
+        if: ${{ matrix.marker == 'integration' }}
+        uses: actions/download-artifact@v7
+        with:
+          name: bootstrap-owner-${{ matrix.platform.id }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: build/pytest-bootstrap-owner
+
+      # Immutable comparison source, never an executable baseline compiler.
+      - name: Refuse inherited Git runtime configuration before frozen checkout
+        shell: bash
+        run: |
+          for name in "${!GIT_CONFIG_@}"; do
+            case "$name" in
+              GIT_CONFIG_COUNT|GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*|GIT_CONFIG_PARAMETERS)
+                printf '%s\n' '::error::Inherited Git runtime configuration is present; refusing frozen-source checkout override.'
+                exit 1
+                ;;
+            esac
+          done
+
+      - uses: actions/checkout@v5
+        # Preserve the immutable blob's LF bytes without changing runner config.
+        # The preceding guard refuses to replace inherited runtime config pairs.
+        env:
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: "core.autocrlf"
+          GIT_CONFIG_VALUE_0: "false"
+          GIT_CONFIG_KEY_1: "core.eol"
+          GIT_CONFIG_VALUE_1: "lf"
+        with:
+          ref: 85b0e08cd28e143d87607a5cd76e8f7c350cabd7
+          path: build/pytest-marker-baseline
+          sparse-checkout: pcc/ir/optimization/integer_fold_contract.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install frozen test dependencies, not the project build hook
+        run: uv sync --frozen --dev --no-install-project
+
+      - name: Execute the complete marker selection with default six workers
+        env:
+          PCC_BUILD_BACKEND: self
+          PCC_RUNTIME_CC: pcc
+          PCC_RUNTIME_HIGH: py
+        run: uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker "${{ matrix.marker }}" ${{ matrix.marker == 'integration' && '--partition remainder --owner-report build/pytest-bootstrap-owner' || '' }} --platform ${{ matrix.platform.id }} --bundle build/pytest-marker-input --research-source build/pytest-marker-baseline --out "build/pytest-markers/${{ matrix.marker }}"
+
+      - name: Preserve executed node reports, gaps and failures
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pytest-marker-${{ matrix.platform.id }}-${{ matrix.marker }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/pytest-markers/**/receipt.json
+            build/pytest-markers/**/command.json
+            build/pytest-markers/**/result.json
+            build/pytest-markers/**/samples.tsv
+            build/pytest-markers/**/target.stdout
+            build/pytest-markers/**/*.resources.jsonl
+            build/pytest-markers/**/*.windows-job.json
+            build/pytest-markers/**/target.stderr
+            build/pytest-markers/**/live.jsonl
+            build/pytest-markers/**/pcc1-routing.jsonl
+            build/pytest-markers/**/junit.xml
+            build/pytest-markers/**/inventory-*.json
+            build/pytest-markers/**/configuration.json

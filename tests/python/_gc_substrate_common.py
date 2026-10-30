@@ -108,6 +108,16 @@ def _build_threaded_runtime(tmp_path: Path) -> Path:
 
 
 def _runtime_variant(kind: str, *, threaded: bool) -> tuple[Path, Path]:
+    explicit = os.environ.get(
+        "PCC_THREADED_RUNTIME_ARCHIVE" if threaded else "PCC_RUNTIME_ARCHIVE"
+    )
+    if explicit:
+        from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
+        archive, _manifest = _verified_test_runtime_archive(
+            explicit, threads=True if threaded else None, runtime_root=RUNTIME_DIR,
+        )
+        return RUNTIME_DIR, archive
     runtime = (
         cached_threaded_pcc_python_runtime()
         if threaded
@@ -127,32 +137,31 @@ def _compile_runtime_probe(
     extra_sources: tuple[Path, ...] = (),
     extra_compile_args: tuple[str, ...] = (),
 ) -> Path:
+    from tests.owned_runtime_c_fixture import link_c_harness_bounded
+
+    if extra_compile_args:
+        raise ValueError(
+            "owned runtime probe does not support host compiler arguments: "
+            + repr(extra_compile_args)
+        )
     runtime, archive = _runtime_variant(kind, threaded=threaded)
     source = tmp_path / f"{stem}_{kind}.c"
     executable = tmp_path / f"{stem}_{kind}"
     source.write_text(textwrap.dedent(source_text).lstrip(), encoding="utf-8")
-    command = [
-        os.environ.get("CC", "cc"),
-        "-std=c11",
-    ]
-    if threaded:
-        command.append("-pthread")
-    command.extend(extra_compile_args)
-    for include_dir in extra_include_dirs:
-        command.append(f"-I{include_dir}")
-    command.extend(str(extra_source) for extra_source in extra_sources)
-    command.extend(
-        [
-            f"-I{runtime / 'include'}",
-            f"-I{runtime / 'src'}",
-            str(source),
-            str(archive),
-            "-lm",
-            "-o",
-            str(executable),
-        ]
+    # This archive owns process entry, libc and TLS. A hosted cc link would
+    # mix its _start with the system CRT and omit owned link-time intrinsics.
+    build = link_c_harness_bounded(
+        source,
+        executable,
+        runtime_archive=archive,
+        extra_include_dirs=(
+            *(str(directory) for directory in extra_include_dirs),
+            str(runtime / "include"),
+            str(runtime / "src"),
+        ),
+        extra_sources=extra_sources,
+        timeout=60,
     )
-    build = subprocess.run(command, capture_output=True, text=True, timeout=60)
     assert build.returncode == 0, build.stdout + build.stderr
     return executable
 

@@ -216,6 +216,7 @@ def _owned_macho_link_in_process(
     tmp_out_path,
     link_profile_path=None,
     pcc_internal_input_manifest=None,
+    coordinator_timing=None,
 ) -> None:
     """Link with pcc's owned Mach-O toolchain in this process.
 
@@ -226,7 +227,7 @@ def _owned_macho_link_in_process(
     """
     from pcc.backend.arm64_asm_driver import assemble_file
     from pcc.backend.macho_exec import prepare_executable_object, link_prepared_executable
-    from pcc.backend.macho_codesign import parse_signature, build_signature
+    from pcc.backend.macho_codesign import parse_signature, _build_signature_prefix
     from pcc.backend.native_object import NativeObject, decode_packed_native_object
     from pcc.backend.macho_internal_inputs import read_internal_input_manifest
 
@@ -254,6 +255,9 @@ def _owned_macho_link_in_process(
         started = time.monotonic()
         phases = {"assemble_pool": 0.0, "decode_pco": 0.0, "prepare_link": 0.0,
                   "sign": 0.0, "validate": 0.0, "write": 0.0}
+        stage_started = 0
+        if coordinator_timing is not None:
+            stage_started = coordinator_timing.begin("macho_stage_inputs")
         objects = []
         if pcc_internal_input_manifest:
             if asm_path or pcc_asm_inputs or pcc_native_object_inputs:
@@ -277,6 +281,10 @@ def _owned_macho_link_in_process(
                 before_link = time.monotonic()
                 if phase_events is not None:
                     phase_events("prepare_inputs_begin")
+                prepare_started = 0
+                if coordinator_timing is not None:
+                    coordinator_timing.complete("macho_stage_inputs", stage_started)
+                    prepare_started = coordinator_timing.begin("macho_prepare_inputs")
                 pending = [prepare_executable_from_paths(
                     [path for _kind, path in ordered],
                     archive_paths=() if runtime_archive is None else (runtime_archive,),
@@ -286,6 +294,8 @@ def _owned_macho_link_in_process(
                     _phase_callback=phase_events,
                     _staged_rows=staged_rows,
                 )]
+                if coordinator_timing is not None:
+                    coordinator_timing.complete("macho_prepare_inputs", prepare_started)
                 if phase_events is not None:
                     phase_events("prepare_inputs_end")
                 native_count = len(ordered)
@@ -318,17 +328,35 @@ def _owned_macho_link_in_process(
                     archives.append(stream.read())
             before_link = time.monotonic()
             phases["decode_pco"] += (before_link - before_extras) * 1000.0
+            prepare_started = 0
+            if coordinator_timing is not None:
+                coordinator_timing.complete("macho_stage_inputs", stage_started)
+                prepare_started = coordinator_timing.begin("macho_prepare_inputs")
             # These inputs are private to this link invocation. Transfer them so
             # the merge can retire decoded graphs before constructing its result.
             if compact_budget is None:
-                pending = [prepare_executable_object(
-                    objects, archives=archives, _consume_inputs=True, _source_view=True,
-                )]
+                if coordinator_timing is None:
+                    pending = [prepare_executable_object(
+                        objects, archives=archives, _consume_inputs=True, _source_view=True,
+                    )]
+                else:
+                    pending = [prepare_executable_object(
+                        objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        coordinator_timing=coordinator_timing,
+                    )]
             else:
-                pending = [prepare_executable_object(
-                    objects, archives=archives, _consume_inputs=True, _source_view=True,
-                    compact_budget=compact_budget,
-                )]
+                if coordinator_timing is None:
+                    pending = [prepare_executable_object(
+                        objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        compact_budget=compact_budget,
+                    )]
+                else:
+                    pending = [prepare_executable_object(
+                        objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        compact_budget=compact_budget, coordinator_timing=coordinator_timing,
+                    )]
+            if coordinator_timing is not None:
+                coordinator_timing.complete("macho_prepare_inputs", prepare_started)
             import sys as execution_runtime
             if execution_runtime.implementation.name == "cpython":
                 if phase_events is not None:
@@ -343,6 +371,9 @@ def _owned_macho_link_in_process(
             elif event == "sign_end":
                 sign_times[1] += (time.monotonic() - sign_times[0]) * 1000.0
 
+        image_started = 0
+        if coordinator_timing is not None:
+            image_started = coordinator_timing.begin("macho_link_image")
         owned_output = False
         if windowed:
             import sys as execution_runtime
@@ -370,20 +401,37 @@ def _owned_macho_link_in_process(
                 if phase_events is not None:
                     phase_events("reference_link_begin")
         if not owned_output and compact_budget is None:
-            image = link_prepared_executable(
-                pending.pop(), entry="_main", phase_callback=link_phase,
-            )
+            if coordinator_timing is None:
+                image = link_prepared_executable(
+                    pending.pop(), entry="_main", phase_callback=link_phase,
+                )
+            else:
+                image = link_prepared_executable(
+                    pending.pop(), entry="_main", phase_callback=link_phase,
+                    coordinator_timing=coordinator_timing,
+                )
         elif not owned_output:
-            image = link_prepared_executable(
-                pending.pop(), entry="_main", phase_callback=link_phase,
-                compact_budget=compact_budget,
-            )
+            if coordinator_timing is None:
+                image = link_prepared_executable(
+                    pending.pop(), entry="_main", phase_callback=link_phase,
+                    compact_budget=compact_budget,
+                )
+            else:
+                image = link_prepared_executable(
+                    pending.pop(), entry="_main", phase_callback=link_phase,
+                    compact_budget=compact_budget, coordinator_timing=coordinator_timing,
+                )
         if not owned_output:
             import sys as execution_runtime
             if execution_runtime.implementation.name == "cpython":
                 if phase_events is not None:
                     phase_events("reference_link_end")
+        if coordinator_timing is not None:
+            coordinator_timing.complete("macho_link_image", image_started)
         before_validate = time.monotonic()
+        verify_started = 0
+        if coordinator_timing is not None:
+            verify_started = coordinator_timing.begin("macho_verify_signature")
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
             if phase_events is not None:
@@ -411,14 +459,19 @@ def _owned_macho_link_in_process(
                     2 * len(image) + signature.datasize,
                     label="owned Mach-O signature verification snapshot",
                 )
-        expected_signature = build_signature(
-            memoryview(image)[:signature.dataoff], identifier=signature.identifier,
+        expected_signature = _build_signature_prefix(
+            image, signature.dataoff, identifier=signature.identifier,
             exec_seg_base=signature.exec_seg_base, exec_seg_limit=signature.exec_seg_limit,
             exec_seg_flags=signature.exec_seg_flags,
         )
         if image[signature.dataoff:] != expected_signature:
             raise SelfBackendLinkError("owned linker produced stale signature page hashes")
+        if coordinator_timing is not None:
+            coordinator_timing.complete("macho_verify_signature", verify_started)
         before_write = time.monotonic()
+        write_started = 0
+        if coordinator_timing is not None:
+            write_started = coordinator_timing.begin("macho_write_image")
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
             if phase_events is not None:
@@ -431,6 +484,8 @@ def _owned_macho_link_in_process(
         os.chmod(temporary, 0o755)
         os.replace(temporary, str(tmp_out_path))
         finished = time.monotonic()
+        if coordinator_timing is not None:
+            coordinator_timing.complete("macho_write_image", write_started)
         import sys as execution_runtime
         if execution_runtime.implementation.name == "cpython":
             if phase_events is not None:
@@ -582,22 +637,41 @@ def run_link_command(
         link_profile_path=link_profile_path,
     ):
         log(verbose, "pcc link (in-process owned Mach-O): " + str(tmp_out_path))
-        _owned_macho_link_in_process(
-            asm_path=asm_path,
-            pcc_asm_inputs=tuple(str(path) for path in pcc_asm_inputs),
-            pcc_native_object_inputs=tuple(
-                str(path) for path in pcc_native_object_inputs
-            ),
-            runtime_archive=(
-                None if runtime_archive is None else str(runtime_archive)
-            ),
-            extra_link_inputs=tuple(
-                str(path) for path in (extra_link_inputs or ())
-            ),
-            tmp_out_path=str(tmp_out_path),
-            link_profile_path=link_profile_path,
-            pcc_internal_input_manifest=pcc_internal_input_manifest,
-        )
+        if coordinator_timing is None:
+            _owned_macho_link_in_process(
+                asm_path=asm_path,
+                pcc_asm_inputs=tuple(str(path) for path in pcc_asm_inputs),
+                pcc_native_object_inputs=tuple(
+                    str(path) for path in pcc_native_object_inputs
+                ),
+                runtime_archive=(
+                    None if runtime_archive is None else str(runtime_archive)
+                ),
+                extra_link_inputs=tuple(
+                    str(path) for path in (extra_link_inputs or ())
+                ),
+                tmp_out_path=str(tmp_out_path),
+                link_profile_path=link_profile_path,
+                pcc_internal_input_manifest=pcc_internal_input_manifest,
+            )
+        else:
+            _owned_macho_link_in_process(
+                asm_path=asm_path,
+                pcc_asm_inputs=tuple(str(path) for path in pcc_asm_inputs),
+                pcc_native_object_inputs=tuple(
+                    str(path) for path in pcc_native_object_inputs
+                ),
+                runtime_archive=(
+                    None if runtime_archive is None else str(runtime_archive)
+                ),
+                extra_link_inputs=tuple(
+                    str(path) for path in (extra_link_inputs or ())
+                ),
+                tmp_out_path=str(tmp_out_path),
+                link_profile_path=link_profile_path,
+                pcc_internal_input_manifest=pcc_internal_input_manifest,
+                coordinator_timing=coordinator_timing,
+            )
         if not os.path.isfile(tmp_out_path) or not os.access(tmp_out_path, os.X_OK):
             raise SelfBackendLinkError(
                 "owned in-process link produced no executable output"
@@ -877,8 +951,14 @@ def link_ir_texts_run(
     with open(asm_path, "w", encoding="utf-8") as stream:
         stream.write(asm_text)
     profile_end(profile, "link_self_asm_join_write", started)
+    link_input = asm_path
+    if not signature_owned_by_pcc:
+        from pcc.frontends.python.pipeline_self_backend_emit import write_aarch64_linux_reference_object
+        object_path = str(os.path.join(tmp, "self_backend.o"))
+        if write_aarch64_linux_reference_object(target_id, asm_text, object_path):
+            link_input = object_path
     tmp_out_path = out_path + ".tmp"
-    cmd = [cc, asm_path, *extra_link_inputs, "-o", tmp_out_path, "-lm"]
+    cmd = [cc, link_input, *extra_link_inputs, "-o", tmp_out_path, "-lm"]
     cmd.extend(extra_link_args)
     cmd.extend(native_extension_export_flags(export_pcc_capi))
     if sys.platform == "darwin" and needs_subsections_via_symbols:

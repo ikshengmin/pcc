@@ -18,6 +18,7 @@ come from the generated C-header-derived py_abi_constants module.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
 from pcc.extern import (
     extern,
     c_abi_export,
@@ -57,6 +58,7 @@ from pcc.unsafe import (
     global_addr,
     global_load_ptr,
     int_to_ptr,
+    atomic_load_i64,
     is_tagged_int,
     load_i8,
     load_i32,
@@ -95,6 +97,8 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
+pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
@@ -147,6 +151,7 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
+pcc_tuple_from_owned_roots_lease = extern("pcc_tuple_from_owned_roots_lease", (c_ptr, c_int64, c_ptr), c_int64)
 py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
@@ -895,7 +900,9 @@ def _rehash(d, new_capacity: int) -> int:
     if ptr_is_null(d) != 0 or new_capacity <= 0:
         return -1
     initial_backend: int = pcc_gc_backend()
-    if initial_backend == 0:
+    # The unlocked table swap is single-threaded only: another carrier may
+    # be reading the old table under the graph lock.
+    if initial_backend == 0 and pcc_threads_enabled() == 0:
         return _rehash_refcount_fast(d, new_capacity)
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, d)
@@ -1139,23 +1146,132 @@ def py_dict_set(d, key, value) -> None:
     if pcc_gc_backend() == 0:
         kind: int = _dict_fast0_key_kind(key)
         if kind != 0:
-            insert_slot = stack_alloc(8)
-            hash_val: int = _dict_fast0_hash(key, kind)
-            ix: int = _dict_probe_fast0(d, key, kind, hash_val, insert_slot)
-            if ix >= 0:
-                # ``d[k] = v`` keeps the stored key object; replace the value.
-                entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-                pcc_gc_store_ptr(
-                    d,
-                    ptr_add(entries, ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET),
-                    value,
-                )
-                return
-            if ix == -1:
-                target: int = load_i64(insert_slot, 0)
-                if target >= 0 and _dict_insert_fast0(d, key, value, target, hash_val) != 0:
+            # The unlocked probe and insert are single-threaded only.
+            if pcc_threads_enabled() == 0:
+                if _dict_set_fast0(d, key, value, kind) != 0:
                     return
+            elif _dict_set_gc0_locked(d, key, value, kind) != 0:
+                return
     _dict_rooted_op(d, key, value, 2, null())
+
+
+def _dict_set_fast0(d, key, value, kind: int) -> int:
+    """Single-threaded GC0 set for a str or tagged-int key; 0 if unhandled."""
+    insert_slot = stack_alloc(8)
+    hash_val: int = _dict_fast0_hash(key, kind)
+    ix: int = _dict_probe_fast0(d, key, kind, hash_val, insert_slot)
+    if ix >= 0:
+        # ``d[k] = v`` keeps the stored key object; replace the value.
+        entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
+        pcc_gc_store_ptr(
+            d,
+            ptr_add(entries, ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET),
+            value,
+        )
+        return 1
+    if ix == -1:
+        target: int = load_i64(insert_slot, 0)
+        if target >= 0 and _dict_insert_fast0(d, key, value, target, hash_val) != 0:
+            return 1
+    return 0
+
+
+def _dict_gc0_admitted_locked() -> int:
+    """The graph-locked GC0 retain applies: no switch, probe or log."""
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
+            or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
+            or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+        return 0
+    return 1
+
+
+def _dict_set_gc0_locked(d, key, value, kind: int) -> int:
+    """Threaded GC0 set for a str or tagged-int key in one graph transaction.
+
+    The probe runs no callback; the new value (and on insert the key) is
+    retained under the lock, and a replaced value is released after it,
+    where its finalizer may run. Returns 0 with the dict unchanged when the
+    rooted operation must decide (equality callbacks, no room, a refused
+    retain).
+    """
+    hash_val: int = _dict_fast0_hash(key, kind)
+    insert_slot = stack_alloc(8)
+    sources = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(sources, 0, key)
+    store_ptr(sources, C_POINTER_SIZE, value)
+    retained = stack_alloc(C_POINTER_SIZE)
+    released = null()
+    done: int = 0
+    pcc_py_gc_minor_graph_lock()
+    if _dict_gc0_admitted_locked() != 0:
+        ix: int = _dict_probe_fast0(d, key, kind, hash_val, insert_slot)
+        entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
+        if ix >= 0:
+            field = ptr_add(entries, ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET)
+            if ptr_eq(load_ptr(field, 0), value) != 0:
+                done = 1
+            elif pcc_gc_try_init_ptr_locked(retained, ptr_add(sources, C_POINTER_SIZE)) != 0:
+                released = load_ptr(field, 0)
+                store_ptr(field, 0, load_ptr(retained, 0))
+                done = 1
+        elif ix == -1:
+            target: int = load_i64(insert_slot, 0)
+            used: int = load_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+            if target >= 0 and used >= 0 and used < load_i64(d, PYDICTOBJECT_CAPACITY_OFFSET):
+                entry = ptr_add(entries, used * DICTENTRY_SIZE)
+                key_field = ptr_add(entry, DICTENTRY_KEY_OFFSET)
+                value_field = ptr_add(entry, DICTENTRY_VALUE_OFFSET)
+                store_ptr(key_field, 0, null())
+                store_ptr(value_field, 0, null())
+                if pcc_gc_try_init_ptr_locked(key_field, sources) != 0:
+                    if pcc_gc_try_init_ptr_locked(value_field, ptr_add(sources, C_POINTER_SIZE)) != 0:
+                        store_i64(entry, DICTENTRY_HASH_OFFSET, hash_val)
+                        store_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET, used + 1)
+                        store_i64(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), target * 8, used)
+                        store_i64(
+                            d, PYDICTOBJECT_ITEM_COUNT_OFFSET,
+                            load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET) + 1,
+                        )
+                        done = 2
+                    else:
+                        # Unpublished: take the retained key back out.
+                        released = load_ptr(key_field, 0)
+                        store_ptr(key_field, 0, null())
+    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(released) == 0:
+        py_decref(released)
+    if done == 2:
+        _maybe_grow(d)
+    if done != 0:
+        return 1
+    return 0
+
+
+def _dict_get_gc0_locked(d, key, kind: int, result_slot) -> int:
+    """Threaded GC0 lookup of a str or tagged-int key in one transaction.
+
+    Returns 1 with the found value retained in result_slot, 0 when the key
+    is absent, or -1 when the rooted operation must decide.
+    """
+    hash_val: int = _dict_fast0_hash(key, kind)
+    insert_slot = stack_alloc(8)
+    status: int = -1
+    pcc_py_gc_minor_graph_lock()
+    if _dict_gc0_admitted_locked() != 0:
+        ix: int = _dict_probe_fast0(d, key, kind, hash_val, insert_slot)
+        if ix >= 0:
+            field = ptr_add(
+                load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET),
+                ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET,
+            )
+            if ptr_is_null(load_ptr(field, 0)) == 0:
+                if pcc_gc_try_init_ptr_locked(result_slot, field) != 0:
+                    status = 1
+        elif ix == -1:
+            status = 0
+    pcc_py_gc_minor_graph_unlock()
+    return status
 
 
 @c_abi_export("py_dict_from_static_pairs")
@@ -1185,11 +1301,19 @@ def py_dict_from_static_pairs(pairs, count: int):
     # the zpage owner payload span.  Growth through the normal insert path is
     # a startup-only cost; the win here is the ~18x drop in *emitted* calls,
     # not in rehashing.
+    # The new dict is private until it is returned: GC0 inserts unlocked.
+    private0: int = 0
+    if pcc_gc_backend() == 0:
+        private0 = 1
     index: int = 0
     while index < count:
         key = load_ptr(pairs, index * 16)
         value = load_ptr(pairs, index * 16 + 8)
-        py_dict_set(d, key, value)
+        kind: int = 0
+        if private0 != 0:
+            kind = _dict_fast0_key_kind(key)
+        if kind == 0 or _dict_set_fast0(d, key, value, kind) == 0:
+            py_dict_set(d, key, value)
         index = index + 1
     return d
 
@@ -1336,18 +1460,28 @@ def py_dict_get(d, key):
     if pcc_gc_backend() == 0:
         kind: int = _dict_fast0_key_kind(key)
         if kind != 0:
-            insert_slot = stack_alloc(8)
-            ix: int = _dict_probe_fast0(
-                d, key, kind, _dict_fast0_hash(key, kind), insert_slot
-            )
-            if ix >= 0:
-                entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-                found = load_ptr(entries, ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET)
-                if ptr_is_null(found) == 0:
-                    py_incref(found)
-                    return found
-            elif ix == -1:
-                return null()
+            # The unlocked probe is single-threaded only.
+            if pcc_threads_enabled() == 0:
+                insert_slot = stack_alloc(8)
+                ix: int = _dict_probe_fast0(
+                    d, key, kind, _dict_fast0_hash(key, kind), insert_slot
+                )
+                if ix >= 0:
+                    entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
+                    found = load_ptr(entries, ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET)
+                    if ptr_is_null(found) == 0:
+                        py_incref(found)
+                        return found
+                elif ix == -1:
+                    return null()
+            else:
+                result_slot = stack_alloc(8)
+                store_ptr(result_slot, 0, null())
+                status: int = _dict_get_gc0_locked(d, key, kind, result_slot)
+                if status > 0:
+                    return load_ptr(result_slot, 0)
+                if status == 0:
+                    return null()
     return _dict_rooted_op(d, key, null(), 0, null())
 
 
@@ -1620,6 +1754,9 @@ pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_p
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
+pcc_gc_root_copy_owned_prepare_locked = extern("pcc_gc_root_copy_owned_prepare_locked", (c_ptr, c_ptr, c_ptr), c_int64)
+pcc_gc_store_root_plan_finish = extern("pcc_gc_store_root_plan_finish", (c_ptr,), c_void)
+py_list_append_from_slots = extern("py_list_append_from_slots", (c_ptr, c_ptr, c_int64), c_void)
 pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
@@ -1630,21 +1767,28 @@ py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
+pcc_gc_register_continuation_root_node = extern(
+    "pcc_gc_register_continuation_root_node", (c_ptr, c_ptr), c_ptr
+)
+pcc_gc_unregister_continuation_root_node = extern(
+    "pcc_gc_unregister_continuation_root_node", (c_ptr,), c_void
+)
+
+
 def _dict_slot_open(slots, tokens, handles, width: int) -> int:
-    # A frame registers only the slots its operation names: slot 0 holds the
-    # caller's suspended exception, the last slot the operation's own, and
-    # every registration costs a locked register/unregister pair.
+    # Root-group state in handles: an owning map in word 0, the checked node
+    # in word 1. Both live until close; registration always sees empty roots.
+    # The existing mapped-root visitor covers all collectors, including GC0
+    # with optional compiler-frame registration disabled.
     memset(slots, 0, width * C_POINTER_SIZE)
     memset(tokens, 0, width * C_POINTER_SIZE)
-    memset(handles, 0, width * C_POINTER_SIZE)
-    count: int = 0
-    while count < width:
-        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
-        if ptr_is_null(handle) != 0:
-            return count
-        store_ptr(handles, count * C_POINTER_SIZE, handle)
-        count = count + 1
-    return count
+    memset(handles, 0, 2 * C_POINTER_SIZE)
+    store_i32(handles, 0, width)
+    node = pcc_gc_register_continuation_root_node(handles, slots)
+    if ptr_is_null(node) != 0:
+        return 0
+    store_ptr(handles, C_POINTER_SIZE, node)
+    return width
 
 
 def _dict_slot_error(message) -> int:
@@ -1703,10 +1847,10 @@ def _dict_slot_close(slots, tokens, handles, count: int, suspended: int, width: 
             py_tls_exc_swap_slot(ptr_add(slots, last * C_POINTER_SIZE))
         else:
             py_tls_exc_swap_slot(slots)
-    index = 0
-    while index < count:
-        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
-        index = index + 1
+    if count != 0:
+        node = load_ptr(handles, C_POINTER_SIZE)
+        store_ptr(handles, C_POINTER_SIZE, null())
+        pcc_gc_unregister_continuation_root_node(node)
 
 
 # Read-only lookup shares the checked probe and copied-result owner.
@@ -2178,6 +2322,90 @@ def _dict_slot_update_protocol(slots, tokens) -> int:
     return 0
 
 
+# Exact update uses the same sixteen-cell operation frame as the mapping
+# protocol. Between the input owners and the error cell are twelve spare
+# owning roots. Store pairs in tuple element order so close's reverse walk
+# retires the same owners in the same order as the heap snapshot tuple.
+_DICT_SLOT_UPDATE_COUNT = 16
+_DICT_SLOT_UPDATE_DESTINATION = 1
+_DICT_SLOT_UPDATE_SOURCE = 2
+_DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY = 3
+_DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE = 2
+_DICT_SLOT_UPDATE_SNAPSHOT_PAIRS = 6
+
+
+def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
+    hashes = stack_alloc(_DICT_SLOT_UPDATE_SNAPSHOT_PAIRS * C_POINTER_SIZE)
+    key_plan = stack_alloc(256)
+    value_plan = stack_alloc(256)
+    status: int = 0
+    index: int = 0
+    output: int = 0
+    while status == 0 and output < count:
+        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY + output * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
+        value_index: int = key_index + 1
+        prepared: int = 0
+        key_token: int = 0
+        value_token: int = 0
+        pcc_py_gc_minor_graph_lock()
+        source = load_ptr(slots, _DICT_SLOT_UPDATE_SOURCE * C_POINTER_SIZE)
+        used: int = load_i64(source, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+        if index >= used:
+            status = -1
+        else:
+            entries = load_ptr(source, PYDICTOBJECT_ENTRIES_OFFSET)
+            offset: int = index * DICTENTRY_SIZE
+            if ptr_is_null(load_ptr(entries, offset + DICTENTRY_KEY_OFFSET)) == 0:
+                key_token = pcc_gc_root_copy_lease_prepare_locked(
+                    ptr_add(slots, key_index * C_POINTER_SIZE),
+                    ptr_add(entries, offset + DICTENTRY_KEY_OFFSET), 0, key_plan)
+                value_token = pcc_gc_root_copy_lease_prepare_locked(
+                    ptr_add(slots, value_index * C_POINTER_SIZE),
+                    ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), 0, value_plan)
+                prepared = 1
+                if key_token >= 0:
+                    store_i64(tokens, key_index * C_POINTER_SIZE, key_token)
+                if value_token >= 0:
+                    store_i64(tokens, value_index * C_POINTER_SIZE, value_token)
+                store_i64(hashes, output * C_POINTER_SIZE, load_i64(entries, offset + DICTENTRY_HASH_OFFSET))
+        pcc_py_gc_minor_graph_unlock()
+        if prepared != 0:
+            pcc_gc_root_copy_lease_finish(key_plan)
+            pcc_gc_root_copy_lease_finish(value_plan)
+            if key_token < 0 or value_token < 0:
+                status = -1
+            else:
+                output = output + 1
+            # Keep the owners in registered roots, but do not pin all
+            # children across the destination's callbacks. Later readers
+            # copy from these authoritative cells after any relocation.
+            release_index: int = value_index
+            while release_index >= key_index:
+                if pcc_gc_foreign_lease_release(
+                    ptr_add(slots, release_index * C_POINTER_SIZE),
+                    load_i64(tokens, release_index * C_POINTER_SIZE),
+                ) != 0:
+                    pcc_platform_abort()
+                    return -1
+                store_i64(tokens, release_index * C_POINTER_SIZE, 0)
+                release_index = release_index - 1
+        index = index + 1
+    index = 0
+    while status == 0 and index < output:
+        key_index: int = _DICT_SLOT_UPDATE_SNAPSHOT_FIRST_KEY + index * _DICT_SLOT_UPDATE_SNAPSHOT_PAIR_STRIDE
+        status = _dict_slot_set_bound(
+            ptr_add(slots, _DICT_SLOT_UPDATE_DESTINATION * C_POINTER_SIZE),
+            ptr_add(slots, key_index * C_POINTER_SIZE),
+            ptr_add(slots, (key_index + 1) * C_POINTER_SIZE),
+            1, load_i64(hashes, index * C_POINTER_SIZE), 0, null())
+        index = index + 1
+    # The enclosing close owns retirement, preserving its pending-exception
+    # protocol and keeping every snapshot value alive through all callbacks.
+    if status != 0:
+        return _dict_slot_error(cstr("dictionary changed during snapshot or snapshot transfer failed"))
+    return 0
+
+
 def _dict_slot_update_exact(slots, tokens) -> int:
     # Snapshot owning entries and their cached hashes before any destination
     # equality callbacks. This also handles updating a dictionary from itself.
@@ -2188,6 +2416,8 @@ def _dict_slot_update_exact(slots, tokens) -> int:
     pcc_py_gc_minor_graph_unlock()
     if count == 0:
         return 0
+    if count > 0 and count <= _DICT_SLOT_UPDATE_SNAPSHOT_PAIRS:
+        return _dict_slot_update_root_snapshot(slots, tokens, count)
     hashes = malloc(count * 8)
     if ptr_is_null(hashes) != 0:
         py_raise_owned(py_exc_new(19, cstr("dictionary update snapshot allocation failed")))
@@ -2263,13 +2493,13 @@ def _dict_slot_update_exact(slots, tokens) -> int:
 
 
 def _dict_slot_update_bound(dict_slot, source_slot, borrowed: int) -> int:
-    slots = stack_alloc(16 * C_POINTER_SIZE)
-    tokens = stack_alloc(16 * C_POINTER_SIZE)
-    handles = stack_alloc(16 * C_POINTER_SIZE)
-    count: int = _dict_slot_open(slots, tokens, handles, 16)
+    slots = stack_alloc(_DICT_SLOT_UPDATE_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_DICT_SLOT_UPDATE_COUNT * C_POINTER_SIZE)
+    handles = stack_alloc(_DICT_SLOT_UPDATE_COUNT * C_POINTER_SIZE)
+    count: int = _dict_slot_open(slots, tokens, handles, _DICT_SLOT_UPDATE_COUNT)
     suspended: int = 0
     status: int = -1
-    if count == 16:
+    if count == _DICT_SLOT_UPDATE_COUNT:
         py_tls_exc_swap_slot(slots)
         suspended = 1
         if borrowed != 0:
@@ -2294,7 +2524,7 @@ def _dict_slot_update_bound(dict_slot, source_slot, borrowed: int) -> int:
                 status = _dict_slot_update_protocol(slots, tokens)
     if status != 0:
         _dict_slot_error(cstr("dictionary update failed without an exception"))
-    _dict_slot_close(slots, tokens, handles, count, suspended, 16)
+    _dict_slot_close(slots, tokens, handles, count, suspended, _DICT_SLOT_UPDATE_COUNT)
     return status
 
 
@@ -2324,13 +2554,119 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_mode_lease_shard_index = extern("pcc_gc_mode_lease_shard_index", (c_ptr,), c_int64)
+pcc_gc_mode_lease_reserve_shard = extern("pcc_gc_mode_lease_reserve_shard", (c_int64,), c_int64)
+pcc_gc_mode_lease_release_shard = extern("pcc_gc_mode_lease_release_shard", (c_int64,), c_int64)
+pcc_tuple_item_can_participate_in_cycle = extern(
+    "pcc_tuple_item_can_participate_in_cycle", (c_ptr,), c_int64
+)
 define_global_i32("pcc_dict_materialize_borrowed_map", -1)
 define_global_i32("pcc_dict_materialize_result_map", 2)
 
 
-def _dict_materialize_entry(slots, tokens, index: int, key_plan, value_plan) -> int:
-    # Select a key/value pair from the actual current owning table under one
-    # graph transaction. No table address or borrowed child crosses unlock.
+def _dict_gc0_materialize(receiver, kind: int, output) -> int:
+    """GC0 eager keys/values/items without the slot frame.
+
+    GC0 never relocates and its cycle collector derives roots from reference
+    counts, so the counted references held here keep the private partial
+    list and pairs alive across allocation. One mode-lease reservation keeps
+    a backend switch out until return. Each entry is retained inside one
+    graph transaction by pcc_gc_try_init_ptr_locked, as a GC0 list append
+    retains its item. A retain it refuses releases everything built so far
+    and returns 0, and the caller runs the general protocol from the start.
+    Returns 1 with the new list in output, 0 when this path does not apply,
+    -1 with an exception after an allocation failure.
+    """
+    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+        return 0
+    shard: int = pcc_gc_mode_lease_shard_index(receiver)
+    if pcc_gc_mode_lease_reserve_shard(shard) != 0:
+        return 0
+    status: int = 1
+    # A switch may have completed between the gate and the reservation.
+    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+        status = 0
+    limit: int = 0
+    if status == 1:
+        pcc_py_gc_minor_graph_lock()
+        limit = load_i64(receiver, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+        pcc_py_gc_minor_graph_unlock()
+    out = null()
+    if status == 1:
+        # Capacity for every used entry: appends never grow the private list.
+        out = py_list_new(limit)
+        if ptr_is_null(out) != 0:
+            status = -1
+    pair = null()
+    index: int = 0
+    while status == 1 and index < limit:
+        if kind == _DICT_MATERIALIZE_ITEMS and ptr_is_null(pair) != 0:
+            pair = py_tuple_new(2)
+            if ptr_is_null(pair) != 0:
+                status = -1
+        if status == 1:
+            selected: int = 0
+            pcc_py_gc_minor_graph_lock()
+            # Reload the current table: it may have been replaced or shrunk.
+            if index < load_i64(receiver, PYDICTOBJECT_ENTRIES_USED_OFFSET):
+                entry = ptr_add(load_ptr(receiver, PYDICTOBJECT_ENTRIES_OFFSET), index * DICTENTRY_SIZE)
+                if ptr_is_null(load_ptr(entry, DICTENTRY_KEY_OFFSET)) == 0:
+                    length: int = load_i64(out, PYLISTOBJECT_LENGTH_OFFSET)
+                    destination = ptr_add(load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET), length * C_POINTER_SIZE)
+                    selected = 1
+                    if kind == _DICT_MATERIALIZE_ITEMS:
+                        pair_items = ptr_add(pair, PYTUPLEOBJECT_ITEMS_OFFSET)
+                        if pcc_gc_try_init_ptr_locked(pair_items, ptr_add(entry, DICTENTRY_KEY_OFFSET)) == 0:
+                            selected = -1
+                        elif pcc_gc_try_init_ptr_locked(
+                                ptr_add(pair_items, C_POINTER_SIZE),
+                                ptr_add(entry, DICTENTRY_VALUE_OFFSET)) == 0:
+                            selected = -1
+                        else:
+                            store_ptr(destination, 0, pair)
+                    else:
+                        field: int = DICTENTRY_KEY_OFFSET
+                        if kind == _DICT_MATERIALIZE_VALUES:
+                            field = DICTENTRY_VALUE_OFFSET
+                        if pcc_gc_try_init_ptr_locked(destination, ptr_add(entry, field)) == 0:
+                            selected = -1
+                    if selected == 1:
+                        store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
+            pcc_py_gc_minor_graph_unlock()
+            if selected < 0:
+                status = 0
+            elif selected == 1 and kind == _DICT_MATERIALIZE_ITEMS:
+                # The list owns the pair now; track it as tuple construction does.
+                if (pcc_tuple_item_can_participate_in_cycle(load_ptr(pair, PYTUPLEOBJECT_ITEMS_OFFSET)) != 0
+                        or pcc_tuple_item_can_participate_in_cycle(
+                            load_ptr(pair, PYTUPLEOBJECT_ITEMS_OFFSET + C_POINTER_SIZE)) != 0):
+                    py_gc_track(pair)
+                pcc_gc_publish_initialized(pair)
+                pair = null()
+        index = index + 1
+    # An unused or partly retained pair releases what it holds.
+    if ptr_is_null(pair) == 0:
+        py_decref(pair)
+    if status == 1:
+        store_ptr(output, 0, out)
+    elif ptr_is_null(out) == 0:
+        py_decref(out)
+    if status < 0 and py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("dictionary materialization: out of memory")))
+    if pcc_gc_mode_lease_release_shard(shard) != 0:
+        pcc_platform_abort()
+        return -1
+    return status
+
+
+def _dict_materialize_entry(slots, tokens, index: int, kind: int, key_plan, value_plan) -> int:
+    # Select only the required children from the actual current owning table
+    # under one graph transaction. Keys/values do not need an extra owner for
+    # the unused sibling; items still snapshots both sides before unlock.
+    # No table address or borrowed child crosses unlock.
     key_slot = ptr_add(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE)
     value_slot = ptr_add(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE)
     prepared: int = 0
@@ -2343,20 +2679,22 @@ def _dict_materialize_entry(slots, tokens, index: int, key_plan, value_plan) -> 
         offset: int = index * DICTENTRY_SIZE
         key_source = ptr_add(entries, offset + DICTENTRY_KEY_OFFSET)
         if ptr_is_null(load_ptr(key_source, 0)) == 0:
-            key_token = pcc_gc_root_copy_lease_prepare_locked(key_slot, key_source, 0, key_plan)
-            prepared = 1
-            if key_token >= 0:
-                store_i64(tokens, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE, key_token)
-                value_token = pcc_gc_root_copy_lease_prepare_locked(
-                    value_slot, ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), 0, value_plan)
-                prepared = 2
+            if kind != _DICT_MATERIALIZE_VALUES:
+                key_token = pcc_gc_root_copy_owned_prepare_locked(key_slot, key_source, key_plan)
+                prepared = 1
+                if key_token >= 0:
+                    store_i64(tokens, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE, key_token)
+            if key_token >= 0 and kind != _DICT_MATERIALIZE_KEYS:
+                value_token = pcc_gc_root_copy_owned_prepare_locked(
+                    value_slot, ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET), value_plan)
+                prepared = prepared | 2
                 if value_token >= 0:
                     store_i64(tokens, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE, value_token)
     pcc_py_gc_minor_graph_unlock()
-    if prepared > 0:
-        pcc_gc_root_copy_lease_finish(key_plan)
-    if prepared > 1:
-        pcc_gc_root_copy_lease_finish(value_plan)
+    if prepared & 1:
+        pcc_gc_store_root_plan_finish(key_plan)
+    if prepared & 2:
+        pcc_gc_store_root_plan_finish(value_plan)
     if key_token < 0 or value_token < 0:
         return _dict_slot_error(cstr("dictionary materialization item transfer failed"))
     return 1 if prepared != 0 else 0
@@ -2376,11 +2714,16 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
     pcc_py_gc_minor_graph_lock()
     limit: int = load_i64(load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE), PYDICTOBJECT_ENTRIES_USED_OFFSET)
     pcc_py_gc_minor_graph_unlock()
-    key_plan = stack_alloc(256)
-    value_plan = stack_alloc(256)
+    key_plan = stack_alloc(128)
+    value_plan = stack_alloc(128)
+    slot_stride: i64 = i64(C_POINTER_SIZE)
+    first_pair_source: i64 = i64(_DICT_MATERIALIZE_KEY)
+    pair_sources = stack_alloc(2 * C_POINTER_SIZE)
+    store_ptr(pair_sources, 0, ptr_add(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE))
+    store_ptr(pair_sources, C_POINTER_SIZE, ptr_add(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE))
     index: int = 0
     while index < limit:
-        selected: int = _dict_materialize_entry(slots, tokens, index, key_plan, value_plan)
+        selected: int = _dict_materialize_entry(slots, tokens, index, kind, key_plan, value_plan)
         if selected < 0:
             return -1
         if selected != 0:
@@ -2388,25 +2731,41 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
             if kind == _DICT_MATERIALIZE_VALUES:
                 item = _DICT_MATERIALIZE_VALUE
             elif kind == _DICT_MATERIALIZE_ITEMS:
-                store_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE, py_tuple_new(2))
-                if _dict_slot_adopt(slots, tokens, _DICT_MATERIALIZE_PAIR) != 0:
+                # Copying from the dictionary created two traced owners,
+                # without address leases. The existing token cleanup also
+                # keeps partial/error states balanced before moving them.
+                selected_index: i64 = i64(_DICT_MATERIALIZE_VALUE)
+                while selected_index >= first_pair_source:
+                    selected_slot = ptr_add(slots, selected_index * slot_stride)
+                    selected_token: int = load_i64(tokens, selected_index * slot_stride)
+                    if pcc_gc_foreign_lease_release(selected_slot, selected_token) != 0:
+                        pcc_platform_abort()
+                        return -1
+                    store_i64(tokens, selected_index * slot_stride, 0)
+                    selected_index -= 1
+                pair_token: int = pcc_tuple_from_owned_roots_lease(pair_sources, 2,
+                    ptr_add(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE))
+                if pair_token < 0:
                     return -1
-                py_tuple_set_item(load_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE), 0,
-                    load_ptr(slots, _DICT_MATERIALIZE_KEY * C_POINTER_SIZE))
-                if py_err_occurred() != 0:
-                    return -1
-                py_tuple_set_item(load_ptr(slots, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE), 1,
-                    load_ptr(slots, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE))
+                # Keep the constructor's protection through the retaining
+                # append; do not release and reacquire the same output lease.
+                store_i64(tokens, _DICT_MATERIALIZE_PAIR * C_POINTER_SIZE, pair_token)
                 if py_err_occurred() != 0:
                     return -1
                 item = _DICT_MATERIALIZE_PAIR
-            py_list_append(load_ptr(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE),
-                load_ptr(slots, item * C_POINTER_SIZE))
+            # The selected child remains in a traced owning slot. The append
+            # reads that slot inside its graph transaction, so no child raw
+            # address needs to survive allocation, lock waits or collection.
+            py_list_append_from_slots(ptr_add(slots, _DICT_MATERIALIZE_OUTPUT * C_POINTER_SIZE),
+                ptr_add(slots, item * C_POINTER_SIZE), 0)
             if py_err_occurred() != 0:
                 return -1
-            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_PAIR)
-            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_VALUE)
-            _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_KEY)
+            if kind == _DICT_MATERIALIZE_ITEMS:
+                _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_PAIR)
+            if kind == _DICT_MATERIALIZE_VALUES:
+                _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_VALUE)
+            if kind == _DICT_MATERIALIZE_KEYS:
+                _dict_slot_drop(slots, tokens, _DICT_MATERIALIZE_KEY)
         index = index + 1
     return 0
 
@@ -2445,6 +2804,13 @@ def _dict_materialize_raw(receiver, kind: int):
     # through entry. Once linked, the borrowed frame is the authoritative input
     # across scratch registration; it is never relabeled as a NEW reference.
     if not _ptr_is_dict(receiver):
+        return null()
+    fast = stack_alloc(C_POINTER_SIZE)
+    store_ptr(fast, 0, null())
+    fast_status: int = _dict_gc0_materialize(receiver, kind, fast)
+    if fast_status > 0:
+        return load_ptr(fast, 0)
+    if fast_status < 0:
         return null()
     borrowed = stack_alloc(C_POINTER_SIZE)
     store_ptr(borrowed, 0, receiver)

@@ -8,6 +8,7 @@ accept it, and that malformed tables are refused.
 from __future__ import annotations
 
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -175,3 +176,118 @@ def test_format_policy_accepts_only_two_and_three(monkeypatch):
     monkeypatch.setenv(wire.PRECISE_STACKMAP_FORMAT_ENV, "4")
     with pytest.raises(PreciseStackMapError):
         wire.precise_stackmap_runtime_format()
+
+
+@pytest.mark.parametrize("arch, register", [(ARCH_AARCH64, 29), (ARCH_X86_64, 6)])
+def test_transcoding_matches_fixed_wire_bytes_and_requested_remap_order(arch, register):
+    payload = encode_stack_map(_map(arch, register))
+    offsets = _address_offsets(payload)
+    runtime, remapped = transcode_runtime_table(payload, tuple(reversed(offsets)))
+    # Independent wire oracle: all six sections, including both rare rows.
+    expected = b"".join((
+        struct.pack("<8sHBBIIIIIII", wire.MAGIC, 3, arch, 8, 2, 6, 4, 4, 2, 0, 0),
+        struct.pack("<QQIIII", 11, 0, 200, 48, 0, 4),
+        struct.pack("<QQIIII", 29, 0, 96, 32, 4, 2),
+        *(struct.pack("<II", *row) for row in ((0, 0), (20, 1), (40, 1), (60, 2), (12, 1), (44, 3))),
+        *(struct.pack("<II", *row) for row in ((0, 0), (0, 2), (2, 1), (3, 1))),
+        *(struct.pack("<i", word) for word in (-16, -23, -8, -31)),
+        struct.pack("<IBBHII", 3, SAFEPOINT_EXCEPTION, RECORD_HAS_EXCEPTION_EDGE, 0, 120, 0),
+        struct.pack("<IBBHII", 5, SAFEPOINT_CONTINUATION, RECORD_SUSPENDED, 0, NO_OFFSET, 7),
+    ))
+    assert runtime == expected
+    assert remapped == ((29, 80), (11, 48))
+    assert type(runtime) is bytes
+
+
+@pytest.mark.parametrize("record_count", (0, 64, 256))
+def test_transcoding_allocates_once_and_writes_only_disjoint_fixed_spans(monkeypatch, record_count):
+    roots = (_slot(-16), _slot(-24, owned=True))
+    value = PreciseStackMap(arch=ARCH_AARCH64, functions=(FunctionStackMap(
+        function_id=(1 << 64) - 1, function_address=(1 << 63) + 8,
+        code_size=4 * record_count + 4, frame_size=32,
+        records=tuple(SafepointRecord(i + 1, 4 * i, SAFEPOINT_CALL, roots)
+                      for i in range(record_count)),
+    ),))
+    payload = encode_stack_map(value)
+    offsets = _address_offsets(payload)
+    allocations = []
+    spans = []
+
+    class FixedBuffer(bytearray):
+        def __init__(self, size):
+            assert type(size) is int
+            super().__init__(size)
+            allocations.append(self)
+
+        def __iadd__(self, value):
+            raise AssertionError("runtime table must not copy a growing prefix")
+
+        def __setitem__(self, key, value):
+            assert isinstance(key, slice) and key.step is None
+            start = 0 if key.start is None else key.start
+            assert key.stop - start == len(value)
+            assert start == (spans[-1][1] if spans else 0)
+            assert key.stop <= len(self)
+            spans.append((start, key.stop))
+            old_length = len(self)
+            super().__setitem__(key, value)
+            assert len(self) == old_length
+
+    monkeypatch.setattr(wire, "bytearray", FixedBuffer, raising=False)
+    runtime, remapped = transcode_runtime_table(payload, offsets)
+    assert len(allocations) == 1
+    assert bytes(allocations[0]) == runtime
+    assert sum(end - start for start, end in spans) == len(runtime)
+    assert spans[-1][1] == len(runtime)
+    assert remapped == (((1 << 64) - 1, 48),)
+    decoded = decode_runtime_table(runtime)
+    assert decoded[0][1] == (1 << 63) + 8
+    assert len(decoded[0][4]) == record_count
+
+
+def test_transcoding_empty_table_and_invalid_input_before_output_allocation(monkeypatch):
+    empty = struct.pack("<8sHBBIII", wire.MAGIC, 2, ARCH_AARCH64, 8, 0, 0, 0)
+    runtime, offsets = transcode_runtime_table(empty, ())
+    assert runtime == struct.pack("<8sHBBIIIIIII", wire.MAGIC, 3, ARCH_AARCH64, 8, 0, 0, 0, 0, 0, 0, 0)
+    assert offsets == ()
+
+    def forbidden_output(*args):
+        raise AssertionError("invalid input must be rejected before output allocation")
+
+    monkeypatch.setattr(wire, "bytearray", forbidden_output, raising=False)
+    with pytest.raises(PreciseStackMapError, match="stack-map header"):
+        transcode_runtime_table(empty[:10], ())
+    with pytest.raises(PreciseStackMapError, match="version 2"):
+        transcode_runtime_table(runtime, ())
+    with pytest.raises(PreciseStackMapError, match="size disagrees"):
+        transcode_runtime_table(empty + b"\0", ())
+
+
+def test_actual_transcoder_ir_uses_bounded_slice_writes(tmp_path):
+    # Host lowering of the actual complete source module, not a rewritten
+    # serializer toy. This checks dispatch, not native execution or timing.
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.type_infer import infer_module
+    from pcc.ir.optimization.ir_mutator import MutableModule
+
+    path = Path(wire.__file__)
+    owner = "pcc.backend.precise_stackmap"
+    typed = infer_module(parse_and_lift(path.read_text(), str(path), owner))
+    codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="off")
+    text = str(codegen.generate(typed))
+    module = MutableModule.parse(text)
+    function = module.function("user_pcc_backend_precise_stackmap_transcode_runtime_table")
+    assert function is not None and function.blocks
+    assert all(block.terminator is not None and block.terminator.is_terminator()
+               for block in function.blocks)
+    instructions = [instruction for block in function.blocks for instruction in block.instructions]
+    assert any(instruction.opcode == "ret" for instruction in instructions)
+    body = "\n".join(instruction.text for instruction in instructions)
+    (tmp_path / "transcode_runtime_table.body.ll").write_text(body)
+    assert "strict.nolib.stub" not in body
+    calls = [instruction.text for instruction in instructions if instruction.opcode == "call"]
+    writes = [call for call in calls if "@py_bytearray_set_slice(" in call or "@py_obj_set_slice(" in call]
+    assert len(writes) == 6, writes  # header and five fixed-width tables
+    assert not any("@py_bytes_concat(" in call or "@py_bytearray_extend(" in call for call in calls)
+    assert any("@py_bytes_from_obj(" in call for call in calls)

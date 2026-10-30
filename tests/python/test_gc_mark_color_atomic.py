@@ -277,7 +277,7 @@ def test_actual_helper_emits_one_strong_full_word_cas(tmp_path):
 @pytest.mark.parametrize("filename,expected_calls", [
     ("freestanding_gc_root_operations.py", 1),
     ("freestanding_gc_common_mark_cycle.py", 3),
-    ("freestanding_gc_barrier_dispatcher.py", 2),
+    ("freestanding_gc_barrier_dispatcher.py", 3),
     ("freestanding_gc_incremental_concurrent_scheduler.py", 2),
 ])
 def test_active_color_writers_share_one_atomic_owner(filename, expected_calls):

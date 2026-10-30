@@ -31,7 +31,7 @@ def _load_functions(path, namespace, names):
 
 
 class _Memory:
-    def __init__(self):
+    def __init__(self, real_pages=False):
         self.cells = {}
         self.blocks = {}
         self.next_pointer = 0x10000
@@ -50,6 +50,7 @@ class _Memory:
             "ptr_add": lambda base, offset: base + offset,
             "ptr_diff": lambda left, right: left - right,
             "ptr_to_int": int,
+            "int_to_ptr": int,
             "is_tagged_int": lambda value: int(bool(value & 1)),
             "logical_shift_right_i64": lambda value, shift: (value & ((1 << 64) - 1)) >> shift,
             "wrapping_mul_i64": lambda left, right: (left * right) & ((1 << 64) - 1),
@@ -84,16 +85,25 @@ class _Memory:
             "_backend4_finish_remap_retirement": lambda finish: None,
         }
         index_names = {
+            # Generic rehashes use these production helpers even for this
+            # graph-locked index, which needs no unlocked-reader record.
+            "_index_published_cell", "_index_retire",
+            "_index_table_publish", "_index_table_release",
             "pcc_gc_index_py_hash_ptr", "pcc_gc_index_py_next_pow2",
             "pcc_gc_index_py_rehash_capacity", "pcc_gc_index_py_find_slot",
             "pcc_gc_index_py_rehash_slots", "pcc_gc_index_py_insert",
             "pcc_gc_index_py_remove",
             *("pcc_gc_remembered_member_" + suffix
-              for suffix in ("note", "maybe", "require", "forget", "clear")),
+              for suffix in ("note", "maybe", "require", "forget", "clear",
+                             "exact", "taint", "head", "set_head")),
         }
         _load_functions(INDEX, self.namespace, index_names)
         _load_functions(BACKEND, self.namespace, {
             "_remembered_set_head", "_set_remembered_set_head",
+            # Entries link into the set list and their owner's chain.
+            "_remembered_entry_link", "_remembered_entry_owner_push",
+            "_remembered_entry_owner_unlink", "_remembered_entry_unlink",
+            "_remembered_entries_count_decrement",
             "_backend4_remembered_set_contains", "_backend4_owner_remembered_slots",
             "_backend4_remembered_set_add", "_backend4_remembered_set_remove",
             "_backend4_remembered_set_remove_slot", "_backend4_remembered_set_clear",
@@ -104,6 +114,18 @@ class _Memory:
             "pcc_gc_backend4_retarget_mutator_payload_locked",
             "pcc_gc_note_object_freeing",
         })
+        if real_pages:
+            # The remembered pages answer membership by slot.
+            _load_functions(BACKEND, self.namespace, {
+                "_backend4_remembered_entry_attach", "_backend4_remembered_entry_detach",
+                "_backend4_remembered_page_find", "_backend4_remembered_page_unlink",
+                "_backend4_remembered_page_add", "_backend4_remembered_page_remove_slot",
+                "_backend4_remembered_page_contains_slot", "_backend4_remembered_pages_clear",
+            })
+        else:
+            # Without pages the remembered list is the only authority: these
+            # cases exercise its walks, mutation order and free reentry.
+            self.write("pcc_gc_backend4_remembered_page_incomplete", 0, 1)
         self.owner_node = self.allocate(80)
         self.page = self.allocate(256)
         self.write(self.owner_node, 8, self.page)
@@ -125,7 +147,8 @@ class _Memory:
         if self.fail_malloc:
             return 0
         pointer = self.allocate(size)
-        if size == 24:
+        # A remembered entry (owner, slot, set links, owner-chain links).
+        if size == 48:
             self.list_nodes.add(pointer)
         self._callback("malloc", pointer)
         return pointer
@@ -414,7 +437,7 @@ def test_retarget_revalidates_target_after_real_page_free_callback():
     memory = _Memory()
     _load_functions(BACKEND, memory.namespace, {
         "_backend4_remembered_page_find", "_backend4_remembered_page_add",
-        "_backend4_remembered_page_remove_slot",
+        "_backend4_remembered_page_remove_slot", "_backend4_remembered_page_unlink",
         "_backend4_remembered_entry_attach", "_backend4_remembered_entry_detach",
     })
     old, new = memory.owner(), memory.owner()
@@ -459,3 +482,71 @@ def test_last_slot_deletion_keeps_only_a_safe_stale_owner_key(method):
     assert memory.members() == [] and memory.maybe(owner) == 1
     memory.call("pcc_gc_note_object_freeing", owner)
     assert memory.maybe(owner) == 0
+
+
+def test_duplicate_check_reads_the_page_byte_not_the_remembered_list():
+    # Building a 200k-node old list walked the whole remembered list on
+    # every append (quadratic); the page byte answers the duplicate check.
+    memory = _Memory(real_pages=True)
+    owner = memory.owner()
+    slots = memory.allocate(8 * 600)
+    for index in range(600):
+        assert memory.add(owner, slots + 8 * index) == 1
+    memory.head_reads = memory.list_reads = 0
+    for index in range(600):
+        assert memory.add(owner, slots + 8 * index) == 0
+    assert memory.list_reads == 0 and memory.head_reads == 0
+    assert len(memory.members()) == 600
+    # After a page allocation failure the bytes no longer cover every slot:
+    # the exact list walk answers until the set is cleared.
+    memory.write("pcc_gc_backend4_remembered_page_incomplete", 0, 1)
+    memory.list_reads = 0
+    assert memory.add(owner, slots + 8 * 7) == 0
+    assert memory.list_reads > 0
+
+
+def test_exact_index_removes_and_counts_an_owner_through_its_chain():
+    # A dying owner walked the whole set twice (unlink, then the absence
+    # count): GC4 st_alloc spent a third of its time there freeing a few
+    # remembered tuples against 18,000 entries of one dict.
+    memory = _Memory()
+    for _ in range(200):
+        assert memory.add(memory.owner()) == 1
+    owner = memory.owner()
+    slots = memory.allocate(64)
+    for offset in (0, 8, 16):
+        assert memory.add(owner, slots + offset) == 1
+    assert memory.call("pcc_gc_remembered_member_exact") == 1
+    assert memory.call("_backend4_owner_remembered_slots", owner) == 3
+    memory.head_reads = memory.list_reads = 0
+    memory.call("pcc_gc_note_object_freeing", owner)
+    # Three entries, each read for its links and slot: no other entry.
+    reads = memory.list_reads
+    assert reads <= 3 * 12
+    assert memory.maybe(owner) == 0
+    assert len(memory.members()) == 200
+    memory.assert_conservative()
+
+
+def test_exact_index_retargets_and_clears_cards_through_the_owner_chain():
+    memory = _Memory()
+    for _ in range(200):
+        assert memory.add(memory.owner()) == 1
+    owner, moved = memory.owner(), memory.owner()
+    slots = memory.allocate(2048)
+    for offset in (0, 8, 1024):
+        assert memory.add(owner, slots + offset) == 1
+    memory.list_reads = 0
+    memory.call("_backend4_remembered_set_retarget_slot", owner, moved, slots + 8, moved + 24)
+    assert memory.list_reads <= 3 * 12
+    memory.list_reads = 0
+    assert memory.call("_backend4_owner_remembered_slots", owner) == 2
+    assert memory.call("_backend4_owner_remembered_slots", moved) == 1
+    assert memory.list_reads <= 3 * 2
+    memory.list_reads = 0
+    assert memory.call("pcc_gc_backend4_zpage_clear_remembered_card", owner, slots) == 1
+    assert memory.list_reads <= 2 * 12
+    assert sorted(slot for item, slot in memory.members() if item in (owner, moved)) == [
+        moved + 24, slots + 1024,
+    ]
+    memory.assert_conservative()

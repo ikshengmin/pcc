@@ -35,6 +35,7 @@ def runtime_root(tmp_path, monkeypatch):
     monkeypatch.delenv("PCC_RUNTIME_BUILD", raising=False)
     monkeypatch.delenv("PCC_WITH_THREADS", raising=False)
     monkeypatch.delenv("PCC_REFCOUNT_KIND", raising=False)
+    monkeypatch.delenv("PCC_SELF_BOOLEAN_REGISTER_LOWERING", raising=False)
     root = tmp_path / "runtime"
     root.mkdir()
     (root / "Makefile").write_text(
@@ -42,6 +43,20 @@ def runtime_root(tmp_path, monkeypatch):
         "PY_MODULES += freestanding_thread_kernel_pthread\n"
         "FREESTANDING_PY_MODULES = freestanding_mem_str\n", encoding="utf-8")
     return root
+
+
+def test_diagnostic_boolean_lowering_separates_runtime_receipts(runtime_root, monkeypatch):
+    target = "arm64-apple-darwin"
+    ordinary = owned.runtime_build_config()
+    receipt = _manifest(runtime_root, target)
+    assert owned._manifest_matches_config(receipt, str(runtime_root), target, ordinary)
+    monkeypatch.setenv("PCC_SELF_BOOLEAN_REGISTER_LOWERING", "1")
+    diagnostic = owned.runtime_build_config()
+    assert not owned._manifest_matches_config(receipt, str(runtime_root), target, diagnostic)
+    for member in receipt["members"]:
+        member["runtime_build_config"] = dict(diagnostic)
+    assert owned._manifest_matches_config(receipt, str(runtime_root), target, diagnostic)
+    assert not owned._manifest_matches_config(receipt, str(runtime_root), target, ordinary)
 
 
 def _selection_options(root):
@@ -372,6 +387,8 @@ def test_darwin_wheel_shortcut_rejects_wrong_target_or_mutated_payload(runtime_r
     {"threads": 1, "refcount": "atomic"},
     {"threads": True},
     {"threads": False, "refcount": "../atomic"},
+    {"threads": True, "refcount": "atomic", "boolean_register_lowering": "1"},
+    {"threads": True, "refcount": "atomic", "boolean_register_lowering": False},
 ])
 def test_runtime_receipt_rejects_malformed_config_before_publication(tmp_path, monkeypatch, config):
     source = tmp_path / "py" / "member.py"
@@ -389,7 +406,8 @@ def test_runtime_receipt_rejects_malformed_config_before_publication(tmp_path, m
     assert not Path(str(obj) + ".provenance.json").exists()
 
 
-def test_runtime_receipt_copies_and_serializes_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize("boolean_lowering", (False, True))
+def test_runtime_receipt_copies_and_serializes_config(tmp_path, monkeypatch, boolean_lowering):
     source = tmp_path / "py" / "member.py"
     source.parent.mkdir()
     source.write_text("def member() -> int:\n    return 1\n", encoding="utf-8")
@@ -397,13 +415,18 @@ def test_runtime_receipt_copies_and_serializes_config(tmp_path, monkeypatch):
     ir.write_text("; diagnostic IR\n", encoding="utf-8")
     obj = tmp_path / "member.o"
     config = {"threads": True, "refcount": "atomic"}
+    if boolean_lowering:
+        config["boolean_register_lowering"] = True
     monkeypatch.setattr(provenance, "codegen_checksum", lambda: "0" * 64)
     receipt = provenance.write_pcc_python_receipt(
         object_path=obj, ir_path=ir, source_path=source, runtime_root=tmp_path,
         target_triple=TARGETS[0], object_bytes=b"owned object",
         runtime_build_config=config)
     config["threads"] = False
-    assert receipt["runtime_build_config"] == {"threads": True, "refcount": "atomic"}
+    expected = {"threads": True, "refcount": "atomic"}
+    if boolean_lowering:
+        expected["boolean_register_lowering"] = True
+    assert receipt["runtime_build_config"] == expected
     stored = json.loads(Path(str(obj) + ".provenance.json").read_text())
     assert stored["runtime_build_config"] == receipt["runtime_build_config"]
 

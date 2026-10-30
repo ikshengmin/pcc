@@ -243,6 +243,8 @@ def test_continuation_root_map_rewrites_backend4_forwarded_slot(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
+        extern void pcc_gc_publish_initialized(PyObject *obj);
+
         static PyObject *new_reloc_payload(void) {
             ProbeListObject *obj = (
                 ProbeListObject *
@@ -251,6 +253,9 @@ def test_continuation_root_map_rewrites_backend4_forwarded_slot(tmp_path):
             obj->length = 0;
             obj->capacity = 0;
             obj->items = 0;
+            /* A relocatable tag stays unpublished, and the selector skips
+             * it, until its constructor publishes the initialized object. */
+            pcc_gc_publish_initialized((PyObject *)obj);
             return (PyObject *)obj;
         }
 
@@ -309,6 +314,8 @@ def test_continuation_object_mount_unmount_scans_and_rewrites_slots(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
+        extern void pcc_gc_publish_initialized(PyObject *obj);
+
         static PyObject *new_reloc_payload(void) {
             ProbeListObject *obj = (
                 ProbeListObject *
@@ -317,6 +324,9 @@ def test_continuation_object_mount_unmount_scans_and_rewrites_slots(tmp_path):
             obj->length = 0;
             obj->capacity = 0;
             obj->items = 0;
+            /* A relocatable tag stays unpublished, and the selector skips
+             * it, until its constructor publishes the initialized object. */
+            pcc_gc_publish_initialized((PyObject *)obj);
             return (PyObject *)obj;
         }
 

@@ -1,4 +1,5 @@
 import argparse, time, re, asyncio, functools, base64, random, urllib.parse, socket, sys, signal
+import os
 from . import proto
 from . import admin
 
@@ -6,6 +7,7 @@ from .__doc__ import *
 
 SOCKET_TIMEOUT = 60
 UDP_LIMIT = 30
+UDP_ASSOCIATION_IDLE = 120
 ALIVE_PROBE = ('1.1.1.1', 443)
 ALIVE_PROBE_TIMEOUT = 3
 DUMMY = lambda s: s
@@ -51,11 +53,15 @@ def link_channel_tasks(channels, writers):
     ACTIVE_CHANNEL_WRITERS.extend(writers)
     def stop_peer(done_task):
         forget_channel_task(done_task)
-        for task in tasks:
-            if task is not done_task and not task.done():
-                task.cancel()
+        half_closed = (not done_task.cancelled() and done_task.exception() is None
+                       and done_task.result() is True)
+        if not half_closed:
+            for task in tasks:
+                if task is not done_task and not task.done():
+                    task.cancel()
         if all(task.done() for task in tasks):
             for writer in writers:
+                writer.close()
                 try:
                     ACTIVE_CHANNEL_WRITERS.remove(writer)
                 except ValueError:
@@ -147,6 +153,20 @@ async def stream_handler(reader, writer, unix, lbind, protos, rserver, cipher, s
         local_addr = None if server_ip in ('127.0.0.1', '::1', None) else (server_ip, 0)
         reader_cipher, _ = await prepare_ciphers(cipher, reader, writer, server_side=False)
         lproto, user, host_name, port, client_connected = await proto.accept(protos, reader=reader, writer=writer, authtable=AuthTable(remote_ip, authtime), reader_cipher=reader_cipher, sock=writer.get_extra_info('socket'), **kwargs)
+        if isinstance(client_connected, proto.Socks5UDPRequest):
+            from .socks5_udp import UDPAssociation
+            urserver = kwargs.get('urserver', [])
+            if unix or (rserver and not urserver):
+                # A TCP-only upstream must not unexpectedly expose a direct
+                # UDP exit. Select -ur direct:// explicitly to opt into it.
+                verbose('SOCKS5 UDP requires an explicit -ur when -r is configured')
+                raise proto.Socks5Error(7)
+            association = UDPAssociation(
+                reader, writer, client_connected, urserver,
+                lambda remotes, host, port: schedule(remotes, salgorithm, host, port),
+                block, verbose, lbind, SOCKET_TIMEOUT)
+            await association.run()
+            return
         if host_name == 'echo':
             if client_connected:
                 await client_connected(writer)
@@ -213,13 +233,21 @@ async def datagram_handler(writer, data, addr, protos, urserver, block, cipher, 
         elif block and block(host_name):
             raise Exception('BLOCK ' + host_name)
         else:
-            roption = schedule(urserver, salgorithm, host_name, port) or DIRECT
+            roption = schedule(urserver, salgorithm, host_name, port)
+            if roption is None and any(r.match_rule(host_name, port) for r in urserver):
+                raise ConnectionError('No available UDP upstream')
+            roption = roption or DIRECT
             verbose(f'UDP {lproto.name} {remote_text}{roption.logtext(host_name, port)}')
-            data = roption.udp_prepare_connection(host_name, port, data)
-            def reply(rdata):
-                rdata = lproto.udp_pack(host_name, port, rdata)
+            def reply(rdata, rhost=host_name, rport=port):
+                rdata = lproto.udp_pack(rhost, rport, rdata)
                 writer.sendto(cipher.datagram.encrypt(rdata) if cipher else rdata, addr)
-            await roption.udp_open_connection(host_name, port, data, addr, reply)
+            if isinstance(roption, ProxySimple) and isinstance(roption.rproto, proto.Socks5):
+                await roption.udp_send_datagram(
+                    host_name, port, data, (writer, addr),
+                    lambda rdata, raddr: reply(rdata, *raddr[:2]))
+            else:
+                data = roption.udp_prepare_connection(host_name, port, data)
+                await roption.udp_open_connection(host_name, port, data, addr, reply)
     except Exception as ex:
         if not str(ex).startswith('Connection closed'):
             verbose(f'{str(ex) or "Unsupported protocol"} from {remote_ip}')
@@ -373,6 +401,9 @@ class ProxySimple(ProxyDirect):
         self.sslclient = sslclient
         self.sslserver = sslserver
         self.jump = jump
+        self.udp_associations = {}
+        self.udp_association_lock = None
+        self.udp_idle_timeout = None
     def logtext(self, host, port):
         return f' -> {self.rproto.name+("+ssl" if self.sslclient else "")} {self.bind}' + self.jump.logtext(host, port)
     def match_rule(self, host, port):
@@ -395,6 +426,63 @@ class ProxySimple(ProxyDirect):
         if self.cipher:
             data = self.cipher.datagram.encrypt(data)
         return data
+    async def udp_send_datagram(self, host, port, data, addr, reply):
+        from .socks5_udp import Socks5Relay
+        if self.udp_association_lock is None:
+            self.udp_association_lock = asyncio.Lock()
+        # Legacy datagram listeners dispatch one task per packet. Serialize
+        # setup so a burst creates just one TCP association for this client.
+        async with self.udp_association_lock:
+            entry = self.udp_associations.get(addr)
+            if entry is None:
+                if len(self.udp_associations) >= UDP_LIMIT:
+                    oldest = min(self.udp_associations, key=lambda key: self.udp_associations[key][0].updated)
+                    old_relay, old_timer = self.udp_associations.pop(oldest)
+                    old_timer.cancel()
+                    await old_relay.close()
+                def disconnected():
+                    current = self.udp_associations.get(addr)
+                    if current is not None and current[0] is relay:
+                        self.udp_associations.pop(addr)
+                        current[1].cancel()
+                bind = self.lbind if self.lbind != 'in' else None
+                relay = Socks5Relay(self, reply, disconnected, bind, SOCKET_TIMEOUT)
+                await relay.start()
+            else:
+                relay, timer = entry
+                timer.cancel()
+            def expire():
+                current = self.udp_associations.get(addr)
+                if current is None or current[0] is not relay:
+                    return
+                idle = self.udp_idle_timeout if self.udp_idle_timeout is not None else UDP_ASSOCIATION_IDLE
+                remaining = idle - (time.monotonic() - relay.updated)
+                if remaining > 0:
+                    timer = asyncio.get_event_loop().call_later(remaining, expire)
+                    self.udp_associations[addr] = (relay, timer)
+                    return
+                self.udp_associations.pop(addr, None)
+                asyncio.ensure_future(relay.close())
+            idle = self.udp_idle_timeout if self.udp_idle_timeout is not None else UDP_ASSOCIATION_IDLE
+            timer = asyncio.get_event_loop().call_later(idle, expire)
+            self.udp_associations[addr] = (relay, timer)
+            await relay.send(host, port, data)
+    async def udp_open_connection(self, host, port, data, addr, reply):
+        if isinstance(self.rproto, proto.Socks5):
+            packet = proto.socks5_udp_unpack(data)
+            if packet is None:
+                raise ValueError('Invalid SOCKS5 UDP packet')
+            await self.udp_send_datagram(*packet, addr, lambda data, source: reply(data))
+        else:
+            await super().udp_open_connection(host, port, data, addr, reply)
+    async def udp_close(self):
+        if self.udp_association_lock is not None:
+            async with self.udp_association_lock:
+                entries = list(self.udp_associations.values())
+                self.udp_associations.clear()
+                for _, timer in entries:
+                    timer.cancel()
+                await asyncio.gather(*(relay.close() for relay, _ in entries))
     def udp_start_server(self, args):
         class Protocol(asyncio.DatagramProtocol):
             def connection_made(prot, transport):
@@ -419,6 +507,22 @@ class ProxySimple(ProxyDirect):
             return asyncio.start_unix_server(handler, path=self.bind)
         else:
             return asyncio.start_server(handler, host=self.host_name, port=self.port, reuse_port=args.get('ruport'))
+
+class ProxyTURN(ProxySimple):
+    def start_server(self, args, stream_handler=stream_handler):
+        raise ValueError('TURN is UDP-only; use -ul turn://address:port#username:password')
+    async def udp_start_server(self, args):
+        from .turn import TurnServer
+        if self.unix or self.cipher or self.sslclient or len(self.protos) != 1 or not self.jump.direct:
+            raise ValueError('TURN requires a standalone UDP listener')
+        protocol = TurnServer(
+            self.users, args.get('turn_relay_address') or self.host_name,
+            external_address=args.get('turn_external_address'),
+            min_port=args.get('turn_min_port', 0), max_port=args.get('turn_max_port', 0),
+            max_allocations=args.get('turn_max_allocations', 128),
+            allow_loopback=args.get('turn_allow_loopback', False))
+        return await asyncio.get_event_loop().create_datagram_endpoint(
+            lambda: protocol, local_addr=(self.host_name, self.port))
 
 class ProxyH2(ProxySimple):
     def __init__(self, sslserver, sslclient, **kw):
@@ -624,6 +728,17 @@ class ProxyQUIC(ProxySimple):
             self.patch_writer(writer)
             asyncio.ensure_future(stream_handler(reader, writer, **vars(self), **args))
         return aioquic.asyncio.serve(self.host_name, self.port, configuration=self.quicserver, stream_handler=handler)
+
+class ProxyMasque(ProxyQUIC):
+    def start_server(self, args, stream_handler=stream_handler):
+        from .masque import serve
+        if self.unix or self.cipher or len(self.protos) != 1 or not self.jump.direct:
+            raise ValueError('MASQUE requires a standalone HTTP/3 listener')
+        return serve(self, args)
+    async def udp_start_server(self, args):
+        raise ValueError('Use -l masque:// for the QUIC proxy listener')
+    async def wait_open_connection(self, *args):
+        raise ValueError('MASQUE is a server protocol; configure it in Chrome')
 
 class ProxyH3(ProxyQUIC):
     def get_stream(self, conn, stream_id):
@@ -894,7 +1009,7 @@ def proxy_by_uri(uri, jump):
         sslcontexts.append(sslclient)
     else:
         sslserver = sslclient = None
-    if 'quic' in rawprotos or 'h3' in protonames:
+    if 'quic' in rawprotos or 'h3' in protonames or 'masque' in protonames:
         try:
             import ssl, aioquic.quic.configuration
         except Exception:
@@ -902,6 +1017,12 @@ def proxy_by_uri(uri, jump):
         quicserver = aioquic.quic.configuration.QuicConfiguration(is_client=False, max_stream_data=2**60, max_data=2**60, idle_timeout=SOCKET_TIMEOUT)
         quicclient = aioquic.quic.configuration.QuicConfiguration(max_stream_data=2**60, max_data=2**60, idle_timeout=SOCKET_TIMEOUT*5)
         quicclient.verify_mode = ssl.CERT_NONE
+        if 'masque' in protonames:
+            quicserver.alpn_protocols = ['h3']
+            quicserver.max_datagram_frame_size = 65536
+            quicserver.max_datagram_size = 1400
+            quicserver.max_data = 16 * 1024 * 1024
+            quicserver.max_stream_data = 1024 * 1024
         sslcontexts.append(quicserver)
         sslcontexts.append(quicclient)
     if 'h2' in rawprotos:
@@ -948,7 +1069,11 @@ def proxy_by_uri(uri, jump):
     else:
         params = dict(jump=jump, protos=protos, cipher=cipher, users=users, rule=url.query, bind=loc or urlpath,
                       host_name=host_name, port=port, unix=not loc, lbind=lbind, sslclient=sslclient, sslserver=sslserver)
-        if 'quic' in rawprotos:
+        if 'masque' in protonames:
+            proxy = ProxyMasque(quicserver, quicclient, **params)
+        elif 'turn' in protonames:
+            proxy = ProxyTURN(**params)
+        elif 'quic' in rawprotos:
             proxy = ProxyQUIC(quicserver, quicclient, **params)
         elif 'h3' in protonames:
             proxy = ProxyH3(quicserver, quicclient, **params)
@@ -998,7 +1123,13 @@ async def test_url(url, rserver):
     print(f'============ success ============')
 
 def print_server_started(option, server, print_fn):
-    for s in server.sockets:
+    sockets = getattr(server, 'sockets', None)
+    if sockets is None:
+        sock = server.get_extra_info('socket') if hasattr(server, 'get_extra_info') else None
+        sockets = [sock] if sock is not None else []
+    if not sockets:
+        print_fn(option)
+    for s in sockets:
         # https://github.com/MagicStack/uvloop/blob/master/uvloop/pseudosock.pyx
         laddr = s.getsockname() # tuple size varies with protocol family
         h = laddr[0]
@@ -1011,11 +1142,18 @@ def print_server_started(option, server, print_fn):
 def main(args = None):
     origin_argv = sys.argv[1:] if args is None else args
 
-    parser = argparse.ArgumentParser(description=__description__+'\nSupported protocols: http,socks4,socks5,shadowsocks,shadowsocksr,redirect,pf,tunnel', epilog=f'Online help: <{__url__}>')
+    parser = argparse.ArgumentParser(description=__description__+'\nSupported protocols: http,socks4,socks5,shadowsocks,shadowsocksr,redirect,pf,tunnel,turn', epilog=f'Online help: <{__url__}>')
     parser.add_argument('-l', dest='listen', default=[], action='append', type=proxies_by_uri, help='tcp server uri (default: http+socks4+socks5://:8080/)')
     parser.add_argument('-r', dest='rserver', default=[], action='append', type=proxies_by_uri, help='tcp remote server uri (default: direct)')
     parser.add_argument('-ul', dest='ulisten', default=[], action='append', type=proxies_by_uri, help='udp server setting uri (default: none)')
     parser.add_argument('-ur', dest='urserver', default=[], action='append', type=proxies_by_uri, help='udp remote server uri (default: direct)')
+    parser.add_argument('--turn-relay-address', help='local IP for TURN peer relay sockets')
+    parser.add_argument('--turn-external-address', help='advertised TURN relay IP when using port-preserving NAT')
+    parser.add_argument('--turn-min-port', type=int, default=0, help='first TURN relay port (default: ephemeral)')
+    parser.add_argument('--turn-max-port', type=int, default=0, help='last TURN relay port')
+    parser.add_argument('--turn-max-allocations', type=int, default=128, help='maximum concurrent TURN allocations')
+    parser.add_argument('--turn-allow-loopback', action='store_true', help='allow TURN loopback peers for local testing')
+    parser.add_argument('--udp-idle', type=float, default=UDP_ASSOCIATION_IDLE, help='SOCKS5 UDP client idle lifetime in seconds; use 900 for TURN tunnels')
     parser.add_argument('-b', dest='block', type=compile_rule, help='block regex rules')
     parser.add_argument('-a', dest='alived', default=0, type=int, help='interval to check remote alive (default: no check)')
     parser.add_argument('-s', dest='salgorithm', default='fa', choices=('fa', 'rr', 'rc', 'lc'), help='scheduling algorithm (default: first_available)')
@@ -1026,11 +1164,31 @@ def main(args = None):
     parser.add_argument('--get', dest='gets', default=[], action='append', help='http custom {path,file}')
     parser.add_argument('--auth', dest='authtime', type=int, default=86400*30, help='re-auth time interval for same ip (default: 86400*30)')
     parser.add_argument('--sys', action='store_true', help='change system proxy setting (mac, windows)')
+    parser.add_argument('--process-rules', help='ordered process TCP/UDP rules JSON for the bundled macOS system extension')
+    parser.add_argument('--capture-app', help='path to the signed PythonProxy.app (default: /Applications/PythonProxy.app)')
     parser.add_argument('--reuse', dest='ruport', action='store_true', help='set SO_REUSEPORT (Linux only)')
     parser.add_argument('--daemon', dest='daemon', action='store_true', help='run as a daemon (Linux only)')
     parser.add_argument('--test', help='test this url for all remote proxies and exit')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args(args)
+    if args.process_rules and args.sys:
+        parser.error('--process-rules uses transparent routing; do not combine it with --sys')
+    if args.capture_app and not args.process_rules:
+        parser.error('--capture-app requires --process-rules')
+    if args.process_rules and args.rserver and not args.urserver:
+        parser.error('--process-rules needs -ur when -r is configured, so UDP uses an explicit route')
+    capture_rules = None
+    if args.process_rules:
+        from .process_rules import load as load_process_rules
+        try:
+            capture_rules = load_process_rules(args.process_rules)
+        except (ValueError, OSError) as ex:
+            parser.error(str(ex))
+    if not args.udp_idle > 0:
+        parser.error('--udp-idle must be positive')
+    for remote in args.urserver:
+        if isinstance(remote, ProxySimple):
+            remote.udp_idle_timeout = args.udp_idle
     if args.sslfile:
         sslfile = args.sslfile.split(',')
         for context in sslcontexts:
@@ -1072,6 +1230,8 @@ def main(args = None):
         from . import verbose
         verbose.setup(loop, args)
     servers = []
+    capture_listeners = []
+    capture_session = None
     admin.config.update({'argv': origin_argv, 'servers': servers, 'args': args, 'loop': loop})
     def print_fn(option, bind=None):
         print('Serving on', (bind or option.bind), 'by', ",".join(i.name for i in option.protos) + ('(SSL)' if option.sslclient else ''), '({}{})'.format(option.cipher.name, ' '+','.join(i.name() for i in option.cipher.plugins) if option.cipher and option.cipher.plugins else '') if option.cipher else '')
@@ -1080,6 +1240,7 @@ def main(args = None):
             server = loop.run_until_complete(option.start_server(vars(args)))
             print_server_started(option, server, print_fn)
             servers.append(server)
+            capture_listeners.append((option, server))
         except Exception as ex:
             print_fn(option)
             print('Start server failed.\n\t==>', ex)
@@ -1105,19 +1266,39 @@ def main(args = None):
                 print_fn(option)
                 print('Start server failed.\n\t==>', ex)
     if servers:
+        if args.process_rules:
+            from .capture import ProcessCapture, listener_configuration
+            try:
+                config = listener_configuration(capture_listeners)
+                config.update(rules=capture_rules, ownerPID=os.getpid(), udpIdle=args.udp_idle)
+                capture_session = loop.run_until_complete(ProcessCapture.start(config, args.capture_app))
+                asyncio.ensure_future(capture_session.monitor(loop))
+            except BaseException as ex:
+                for server in servers:
+                    server.close()
+                drain_pending_tasks(loop)
+                if isinstance(ex, (KeyboardInterrupt, SystemExit)):
+                    raise
+                parser.exit(1, 'Process capture failed: %s\n' % ex)
         if args.sys:
             from . import sysproxy
             args.sys = sysproxy.setup(args)
-        if args.alived > 0 and args.rserver:
-            asyncio.ensure_future(check_server_alive(args.alived, args.rserver, args.verbose if args.v else DUMMY))
+        health_remotes = list(args.rserver)
+        health_remotes.extend(r for r in args.urserver if isinstance(r, ProxySimple)
+                              and isinstance(r.rproto, proto.Socks5) and r not in health_remotes)
+        if args.alived > 0 and health_remotes:
+            asyncio.ensure_future(check_server_alive(args.alived, health_remotes, args.verbose if args.v else DUMMY))
         interrupt_handlers = {}
         for signum in (signal.SIGINT, signal.SIGTERM):
             handler = signal.getsignal(signum)
-            if callable(handler):
+            if capture_session or callable(handler):
                 try:
                     # Run Python signal handlers between callbacks, not in the
                     # middle of creating/awaiting a connection coroutine.
-                    loop.add_signal_handler(signum, handler, signum, None)
+                    if capture_session:
+                        loop.add_signal_handler(signum, loop.stop)
+                    else:
+                        loop.add_signal_handler(signum, handler, signum, None)
                     interrupt_handlers[signum] = handler
                 except (NotImplementedError, RuntimeError, ValueError):
                     pass
@@ -1126,6 +1307,8 @@ def main(args = None):
         except KeyboardInterrupt:
             print('exit')
         finally:
+            if capture_session:
+                cleanup_run_until_complete(loop, capture_session.close())
             for signum, handler in interrupt_handlers.items():
                 loop.remove_signal_handler(signum)
                 signal.signal(signum, handler)
@@ -1143,6 +1326,8 @@ def main(args = None):
         admin.config['reload'] = False
         main(admin.config['argv'])
     loop.close()
+    if capture_session and capture_session.failed:
+        raise SystemExit(1)
 
 if __name__ == '__main__':
     main()

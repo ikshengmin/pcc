@@ -37,6 +37,8 @@ _iter_source_import_specs = _pipeline_import_scan._iter_source_import_specs
 _iter_source_importlib_literal_specs = _pipeline_import_scan._iter_source_importlib_literal_specs
 _iter_source_importlib_resource_literal_specs = _pipeline_import_scan._iter_source_importlib_resource_literal_specs
 _iter_source_import_from_specs = _pipeline_import_scan._iter_source_import_from_specs
+_INIT_IMPORT_SPECS = _iter_source_import_specs
+_INIT_IMPORT_FROM_SPECS = _iter_source_import_from_specs
 _without_attribute_error_handler_imports = _pipeline_import_scan._without_attribute_error_handler_imports
 _source_import_discovery_text = _pipeline_import_scan._source_import_discovery_text
 _without_type_checking_imports = _pipeline_import_scan._without_type_checking_imports
@@ -1187,10 +1189,11 @@ def _sources_use_native_stdlib(src_paths: list[str]) -> bool:
 
 
 
-def _source_absolute_imports_for_discovery(
+def _source_absolute_imports_for_discovery_with_field_state(
     source: str,
     *,
     include_function_bodies: bool = True,
+    field_state=None,
 ) -> list[str]:
     """Return absolute import module names without constructing an AST.
 
@@ -1237,9 +1240,23 @@ def _source_absolute_imports_for_discovery(
                 from pcc.frontends.python.py_lift import parse_and_lift
                 from pcc.frontends.python.pipeline_import_policy import dataclasses_field_runtime_names
                 try:
-                    field_module = parse_and_lift(source, "<field-import-scan>", "<scan>")
-                    if dataclasses_field_runtime_names(field_module):
-                        compile_only_only = False
+                    if field_state is None:
+                        field_module = parse_and_lift(source, "<field-import-scan>", "<scan>")
+                        if dataclasses_field_runtime_names(field_module):
+                            compile_only_only = False
+                    else:
+                        reusable = _field_discovery_readers_are_original(source, field_state)
+                        if reusable and len(field_state) == 2 and field_state[0] == source:
+                            has_runtime_use = field_state[1]
+                        else:
+                            field_module = parse_and_lift(source, "<field-import-scan>", "<scan>")
+                            has_runtime_use = bool(dataclasses_field_runtime_names(field_module))
+                            if reusable:
+                                field_state.clear()
+                                field_state.append(source)
+                                field_state.append(has_runtime_use)
+                        if has_runtime_use:
+                            compile_only_only = False
                 except Exception:
                     # An uncertain runtime binding must keep its real owner.
                     compile_only_only = False
@@ -1268,6 +1285,59 @@ def _source_absolute_imports_for_discovery(
                     seen.add(child_name)
                     out.append(child_name)
     return out
+
+
+
+def _field_discovery_readers_are_original(source, field_state):
+    if type(source) is not str or type(field_state) is not list:
+        return False
+    try:
+        # Check identities in the defining modules, not by materializing local
+        # cross-module function values (which may acquire native adapters).
+        from pcc.frontends.python.py_lift import _field_discovery_parser_is_original
+        from pcc.frontends.python.pipeline_import_policy import _field_discovery_classifier_is_original
+        return _field_discovery_parser_is_original() and _field_discovery_classifier_is_original()
+    except Exception:
+        return False
+
+
+def _source_absolute_imports_for_discovery(
+    source: str,
+    *,
+    include_function_bodies: bool = True,
+) -> list[str]:
+    """Return absolute import module names without constructing an AST.
+
+    Class bodies remain part of module initialization.  Function bodies are
+    included only for the narrower pcc-owned-provider decision.
+    """
+    # Direct callers retain the original uncached reader and failure behavior.
+    return _source_absolute_imports_for_discovery_with_field_state(
+        source, include_function_bodies=include_function_bodies,
+    )
+
+
+_SOURCE_ABSOLUTE_IMPORTS_FOR_DISCOVERY = _source_absolute_imports_for_discovery
+
+
+def _source_absolute_import_discovery_pair(source):
+    if (type(source) is str and _source_absolute_imports_for_discovery
+            is _SOURCE_ABSOLUTE_IMPORTS_FOR_DISCOVERY):
+        field_state = []
+        eager = _source_absolute_imports_for_discovery_with_field_state(
+            source, include_function_bodies=False, field_state=field_state,
+        )
+        if _source_absolute_imports_for_discovery is _SOURCE_ABSOLUTE_IMPORTS_FOR_DISCOVERY:
+            lazy = _source_absolute_imports_for_discovery_with_field_state(
+                source, include_function_bodies=True, field_state=field_state,
+            )
+        else:
+            lazy = _source_absolute_imports_for_discovery(source, include_function_bodies=True)
+        return eager, lazy
+    # Re-read the public hook for the second call, as the original caller did.
+    eager = _source_absolute_imports_for_discovery(source, include_function_bodies=False)
+    lazy = _source_absolute_imports_for_discovery(source, include_function_bodies=True)
+    return eager, lazy
 
 
 def _source_pcc_native_extension_paths(src_path: str) -> list[str]:
@@ -1628,17 +1698,11 @@ def _expand_recursive_stdlib(
                 ):
                     admit_provider(parent_mod, parent_src)
                 admit_provider(relative_mod, relative_src)
-        import_names = _source_absolute_imports_for_discovery(
-            source,
-            include_function_bodies=False,
-        )
+        import_names, lazy_import_names = _source_absolute_import_discovery_pair(source)
         # Include lazy imports only for first-class pcc-owned stdlib providers.
         # This covers module-init factories without admitting arbitrary host
         # stdlib/optional dependency trees into the no-libpython closure.
-        for lazy_name in _source_absolute_imports_for_discovery(
-            source,
-            include_function_bodies=True,
-        ):
+        for lazy_name in lazy_import_names:
             lazy_provider = _locate_native_stdlib_module_source(lazy_name)
             if (
                 lazy_provider is not None
@@ -1755,6 +1819,26 @@ def _relative_import_targets(
     )
 
 
+def _init_import_specs(source, scope_state):
+    if type(source) is str and _iter_source_import_specs is _INIT_IMPORT_SPECS:
+        return _pipeline_import_scan._iter_source_import_specs_with_scope_state(
+            source, top_level_only=True, scope_state=scope_state,
+        )
+    return _iter_source_import_specs(source, top_level_only=True)
+
+
+def _init_import_from_specs(source, scope_state):
+    try:
+        if type(source) is str and _iter_source_import_from_specs is _INIT_IMPORT_FROM_SPECS:
+            return _pipeline_import_scan._iter_source_import_from_specs_with_scope_state(
+                source, top_level_only=True, scope_state=scope_state,
+            )
+        return _iter_source_import_from_specs(source, top_level_only=True)
+    finally:
+        # Returning the statement list no longer needs the shared scope rows.
+        scope_state.clear()
+
+
 def _order_module_init_deps_for(
     mod_name: str,
     module_to_src,
@@ -1776,20 +1860,25 @@ def _order_module_init_deps_for(
         if dep_mod in module_set and dep_mod != mod_name and dep_mod not in deps:
             deps.append(dep_mod)
 
-    for dep_mod in _iter_source_import_specs(source, top_level_only=True):
-        add_dep(dep_mod)
-        top_mod = dep_mod.split(".", 1)[0]
-        add_dep(top_mod)
-    for module_spec, imported_names in _iter_source_import_from_specs(
-        source,
-        top_level_only=True,
-    ):
-        if module_spec.startswith("."):
-            continue
-        add_dep(module_spec)
-        for imported_name in imported_names:
-            if imported_name and imported_name != "*":
-                add_dep(module_spec + "." + imported_name)
+    # Keep the two hooks at their original positions. The only cached value
+    # is one owned scope-row list, cleared before relative-file resolution.
+    scope_state = []
+    try:
+        for dep_mod in _init_import_specs(source, scope_state):
+            add_dep(dep_mod)
+            top_mod = dep_mod.split(".", 1)[0]
+            add_dep(top_mod)
+        for module_spec, imported_names in _init_import_from_specs(source, scope_state):
+            if module_spec.startswith("."):
+                continue
+            add_dep(module_spec)
+            for imported_name in imported_names:
+                if imported_name and imported_name != "*":
+                    add_dep(module_spec + "." + imported_name)
+    finally:
+        # Also release after a scanner/dependency callback raises; do not keep
+        # the extra owner through an exception traceback.
+        scope_state.clear()
 
     for _dep_src, dep_mod in _relative_import_targets(
         src_path,

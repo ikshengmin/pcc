@@ -5,6 +5,7 @@ reads an environment variable or retains an IR/function object for these totals.
 Indexes are stable; assembly children 13..15 belong to inclusive parent 9.
 """
 
+import os
 import sys
 import time
 
@@ -158,9 +159,41 @@ _COORDINATOR_PARENTS = {
     "elf_image_finalize": "elf_link_image",
     "elf_verify_inputs": "artifact_link",
     "elf_write_image": "artifact_link",
+    "macho_stage_inputs": "artifact_link",
+    "macho_prepare_inputs": "artifact_link",
+    "macho_prepare_validate": "macho_prepare_inputs",
+    "macho_prepare_archives": "macho_prepare_inputs",
+    "macho_prepare_merge": "macho_prepare_inputs",
+    "macho_merge_inputs": "macho_prepare_merge",
+    "macho_merge_stackmaps": "macho_prepare_merge",
+    "macho_merge_final_view": "macho_prepare_merge",
+    "macho_link_image": "artifact_link",
+    "macho_sign": "macho_link_image",
+    "macho_verify_signature": "artifact_link",
+    "macho_write_image": "artifact_link",
     "executable_publish": "artifact_link",
     "artifact_cleanup": "none",
 }
+
+
+def native_macho_merge_timing_enabled() -> bool:
+    """Reuse the direct coordinator's policy without a frontend import cycle.
+
+    The linker additionally requires its private consuming/final source-view
+    route. No new logging switch or timer handoff is needed at that boundary.
+    """
+    try:
+        return (
+            sys.implementation.name == "pcc" and sys.platform == "darwin"
+            and str(os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or "").strip().lower()
+            in ("1", "true", "yes", "on")
+            and str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or "").strip().lower()
+            in ("1", "true", "yes", "on")
+            and not str(os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or "").strip()
+            and not str(os.environ.get("PCC_DEFER_FRONTEND_CODEGEN_PLAN", "") or "").strip()
+        )
+    except BaseException:
+        return False
 
 
 def _bounded_module_name(module_name: str) -> str:
@@ -192,7 +225,7 @@ def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name
 
 
 class CoarsePhaseTiming:
-    """At most fourteen fixed coordinator boundary pairs in the direct build path.
+    """Fixed coordinator boundary labels in the direct build path.
 
     Native GC readings cover this compiler process only. They include nested
     recorded collector work and diagnostic allocation, are not atomic, and do

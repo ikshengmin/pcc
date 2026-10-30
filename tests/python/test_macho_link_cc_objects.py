@@ -30,7 +30,7 @@ from pcc.backend import macho_spec as spec
 from pcc.backend.macho_link import link_relocatable
 
 _CC = shutil.which(os.environ.get("CC", "cc"))
-_IS_ARM64_DARWIN = os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+_IS_ARM64_DARWIN = hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 _GATE = None if (_CC and _IS_ARM64_DARWIN) else "needs cc on Darwin arm64"
 
 pytestmark = pytest.mark.pcc_gate(unavailable=_GATE)

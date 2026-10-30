@@ -32,6 +32,52 @@ def export_split_global_line(line: str) -> str:
     return line.replace(" = private ", " = ", 1)
 
 
+def _gc_short_path_shard_metadata(
+    global_lines: list[str],
+    functions: list[tuple[str, str, str, bool]],
+) -> tuple[list[str], list[str]]:
+    """Separate immutable GC ABI metadata from single-definition globals.
+
+    Every shard needs the explicit opt-in and the original module's local
+    callee exclusions. Keeping both local also preserves them when a pass
+    shard is split again for object emission. No call name grants admission.
+    """
+    from pcc.backend.self_backend_aarch64_gc_calls import (
+        GC_ABI_EXCLUSION_PREFIX,
+        GC_ABI_MARKER,
+        GC_SHORT_CALL_HELPERS,
+    )
+
+    literals: dict[str, str] = {}
+    for line in global_lines:
+        words = line.split()
+        if (
+            len(words) == 6
+            and words[0].startswith("@")
+            and words[1] == "="
+            and words[2] in ("internal", "private")
+            and words[3:] == ["constant", "i8", "1"]
+        ):
+            literals[words[0][1:]] = line
+    if GC_ABI_MARKER not in literals:
+        return [], global_lines
+
+    metadata = [literals[GC_ABI_MARKER]]
+    metadata_names = {GC_ABI_MARKER}
+    local_definitions = {name for name, _body, _declaration, _internal in functions}
+    for callee in GC_SHORT_CALL_HELPERS:
+        exclusion = GC_ABI_EXCLUSION_PREFIX + callee
+        if exclusion in literals or callee in local_definitions:
+            metadata.append("@" + exclusion + " = internal constant i8 1")
+            metadata_names.add(exclusion)
+    remaining = []
+    for line in global_lines:
+        name = line.split()[0][1:]
+        if name not in metadata_names:
+            remaining.append(line)
+    return metadata, remaining
+
+
 def self_backend_local_frame_map_line(line: str) -> bool:
     """Return whether *line* is an immutable precise-root descriptor.
 
@@ -163,6 +209,9 @@ def split_python_ir_module_for_pass_shards(
     if len(functions_raw) <= 1:
         return [ir_text]
 
+    gc_metadata, global_defs_raw = _gc_short_path_shard_metadata(
+        global_defs_raw, functions_raw,
+    )
     rename_map = private_symbol_rename_map(
         global_defs_raw,
         functions_raw,
@@ -211,6 +260,7 @@ def split_python_ir_module_for_pass_shards(
         pieces: list[str] = []
         if shared:
             pieces.append(shared)
+        pieces.extend(gc_metadata)
         if include_global_defs:
             pieces.extend(global_defs)
         else:
@@ -286,6 +336,9 @@ def split_self_backend_ir_module_for_object_shards(
 
     if len(functions_raw) <= 1:
         return [ir_text]
+    gc_metadata, global_lines_raw = _gc_short_path_shard_metadata(
+        global_lines_raw, functions_raw,
+    )
     local_frame_map_lines = []
     exported_global_lines_raw = []
     for line in global_lines_raw:
@@ -347,6 +400,7 @@ def split_self_backend_ir_module_for_object_shards(
         pieces = []
         if shared:
             pieces.append(shared)
+        pieces.extend(gc_metadata)
         if body_parts:
             needed: set[str] = set()
             prune = shared_map_references is not None

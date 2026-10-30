@@ -34,7 +34,7 @@ from pcc.backend.macho_obj import (
 
 
 _IS_ARM64_DARWIN = (
-    os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
+    hasattr(os, "uname") and os.uname().sysname == "Darwin" and os.uname().machine == "arm64"
 )
 _AS = shutil.which("as")
 _CC = shutil.which(os.environ.get("CC", "cc"))

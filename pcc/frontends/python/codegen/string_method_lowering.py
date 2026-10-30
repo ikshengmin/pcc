@@ -391,7 +391,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("decode.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_bytes_decode_call(self, recv, receiver_expr, operands, span):
         if not self._owned_release_needed(recv, receiver_expr):
@@ -509,7 +509,7 @@ class StringMethodLoweringMixin:
             )
             self._release_slot_call_roots((separator, items))
             if sink is None:
-                return self._take_slot_call_root(output)
+                return self._take_slot_call_root(output, source_expr=expr)
             return self.builder.load(output, name=self._fresh(label + ".current"))
         finally:
             self._try_err_block = previous
@@ -720,7 +720,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("padding.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_owned_strip_method(self, expr):
         """Dispatch strip through the actual text/byte family with rooted inputs.
@@ -874,7 +874,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("strip.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _maybe_emit_owned_str_result(self, expr):
         """Evaluate native string operands in roots and publish before cleanup.
@@ -943,7 +943,7 @@ class StringMethodLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            receiver = self._emit_slot_call_operand(attr.obj, "str.method.receiver")
+            receiver = self._emit_slot_call_operand(attr.obj, "str.method.receiver", borrow_stable=True)
             roots.append(receiver)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
@@ -978,7 +978,7 @@ class StringMethodLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         if sink is not None:
             return self.builder.load(output, name=self._fresh("str.method.output"))
-        return self._take_slot_call_root(output)
+        return self._take_slot_call_root(output, source_expr=expr)
 
     def _emit_str_method_with_receiver(self, expr: Call, recv: ir.Value, dynamic: bool):
         if expr.func.name == "encode":
@@ -1051,6 +1051,11 @@ class StringMethodLoweringMixin:
         attr = expr.func
         assert isinstance(attr, Attr)
         if attr.name not in _STR_METHOD_NATIVE:
+            return None
+        if attr.name == "find":
+            # A dynamic receiver may be bytes/bytearray, a str subtype, or an
+            # ordinary user object. Let normal method lookup bind its callable;
+            # a method name alone is not evidence for the raw str layout.
             return None
         if self._has_unpacked_operands(expr.args, expr.kwargs):
             # The helpers take fixed operands; the generic method call binds

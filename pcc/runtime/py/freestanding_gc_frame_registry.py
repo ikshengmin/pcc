@@ -42,6 +42,8 @@ define_thread_local_i32("pcc_gc_frame_node_pool_total", 0)
 
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_gc_cycle_requested_store_release = extern("pcc_gc_cycle_requested_store_release", (c_int64,), c_void)
 
 pcc_gc_root_slot_count_from_map = extern("pcc_gc_root_slot_count_from_map", (c_ptr,), c_int64)
@@ -299,8 +301,14 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
     root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
     if root_count <= 0:
         return
+    # The slots become roots only once linked. A contended graph lock polls
+    # for a stop before it queues, and a collector running then could move or
+    # free values that only these unpublished slots hold. Stay unparkable
+    # until the node is linked; the exit services any pending stop after.
+    pcc_thread_no_park_enter()
     node = pcc_gc_frame_node_create(frame_map, slots, root_count, 0)
     if ptr_is_null(node) != 0:
+        pcc_thread_no_park_exit()
         return
     prepared = null()
     prepared_cap: i64 = 0
@@ -313,6 +321,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
             if ptr_is_null(prepared) == 0:
                 free(prepared)
             pcc_gc_frame_node_release(node)
+            pcc_thread_no_park_exit()
             return
         if required > 0 and (
             ptr_is_null(prepared) != 0 or prepared_cap < required
@@ -323,6 +332,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
             prepared = malloc(required * pcc_gc_index_slot_size())
             if ptr_is_null(prepared) != 0:
                 pcc_gc_frame_node_release(node)
+                pcc_thread_no_park_exit()
                 return
             memset(prepared, 0, required * pcc_gc_index_slot_size())
             prepared_cap = required
@@ -354,6 +364,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
             if ptr_is_null(prepared) == 0:
                 free(prepared)
             pcc_gc_frame_node_release(node)
+            pcc_thread_no_park_exit()
             return
         store_ptr(node, 32, duplicate)
         # A frame enter or leave genuinely is new tracing work for an incremental
@@ -373,6 +384,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         pcc_py_gc_minor_graph_unlock()
         if ptr_is_null(prepared) == 0:
             free(prepared)
+        pcc_thread_no_park_exit()
         return
 
 
@@ -388,21 +400,23 @@ def pcc_gc_note_frame_enter_lifo(frame_map, slots) -> None:
     root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
     if root_count <= 0:
         return
+    # Unparkable until linked, as in pcc_gc_note_frame_enter.
+    pcc_thread_no_park_enter()
     node = pcc_gc_frame_node_create(frame_map, slots, root_count, 2)
-    if ptr_is_null(node) != 0:
-        return
-    pcc_py_gc_minor_graph_lock()
-    old_head = global_load_ptr("pcc_gc_frame_head")
-    store_ptr(node, 16, old_head)
-    if ptr_is_null(old_head) == 0:
-        store_ptr(old_head, 24, node)
-    global_store_ptr("pcc_gc_frame_head", node)
-    pcc_gc_root_registry_note_mutation_locked()
-    # Collector-internal frame transitions must not re-arm the cycle; see the
-    # note on the first of these four sites.
-    if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
-        pcc_gc_cycle_requested_store_release(1)
-    pcc_py_gc_minor_graph_unlock()
+    if ptr_is_null(node) == 0:
+        pcc_py_gc_minor_graph_lock()
+        old_head = global_load_ptr("pcc_gc_frame_head")
+        store_ptr(node, 16, old_head)
+        if ptr_is_null(old_head) == 0:
+            store_ptr(old_head, 24, node)
+        global_store_ptr("pcc_gc_frame_head", node)
+        pcc_gc_root_registry_note_mutation_locked()
+        # Collector-internal frame transitions must not re-arm the cycle; see
+        # the note on the first of these four sites.
+        if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
+            pcc_gc_cycle_requested_store_release(1)
+        pcc_py_gc_minor_graph_unlock()
+    pcc_thread_no_park_exit()
 
 
 @c_abi_export("pcc_gc_note_frame_leave_lifo")

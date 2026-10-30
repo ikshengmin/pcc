@@ -116,6 +116,10 @@ FREESTANDING_C_LIBC_PY_MODULES = (
     "freestanding_platform_process",
     "freestanding_platform_socket",
     "freestanding_stdio",
+    "freestanding_linux_libc",
+    "freestanding_errno",
+    "freestanding_gc_state",
+    "freestanding_runtime_traps",
 )
 def _optional_find_library(name):
     """``ctypes.util.find_library`` when the host has it, else ``None``.
@@ -847,12 +851,15 @@ _C_EXTENSION_COMPAT_DEFINES = (
     "-D__restrict__=restrict",
     "-D_Atomic(x)=x",
     "-Dasm(...)=",
-    "-D__asm__(x)=",
-    "-D__asm(x)=",
+    "-D__asm__(...)=",
+    "-D__asm(...)=",
     "-D_Nonnull=",
     "-D_Nullable=",
     "-D_Null_unspecified=",
-    "-D__nonnull=",
+    # __nonnull is a header-owned macro, not a nullability keyword.  In
+    # glibc it takes an argument list; predefining it as an empty object-like
+    # macro suppresses that definition and leaves stray ((1, 2)) suffixes on
+    # ordinary function declarations.  __attribute__ above handles its result.
     "-D__nullable=",
     "-D__null_unspecified=",
     "-D__int128_t=__int128",
@@ -1978,11 +1985,21 @@ class CEvaluator(object):
                                       timeout=timeout, cwd=base_dir or os.getcwd())
             # The external toolchain is reachable only through an explicitly
             # requested system-cc oracle entrypoint.
-            asm_text = self._self_backend_asm_text(prepared_units)
-            cc = self._system_cc()
-            asm_path = os.path.join(tmpdir, "self_backend.s")
-            with open(asm_path, "w") as f:
-                f.write(asm_text)
+            if self._self_link_target_identity(prepared_units) == "self-aarch64-linux-v0":
+                # AArch64's internal section/@PAGE transport is not GNU as syntax.
+                # Reuse owned per-TU ELF emission and semantic stackmap merging;
+                # the explicitly requested system-cc oracle still performs the link.
+                link_input = os.path.join(tmpdir, "self_backend.o")
+                self._emit_compiled_units_self_backend(
+                    prepared_units, emit_obj=link_input, optimize=False,
+                )
+                cc = self._system_cc()
+            else:
+                asm_text = self._self_backend_asm_text(prepared_units)
+                cc = self._system_cc()
+                link_input = os.path.join(tmpdir, "self_backend.s")
+                with open(link_input, "w") as f:
+                    f.write(asm_text)
             startup_inputs, platform_link_flags, runtime_link_args = (
                 self._freestanding_link_inputs(
                     tmpdir,
@@ -1992,7 +2009,7 @@ class CEvaluator(object):
             )
             bin_path = os.path.join(tmpdir, "a.out")
             link_cmd = (
-                [cc, asm_path]
+                [cc, link_input]
                 + startup_inputs
                 + ["-o", bin_path]
                 + platform_link_flags

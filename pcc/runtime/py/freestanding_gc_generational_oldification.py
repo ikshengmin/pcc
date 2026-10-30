@@ -83,6 +83,10 @@ pcc_gc_live_bytes_subtract = extern(
 )
 
 
+pcc_gc_gray_count_increment_acq_rel = extern("pcc_gc_gray_count_increment_acq_rel", (), c_void)
+pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
+pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+
 @c_abi_export("pcc_gc_generational_oldify_supported_tag")
 def pcc_gc_generational_oldify_supported_tag(tag: i64) -> i64:
     if tag == PY_TYPE_INT:  # PY_TYPE_INT
@@ -135,6 +139,10 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
             return target
     if (flags & 128) == 0 or pcc_gc_object_is_address_pinned(from_obj) != 0:
         return null()
+    # The running step found a mutator outside an application gate: callers
+    # promote the object in place, as they do a pinned one.
+    if load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0) != 0:
+        return null()
 
     tag: i64 = load_i32(from_obj, 8)
     if pcc_gc_generational_oldify_supported_tag(tag) == 0:
@@ -149,6 +157,10 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
     memmove(to_obj, from_obj, size)
     store_i64(to_obj, 0, 1)
     new_flags: i64 = load_i32(to_obj, 12)
+    if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+        # The copied GRAY bit is not a second counted work item. Keep the
+        # new node white until forwarding commits under this graph lock.
+        new_flags = (new_flags & ~56) | 8
     # Same stale-verdict rule as the C oracle: the header copy inherits
     # SWEEP_CANDIDATE (1024) from a finished cycle that predates
     # promotion, and a pending-candidate sweep would run PASS-0 __del__
@@ -212,5 +224,13 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
 
     pcc_gc_backend3_young_unlink(pcc_gc_object_index_find(from_obj))
     pcc_gc_generational_mark_forwarded_source_inactive(from_obj)
+    if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+        # The old node is now inactive. Transfer its gray work, or introduce
+        # one new scan for a promoted white/black object, without double-count.
+        if (load_i32(from_obj, 12) & 16) != 0:
+            pcc_gc_gray_count_decrement_acq_rel()
+        if (load_i32(to_obj, 12) & 16) == 0:
+            pcc_gc_gray_count_increment_acq_rel()
+        pcc_gc_set_mark_color(to_obj, 16)
     store_i32(from_obj, 12, (load_i32(from_obj, 12) & ~128) | 256)
     return to_obj

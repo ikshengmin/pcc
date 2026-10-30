@@ -408,6 +408,64 @@ def _custom_scheduler_plugin(kind):
     """)
 
 
+def _probe_environment(tmp_path, records):
+    routing_dir = tmp_path / "probe-routing"
+    routing_dir.mkdir()  # Refuse to reuse an existing session's log namespace.
+    env = os.environ.copy()
+    env.pop("LC_ALL", None)
+    env.pop(budget._OUTER_ENV, None)
+    env.pop("PYTEST_ADDOPTS", None)
+    env["PYTHONPATH"] = str(ROOT)
+    env["PCC_BUDGET_RECORDS"] = str(records)
+    # These non-compiling probes are independent pytest sessions. Keep strict
+    # routing enabled, but do not summarize another session's in-flight work.
+    env["PCC_TEST_COMPILER_LOG"] = str(routing_dir / "pcc1-routing.jsonl")
+    return env
+
+
+def test_probe_routing_log_does_not_inherit_outer_incomplete_invocation(
+    tmp_path, monkeypatch
+):
+    from tests import conftest, pcc1_route
+
+    outer_log = tmp_path / "outer-routing.jsonl"
+    outer_record = json.dumps(
+        {"route": "native", "event": "attempt", "invocation": "outer-in-flight"}
+    ) + "\n"
+    outer_log.write_text(outer_record, encoding="utf-8")
+    monkeypatch.setenv("PCC_TEST_COMPILER", "unused-non-compiling-probe")
+    monkeypatch.setenv(pcc1_route.STRICT_ENV, "1")
+    monkeypatch.setenv(pcc1_route.LOG_ENV, str(outer_log))
+
+    env = _probe_environment(tmp_path, tmp_path / "records")
+    assert env[pcc1_route.STRICT_ENV] == "1"
+    assert env["PCC_TEST_COMPILER"] == os.environ["PCC_TEST_COMPILER"]
+    assert env[pcc1_route.LOG_ENV] != str(outer_log)
+    assert os.environ[pcc1_route.LOG_ENV] == str(outer_log)
+    with monkeypatch.context() as inner:
+        inner.setenv(pcc1_route.LOG_ENV, env[pcc1_route.LOG_ENV])
+        session = SimpleNamespace(config=SimpleNamespace(), exitstatus=0)
+        conftest.pytest_sessionfinish(session, 0)
+        assert session.exitstatus == 0
+        # An incomplete invocation belonging to the probe must still fail it.
+        Path(env[pcc1_route.LOG_ENV]).write_text(
+            json.dumps(
+                {"route": "native", "event": "attempt", "invocation": "inner-in-flight"}
+            ) + "\n",
+            encoding="utf-8",
+        )
+        session = SimpleNamespace(config=SimpleNamespace(), exitstatus=0)
+        conftest.pytest_sessionfinish(session, 0)
+        assert session.exitstatus == 1
+
+    # Isolation must neither erase nor forgive the actual outer invocation.
+    assert outer_log.read_text(encoding="utf-8") == outer_record
+    assert pcc1_route.summarize(str(outer_log))["counts"]["native_incomplete"] == 1
+    session = SimpleNamespace(config=SimpleNamespace(), exitstatus=0)
+    conftest.pytest_sessionfinish(session, 0)
+    assert session.exitstatus == 1
+
+
 @pytest.mark.parametrize(
     "case,item_count,expected",
     [
@@ -486,12 +544,7 @@ def test_real_xdist_budget_contract(tmp_path, case, item_count, expected):
             """),
             encoding="utf-8",
         )
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env.pop(budget._OUTER_ENV, None)
-    env.pop("PYTEST_ADDOPTS", None)
-    env["PYTHONPATH"] = str(ROOT)
-    env["PCC_BUDGET_RECORDS"] = str(records)
+    env = _probe_environment(tmp_path, records)
     if case in {"explicit", "empty_explicit", "invalid_explicit"}:
         env[budget._OUTER_ENV] = expected
     command = [

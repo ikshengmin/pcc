@@ -55,7 +55,11 @@ class BaseProtocol:
         return data
     async def connect(self, reader_remote, writer_remote, rauth, host_name, port, **kw):
         raise Exception(f'{self.name} don\'t support client')
+    def channel_error(self, error, phase):
+        # Optional diagnostics run only on failure, never for each data chunk.
+        pass
     async def channel(self, reader, writer, stat_bytes, stat_conn):
+        normal_eof = False
         try:
             stat_conn(1)
             while not reader.at_eof() and not writer.is_closing():
@@ -67,15 +71,35 @@ class BaseProtocol:
                 stat_bytes(len(data))
                 writer.write(data)
                 await writer.drain()
+            normal_eof = reader.at_eof()
         except asyncio.CancelledError:
             pass
-        except Exception:
-            pass
+        except Exception as error:
+            self.channel_error(error, 'relay')
         finally:
             stat_conn(-1)
-            writer.close()
+        return await self.finish_channel(writer, normal_eof)
+
+    async def finish_channel(self, writer, normal_eof):
+        if normal_eof and getattr(writer, 'can_write_eof', lambda: False)():
+            try:
+                writer.write_eof()
+                await writer.drain()
+                return True
+            except asyncio.CancelledError:
+                pass
+            except Exception as error:
+                self.channel_error(error, 'half_close')
+        writer.close()
+        return False
 
 class Direct(BaseProtocol):
+    pass
+
+class Turn(BaseProtocol):
+    pass
+
+class Masque(BaseProtocol):
     pass
 
 class Trojan(BaseProtocol):
@@ -257,6 +281,52 @@ class Socks5Reply:
         self.sent = True
         await self.writer.drain()
 
+class Socks5UDPRequest(Socks5Reply):
+    def __init__(self, writer, address, host, port):
+        super().__init__(writer, address)
+        self.host = host
+        self.port = port
+
+def socks5_address(host, port):
+    for family, kind in ((socket.AF_INET, 1), (socket.AF_INET6, 4)):
+        try:
+            address = bytes([kind]) + socket.inet_pton(family, host)
+            break
+        except OSError:
+            pass
+    else:
+        name = host.encode('idna')
+        if not 0 < len(name) <= 255:
+            raise ValueError('Invalid SOCKS5 domain length')
+        address = b'\x03' + packstr(name)
+    return address + port.to_bytes(2, 'big')
+
+def socks5_udp_unpack(data):
+    # Fragment reassembly is optional in RFC 1928; silently drop FRAG != 0.
+    if len(data) < 4 or data[:3] != b'\x00\x00\x00':
+        return None
+    kind = data[3]
+    offset = 4
+    if kind == 3:
+        if len(data) < 5 or data[4] == 0:
+            return None
+        size, offset = data[4], 5
+    elif kind in (1, 4):
+        size = 4 if kind == 1 else 16
+    else:
+        return None
+    if len(data) < offset + size + 2:
+        return None
+    address = data[offset:offset + size]
+    try:
+        host = address.decode('idna') if kind == 3 else socket.inet_ntop(
+            socket.AF_INET if kind == 1 else socket.AF_INET6, address)
+    except (UnicodeError, OSError):
+        return None
+    offset += size
+    port = int.from_bytes(data[offset:offset + 2], 'big')
+    return host, port, data[offset + 2:]
+
 class Socks5(BaseProtocol):
     async def guess(self, reader, **kw):
         header = await reader.read_w(1)
@@ -287,11 +357,21 @@ class Socks5(BaseProtocol):
             writer.write(b'\x05\x00')
         if users:
             authtable.set_authed(user)
-        assert await reader.read_n(3) == b'\x05\x01\x00', 'Unknown SOCKS protocol'
+        request = await reader.read_n(3)
+        if request[0] != 5 or request[2] != 0 or request[1] not in (1, 3):
+            await Socks5Reply(writer, b'').failed(Socks5Error(7))
+            raise Exception('Unsupported SOCKS5 command')
         header = await reader.read_n(1)
+        if header[0] not in (1, 3, 4):
+            await Socks5Reply(writer, b'').failed(Socks5Error(8))
+            raise Exception('Unsupported SOCKS5 address type')
         host_name, port, data = await socks_address_stream(reader, header[0])
+        if request[1] == 3:
+            return user, host_name, port, Socks5UDPRequest(writer, header + data, host_name, port)
         return user, host_name, port, Socks5Reply(writer, header + data)
     async def connect(self, reader_remote, writer_remote, rauth, host_name, port, **kw):
+        await self.request(reader_remote, writer_remote, rauth, host_name, port, 1)
+    async def request(self, reader_remote, writer_remote, rauth, host_name, port, command):
         if rauth:
             writer_remote.write(b'\x05\x01\x02')
             assert await reader_remote.read_n(2) == b'\x05\x02'
@@ -300,24 +380,29 @@ class Socks5(BaseProtocol):
         else:
             writer_remote.write(b'\x05\x01\x00')
             assert await reader_remote.read_n(2) == b'\x05\x00'
-        writer_remote.write(b'\x05\x01\x00\x03' + packstr(host_name.encode()) + port.to_bytes(2, 'big'))
+        writer_remote.write(bytes([5, command, 0]) + socks5_address(host_name, port))
         response = await reader_remote.read_n(3)
         assert response[0] == 5 and response[2] == 0, 'Invalid SOCKS reply'
         if response[1]:
             raise Socks5Error(response[1])
         header = (await reader_remote.read_n(1))[0]
-        await reader_remote.read_n(6 if header == 1 else (18 if header == 4 else (await reader_remote.read_n(1))[0]+2))
+        if header not in (1, 3, 4):
+            raise ValueError('Invalid SOCKS5 reply address type')
+        host, port, _ = await socks_address_stream(reader_remote, header)
+        return host, port
     def udp_accept(self, data, **kw):
-        reader = io.BytesIO(data)
-        if reader.read(3) != b'\x00\x00\x00':
-            return
-        n = reader.read(1)[0]
-        if n not in (1, 3, 4):
-            return
-        host_name, port = socks_address(reader, n)
-        return True, host_name, port, reader.read()
+        packet = socks5_udp_unpack(data)
+        if packet is not None:
+            return (True,) + packet
+    def udp_unpack(self, data):
+        packet = socks5_udp_unpack(data)
+        if packet is None:
+            raise ValueError('Invalid SOCKS5 UDP packet')
+        return packet[2]
+    def udp_pack(self, host_name, port, data):
+        return b'\x00\x00\x00' + socks5_address(host_name, port) + data
     def udp_connect(self, rauth, host_name, port, data, **kw):
-        return b'\x00\x00\x00\x03' + packstr(host_name.encode()) + port.to_bytes(2, 'big') + data
+        return self.udp_pack(host_name, port, data)
 
 class HTTP(BaseProtocol):
     async def guess(self, reader, **kw):
@@ -381,6 +466,7 @@ class HTTP(BaseProtocol):
                 or not status[1].isdigit() or not 200 <= int(status[1]) < 300):
             raise ConnectionError('Upstream HTTP CONNECT rejected or returned an invalid response')
     async def http_channel(self, reader, writer, stat_bytes, stat_conn):
+        normal_eof = False
         try:
             stat_conn(1)
             while not reader.at_eof() and not writer.is_closing():
@@ -400,13 +486,14 @@ class HTTP(BaseProtocol):
                 stat_bytes(len(data))
                 writer.write(data)
                 await writer.drain()
+            normal_eof = reader.at_eof()
         except asyncio.CancelledError:
             pass
-        except Exception:
-            pass
+        except Exception as error:
+            self.channel_error(error, 'http_relay')
         finally:
             stat_conn(-1)
-            writer.close()
+        return await self.finish_channel(writer, normal_eof)
 
 class HTTPOnly(HTTP):
     async def connect(self, reader_remote, writer_remote, rauth, host_name, port, myhost, **kw):
@@ -651,6 +738,8 @@ def udp_accept(protos, data, **kw):
     raise Exception(f'Unsupported protocol {data[:10]}')
 
 MAPPINGS = dict(direct=Direct, http=HTTP, httponly=HTTPOnly, httpadmin=HTTPAdmin, ssh=SSH, socks5=Socks5, socks4=Socks4, socks=Socks5, ss=SS, ssr=SSR, redir=Redir, pf=Pf, tunnel=Tunnel, echo=Echo, ws=WS, trojan=Trojan, h2=H2, h3=H3, ssl='', secure='', quic='')
+MAPPINGS['turn'] = Turn
+MAPPINGS['masque'] = Masque
 MAPPINGS['in'] = ''
 
 def get_protos(rawprotos):

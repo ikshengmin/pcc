@@ -70,6 +70,9 @@ pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
 
 
 @c_abi_export("pcc_gc_relocation_selector_zpage_head")
@@ -1095,6 +1098,7 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
     while pages < page_budget:
         page_token = null()
         preflight_seed = null()
+        preflight_epoch: i64 = -1
         object_budget: i64 = 0
         preflight_result = stack_alloc(24)
         preflight_complete: i64 = 0
@@ -1122,6 +1126,14 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
                     # Asynchronous foreign managed reentry remains outside
                     # the raw-runtime contract.
                     preflight_seed = load_ptr(preflight_result, 0)
+                else:
+                    # A threaded caller may reuse only while it owns the
+                    # same stopped-world epoch across raw plan allocation.
+                    # This is not a global stopped flag or a ranking lease:
+                    # later polls still use registered cursors and rescans.
+                    preflight_epoch = pcc_thread_world_stop_epoch_held()
+                    if preflight_epoch > 0:
+                        preflight_seed = load_ptr(preflight_result, 0)
             pcc_py_gc_minor_graph_unlock()
             if (
                 preflight_complete == 0
@@ -1172,6 +1184,11 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
             while current_complete == 0:
                 pcc_py_gc_minor_graph_lock()
                 has_current: i64 = 0
+                if ptr_is_null(preflight_seed) == 0 and preflight_epoch > 0:
+                    if pcc_thread_world_stop_epoch_held() != preflight_epoch:
+                        # Drop before any seed/page dereference. A resume,
+                        # new epoch or lost ownership needs the original scan.
+                        preflight_seed = null()
                 if ptr_is_null(preflight_seed) == 0:
                     # Recheck and register this one-shot seed before the
                     # first explicit poll. After that boundary only the

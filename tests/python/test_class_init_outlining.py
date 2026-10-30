@@ -47,7 +47,7 @@ def _bounded_host_configuration(monkeypatch):
     # runtime archive, external optimizer, target emitter or subprocess is used.
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
-    monkeypatch.setenv("PCC_WITH_THREADS", "0")
+    monkeypatch.delenv("PCC_WITH_THREADS", raising=False)
     monkeypatch.delenv("PCC_DEBUG_CODEGEN_PHASES", raising=False)
 
 
@@ -272,15 +272,21 @@ def test_reused_helper_without_noinline_is_rejected(monkeypatch, other_attribute
     assert str(raised.value) == "incompatible class-init outline declaration: " + changed[0]
 
 
-@pytest.mark.parametrize("threads", ["0", "1"])
-def test_inline_oracle_preserves_constructors_and_root_operations(monkeypatch, threads):
-    monkeypatch.setenv("PCC_WITH_THREADS", threads)
+def test_single_thread_runtime_request_fails_explicitly(monkeypatch):
+    # The single-thread runtime was removed; selecting it must not compile.
+    monkeypatch.setenv("PCC_WITH_THREADS", "0")
+    with pytest.raises(ValueError, match="single-thread runtime was removed"):
+        _emit()
+
+
+def test_inline_oracle_preserves_constructors_and_root_operations(monkeypatch):
+    monkeypatch.setenv("PCC_WITH_THREADS", "1")
     _, _, outlined_generator, outlined = _emit()
-    assert outlined_generator._runtime_threads_enabled == (threads == "1")
+    assert outlined_generator._runtime_threads_enabled
     with monkeypatch.context() as disabled:
         disabled.setattr(ClassLowering, "_maybe_emit_class_init_outline", lambda self, cd, info: False)
         _, _, inline_generator, inline = _emit()
-        assert inline_generator._runtime_threads_enabled == (threads == "1")
+        assert inline_generator._runtime_threads_enabled
     assert not _helpers(inline)
     constructors = Counter()
     selected = {

@@ -256,6 +256,21 @@ def _fold(
         )
         rows.append((len(match.group("lead")), weight, label))
 
+    # Charge each row's cumulative weight to its immediate parent once.
+    # Re-scanning rows[index + 1:] copied the entire remaining call tree
+    # for every node, making large multi-thread captures quadratic.
+    child_weights = [0] * len(rows)
+    parents: list[tuple[int, int]] = []
+    for index, row in enumerate(rows):
+        if row is None:
+            continue
+        depth, count, _label = row
+        while parents and parents[-1][0] >= depth:
+            parents.pop()
+        if parents:
+            child_weights[parents[-1][1]] += count
+        parents.append((depth, index))
+
     folded: collections.Counter = collections.Counter()
     stack: list[tuple[int, str]] = []
     for index, row in enumerate(rows):
@@ -265,18 +280,7 @@ def _fold(
         while stack and stack[-1][0] >= depth:
             stack.pop()
         stack.append((depth, label))
-        child_depth = None
-        children = 0
-        for follow in rows[index + 1 :]:
-            if follow is None:
-                continue
-            if follow[0] <= depth:
-                break
-            if child_depth is None:
-                child_depth = follow[0]
-            if follow[0] == child_depth:
-                children += follow[1]
-        own = max(0, count - children)
+        own = max(0, count - child_weights[index])
         # Same on-CPU rule the injected host sampler uses: a frame blocked in
         # waitpid/sleep/condvar burns no CPU, and counting it makes the two
         # graphs incomparable -- which is the only reason to draw them.

@@ -31,19 +31,24 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     cstr,
+    define_thread_local_ptr_null,
     free,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i8,
     load_i32,
     load_i64,
     load_ptr,
-    malloc,
+    memcpy,
     null,
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    stack_alloc,
     store_i8,
+    store_i64,
+    store_ptr,
     strlen,
     write,
 )
@@ -94,16 +99,103 @@ def _type_of(obj) -> int:
     return load_i32(obj, 8)
 
 
+# One print call's output buffer, on that call's stack:
+#   [0] data   [8] used bytes   [16] capacity
+# The thread-local names the innermost print in progress. A print writes its
+# whole output with one write(), so prints from different threads never
+# interleave inside a line, as they do not under CPython's GIL, and an int or
+# a repr no longer costs one write() per digit or byte. Pending text is
+# written out before code that can print on its own runs (__str__, __repr__,
+# an extension's tp_repr): a print nested in that code then lands after the
+# text the outer call already produced, as with CPython's shared buffer.
+define_thread_local_ptr_null("pcc_tls_print_buffer")
+
+
+def _write_fd_all(data, n: int) -> None:
+    done: int = 0
+    failed: int = 0
+    while done < n and failed == 0:
+        wrote: int = write(1, ptr_add(data, done), n - done)
+        if wrote <= 0:
+            failed = 1
+        else:
+            done = done + wrote
+
+
+def _print_buffer_flush() -> None:
+    state = global_load_ptr("pcc_tls_print_buffer")
+    if ptr_is_null(state) != 0:
+        return
+    used: int = load_i64(state, 8)
+    if used > 0:
+        _write_fd_all(load_ptr(state, 0), used)
+        store_i64(state, 8, 0)
+
+
+def _print_buffer_begin(state, data):
+    """Install ``state`` over ``data`` (4096 bytes) and return the outer one."""
+    store_ptr(state, 0, data)
+    store_i64(state, 8, 0)
+    store_i64(state, 16, 4096)
+    outer = global_load_ptr("pcc_tls_print_buffer")
+    global_store_ptr("pcc_tls_print_buffer", state)
+    return outer
+
+
+def _print_buffer_end(outer) -> None:
+    _print_buffer_flush()
+    global_store_ptr("pcc_tls_print_buffer", outer)
+
+
+def _print_buffer_release():
+    """Write pending text out and detach the buffer while other code runs.
+
+    That code may print (its print installs its own buffer) or suspend a
+    virtual thread that resumes on another carrier thread, so no buffer stays
+    installed across it."""
+    _print_buffer_flush()
+    state = global_load_ptr("pcc_tls_print_buffer")
+    global_store_ptr("pcc_tls_print_buffer", null())
+    return state
+
+
+def _print_buffer_reacquire(state) -> None:
+    global_store_ptr("pcc_tls_print_buffer", state)
+
+
 def _write_cstr(p) -> None:
     if ptr_is_null(p) != 0:
         return
     n: int = strlen(p)
     if n > 0:
-        write(1, p, n)
+        _write_lit(p, n)
 
 
 def _write_lit(p, n: int) -> None:
-    write(1, p, n)
+    if n <= 0:
+        return
+    state = global_load_ptr("pcc_tls_print_buffer")
+    if ptr_is_null(state) != 0:
+        _write_fd_all(p, n)
+        return
+    used: int = load_i64(state, 8)
+    capacity: int = load_i64(state, 16)
+    if used + n > capacity:
+        if used > 0:
+            _write_fd_all(load_ptr(state, 0), used)
+            store_i64(state, 8, 0)
+            used = 0
+        if n > capacity:
+            _write_fd_all(p, n)
+            return
+    memcpy(ptr_add(load_ptr(state, 0), used), p, n)
+    store_i64(state, 8, used + n)
+
+
+def _write_byte(c: int) -> None:
+    cell = stack_alloc(8)
+    store_i8(cell, 0, c)
+    _write_lit(cell, 1)
 
 
 def _flush_stdio() -> None:
@@ -116,37 +208,29 @@ def _write_i64(v: int) -> None:
     if v == 0:
         _write_lit(cstr("0"), 1)
         return
+    negative: int = 0
     if v < 0:
-        _write_lit(cstr("-"), 1)
+        negative = 1
         v = 0 - v
-    buf = malloc(32)
-    if ptr_is_null(buf) != 0:
-        return
-    n: int = 0
+    # Digits fill the cell from its end, so the text is written in one piece.
+    buf = stack_alloc(32)
+    pos: int = 32
     while v > 0:
         digit: int = v % 10
-        store_i8(buf, n, 48 + digit)
-        n = n + 1
+        pos = pos - 1
+        store_i8(buf, pos, 48 + digit)
         v = v // 10
-    i: int = n - 1
-    while i >= 0:
-        write(1, ptr_add(buf, i), 1)
-        i = i - 1
-    free(buf)
+    if negative != 0:
+        pos = pos - 1
+        store_i8(buf, pos, 45)
+    _write_lit(ptr_add(buf, pos), 32 - pos)
 
 
 def _write_hex_nibble(v: int) -> None:
-    ch: int = 0
     if v < 10:
-        ch = 48 + v
+        _write_byte(48 + v)
     else:
-        ch = 87 + v
-    buf = malloc(1)
-    if ptr_is_null(buf) != 0:
-        return
-    store_i8(buf, 0, ch)
-    write(1, buf, 1)
-    free(buf)
+        _write_byte(87 + v)
 
 
 def _write_hex2(v: int) -> None:
@@ -168,7 +252,7 @@ def _format_int(o) -> None:
 def _format_str(o) -> None:
     n: int = load_i64(o, 16)
     if n > 0:
-        write(1, ptr_add(o, 40), n)
+        _write_lit(ptr_add(o, 40), n)
 
 
 def _repr_quote(data, n: int) -> int:
@@ -196,44 +280,20 @@ def _write_quote(quote: int) -> None:
         _write_lit(cstr("'"), 1)
 
 
-def _format_str_repr(o) -> None:
-    data = ptr_add(o, 40)
-    n: int = load_i64(o, 16)
-    quote: int = _repr_quote(data, n)
-    _write_quote(quote)
-    i: int = 0
-    while i < n:
-        c: int = load_i8(data, i) & 255
-        if c == 92:                  # '\\'
-            _write_lit(cstr("\\\\"), 2)
-        elif c == quote and c == 39:
-            _write_lit(cstr("\\'"), 2)
-        elif c == quote:
-            _write_lit(cstr("\\\""), 2)
-        elif c == 10:
-            _write_lit(cstr("\\n"), 2)
-        elif c == 13:
-            _write_lit(cstr("\\r"), 2)
-        elif c == 9:
-            _write_lit(cstr("\\t"), 2)
-        elif c < 32 or c == 127:
-            _write_lit(cstr("\\x"), 2)
-            _write_hex2(c)
-        else:
-            write(1, ptr_add(data, i), 1)
-        i = i + 1
-    _write_quote(quote)
-
-
 def _format_bytes(o) -> None:
     data = ptr_add(o, 24)
     n: int = load_i64(o, 16)
     quote: int = _repr_quote(data, n)
     _write_lit(cstr("b"), 1)
     _write_quote(quote)
+    run: int = 0
     i: int = 0
     while i < n:
         c: int = load_i8(data, i) & 255
+        if c == 92 or c == quote or c < 32 or c >= 127:
+            if i > run:
+                _write_lit(ptr_add(data, run), i - run)
+            run = i + 1
         if c == 92:                  # '\\'
             _write_lit(cstr("\\\\"), 2)
         elif c == quote and c == 39:
@@ -252,9 +312,9 @@ def _format_bytes(o) -> None:
             # so b'\xcf\x80' printed the raw UTF-8 char instead of the escapes.)
             _write_lit(cstr("\\x"), 2)
             _write_hex2(c)
-        else:
-            write(1, ptr_add(data, i), 1)
         i = i + 1
+    if n > run:
+        _write_lit(ptr_add(data, run), n - run)
     _write_quote(quote)
 
 
@@ -273,117 +333,8 @@ def _format_float(o) -> None:
     s = py_float_repr_shortest(o)
     if ptr_is_null(s) != 0:
         return
-    data = ptr_add(s, 40)
-    n: int = load_i64(s, 16)
-    write(1, data, n)
-
-
-def _format_list(o) -> None:
-    _write_lit(cstr("["), 1)
-    length: int = load_i64(o, 16)
-    items = load_ptr(o, 32)
-    i: int = 0
-    while i < length:
-        if i > 0:
-            _write_lit(cstr(", "), 2)
-        _format_repr(pcc_gc_load_ptr(o, ptr_add(items, i * 8)))
-        i = i + 1
-    _write_lit(cstr("]"), 1)
-
-
-def _format_tuple(o) -> None:
-    _write_lit(cstr("("), 1)
-    length: int = load_i64(o, 16)
-    i: int = 0
-    while i < length:
-        if i > 0:
-            _write_lit(cstr(", "), 2)
-        _format_repr(pcc_gc_load_ptr(o, ptr_add(o, 24 + i * 8)))
-        i = i + 1
-    if length == 1:
-        _write_lit(cstr(","), 1)
-    _write_lit(cstr(")"), 1)
-
-
-def _format_dict(o) -> None:
-    # PyDictObject: entries ptr @40, entries_used @48.
-    # DictEntry (24 bytes): hash @0, key @8, value @16; key NULL = dead slot.
-    _write_lit(cstr("{"), 1)
-    entries = load_ptr(o, 40)
-    entries_used: int = load_i64(o, 48)
-    emitted: int = 0
-    i: int = 0
-    while i < entries_used:
-        entry = ptr_add(entries, i * 24)
-        if ptr_is_null(load_ptr(entry, 8)) == 0:
-            if emitted > 0:
-                _write_lit(cstr(", "), 2)
-            _format_repr(pcc_gc_load_ptr(o, ptr_add(entry, 8)))
-            _write_lit(cstr(": "), 2)
-            _format_repr(pcc_gc_load_ptr(o, ptr_add(entry, 16)))
-            emitted = emitted + 1
-        i = i + 1
-    _write_lit(cstr("}"), 1)
-
-
-def _format_set(o) -> None:
-    # PySetObject: size @16, capacity @24, entries ptr @40.
-    # SetEntry (16 bytes): key @8 (NULL empty, py_set_dummy tombstone).
-    size: int = load_i64(o, 16)
-    if size == 0:
-        _write_lit(cstr("set()"), 5)
-        return
-    _write_lit(cstr("{"), 1)
-    entries = load_ptr(o, 40)
-    dummy = global_load_ptr("py_set_dummy")
-    cap: int = load_i64(o, 24)
-    emitted: int = 0
-    i: int = 0
-    while i < cap:
-        key = load_ptr(entries, i * 16 + 8)
-        if ptr_is_null(key) == 0:
-            if ptr_eq(key, dummy) == 0:
-                if emitted > 0:
-                    _write_lit(cstr(", "), 2)
-                _format_repr(pcc_gc_load_ptr(o, ptr_add(entries, i * 16 + 8)))
-                emitted = emitted + 1
-        i = i + 1
-    _write_lit(cstr("}"), 1)
-
-
-def _format_repr(o) -> None:
-    if ptr_is_null(o) != 0:
-        _write_lit(cstr("<null>"), 6)
-        return
-    if is_tagged_int(o):
-        _format_int(o)
-        return
-    tag: int = load_i32(o, 8)
-    if tag == PY_TYPE_STR:                    # PY_TYPE_STR
-        _format_str_repr(o)
-        return
-    if tag == PY_TYPE_BYTES:                   # PY_TYPE_BYTES
-        _format_bytes(o)
-        return
-    if tag == PY_TYPE_BYTEARRAY:                   # PY_TYPE_BYTEARRAY
-        _format_bytearray(o)
-        return
-    if (
-        tag == PY_TYPE_INSTANCE
-        or tag == PY_TYPE_EXC
-        or tag >= PY_TYPE_USER_CLASS_START
-    ):
-        # repr() of a user instance must dispatch __repr__, not __str__.
-        # Container elements recurse here, so a class with both __str__ and
-        # __repr__ would otherwise show __str__ inside a list. PY_TYPE_EXC (12):
-        # repr([KeyError('m')]) == [KeyError('m')], not the str. On NULL (no
-        # __repr__) fall through to _format's default handling.
-        s = py_obj_repr(o)
-        if ptr_is_null(s) == 0:
-            _format_str(s)
-            py_decref(s)
-            return
-    _format(o)
+    _format_str(s)
+    py_decref(s)
 
 
 def _format(o) -> None:
@@ -416,14 +367,20 @@ def _format(o) -> None:
         _format_bytes(o)
     elif tag == PY_TYPE_BYTEARRAY:                 # PY_TYPE_BYTEARRAY
         _format_bytearray(o)
-    elif tag == PY_TYPE_LIST:                  # PY_TYPE_LIST
-        _format_list(o)
-    elif tag == PY_TYPE_TUPLE:                  # PY_TYPE_TUPLE
-        _format_tuple(o)
-    elif tag == PY_TYPE_DICT:                  # PY_TYPE_DICT
-        _format_dict(o)
-    elif tag == PY_TYPE_SET:                  # PY_TYPE_SET
-        _format_set(o)
+    elif (
+        tag == PY_TYPE_LIST
+        or tag == PY_TYPE_TUPLE
+        or tag == PY_TYPE_DICT
+        or tag == PY_TYPE_SET
+    ):
+        # str(container) builds the whole repr first, as CPython does, so a
+        # print run by an element's __repr__ lands before this line's text.
+        held = _print_buffer_release()
+        text = py_obj_repr(o)
+        _print_buffer_reacquire(held)
+        if ptr_is_null(text) == 0:
+            _format_str(text)
+            py_decref(text)
     elif tag == PY_TYPE_COROUTINE:                 # PY_TYPE_COROUTINE
         _write_lit(cstr("<coroutine object>"), 18)
     elif tag == PY_TYPE_CONTINUATION:
@@ -434,7 +391,9 @@ def _format(o) -> None:
         _write_lit(cstr("<vthread channel object>"), 24)
     elif tag == PY_TYPE_EXC:
         if (load_i32(o, 12) & (PY_FLAG_EXC_UNICODE_PAYLOAD | PY_FLAG_EXC_OS_PAYLOAD)) != 0:
+            held = _print_buffer_release()
             rendered = py_obj_str(o)
+            _print_buffer_reacquire(held)
             if ptr_is_null(rendered) == 0:
                 _format_str(rendered)
                 py_decref(rendered)
@@ -444,7 +403,9 @@ def _format(o) -> None:
             msg = py_exc_get_message(o)
             if ptr_is_null(msg) == 0:
                 if py_exc_matches(o, py_exc_builtin_class(4)) != 0:
+                    held = _print_buffer_release()
                     r = py_obj_repr(msg)
+                    _print_buffer_reacquire(held)
                     if ptr_is_null(r) == 0:
                         _format_str(r)
                         py_decref(r)
@@ -457,6 +418,7 @@ def _format(o) -> None:
         # opaque "<object tag=N>" even when the class defines __str__. A NULL
         # result (no __str__/__repr__) falls back to the libpython hook then
         # "<object tag=N>".
+        held = _print_buffer_release()
         s = py_obj_str(o)
         if ptr_is_null(s) != 0:
             # numpy / C-extension scalar (e.g. an ndarray element): py_obj_str
@@ -464,10 +426,15 @@ def _format(o) -> None:
             # than printing the opaque <object tag=N>.
             if pcc_capi_is_cext_type_tag(tag) != 0:
                 s = pcc_capi_cext_object_repr(o)
+        # The CPython-object renderer writes to fd 1 itself.
+        rendered: int = 0
+        if ptr_is_null(s) != 0:
+            rendered = py_format_try_cpy_object_into_fd(1, o, tag)
+        _print_buffer_reacquire(held)
         if ptr_is_null(s) == 0:
             _format_str(s)
             py_decref(s)
-        elif py_format_try_cpy_object_into_fd(1, o, tag) == 0:
+        elif rendered == 0:
             _write_lit(cstr("<object tag="), 12)
             _write_i64(tag)
             _write_lit(cstr(">"), 1)
@@ -476,13 +443,20 @@ def _format(o) -> None:
 @c_abi_export("py_print")
 def py_print(o) -> None:
     _flush_stdio()
+    data = stack_alloc(4096)
+    state = stack_alloc(24)
+    outer = _print_buffer_begin(state, data)
     _format(o)
     _write_lit(cstr("\n"), 1)
+    _print_buffer_end(outer)
 
 
 @c_abi_export("py_print_many")
 def py_print_many(args_tuple, sep, end) -> None:
     _flush_stdio()
+    data = stack_alloc(4096)
+    state = stack_alloc(24)
+    outer = _print_buffer_begin(state, data)
     sep_data = cstr(" ")
     sep_len: int = 1
     end_data = cstr("\n")
@@ -500,18 +474,17 @@ def py_print_many(args_tuple, sep, end) -> None:
                 end_data = ptr_add(end, 40)
                 end_len = load_i64(end, 16)
 
-    if ptr_is_null(args_tuple) != 0:
-        write(1, end_data, end_len)
-        return
-
-    length: int = load_i64(args_tuple, 16)
+    length: int = 0
+    if ptr_is_null(args_tuple) == 0:
+        length = load_i64(args_tuple, 16)
     i: int = 0
     while i < length:
         if i > 0:
-            write(1, sep_data, sep_len)
+            _write_lit(sep_data, sep_len)
         _format(pcc_gc_load_ptr(args_tuple, ptr_add(args_tuple, 24 + i * 8)))
         i = i + 1
-    write(1, end_data, end_len)
+    _write_lit(end_data, end_len)
+    _print_buffer_end(outer)
 
 
 def _print_file_text_arg(value, default, which):

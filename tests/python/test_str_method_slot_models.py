@@ -14,7 +14,17 @@ from test_set_call_slot_roots import Memory, Object, Block, Ptr
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = ROOT / "pcc/runtime/py/py_class.py"
-_TREES = {name:ast.parse(PORT.with_name(name).read_text()) for name in ("py_class.py","py_obj_ops_dispatch.py","py_str_accessors.py")}
+# Model-only runtime ASTs are not collection inputs.  Each xdist worker
+# must discover the complete test tree before marker filtering, so parsing
+# these sources at import would retain them even for integration-only runs.
+_TREES = {}
+
+
+def _runtime_tree(name):
+    if name not in _TREES:
+        _TREES[name] = ast.parse(PORT.with_name(name).read_text())
+    return _TREES[name]
+
 
 _COMPILED = {}
 
@@ -81,22 +91,22 @@ class StringMemory(Memory):
             "py_instance_bind_method","_instance_bind_method_body","_wrap_bound_captures",
             "_bound_signature","_func_signature","_func_signature_valid"}
         body=[]
-        for node in _TREES["py_class.py"].body:
+        for node in _runtime_tree("py_class.py").body:
             if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id.startswith(("_STR_METHOD_","_STR_TYPE_","_BOUND_BIND_","_BOUND_SIGNATURE_")) for t in node.targets):body.append(node)
             elif isinstance(node,ast.FunctionDef) and (node.name in names or node.name.startswith(("_str_method_","_str_type_","_bound_signature_"))):
                 node.decorator_list=[];body.append(node)
         exec(_compile_once(body,PORT),self.ns)
         dispatch=PORT.with_name("py_obj_ops_dispatch.py")
-        fn=next(n for n in _TREES["py_obj_ops_dispatch.py"].body if isinstance(n,ast.FunctionDef) and n.name=="py_builtin_type_class_tag")
+        fn=next(n for n in _runtime_tree("py_obj_ops_dispatch.py").body if isinstance(n,ast.FunctionDef) and n.name=="py_builtin_type_class_tag")
         fn.decorator_list=[]
         exec(_compile_once([fn],dispatch),self.ns)
         # Execute the actual byte-scanning bodies as well. Host str methods are
         # used only on the reference side of each assertion.
         primitives={"_bytes_eq","_utf8_codepoint_count","_str_cp_len",
             "_utf8_byte_offset_for_codepoint","_str_tailmatch_one",
-            "py_str_tailmatch_range","py_str_count_range","_int_or_default","_type_of"}
+            "py_str_tailmatch_range","py_str_count_range","py_str_len","_int_or_default","_type_of"}
         p=PORT.with_name("py_str_accessors.py")
-        body=[n for n in _TREES["py_str_accessors.py"].body if isinstance(n,ast.FunctionDef) and n.name in primitives]
+        body=[n for n in _runtime_tree("py_str_accessors.py").body if isinstance(n,ast.FunctionDef) and n.name in primitives]
         for n in body:n.decorator_list=[]
         exec(_compile_once(body,p),self.ns)
 
@@ -266,7 +276,7 @@ class StringMemory(Memory):
     def invoke(self,method,value,*args):
         caller=Block();self.roots[("caller",0)]=caller
         caller.fields[0]=self.wrap((value,)+args)
-        captures=self.wrap(({"count":0,"startswith":1,"endswith":2}[method],))
+        captures=self.wrap(({"count":0,"startswith":1,"endswith":2,"__len__":4}[method],))
         result=self.ns["_str_method_entry"](captures,self.read(caller,0))
         assert not self.frame_handles
         assert all(isinstance(key,tuple) for key in self.roots)
@@ -346,10 +356,15 @@ def test_method_copy_failure_retires_acquired_owners(failure):
     mem=StringMemory(fail_copy=failure)
     assert mem.invoke("startswith","abc","a",0,3)[0]=="error"
 
-@pytest.mark.parametrize("failure",(1,4,14))
-def test_method_root_registration_failure_retires_handles(failure):
-    mem=StringMemory(fail_register=failure)
-    assert mem.invoke("startswith","abc","a")[0]=="error"
+def test_method_root_registration_failure_retires_handles():
+    successful = StringMemory()
+    assert successful.invoke("startswith", "abc", "a")[0] == "value"
+    assert successful.registrations > 0
+    for failure in range(1, successful.registrations + 1):
+        mem = StringMemory(fail_register=failure)
+        assert mem.invoke("startswith", "abc", "a")[0] == "error"
+        assert mem.registrations >= failure
+        assert not mem.root_groups
 
 
 class CanonicalStringMemory(StringMemory):
@@ -360,7 +375,7 @@ class CanonicalStringMemory(StringMemory):
         self.ns.update({
             "_object_new_cache_mutex":lambda:"owned-mutex",
             "pcc_mutex_lock":self.mutex_lock,"pcc_mutex_unlock":self.mutex_unlock,
-            "py_class_new":self.class_new,
+            "py_class_new_builtin":self.class_new,
             "py_class_write_namespace_slots":self.write_namespace,
             "py_class_add_method":self.add_method,
         })
@@ -449,10 +464,10 @@ def test_canonical_string_class_owns_supported_method_family(phase):
     mem=CanonicalStringMemory(phase)
     result=mem.ns["py_str_type_new"]()
     assert result.alive and result is mem.global_value("pcc_type_cls_str")
-    assert mem.installed == ["count","startswith","endswith"]
+    assert mem.installed == ["count","startswith","endswith","find","__len__"]
     assert mem.initializations == 1
     methods=result.fields[abi.PYCLASSOBJECT_METHODS_OFFSET]
-    for index in range(3):
+    for index in range(5):
         fn=methods.fields[index*abi.PYCLASSMETHOD_SIZE+abi.PYCLASSMETHOD_FUNC_OFFSET]
         assert fn.alive and fn.refs==1 and fn.fields[64].refs==1
     assert not mem.locked and not mem.frame_handles
@@ -526,3 +541,78 @@ def test_unimplemented_string_attribute_does_not_bind_base_object_descriptor():
     mem=CanonicalStringMemory()
     assert mem.ns['py_str_getattr'](mem.wrap('abc'),'__repr__') is None
     assert mem.error is None and mem.initializations==0
+
+
+@pytest.mark.parametrize("phase", ("register", "copy", "acquire", "callback", "release", "drop", "allocation", "frame_enter", "frame_leave"))
+def test_len_descriptor_counts_codepoints_from_owned_subclass_payload(phase):
+    class Child(StringSubclass):
+        pass
+
+    for text in ("", "ascii", "hé🙂\x00hé", "A\ud800B", "日本語"):
+        for value in (text, Child(text)):
+            memory = StringMemory(phase)
+            assert memory.invoke("__len__", value) == ("value", str.__len__(value))
+            assert not memory.root_groups
+            if phase in ("register", "copy", "acquire", "release", "drop", "frame_enter", "frame_leave"):
+                assert memory.moves > 0
+
+
+@pytest.mark.parametrize("args", ((), ("abc", 1), (42,), (None,), (b"abc",)))
+def test_len_descriptor_rejects_wrong_receiver_and_arity(args):
+    memory = StringMemory("copy")
+    caller = Block()
+    memory.roots[("caller", 0)] = caller
+    caller.fields[0] = memory.wrap(args)
+    captures = memory.wrap((memory.ns["_STR_METHOD_LEN"],))
+    assert memory.ns["_str_method_entry"](captures, memory.read(caller, 0)) is None
+    assert memory.error[0] == 3
+    assert not memory.frame_handles and not memory.root_groups
+    assert all(obj.leases == 0 for obj in memory.objects if obj.alive and obj is not memory.none)
+
+
+def test_len_descriptor_copy_and_registration_failures_release_owners():
+    successful = StringMemory("copy")
+    assert successful.invoke("__len__", StringSubclass("hé🙂")) == ("value", 3)
+    for failure in range(1, successful.copies + 1):
+        memory = StringMemory("copy", fail_copy=failure)
+        assert memory.invoke("__len__", StringSubclass("hé🙂"))[0] == "error"
+        assert not memory.root_groups
+    for failure in range(1, successful.registrations + 1):
+        memory = StringMemory("copy", fail_register=failure)
+        assert memory.invoke("__len__", StringSubclass("hé🙂"))[0] == "error"
+        assert not memory.root_groups
+
+
+def test_len_descriptor_lookup_preserves_inherited_overrides_and_present_none():
+    memory = CanonicalStringMemory("copy")
+    canonical = memory.ns["py_str_type_new"]()
+    base = memory.klass("Base", [canonical])
+    child = memory.klass("Child", [base, canonical])
+    # Execute the actual C3 namespace lookup, not a replacement lookup model.
+    record = Block()
+    inherited = memory.ns["_special_lookup_locked"](child, "__len__", record)
+    assert memory.read(record, 0) == 1
+    assert memory.read(inherited, 0).fields[72] == "__len__"
+    override = memory.make("user length override", abi.PY_TYPE_FUNC)
+    memory.install(base, "__len__", override)
+    selected = memory.ns["_special_lookup_locked"](child, "__len__", record)
+    assert memory.read(record, 0) == 1 and memory.read(selected, 0) is override
+    memory.install(child, "__len__", memory.none)
+    selected = memory.ns["_special_lookup_locked"](child, "__len__", record)
+    assert memory.read(record, 0) == 1 and memory.read(selected, 0) is memory.none
+
+
+@pytest.mark.parametrize("phase", ("copy", "acquire", "release", "frame_enter", "frame_leave"))
+def test_exact_string_getattr_exposes_owned_len_descriptor(phase):
+    memory = CanonicalStringMemory(phase)
+    caller = Block()
+    memory.roots[("caller", 0)] = caller
+    caller.fields[0] = memory.wrap("hé🙂")
+    bound = memory.ns["py_str_getattr"](memory.read(caller, 0), "__len__")
+    assert memory.error is None and bound.alive
+    assert bound.fields[80] is memory.read(caller, 0)
+    canonical = bound.fields[64].fields[24]
+    assert canonical.fields[72] == "__len__"
+    assert canonical.fields[64].fields[24] == memory.ns["_STR_METHOD_LEN"]
+    assert not memory.frame_handles and not memory.root_groups
+    assert all(obj.leases == 0 for obj in memory.objects if obj.alive and obj is not memory.none)

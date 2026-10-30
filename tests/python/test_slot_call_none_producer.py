@@ -50,7 +50,7 @@ def test_list_append_call_result_publishes_exact_none_into_operand():
         "def probe(values: list):\n"
         "    return slot_operand_probe(values.append('value'))\n"
     )
-    assert "@py_list_append(" in text
+    assert "@py_list_append_from_slots(" in text
     _assert_none_published(text, "probe.operand")
 
 
@@ -61,7 +61,7 @@ def test_weakref_lambda_side_effect_body_publishes_exact_none():
         "def probe(owner):\n"
         "    return weakref.ref(owner, lambda reference: events.append('lambda'))\n"
     )
-    assert "@py_list_append(" in text
+    assert "@py_list_append_from_slots(" in text
     assert "@py_weakref_new(" in text
     _assert_none_published(text, "lambda.body.result")
     assert "strict.nolib.stub" not in text
@@ -96,5 +96,5 @@ def test_always_raising_callback_expression_retains_original_error_path():
 def test_complete_unchanged_weakref_callback_program_emits_without_fallback():
     text = _emit(PROGRAM)
     assert "@py_weakref_new(" in text
-    assert "@py_list_append(" in text
+    assert "@py_list_append_from_slots(" in text
     assert "strict.nolib.stub" not in text

@@ -825,6 +825,16 @@ class OwnershipLoweringMixin:
             return True
         return False
 
+    def _call_instantiates_module_class(self, expr: Call) -> bool:
+        """Whether ``expr`` calls a class this module defines."""
+        if isinstance(getattr(expr.func, "ty", None), ClassType):
+            return True
+        return (
+            isinstance(expr.func, Name)
+            and hasattr(self, "class_lowering")
+            and expr.func.ident in self.class_lowering.classes
+        )
+
     def _raw_scaffold_object_rhs_is_owned(self, expr: Expr) -> bool:
         if not self._module_uses_raw_int_scaffold:
             return True
@@ -887,6 +897,15 @@ class OwnershipLoweringMixin:
                 # is the ownership proof for Dyn and object projections alike.
                 return True
         if self._module_has_c_abi_export:
+            if (
+                not getattr(self, "_runtime_port_module", False)
+                and isinstance(expr, Call)
+                and self._call_instantiates_module_class(expr)
+            ):
+                # Instantiation allocates a fresh instance whatever reference
+                # discipline the module's raw ABI helpers follow; treating it
+                # as borrowed leaked every temporary and never ran __del__.
+                return True
             return isinstance(expr, (ListExpr, DictExpr, TupleExpr, StrLit, BytesLit))
         if isinstance(expr, (ListExpr, DictExpr, TupleExpr, StrLit, BytesLit)):
             return True
@@ -1223,16 +1242,19 @@ class OwnershipLoweringMixin:
                 return
         if frame_map is None:
             frame_map = self._gc_one_slot_frame_map()
-        from pcc.frontends.python.codegen.generator_lowering import (
-            generator_operand_root_group,
+        from pcc.frontends.python.codegen.frame_root_groups import (
+            frame_root_group,
         )
-        group = generator_operand_root_group(self, alloca)
+        group = frame_root_group(self, alloca)
         registration_slot = alloca
         new_registration = True
         if group is not None:
-            if frame_map is not self._gc_one_slot_frame_map():
+            expected_map = (self._gc_one_slot_borrowed_frame_map()
+                            if group.get("borrowed", False) else self._gc_one_slot_frame_map())
+            if frame_map is not expected_map:
                 from pcc.frontends.python.codegen.errors import L1CodegenError
-                raise L1CodegenError("generator operand group requires an owning frame map")
+                role = "borrowed" if group.get("borrowed", False) else "owning"
+                raise L1CodegenError("root group requires an " + role + " frame map")
             registration_slot = group["base"]
             frame_map = group["map"]
             new_registration = not group["registered"]
@@ -1357,10 +1379,10 @@ class OwnershipLoweringMixin:
         if not hasattr(self, "_fn_err_exit_gc_root_slots"):
             self._fn_err_exit_gc_root_slots = {}
         patched = self._fn_err_exit_gc_root_slots.setdefault(fn.name, [])
-        from pcc.frontends.python.codegen.generator_lowering import (
-            generator_operand_root_group,
+        from pcc.frontends.python.codegen.frame_root_groups import (
+            frame_root_group,
         )
-        group = generator_operand_root_group(self, alloca)
+        group = frame_root_group(self, alloca)
         registration_slot = alloca if group is None else group["base"]
         for done in patched:
             if done is registration_slot:
@@ -1564,10 +1586,14 @@ class OwnershipLoweringMixin:
 
     def _emit_owned_local_cleanup(
         self, skip_name: Optional[str] = None, skip_payload=None, shared_exit_leaves: bool = False,
-    ) -> None:
+        shared_pinned_target=None,
+    ):
         """Release this exit's locals; leave every root frame unless
         ``shared_exit_leaves`` (the caller branches to the shared return
-        exit, which leaves them once for every return)."""
+        exit, which leaves them once for every return). A shared return may
+        supply ``shared_pinned_target`` to receive its exact pinned-cleanup
+        chain head instead of emitting that suffix at this insertion point.
+        """
         self._emit_owned_valueclass_cleanup(skip_payload)
         if self.current_func_def is None:
             for record in reversed(self._fn_gc_root_slot_registry.get(self.current_function.name, ())):
@@ -1601,6 +1627,7 @@ class OwnershipLoweringMixin:
         for name in sorted(rooted_names.difference(set(root_order))):
             root_order.append(name)
         emitted_root_unpins: set[str] = set()
+        shared_pinned_slots = []
         for name in reversed(root_order):
             if name in emitted_root_unpins:
                 continue
@@ -1620,6 +1647,12 @@ class OwnershipLoweringMixin:
             if not self._ir_type_matches(ir_ty, _CSTR):
                 continue
             if name in getattr(self, "_pinned_gc_rooted_local_names", set()):
+                if shared_exit_leaves and shared_pinned_target is not None:
+                    # Preserve this return's exact sequence, including physical
+                    # slot aliases. Only the emitted suffix is shared; selection
+                    # still uses this return's names, environment and ownership.
+                    shared_pinned_slots.append(alloca)
+                    continue
                 pinned = self.builder.load(
                     alloca,
                     name=self._fresh("gc.root.cleanup.unpin"),
@@ -1640,6 +1673,10 @@ class OwnershipLoweringMixin:
                 )
         if shared_exit_leaves:
             # Not an exit site: retro-patched leaves belong on the shared exit.
+            if shared_pinned_target is not None:
+                return self._shared_return_pinned_cleanup(
+                    shared_pinned_slots, shared_pinned_target,
+                )
             return
         # Leave every slot this function ever frame-registered, newest
         # first, exactly once per slot. Leaves are driven by the per-slot
@@ -1651,25 +1688,23 @@ class OwnershipLoweringMixin:
         if fn is not None and hasattr(self, "_fn_gc_root_slot_registry"):
             if fn.name in self._fn_gc_root_slot_registry:
                 registry = self._fn_gc_root_slot_registry[fn.name]
-        emitted_slot_leaves: list = []
+        # Keep the owners alive: an id must not outlive its exact slot.
+        emitted_slot_leaves: dict = {}
         payload_handoff_roots = self._valueclass_payload_owned_roots(skip_payload) if skip_payload is not None else ()
-        from pcc.frontends.python.codegen.generator_lowering import (
-            generator_operand_root_group,
+        from pcc.frontends.python.codegen.frame_root_groups import (
+            frame_root_group,
         )
         for entry in reversed(registry):
             entry_alloca = entry[1]
             if any(root is entry_alloca for root in payload_handoff_roots):
                 continue
-            group = generator_operand_root_group(self, entry_alloca)
+            group = frame_root_group(self, entry_alloca)
             if group is not None:
                 entry_alloca = group["base"]
-            already = False
-            for done in emitted_slot_leaves:
-                if done is entry_alloca:
-                    already = True
-            if already:
+            slot_id = id(entry_alloca)
+            if slot_id in emitted_slot_leaves:
                 continue
-            emitted_slot_leaves.append(entry_alloca)
+            emitted_slot_leaves[slot_id] = entry_alloca
             self._emit_gc_frame_leave_for_slot(entry_alloca)
         # Record this exit so slots registered AFTER this cleanup was
         # emitted retro-patch their leave into it (their entry enter always

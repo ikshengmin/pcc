@@ -31,8 +31,8 @@ from pcc.unsafe import (
     store_ptr,
 )
 
-py_class_new = extern(
-    "py_class_new",
+py_class_new_builtin = extern(
+    "py_class_new_builtin",
     (c_ptr, c_ptr, c_int32, c_ptr, c_int32),
     c_ptr,
 )
@@ -117,7 +117,7 @@ def py_exc_builtin_class(tag: int):
         n_bases = 1
 
     name_cstr = _exc_name(tag)
-    cls = py_class_new(name_cstr, bases_ptr, n_bases, null(), 0)
+    cls = py_class_new_builtin(name_cstr, bases_ptr, n_bases, null(), 0)
 
     if not ptr_is_null(cls):
         # Register before temp-array free or publication entry can safepoint.

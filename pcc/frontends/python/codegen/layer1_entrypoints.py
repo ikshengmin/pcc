@@ -11,8 +11,16 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Expr, Module, Stmt
 from pcc.frontends.python.codegen.expr_dispatch_lowering import ExprDispatchLoweringMixin
-from pcc.frontends.python.codegen.errors import CodegenDiagnosticError
+from pcc.frontends.python.codegen.errors import CodegenDiagnosticError, L1CodegenError
 from pcc.frontends.python.codegen.generation_lowering import GenerationLoweringMixin
+from pcc.frontends.python.codegen.generator_lowering import (
+    begin_generator_statement_spills,
+    emit_generator_spilled_inplace,
+    finish_generator_statement_spills,
+    plan_generator_statement_spills,
+    synchronous_generator_statement_context,
+    unbind_generator_statement_spills,
+)
 from pcc.frontends.python.codegen.layer1_init import Layer1InitMixin
 from pcc.frontends.python.codegen.stmt_dispatch_lowering import StmtDispatchLoweringMixin
 
@@ -363,6 +371,9 @@ class L1CodeGenEntrypointMixin:
         temporary_start = len(self._valueclass_payload_temporaries.get(scope_function.name, ()))
         scope_error = None
         scope_target = None
+        lexical_context = None
+        previous_lexical = False
+        lexical_state = 0
         if payload_scope:
             scope_target = self._current_try_err_block()
             if scope_target is None:
@@ -371,11 +382,33 @@ class L1CodeGenEntrypointMixin:
             self._try_err_block = scope_error
             self._cpy_operand_cleanup_block = scope_error
         try:
-            StmtDispatchLoweringMixin._emit_stmt_impl(self, stmt)
+            spill = plan_generator_statement_spills(self, stmt)
+            if spill is None:
+                if not payload_scope:
+                    lexical_context = synchronous_generator_statement_context(self, stmt)
+                if lexical_context is not None:
+                    previous_lexical = lexical_context.get("lexical_slot_operands", False)
+                    lexical_state = lexical_context["next_state"]
+                    lexical_context["lexical_slot_operands"] = True
+                StmtDispatchLoweringMixin._emit_stmt_impl(self, stmt)
+                if lexical_context is not None and lexical_context["next_state"] != lexical_state:
+                    raise L1CodegenError("synchronous operand-root statement emitted a suspension")
+            else:
+                spills = begin_generator_statement_spills(self, spill[0])
+                try:
+                    rebuilt = spill[1]
+                    if spill[2] is not None:
+                        rebuilt = emit_generator_spilled_inplace(self, spills, spill[2])
+                    StmtDispatchLoweringMixin._emit_stmt_impl(self, rebuilt)
+                    finish_generator_statement_spills(self, spills)
+                finally:
+                    unbind_generator_statement_spills(self, spills)
         except BaseException as exc:
             self._codegen_trace_dump(exc)
             raise
         finally:
+            if lexical_context is not None:
+                lexical_context["lexical_slot_operands"] = previous_lexical
             self._try_err_block = previous_error
             self._cpy_operand_cleanup_block = previous_cleanup
         if payload_scope:

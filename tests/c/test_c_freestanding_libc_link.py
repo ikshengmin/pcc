@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import platform
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from pcc.driver.cli_core import cli_main
+from pcc.driver.project import collect_translation_units
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, FREESTANDING_C_LIBC_PY_MODULES
 
 
@@ -236,6 +239,10 @@ def test_c_freestanding_libc_link_view_lists_only_pcc_python_sources():
         "freestanding_platform_process",
         "freestanding_platform_socket",
         "freestanding_stdio",
+        "freestanding_linux_libc",
+        "freestanding_errno",
+        "freestanding_gc_state",
+        "freestanding_runtime_traps",
     )
     for module_name in FREESTANDING_C_LIBC_PY_MODULES:
         source = runtime_py / (module_name + ".py")
@@ -243,6 +250,202 @@ def test_c_freestanding_libc_link_view_lists_only_pcc_python_sources():
         assert "__pcc_freestanding__ = True" in source.read_text(encoding="utf-8")
         assert not source.with_suffix(".c").exists(), module_name
         assert not source.with_suffix(".s").exists(), module_name
+
+
+def test_linux_freestanding_c_archive_closes_explicit_symbol_dependencies():
+    runtime_py = Path(__file__).resolve().parents[2] / "pcc" / "runtime" / "py"
+    exports = {}
+    externs = set()
+    globals_ = {}
+    global_refs = set()
+    modules = FREESTANDING_C_LIBC_PY_MODULES + ("freestanding_c_linux_start",)
+    for module_name in modules:
+        tree = ast.parse((runtime_py / (module_name + ".py")).read_text("utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id in {"c_abi_export", "c_abi_typed_export"}:
+                symbol = ast.literal_eval(node.args[0])
+                assert symbol not in exports, (symbol, exports.get(symbol), module_name)
+                exports[symbol] = module_name
+            elif node.func.id == "extern":
+                externs.add(ast.literal_eval(node.args[0]))
+            elif node.func.id.startswith(("define_global_", "define_thread_local_")):
+                symbol = ast.literal_eval(node.args[0])
+                assert symbol not in globals_, (symbol, globals_.get(symbol), module_name)
+                globals_[symbol] = module_name
+            elif node.func.id in {"global_addr", "global_load_ptr", "global_store_ptr"}:
+                global_refs.add(ast.literal_eval(node.args[0]))
+    # The C translation unit supplies main; the private archive must supply
+    # every explicit runtime extern, including startup exit and libc errno.
+    assert externs - exports.keys() == {"main"}
+    assert exports["lseek"] == "freestanding_linux_libc"
+    assert exports["pcc_errno_set"] == "freestanding_errno"
+    assert exports.keys().isdisjoint(globals_)
+    # GNU ld supplies these bounds. All other global references must resolve
+    # inside this standalone archive, not through the separate full runtime.
+    assert global_refs - globals_.keys() == {
+        "__init_array_start", "__init_array_end",
+        "__fini_array_start", "__fini_array_end",
+    }
+    assert globals_["pcc_errno_storage"] == "freestanding_errno"
+    assert globals_["pcc_gc_refcount_provenance_probe"] == "freestanding_gc_state"
+
+
+def test_null_callee_trap_has_one_freestanding_runtime_owner():
+    from pcc.frontends.python.owned_runtime_build import runtime_modules
+
+    runtime_root = Path(__file__).resolve().parents[2] / "pcc" / "runtime"
+    modules = set()
+    for target in (
+        "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+        "arm64-apple-darwin", "x86_64-pc-windows-msvc",
+    ):
+        inventory = runtime_modules(str(runtime_root), target)
+        assert inventory.count("freestanding_runtime_traps") == 1
+        modules.update(inventory)
+    owners = []
+    for module_name in sorted(modules):
+        source = (runtime_root / "py" / (module_name + ".py")).read_text("utf-8")
+        if "pcc_null_callee_trap" not in source:
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"c_abi_export", "c_abi_typed_export"}
+                and ast.literal_eval(node.args[0]) == "pcc_null_callee_trap"
+            ):
+                owners.append(module_name)
+    assert owners == ["freestanding_runtime_traps"]
+
+
+def _assert_linux_standalone_archive_closure(archive_path, required_symbols):
+    from pcc.backend.elf_x86_64 import read_archive, select_archive_members
+
+    members = read_archive(Path(archive_path).read_bytes())
+    selected = []
+    _objects, unresolved = select_archive_members(
+        members,
+        required_symbols | {"pcc_platform_env_init", "exit"},
+        already_defined={
+            "_GLOBAL_OFFSET_TABLE_", "__init_array_start", "__init_array_end",
+            "__fini_array_start", "__fini_array_end",
+        },
+        selected_names=selected,
+    )
+    # Inspect actual emitted references: the backend can insert a runtime
+    # symbol (for example the null-callee trap) absent from source externs.
+    assert not unresolved, sorted(unresolved)
+    assert "freestanding_runtime_traps.o" in selected
+
+
+def _check_linux_standalone_link_inputs(monkeypatch, evaluator, required_symbols):
+    original = evaluator._freestanding_link_inputs
+
+    def checked(tmpdir, *, enabled, timeout):
+        result = original(tmpdir, enabled=enabled, timeout=timeout)
+        assert enabled
+        assert len(result[2]) == 1
+        _assert_linux_standalone_archive_closure(result[2][0], required_symbols)
+        return result
+
+    monkeypatch.setattr(evaluator, "_freestanding_link_inputs", checked)
+
+
+@pytest.mark.pcc_gate(
+    unavailable=None
+    if sys.platform.startswith("linux")
+    and platform.machine().lower() in {"x86_64", "amd64"}
+    else "the standalone system-cc freestanding archive requires Linux x86_64"
+)
+def test_linux_freestanding_system_link_runs_lseek_and_errno(tmp_path, monkeypatch):
+    source = tmp_path / "seek_consumer.c"
+    output = tmp_path / "seek_consumer.bin"
+    link_map = tmp_path / "seek_consumer.map"
+    source.write_text(
+        r"""
+int open(const char *, int, ...);
+int close(int);
+long lseek(int, long, int);
+int *__errno_location(void);
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 30;
+    int *error = __errno_location();
+    if (*error != 0) return 31;
+    *error = 123;
+    int fd = open(argv[1], 66, 0600);
+    if (fd < 0 || *error != 123) return 32;
+    long large = 4294967296L + 19;
+    if (lseek(fd, large, 0) != large) return 33;
+    if (lseek(fd, -7, 1) != large - 7) return 34;
+    if (lseek(fd, 0, 1) != large - 7 || *error != 123) return 35;
+    if (lseek(-1, 0, 0) != -1 || *error != 9) return 36;
+    if (__errno_location() != error) return 37;
+    if (lseek(fd, 0, 0) != 0 || *error != 9) return 38;
+    if (close(fd) != 0 || *error != 9) return 39;
+    return 0;
+}
+""",
+        encoding="utf-8",
+    )
+    units, base_dir = collect_translation_units(str(source))
+    evaluator = CEvaluator(backend="self", target_triple="x86_64-unknown-linux-gnu")
+    compiled_units = evaluator.compile_translation_units(units, base_dir=base_dir)
+    _check_linux_standalone_link_inputs(
+        monkeypatch, evaluator, {"__errno_location", "open", "close", "lseek"},
+    )
+    # Exercise the exact private-archive route used by the zlib oracle, not
+    # the separately built main runtime used by the owned-link CLI tests.
+    result = evaluator.run_compiled_translation_units_with_system_cc(
+        compiled_units,
+        base_dir=base_dir,
+        prog_args=[str(output)],
+        link_args=["-Wl,-Map," + str(link_map)],
+        freestanding_libc=True,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert output.stat().st_size == 0  # Seeking past 4 GiB writes no file data.
+    ownership = link_map.read_text(encoding="utf-8")
+    for module_name in (
+        "freestanding_linux_libc", "freestanding_errno", "freestanding_gc_state",
+        "freestanding_runtime_traps",
+    ):
+        assert "libpcc_freestanding_c.a(" + module_name + ".o)" in ownership
+    assert "libpy_runtime_pcc_py.a" not in ownership
+    assert "libc.a" not in ownership
+
+
+@pytest.mark.pcc_gate(
+    unavailable=None
+    if sys.platform.startswith("linux")
+    and platform.machine().lower() in {"x86_64", "amd64"}
+    else "the standalone system-cc freestanding archive requires Linux x86_64"
+)
+def test_linux_freestanding_system_link_preserves_null_trap_fatal_contract(
+    tmp_path, monkeypatch,
+):
+    source = tmp_path / "null_trap_consumer.c"
+    source.write_text(
+        "void pcc_null_callee_trap(void);\n"
+        "int main(void) { pcc_null_callee_trap(); return 77; }\n",
+        encoding="utf-8",
+    )
+    units, base_dir = collect_translation_units(str(source))
+    evaluator = CEvaluator(backend="self", target_triple="x86_64-unknown-linux-gnu")
+    compiled_units = evaluator.compile_translation_units(units, base_dir=base_dir)
+    _check_linux_standalone_link_inputs(
+        monkeypatch, evaluator, {"pcc_null_callee_trap"},
+    )
+    result = evaluator.run_compiled_translation_units_with_system_cc(
+        compiled_units, base_dir=base_dir, freestanding_libc=True,
+    )
+    # The existing platform abort raises SIGABRT, with exit(134) as its
+    # fallback. A normal return or a different failure is not this contract.
+    assert result.returncode in (-signal.SIGABRT, 134), (result.stdout, result.stderr)
+    assert result.stdout == ""
+    assert result.stderr == "[NULL_CALL]\n"
 
 
 def test_c_cli_freestanding_libc_runs_representative_project_consumers(tmp_path):

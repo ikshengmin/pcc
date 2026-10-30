@@ -4,11 +4,19 @@ from pcc.frontends.c.passes import PassContext
 from pcc.frontends.c.passes.ssa_sccp_rewrite import SSASCCPRewritePass
 
 
-_PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+_PARSER = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = CParser(lex_optimize=True, yacc_debug=False, yacc_optimize=True)
+    return _PARSER
 
 
 def _run_rewrite(source: str):
-    ast = _PARSER.parse(source)
+    ast = _get_parser().parse(source)
     ctx = PassContext()
     out = SSASCCPRewritePass().run(ast, ctx)
     return ast, out, ctx

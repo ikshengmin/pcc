@@ -588,6 +588,22 @@ class PackedPlannedSafepoints:
     def diagnostic_records(self) -> tuple[PlannedSafepoint, ...]:
         return tuple(self)
 
+    def retire_emission_state(self) -> None:
+        """Consume reload and routing storage after every body has emitted.
+
+        Final stack-map serialization needs record/root metadata, not the
+        routes or reload instructions that the emitter has already consumed.
+        This is irreversible: diagnostic materialization still needs reloads.
+        Public planning helpers leave their returned plans fully usable.
+        """
+        self.reload_scalars.close()
+        self.entry_routes.close()
+        self.suffix_routes.close()
+        self.terminator_routes.close()
+        self.entry_route_spans.close()
+        self.suffix_route_spans.close()
+        self.terminator_route_spans.close()
+
     def close(self) -> None:
         self.scalars.close()
         self.spans.close()
@@ -3652,6 +3668,10 @@ def _planned_managed_reloads(
             -(1 << 31) <= origin.derived_offset < (1 << 31)
         ):
             _fail(func, f"derived managed SSA value {name!r} exceeds x86 imm32")
+        # The root slot already holds this exact pointer. Keep all validation
+        # above, but avoid allocating a reload record that would be discarded.
+        if destination == origin.root_offset and origin.derived_offset == 0:
+            continue
         # Positional in declaration order: same reason as the PlannedSafepoint
         # construction below — this is on the per-call-site reload path.
         reload = PlannedManagedReload(
@@ -3659,8 +3679,6 @@ def _planned_managed_reloads(
             destination,
             origin.derived_offset,
         )
-        if destination == origin.root_offset and origin.derived_offset == 0:
-            continue
         previous = destinations.get(destination)
         if previous is not None and previous != reload:
             _fail(func, f"live managed SSA values share spill offset {destination}")
@@ -4751,7 +4769,10 @@ def _native_managed_liveness(
                                 row_state.set_unchecked(head_offset, len(reverse_edges) + 1)
                                 reverse_edges.append2(block_id, previous_head)
                             successor_position += 1
-                        if scratch.converge_liveness_row_unchecked(
+                        # Reverse dependencies consume live-in only. Always
+                        # publish live-out, but do not propagate growth killed
+                        # by this block's definitions to its predecessors.
+                        if scratch.converge_liveness_incoming_row_unchecked(
                             uses,
                             definitions,
                             live_out,

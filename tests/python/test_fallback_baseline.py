@@ -649,13 +649,16 @@ def test_pipeline_subprocess_run_kwargs_resolve_without_cpython_bridge():
     )
     module_name = "pcc.frontends.python.pipeline"
     typed = infer_module(parse_and_lift(source, "subprocess_probe.py", module_name))
-    ir_text = str(
-        L1CodeGen(
-            typed,
-            emit_cpy_main_exitcode=False,
-            ir_scaffold_mode="on",
-        ).generate(typed)
+    gen = L1CodeGen(
+        typed,
+        emit_cpy_main_exitcode=False,
+        ir_scaffold_mode="on",
     )
+    # Match the strict_no_libpython=True contextual closure immediately
+    # above. Compatibility mode correctly permits a CPython provider for
+    # computed capture_output; that is not this native canary's pipeline.
+    gen._strict_no_libpython = True
+    ir_text = str(gen.generate(typed))
 
     assert "@py_subprocess_run(" in ir_text
     assert "@py_subprocess_run_timeout(" in ir_text
@@ -723,6 +726,8 @@ def test_cli_bootstrap_package_schema_static_imports_stay_native():
         emit_cpy_main_exitcode=False,
         ir_scaffold_mode="on",
     )
+    # The bootstrap CLI is compiled with libpython disabled.
+    codegen._strict_no_libpython = True
     ir_text = str(codegen.generate(typed))
     assert _count_py_cpy_calls(ir_text) == 0
 
@@ -790,12 +795,32 @@ def test_layer1_constants_cross_module_static_imports_stay_native():
         if "layer1_constants" in line and "@py_cpy_" in line
     ]
     assert layer1_constant_fallbacks == []
-    assert re.search(
-        r"store ptr @\.pystr\.obj\.\d+, ptr "
-        r"@\.classattr\.pcc_frontends_python_codegen_layer1\.L1CodeGen\."
-        r"_IR_RUNTIME_COMPAT_MODULE",
-        ir_text,
+    # Follow the expected imported literal into the live class namespace.
+    # A declaration of the retired fast-slot alone does not publish its value.
+    from pcc.frontends.python.codegen.layer1_constants import IR_RUNTIME_COMPAT_MODULE
+
+    encoded = "".join(chr(92) + format(byte, "02X")
+                      for byte in IR_RUNTIME_COMPAT_MODULE.encode() + bytes((0,)))
+    literals = {
+        line.split(" =", 1)[0]
+        for line in ir_text.splitlines()
+        if line.startswith("@.pystr.obj.") and 'c"' + encoded + '"' in line
+    }
+    names = re.findall(
+        r"(?m)^  (%[^ ]+) = getelementptr[^\n]*"
+        r"@\.class_name\._IR_RUNTIME_COMPAT_MODULE\.\d+,", ir_text,
     )
+    published = False
+    for literal in literals:
+        slots = re.findall(r"store ptr " + re.escape(literal) + r", ptr (%[^,\n]+)", ir_text)
+        for slot in slots:
+            values = re.findall(r"(?m)^  (%[^ ]+) = load ptr, ptr " + re.escape(slot) + r"$", ir_text)
+            for name in names:
+                for value in values:
+                    if re.search(r"@py_class_setattr_raw\(ptr [^,]+, ptr " + re.escape(name)
+                                 + r", ptr " + re.escape(value) + r"\)", ir_text):
+                        published = True
+    assert published, "imported native constant did not reach the class namespace"
 
 
 def test_native_module_constant_bindings_are_contextual_host_state():

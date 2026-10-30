@@ -245,6 +245,12 @@ def _visit_fixed_owner_slots(o, visitor, context) -> i64:
     if tag == abi_constant("object.type.gen"):
         _visit_slot(o, 24, 1, visitor, context)
         _visit_slot(o, 48, 1, visitor, context)
+        if (load_i32(o, abi_constant("object.header.flags_offset")) & abi_constant("object.gen.inline_frame_flag")) != 0:
+            count: i64 = load_i64(o, abi_constant("object.gen.inline_length_offset"))
+            index: i64 = 0
+            while index < count:
+                _visit_slot(o, abi_constant("object.gen.inline_items_offset") + index * abi_constant("object.pointer.size"), 1, visitor, context)
+                index += 1
         return 1
     if tag == abi_constant("object.type.coroutine"):
         _visit_slot(o, 32, 1, visitor, context)
@@ -377,6 +383,9 @@ def _visit_class_slots(o, visitor, context) -> i64:
                 context,
             )
             index = index + 1
+    # The MRO is derived metadata, not an owning edge: it starts with the
+    # class itself, and the bases keep the rest alive. Update-only (role 3),
+    # so reference counting and trial deletion never count it.
     count = load_i32(o, abi_constant("object.class.n_mro_offset"))
     slots = load_ptr(o, abi_constant("object.class.mro_offset"))
     index: i64 = 0
@@ -385,7 +394,7 @@ def _visit_class_slots(o, visitor, context) -> i64:
             _visit_slot(
                 slots,
                 index * abi_constant("object.pointer.size"),
-                2,
+                3,
                 visitor,
                 context,
             )
@@ -568,6 +577,8 @@ def pcc_gc_visit_object_slots_slice(
         family = 8
     elif tag == abi_constant("object.type.gen"):
         total = 2
+        if (load_i32(o, abi_constant("object.header.flags_offset")) & abi_constant("object.gen.inline_frame_flag")) != 0:
+            total = total + load_i64(o, abi_constant("object.gen.inline_length_offset"))
         family = 9
     elif tag == abi_constant("object.type.coroutine"):
         total = 3
@@ -715,8 +726,10 @@ def pcc_gc_visit_object_slots_slice(
         elif family == 9:
             if cursor == 0:
                 slot_offset = 24
-            else:
+            elif cursor == 1:
                 slot_offset = 48
+            else:
+                slot_offset = abi_constant("object.gen.inline_items_offset") + (cursor - 2) * abi_constant("object.pointer.size")
         elif family == 10:
             slot_offset = 32 + cursor * 8
         elif family == 11:
@@ -789,9 +802,10 @@ def pcc_gc_visit_object_slots_slice(
                 slot_offset = cursor * 8
                 role = 2
             elif cursor < n_bases + n_mro:
+                # Derived metadata, as in _visit_class_slots.
                 slot_base = load_ptr(o, abi_constant("object.class.mro_offset"))
                 slot_offset = (cursor - n_bases) * 8
-                role = 2
+                role = 3
             elif cursor < n_bases + n_mro + n_methods:
                 slot_base = load_ptr(o, abi_constant("object.class.methods_offset"))
                 slot_offset = (

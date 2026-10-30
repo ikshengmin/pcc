@@ -260,12 +260,26 @@ class _Lifter:
         #   - an AST node (``x: int = 1`` — original annotation)
         #   - ``"walrus"`` (inline ``:=``)
         #   - ``None`` (plain assign)
-        target = self.lift_expr(s.target)
-        value = self.lift_expr(s.value)
+        targets = [self.lift_expr(s.target)]
+        value_node = s.value
+        if isinstance(value_node, pp._Assign) and value_node.annotation is None:
+            # The parser nests the destination chain in target position.
+            # Preserve it as ordered destinations, not an inner walrus:
+            # ``a = b = rhs`` stores a before b, while ``a = (b := rhs)``
+            # stores b first. The latter has the explicit walrus annotation.
+            targets.extend(self._chain_assignment_targets(value_node.target))
+            value_node = value_node.value
+        value = self.lift_expr(value_node)
         ann_type: Optional[pa.Type] = None
         if s.annotation is not None and s.annotation != "walrus":
             ann_type = _lift_type(s.annotation)
-        return pa.Assign(self._span(s.line), (target,), value, ann_type, s.has_value)
+        return pa.Assign(self._span(s.line), tuple(targets), value, ann_type, s.has_value)
+
+    def _chain_assignment_targets(self, target):
+        if isinstance(target, pp._Assign) and target.annotation is None:
+            return (self._chain_assignment_targets(target.target)
+                    + self._chain_assignment_targets(target.value))
+        return [self.lift_expr(target)]
 
     def _s_AugAssign(self, s: pp._AugAssign) -> pa.AugAssign:
         return pa.AugAssign(
@@ -1411,3 +1425,11 @@ def finish_lifted_module(lifted: pa.Module) -> pa.Module:
     a module for compilation must finish it here.
     """
     return inject_builtin_function_values(fold_module_int_constants(lifted))
+
+
+# Stable reader identity for the synchronous dependency-discovery pair only.
+_FIELD_DISCOVERY_PARSE_AND_LIFT = parse_and_lift
+
+
+def _field_discovery_parser_is_original():
+    return parse_and_lift is _FIELD_DISCOVERY_PARSE_AND_LIFT

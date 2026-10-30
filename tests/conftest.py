@@ -367,7 +367,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     counts = summary["counts"]
     terminalreporter.write_sep("=", "pcc1 compile routing")
     terminalreporter.write_line(
-        f"native: {counts.get('native', 0)}  host fallback: {counts.get('host', 0)}"
+        f"native passed: {counts.get('native', 0)}  host fallback: {counts.get('host', 0)}"
+        f"  unsupported: {counts.get('unsupported', 0)}"
+        f"  native attempts: {counts.get('native_attempted', 0)}"
+        f"  native failed: {counts.get('native_failed', 0)}"
+        f"  native timeout/error: {counts.get('native_timeout', 0) + counts.get('native_error', 0)}"
+        f"  incomplete invocations: {counts.get('native_incomplete', 0)}"
+        f"  CLI exec attempts (completion not observed here): {counts.get('native_exec_attempted', 0)}"
         f"  (log: {os.environ.get(LOG_ENV, '')})"
     )
     for reason, count in sorted(summary["host_reasons"].items(), key=lambda kv: -kv[1]):
@@ -375,12 +381,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """PCC_TEST_COMPILER_STRICT=1: a host fallback fails the session."""
+    """Strict routing fails even if a test catches an unsupported-call error."""
     config = session.config
     if not os.environ.get("PCC_TEST_COMPILER") or hasattr(config, "workerinput"):
         return
     from tests.pcc1_route import LOG_ENV, STRICT_ENV, summarize
 
     if os.environ.get(STRICT_ENV) == "1":
-        if summarize(os.environ.get(LOG_ENV, ""))["counts"].get("host", 0):
+        counts = summarize(os.environ.get(LOG_ENV, ""))["counts"]
+        if counts.get("host", 0) or counts.get("unsupported", 0) or counts.get("native_incomplete", 0):
             session.exitstatus = 1

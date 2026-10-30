@@ -24,6 +24,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend3_scheduler_root_scan_reset_locked",
     "pcc_gc_backend4_step_generation_aging",
     "pcc_gc_backend4_step_remembered_roots",
+    "pcc_gc_backend4_drain_remembered_batch",
     "pcc_gc_generational_promote_frame_roots",
     "pcc_gc_generational_promote_scheduler_roots",
     "pcc_gc_generational_promote_extension_module_state_root",
@@ -78,6 +79,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_root_registry_revision",
     "pcc_gc_scheduler_root_head",
     "pcc_gc_store_buffer_member_forget",
+    "pcc_gc_store_buffer_entry_forget",
+    "pcc_gc_store_buffer_owner_entries",
+    # The young step visits the walked mutator stack roots.
+    "pcc_gc_visit_walked_stack_roots",
     "pcc_gc_trace_referents_for_promotion",
     "pcc_gc_visit_mapped_root_slot",
     "pcc_py_gc_minor_graph_lock",

@@ -165,11 +165,11 @@ def _differential_source() -> str:
     lines.extend(
         [
             "static int64_t pcc_gc_metric_load_oracle(int64_t metric) {",
-            "  if (metric == 0) return pcc_gc_metric_alloc;",
+            "  if (metric == 0) return pcc_gc_metric_allocation_count();",
             "  if (metric == 1) return pcc_gc_metric_store;",
             "  if (metric == 2) return pcc_gc_metric_load;",
             "  if (metric == 3) return pcc_gc_metric_safepoint;",
-            "  if (metric == 4) return pcc_gc_metric_pin;",
+            "  if (metric == 4) return pcc_gc_metric_pin_balance();",
             "  if (metric == 5) return pcc_gc_metric_step;",
             "  return -1;",
             "}",

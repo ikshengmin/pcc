@@ -1917,6 +1917,12 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
             if value == "zeroinitializer":
                 lines.extend(_zero_address("r11", value_type.slot_size))
                 return lines
+            if is_aggregate_literal_value(value):
+                literal = aggregate_literal_to_bytes(
+                    value_type, value, type_context=func.type_context
+                )
+                lines.extend(_store_literal_bytes_to_address(literal, "r11"))
+                return lines
             lines.extend(_materialize_aggregate_value_address(func, value, value_type, "r10"))
             lines.extend(_copy_address_to_address("r10", "r11", value_type.slot_size))
             return lines
@@ -2461,6 +2467,11 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             src_reg = _reg_name(src_type, 10)
             dst_reg = _reg_name(dst_type, 10)
             lines = _materialize_value(func, value, src_type, src_reg)
+            if src_type.width < 32:
+                # SSE converts signed i32/i64 only. Extend the logical IR
+                # sign bit, not just its rounded byte/word storage lane.
+                lines.extend(_sign_extend_reg_to_r10(src_type))
+                src_reg = "r10"
             cvt_op = "cvtsi2ss" if dst_type.width <= 32 else "cvtsi2sd"
             lines.append(f"  {cvt_op} {dst_reg}, {src_reg}")
             lines.extend(_store_reg_to_slot(dst_reg, func.value_slots[dest].offset, dst_type))
@@ -2660,6 +2671,41 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
         lines.extend(_materialize_value(func, false_value, value_type, _reg_name(value_type, 10)))
         lines.append(f"{done_label}:")
         lines.extend(_store_reg_to_slot(_reg_name(value_type, 10), func.value_slots[dest].offset, value_type))
+        return lines
+
+    if kind == "extractelement":
+        dest, vector_type, vector_value, index_value, elem_type = data
+        if dest not in func.value_slots:
+            return []
+        expected_elem = _vector_elem_type(vector_type)
+        if expected_elem.describe() != elem_type.describe():
+            raise BackendUnavailable(
+                f"x86_64 self backend extractelement lane type mismatch in {func.name!r}: "
+                f"{elem_type.describe()} from {vector_type.describe()}"
+            )
+        if elem_type.is_int:
+            _validate_integer_register_type(elem_type)
+        elif elem_type.is_fp and elem_type.width not in (32, 64):
+            raise BackendUnavailable(
+                f"x86_64 self backend extractelement floating lane type not translated yet: {elem_type.describe()}"
+            )
+        lane = const_int_from_value(index_value)
+        if lane is None:
+            raise BackendUnavailable(
+                f"x86_64 self backend extractelement requires constant lane index in {func.name!r}: {index_value}"
+            )
+        if lane < 0 or lane >= vector_type.count:
+            # The finite target does not yet represent an out-of-range poison
+            # result. Refuse it explicitly; never emit an unconditional trap
+            # or an out-of-bounds memory access for a poison-producing index.
+            raise BackendUnavailable(
+                f"x86_64 self backend extractelement lane index out of range in {func.name!r}: {index_value}"
+            )
+        reg = _reg_name(elem_type, 10)
+        lines = _materialize_vector_lane_to_reg(func, vector_value, vector_type, lane, reg)
+        if elem_type.is_int:
+            lines.extend(_truncate_reg_to_r10(elem_type))
+        lines.extend(_store_reg_to_slot(reg, func.value_slots[dest].offset, elem_type))
         return lines
 
     if kind == "insertelement":
@@ -3302,7 +3348,44 @@ def _emit_indexed_instruction_parts(
         )
     # Preserve the legacy projection's metadata check and operand interning.
     # x86 selection itself consumes only kind/data; the kernel retains flags.
-    kernel.instruction_arithmetic_flags(block_id, instruction_index)
+    if type(kernel) is IndexedFunctionKernel:
+        kernel.instruction_arithmetic_flags_by_id(instruction_id)
+    else:
+        kernel.instruction_arithmetic_flags(block_id, instruction_index)
+    return emit_instruction_dispatch_parts(
+        func,
+        block,
+        PARSED_INSTRUCTION_KINDS[kind_id],
+        _interned_operands(data),
+        emit_memory=_emit_memory_instruction,
+        emit_compute=_emit_compute_instruction,
+    )
+
+
+def _emit_exact_indexed_instruction_parts(
+    func: ParsedFunction,
+    block: ParsedBlock,
+    kernel: IndexedFunctionKernel,
+    block_id: int,
+    instruction_index: int,
+    instruction_id: int,
+    kind_id: int,
+    data: int | tuple,
+    is_volatile: bool,
+) -> list[str]:
+    # _emit_function selects this adapter only after its exact-kernel guard.
+    # Keep the compatibility adapter above for block-local/custom callers;
+    # the production instruction loop needs no repeated type dispatch.
+    # The shared loop supplies packed IDs for its fixed-payload vocabulary and
+    # already-decoded tuples for other kinds, including atomic/cold records.
+    # Let the authoritative decoder distinguish packed and negative cold IDs.
+    if isinstance(data, int):
+        data = kernel.instruction_data_by_id(
+            instruction_id, block_id, instruction_index,
+        )
+    # Preserve the legacy projection's metadata check and operand interning.
+    # x86 selection itself consumes only kind/data; the kernel retains flags.
+    kernel.instruction_arithmetic_flags_by_id(instruction_id)
     return emit_instruction_dispatch_parts(
         func,
         block,
@@ -3345,7 +3428,7 @@ def _emit_function(
             and type(original_block_map) is dict
         ):
             _materialize_indexed_control_flow(func, kernel)
-            indexed_instruction_emitter = _emit_indexed_instruction_parts
+            indexed_instruction_emitter = _emit_exact_indexed_instruction_parts
         else:
             kernel.materialize_legacy_blocks(func)
             # Supplied compatibility blocks may have released scalar PHIs.

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from pcc.runtime.py.py_abi_constants import PY_TYPE_VALUEBOX
+
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
 pytestmark = pytest.mark.xdist_group("gc_free_watch")
@@ -62,6 +64,9 @@ class WatchRuntime:
             "pcc_gc_object_index_find": lambda o: 0,
             "pcc_gc_granule_is_object_start": lambda o: 1,
             "_identity_remove": self.notes.append, "_gc_tracks_objects": lambda: 0,
+            # This fixture isolates free-watch bookkeeping; the separate
+            # terminal-free regression executes the metadata-free admission.
+            "_gc0_terminal_free_has_no_metadata": lambda o: 0,
         }
         _load("py_gc_backend.py", ["pcc_gc_free_watch_begin", "pcc_gc_free_watch_end",
                                   "pcc_gc_note_object_freeing"], self.ns)
@@ -170,6 +175,7 @@ def _caller(rt, caller, deallocate, delayed):
         "GC_FREE_WATCH_BYTES": 24, "PYOBJECTHEADER_REFCOUNT_OFFSET": 0,
         "PYOBJECTHEADER_FLAGS_OFFSET": 12, "PY_TYPE_GEN": 10,
         "PY_TYPE_INSTANCE": 20, "PY_TYPE_USER_CLASS_START": 100,
+        "PY_TYPE_VALUEBOX": PY_TYPE_VALUEBOX,
         "pcc_refcount_forget": lambda o: None, "py_gc_untrack": lambda o: None,
         "py_weakref_invalidate": lambda o: None, "py_user_del_dispatch": lambda o: None,
         "_dealloc_ptr_is_instance": lambda o: False,

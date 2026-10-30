@@ -90,6 +90,25 @@ static int page_id(void *p) {
     stub_errors++; return -1;
 }
 
+/* This fixture covers inactive marking with no GRAY source/target bits.
+ * Resolve the copy module's active-mark dependencies without pretending to
+ * implement them. Any new path reaching one needs real mark dependencies and
+ * assertions; it must not silently pass as a page-membership regression. */
+static _Noreturn void unexpected_mark_helper(const char *symbol) {
+    fprintf(stderr, "mark-inactive copy fixture unexpectedly called %s\n", symbol);
+    abort();
+}
+void pcc_gc_gray_count_increment_acq_rel(void) {
+    unexpected_mark_helper("pcc_gc_gray_count_increment_acq_rel");
+}
+void pcc_gc_gray_count_decrement_acq_rel(void) {
+    unexpected_mark_helper("pcc_gc_gray_count_decrement_acq_rel");
+}
+void pcc_gc_set_mark_color(void *obj, int64_t color) {
+    (void)obj; (void)color;
+    unexpected_mark_helper("pcc_gc_set_mark_color");
+}
+
 /* Retain nominal threaded fixture inputs; the locked transaction no longer
  * consults a threads provider. A call here is a regression. */
 int64_t pcc_threads_enabled(void) { unexpected_calls++; return threads; }
@@ -509,6 +528,7 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "already-forwarded")) installed_forwarding = &target;
     w64(&target, 0, 99); w32(&target, 8, 2); w32(&target, 12, 64 | 65536);
     for (int k = 16; k < SIZE; k += 8) w64(&target, k, 9000 + k);
+    pcc_gc_mark_active = 0;
     pcc_gc_backend_selected = !strcmp(mode, "wrong-backend") ? 3 : 4;
     pcc_gc_backend4_evacuated_bytes_count = 11;
     pcc_gc_backend4_reseed_relocation_revision = 37;

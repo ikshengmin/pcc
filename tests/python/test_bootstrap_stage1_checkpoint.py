@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import copy
 import importlib._bootstrap_external
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -35,6 +37,46 @@ def supported_host(monkeypatch):
         implementation=SimpleNamespace(name="cpython"), platform="linux",
     ))
     monkeypatch.setattr(checkpoint, "platform", SimpleNamespace(machine=lambda: "x86_64"))
+
+
+@pytest.fixture
+def checkpoint_protocol_services(request, monkeypatch):
+    """Declared protocol-model inputs, never a Windows native checkpoint oracle.
+
+    Linux/POSIX tests retain real getrusage and directory fsync unchanged.
+    Windows runs the ledger state machine using explicit accounting samples and
+    a recorded durability boundary; real JSON, file fsync and hard links remain.
+    The indirect ``model`` case exercises this adapter on every host.
+    """
+    # These 12 functions model a ledger/launcher protocol, not host cgroup
+    # discovery. Match the focused gate's existing 2 GiB cap explicitly; leave
+    # _options and every un-fixtured native-host oracle unchanged.
+    original_options = globals()["_options"]
+    def ledger_model_options(tmp_path, **environment):
+        selected = {"PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES": str(2 * 1024 ** 3),
+                    **environment}
+        return original_options(tmp_path, **selected)
+    monkeypatch.setitem(globals(), "_options", ledger_model_options)
+    if os.name == "posix" and getattr(request, "param", None) != "model":
+        if (sys.implementation.name != "cpython" or sys.platform != "linux"
+                or platform.machine().lower() not in ("x86_64", "amd64")):
+            # This fixture is attached only to protocol-model functions, never
+            # to host-oracle tests. Keep real POSIX CPU/durability services.
+            monkeypatch.setattr(checkpoint, "_require_supported_host", lambda: None)
+        yield None
+        return
+    model = SimpleNamespace(
+        qualification="protocol_model_only_not_native_checkpoint",
+        declared_cpu_sample=(2.0, 1.0), directory_barriers=[],
+    )
+    def directory_barrier(path):
+        assert path.is_dir()
+        model.directory_barriers.append(path)
+    monkeypatch.setattr(checkpoint, "_cpu", lambda: model.declared_cpu_sample)
+    monkeypatch.setattr(checkpoint, "_fsync_directory", directory_barrier)
+    monkeypatch.setattr(checkpoint, "_require_supported_host", lambda: None)
+    yield model
+    assert model.directory_barriers, "ledger model never exercised its durability boundary"
 
 
 def _payload():
@@ -139,7 +181,7 @@ def test_stage_and_native_smoke_isolate_checkpoint_environment(tmp_path, monkeyp
     "pcc/stdlib/os.py", "scripts/bootstrap.py", "scripts/bootstrap_stage1_checkpoint.py",
     "utils/table.json", "uv.lock", ".python-version", "pyproject.toml",
 ])
-def test_source_identity_rejects_same_path_changed_bytes(tmp_path, relative):
+def test_source_identity_rejects_same_path_changed_bytes(tmp_path, relative, checkpoint_protocol_services):
     source = tmp_path / "source"
     path = source / relative
     path.parent.mkdir(parents=True)
@@ -205,7 +247,7 @@ def test_watchdog_redaction_keeps_default_off_behavior(monkeypatch):
     assert "do-not-persist-this" not in json.dumps(protected)
 
 
-def test_build_identity_is_canonical_immutable_and_self_authenticating(tmp_path):
+def test_build_identity_is_canonical_immutable_and_self_authenticating(tmp_path, checkpoint_protocol_services):
     payload = {"stage": 1, "source": "caf\u00e9"}
     identity = checkpoint.ensure_build(tmp_path, payload)
     assert identity == checkpoint.digest(payload)
@@ -229,7 +271,7 @@ def test_checkpoint_json_rejects_duplicate_and_nonfinite_fields(tmp_path, body):
         checkpoint.read_json(path)
 
 
-def test_attempt_accounting_retains_failures_and_gaps(tmp_path):
+def test_attempt_accounting_retains_failures_and_gaps(tmp_path, checkpoint_protocol_services):
     for name, wall, cpu, status, utc in (
         ("one", 3000, 2200, "TIMEOUT", "2026-10-06T08:00:03+00:00"),
         ("two", 5000, 4100, "COMPLETE", "2026-10-06T08:01:05+00:00"),
@@ -367,7 +409,7 @@ else:
                 pass
 
 
-def test_lost_launcher_terminal_guard_is_only_a_lower_bound(tmp_path):
+def test_lost_launcher_terminal_guard_is_only_a_lower_bound(tmp_path, checkpoint_protocol_services):
     guard = _started(tmp_path, "lost")
     _terminal_guard(guard, elapsed=7.25)
     checkpoint.check_prior_attempts(tmp_path)
@@ -379,7 +421,7 @@ def test_lost_launcher_terminal_guard_is_only_a_lower_bound(tmp_path):
 
 
 @pytest.mark.parametrize("status", [None, "RUNNING", "INVENTED_SUCCESS"])
-def test_unresolved_guard_blocks_resume_and_never_improves_timing(tmp_path, status):
+def test_unresolved_guard_blocks_resume_and_never_improves_timing(tmp_path, status, checkpoint_protocol_services):
     guard = _started(tmp_path, "lost")
     if status:
         _terminal_guard(guard, status=status, elapsed=999)
@@ -390,14 +432,14 @@ def test_unresolved_guard_blocks_resume_and_never_improves_timing(tmp_path, stat
     assert result["cumulative_active_wall_ms"] is None
 
 
-def test_proven_prelaunch_failure_allows_retry(tmp_path):
+def test_proven_prelaunch_failure_allows_retry(tmp_path, checkpoint_protocol_services):
     _started(tmp_path, "not-launched")
     checkpoint.write_immutable_json(tmp_path / "attempts/not-launched.finished.json", {
         "guard_launch_requested": False, "status": "FAILED"})
     checkpoint.check_prior_attempts(tmp_path)
 
 
-def test_guard_path_escape_is_rejected(tmp_path):
+def test_guard_path_escape_is_rejected(tmp_path, checkpoint_protocol_services):
     root = tmp_path / "store"
     guard = _started(root, "escape")
     path = root / "attempts/escape.started.json"
@@ -408,7 +450,7 @@ def test_guard_path_escape_is_rejected(tmp_path):
         checkpoint.check_prior_attempts(root)
 
 
-def test_launcher_retains_failed_attempt_and_publishes_resumed_only_after_smoke(tmp_path, monkeypatch, capsys):
+def test_launcher_retains_failed_attempt_and_publishes_resumed_only_after_smoke(tmp_path, monkeypatch, capsys, checkpoint_protocol_services):
     options = _options(tmp_path)
     options.out_dir.mkdir()
     monkeypatch.setattr(checkpoint, "build_identity", lambda *args: _payload())
@@ -483,7 +525,7 @@ def test_launcher_retains_failed_attempt_and_publishes_resumed_only_after_smoke(
     assert "PCC_BOOTSTRAP_STAGE_RESULT" not in capsys.readouterr().out
 
 
-def test_build_mismatch_fails_before_guard_or_stale_output_removal(tmp_path, monkeypatch):
+def test_build_mismatch_fails_before_guard_or_stale_output_removal(tmp_path, monkeypatch, checkpoint_protocol_services):
     options = _options(tmp_path)
     options.out_dir.mkdir()
     options.stage_output(1).write_bytes(b"previous")
@@ -547,7 +589,7 @@ def test_actual_selected_host_import_roots_have_a_bounded_complete_inventory():
     assert all(record.get("sha256") or record["kind"] == "absent" for record in records)
 
 
-def test_caught_launcher_failure_with_unresolved_guard_keeps_unknown_intervals(tmp_path, monkeypatch):
+def test_caught_launcher_failure_with_unresolved_guard_keeps_unknown_intervals(tmp_path, monkeypatch, checkpoint_protocol_services):
     options = _options(tmp_path)
     monkeypatch.setattr(checkpoint, "_module_summary", lambda *args: {})
     attempt = checkpoint.Attempt(tmp_path, "a" * 64, options, ["python", "-m", "pcc"], {}, _payload())
@@ -559,7 +601,7 @@ def test_caught_launcher_failure_with_unresolved_guard_keeps_unknown_intervals(t
     assert summary["unknown_wall_intervals"] and summary["unknown_cpu_intervals"]
 
 
-def test_attempt_clock_includes_module_validation_and_labels_publication_boundary(tmp_path, monkeypatch):
+def test_attempt_clock_includes_module_validation_and_labels_publication_boundary(tmp_path, monkeypatch, checkpoint_protocol_services):
     attempt = checkpoint.Attempt(tmp_path, "a" * 64, _options(tmp_path), ["python", "-m", "pcc"], {}, _payload())
     clock = [10.0]
     attempt.started = clock[0]
@@ -579,7 +621,7 @@ def test_attempt_clock_includes_module_validation_and_labels_publication_boundar
     assert finished["measurement_end"].endswith("before_ledger_publication")
 
 
-def test_inputs_changing_during_compile_fail_before_smoke_and_success(tmp_path, monkeypatch, capsys):
+def test_inputs_changing_during_compile_fail_before_smoke_and_success(tmp_path, monkeypatch, capsys, checkpoint_protocol_services):
     options = _options(tmp_path)
     options.out_dir.mkdir()
     payload = _payload()
@@ -758,3 +800,114 @@ def test_real_or_unknown_semantic_input_files_still_invalidate_identity(tmp_path
     initial = checkpoint.build_identity(options, command, environment)
     source.write_text("changed input")
     assert checkpoint.build_identity(options, command, environment) != initial
+
+
+def _checkpoint_without_resource(monkeypatch):
+    original_import = builtins.__import__
+    def selected_import(name, *args, **kwargs):
+        if name == "resource":
+            raise ModuleNotFoundError("resource unavailable on this host", name="resource")
+        return original_import(name, *args, **kwargs)
+    spec = importlib.util.spec_from_file_location("checkpoint_no_resource", checkpoint.__file__)
+    module = importlib.util.module_from_spec(spec)
+    with monkeypatch.context() as selected:
+        selected.setattr(builtins, "__import__", selected_import)
+        spec.loader.exec_module(module)
+    return module
+
+
+def test_checkpoint_import_without_resource_keeps_pure_codec_available(monkeypatch):
+    module = _checkpoint_without_resource(monkeypatch)
+    assert module.resource is None
+    assert module.canonical_bytes({"z": 2, "a": 1}) == b'{"a":1,"z":2}'
+    assert module.resolve_hash_seed({}) == "0"
+
+
+@pytest.mark.parametrize("implementation,system,machine", [
+    ("cpython", "win32", "AMD64"),
+    ("cpython", "darwin", "arm64"),
+    ("cpython", "linux", "aarch64"),
+    ("pypy", "linux", "x86_64"),
+])
+def test_unsupported_checkpoint_entry_rejects_before_store_lock_or_cpu(
+        tmp_path, monkeypatch, implementation, system, machine):
+    module = _checkpoint_without_resource(monkeypatch)
+    monkeypatch.setattr(module, "sys", SimpleNamespace(
+        implementation=SimpleNamespace(name=implementation), platform=system))
+    monkeypatch.setattr(module, "platform", SimpleNamespace(machine=lambda: machine))
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("unsupported checkpoint reached a host service")
+    monkeypatch.setattr(module, "Path", forbidden)
+    monkeypatch.setattr(module, "_cpu", forbidden)
+    store = tmp_path / "must-not-exist"
+    options = SimpleNamespace(stage1_checkpoint=store)
+    # The supported-host check precedes even importing the lock implementation.
+    original_import = builtins.__import__
+    def no_lock_import(name, *args, **kwargs):
+        if name == "scripts.file_lock":
+            return forbidden(name)
+        return original_import(name, *args, **kwargs)
+    with monkeypatch.context() as selected:
+        selected.setattr(builtins, "__import__", no_lock_import)
+        with pytest.raises(module.CheckpointError, match="requires host CPython on x86_64 Linux"):
+            module.run_checkpointed_stage(1, tmp_path / "output", [], options, forbidden)
+    assert calls == []
+    assert not store.exists()
+
+
+def test_missing_resource_never_fabricates_cpu_accounting(monkeypatch):
+    module = _checkpoint_without_resource(monkeypatch)
+    with pytest.raises(module.CheckpointError, match="CPU accounting requires POSIX resource.getrusage"):
+        module._cpu()
+
+
+def test_missing_directory_fsync_is_explicit_not_a_noop(tmp_path, monkeypatch):
+    module = _checkpoint_without_resource(monkeypatch)
+    def forbidden_open(*args, **kwargs):
+        pytest.fail("directory opened before rejecting unsupported durability")
+    monkeypatch.setattr(module, "os", SimpleNamespace(O_RDONLY=os.O_RDONLY, open=forbidden_open))
+    with pytest.raises(module.CheckpointError, match="durability requires POSIX directory fsync"):
+        module._fsync_directory(tmp_path)
+
+
+@pytest.mark.parametrize("checkpoint_protocol_services", ["model"], indirect=True)
+def test_explicit_protocol_model_keeps_real_json_file_fsync_and_immutable_link(
+        tmp_path, monkeypatch, checkpoint_protocol_services):
+    model = checkpoint_protocol_services
+    assert model.qualification == "protocol_model_only_not_native_checkpoint"
+    assert checkpoint._cpu() == model.declared_cpu_sample
+    fsync_calls, link_calls = [], []
+    actual_fsync, actual_link = os.fsync, os.link
+    def file_fsync(fd):
+        fsync_calls.append(fd)
+        return actual_fsync(fd)
+    def immutable_link(source, target):
+        link_calls.append((source, target))
+        return actual_link(source, target)
+    monkeypatch.setattr(checkpoint.os, "fsync", file_fsync)
+    monkeypatch.setattr(checkpoint.os, "link", immutable_link)
+    path = tmp_path / "ledger" / "record.json"
+    checkpoint.write_immutable_json(path, {"declared_model": True, "value": 7})
+    original = path.read_bytes()
+    assert checkpoint.read_json(path) == {"declared_model": True, "value": 7}
+    with pytest.raises(FileExistsError):
+        checkpoint.write_immutable_json(path, {"value": 8})
+    assert path.read_bytes() == original
+    assert len(fsync_calls) == 2 and len(link_calls) == 2
+    assert model.directory_barriers == [path.parent]
+    assert sorted(p.name for p in path.parent.iterdir()) == [path.name]
+
+
+@pytest.mark.parametrize("checkpoint_protocol_services", ["model"], indirect=True)
+@pytest.mark.parametrize("case,parameters", [('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'pcc/backend/emitter.py'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'pcc/runtime/src/runtime.c'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'pcc/runtime/include/runtime.h'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'pcc/stdlib/os.py'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'scripts/bootstrap.py'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'scripts/bootstrap_stage1_checkpoint.py'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'utils/table.json'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'uv.lock'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': '.python-version'}), ('test_source_identity_rejects_same_path_changed_bytes', {'relative': 'pyproject.toml'}), ('test_build_identity_is_canonical_immutable_and_self_authenticating', {}), ('test_attempt_accounting_retains_failures_and_gaps', {}), ('test_lost_launcher_terminal_guard_is_only_a_lower_bound', {}), ('test_unresolved_guard_blocks_resume_and_never_improves_timing', {'status': None}), ('test_unresolved_guard_blocks_resume_and_never_improves_timing', {'status': 'RUNNING'}), ('test_unresolved_guard_blocks_resume_and_never_improves_timing', {'status': 'INVENTED_SUCCESS'}), ('test_proven_prelaunch_failure_allows_retry', {}), ('test_guard_path_escape_is_rejected', {}), ('test_launcher_retains_failed_attempt_and_publishes_resumed_only_after_smoke', {}), ('test_build_mismatch_fails_before_guard_or_stale_output_removal', {}), ('test_caught_launcher_failure_with_unresolved_guard_keeps_unknown_intervals', {}), ('test_attempt_clock_includes_module_validation_and_labels_publication_boundary', {}), ('test_inputs_changing_during_compile_fail_before_smoke_and_success', {})])
+def test_declared_protocol_model_runs_existing_ledger_assertions(
+        tmp_path, monkeypatch, capsys, checkpoint_protocol_services, case, parameters):
+    """Platform-service model only; executes the original ledger assertions."""
+    assert checkpoint_protocol_services.qualification == "protocol_model_only_not_native_checkpoint"
+    function = globals()[case]
+    available = {"tmp_path": tmp_path, "monkeypatch": monkeypatch, "capsys": capsys,
+                 "checkpoint_protocol_services": checkpoint_protocol_services, **parameters}
+    names = function.__code__.co_varnames[:function.__code__.co_argcount]
+    function(**{name: available[name] for name in names})

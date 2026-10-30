@@ -132,7 +132,7 @@ def test_dynamic_cext_object_list_retain_release_deallocs(
         #include <stdint.h>
 
         void py_decref(PyObject *o);
-        PyObject *py_list_new(long initial_capacity);
+        PyObject *py_list_new(int64_t initial_capacity);
         void py_list_append(PyObject *lst, PyObject *item);
 
         typedef struct ProbeManagedObject {
@@ -200,11 +200,11 @@ def test_dynamic_cext_object_list_retain_release_deallocs(
 
 def test_strict_refcount_guards_accept_only_registry_proven_cext_tags() -> None:
     """Parity/negative contract: strict incref and decref prepare gate the
-    >500 rejection on the C-extension registry, mirroring the C owner, so
-    registry-proven dynamic tags are accepted while unmanaged/unknown high
-    tags stay fail-closed. Prevents a regression back to a blanket >500 reject
-    (which drops C-extension owners) or a tag-only exemption without the
-    registry authority."""
+    C-extension tag range (PY_TYPE_CEXT_TAG_BASE and above) on the
+    C-extension registry, so registry-proven dynamic tags are accepted while
+    unmanaged/unknown high tags stay fail-closed. Prevents a regression back
+    to a blanket range reject (which drops C-extension owners) or a tag-only
+    exemption without the registry authority."""
     py_obj = (REPO_ROOT / "pcc" / "runtime" / "py" / "py_obj.py").read_text(
         encoding="utf-8"
     )
@@ -212,12 +212,13 @@ def test_strict_refcount_guards_accept_only_registry_proven_cext_tags() -> None:
     assert 'pcc_capi_is_cext_type_tag = extern(' in py_obj
     # Both refcount-prepare guards accept ONLY registry-proven high tags.
     assert (
-        "or (tag > 500 and pcc_capi_is_cext_type_tag(tag) == 0)" in py_obj
+        "or (tag >= (PY_TYPE_CEXT_TAG_BASE) "
+        "and pcc_capi_is_cext_type_tag(tag) == 0)" in py_obj
     )
     assert (
-        "or (tag_dbg > 500 and pcc_capi_is_cext_type_tag(tag_dbg) == 0)"
-        in py_obj
+        "or (tag_dbg >= (PY_TYPE_CEXT_TAG_BASE) "
+        "and pcc_capi_is_cext_type_tag(tag_dbg) == 0)" in py_obj
     )
-    # No blanket ">500: return" reject survives in the prepare guards.
-    assert "\n        or tag > 500\n    ):" not in py_obj
-    assert "\n        or tag_dbg > 500\n    ):" not in py_obj
+    # No blanket range reject survives in the prepare guards.
+    assert "\n        or tag >= (PY_TYPE_CEXT_TAG_BASE)\n    ):" not in py_obj
+    assert "\n        or tag_dbg >= (PY_TYPE_CEXT_TAG_BASE)\n    ):" not in py_obj

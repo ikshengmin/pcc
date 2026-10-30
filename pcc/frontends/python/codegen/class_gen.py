@@ -75,6 +75,7 @@ from pcc.frontends.python.codegen.class_override_index import (
     build_export_subclassed_classes,
 )
 from pcc.frontends.python.codegen.ownership_lowering import prepare_rebound_object_parameters
+from pcc.frontends.python.codegen.local_bound_lowering import prepare_local_boundness
 from pcc.frontends.python.codegen.str_default_cells import str_default_cell_expr
 from pcc.frontends.python.py_ast import (
     Arg,
@@ -2102,6 +2103,7 @@ class ClassLowering:
         self._dataclass_generated_init = {}
         self._external_method_overrides = None
         self._external_subclassed = None
+        self._assigned_attribute_names = None
 
     # ------------------------------------------------------ declaration
 
@@ -4626,6 +4628,7 @@ class ClassLowering:
             parent._lambda_lexical_shadow_names = set(parent._current_param_names)
             if auto_root_borrowed_params:
                 prepare_rebound_object_parameters(parent, fd, boxed_param_names)
+            prepare_local_boundness(parent, fd)
             parent._emit_application_safepoint()
 
             # Emit statements via the parent's normal emitter. In debug mode,
@@ -5531,9 +5534,9 @@ class ClassLowering:
                 parent.runtime["pcc_gc_store_root"],
                 [parent._as_gc_ptr(current), ir.Constant(_PTR, None)],
             )
-            moved = builder.call(
-                parent.runtime["pcc_gc_root_move"],
-                [parent._as_gc_ptr(current), parent._as_gc_ptr(result)],
+            moved = parent._emit_root_slot_move(
+                current,
+                result,
                 name=self._fresh("class.decorator.move"),
             )
             parent._slot_call_check_status(moved, "class decorator result move", cd.span)
@@ -8151,8 +8154,11 @@ class ClassLowering:
         A type hint identifies a compatible base class, not the receiver's
         exact runtime class.  Direct instance-method dispatch is therefore
         sound only when the closed-world class graph has no subclass override
-        below the hinted receiver class.
+        below the hinted receiver class, and when nothing in the module
+        rebinds, deletes or shadows the name (method_name_assigned_in_module).
         """
+        if self.method_name_assigned_in_module(method_name):
+            return True
         native_exports = self.parent._native_module_exports
         if native_exports is not None:
             if self._external_method_overrides is None:
@@ -8180,6 +8186,23 @@ class ClassLowering:
             if self._derives_from(other, info.name):
                 return True
         return False
+
+    def method_name_assigned_in_module(self, method_name: str) -> bool:
+        """Whether this module assigns or deletes an attribute ``method_name``.
+
+        ``A.f = g`` in any function, ``del A.f``, ``obj.f = h`` (an instance
+        attribute shadows the method) and ``setattr``/``delattr`` with a
+        literal name each make ``x.f()`` call something other than the
+        compiled ``f``. Each is a statement anywhere in the module, not just
+        earlier in the function that calls, so direct dispatch of a method
+        so named is unsound throughout. Closed world: a computed setattr
+        name or another module's assignment is not seen.
+        """
+        if self._assigned_attribute_names is None:
+            self._assigned_attribute_names = _module_assigned_attribute_names(
+                self.parent.ast_module
+            )
+        return method_name in self._assigned_attribute_names
 
     # Dict-inherited methods the runtime serves for classes that subclass the
     # builtin ``dict`` (PY_CLASS_FLAG_DICT_SUBCLASS): py_dict_subclass_getattr
@@ -9211,6 +9234,54 @@ def _classgen_annotation_or_none(node):
         return node.annotation
     except AttributeError:
         return None
+
+
+def _note_assigned_attribute_target(target, names: dict) -> None:
+    if _is_ast_node(target, Attr):
+        names[target.name] = True
+    elif _is_ast_node(target, (TupleExpr, ListExpr)):
+        for element in target.elems:
+            _note_assigned_attribute_target(element, names)
+
+
+def _module_assigned_attribute_names(module) -> dict:
+    """Attribute names any statement of ``module`` assigns or deletes."""
+    names: dict = {}
+    pending = list(module.body)
+    while pending:
+        statement = pending.pop()
+        if _is_ast_node(statement, (Assign, Delete)):
+            for target in statement.targets:
+                _note_assigned_attribute_target(target, names)
+        elif _is_ast_node(statement, AugAssign):
+            _note_assigned_attribute_target(statement.target, names)
+        elif _is_ast_node(statement, ExprStmt):
+            call = statement.expr
+            if (_is_ast_node(call, Call) and _is_ast_node(call.func, Name)
+                    and call.func.ident in ("setattr", "delattr")
+                    and len(call.args) >= 2 and _is_ast_node(call.args[1], StrLit)):
+                names[call.args[1].value] = True
+        elif _is_ast_node(statement, For):
+            _note_assigned_attribute_target(statement.target, names)
+            pending.extend(statement.body)
+            pending.extend(statement.else_body)
+        elif _is_ast_node(statement, (If, While)):
+            pending.extend(statement.body)
+            pending.extend(statement.else_body)
+        elif _is_ast_node(statement, With):
+            for item in statement.items:
+                if item[1] is not None:
+                    _note_assigned_attribute_target(item[1], names)
+            pending.extend(statement.body)
+        elif _is_ast_node(statement, Try):
+            pending.extend(statement.body)
+            for handler in statement.handlers:
+                pending.extend(handler.body)
+            pending.extend(statement.else_body)
+            pending.extend(statement.finally_body)
+        elif _is_ast_node(statement, (FuncDef, ClassDef)):
+            pending.extend(statement.body)
+    return names
 
 
 def _is_ast_node(node, expected_types) -> bool:

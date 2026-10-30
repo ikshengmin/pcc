@@ -98,6 +98,9 @@ def test_packed_merge_retires_before_owned_output_and_matches_eager_image(tmp_pa
     from pcc.backend import macho_obj as obj, macho_spec as spec, native_object as native
     from tests.python.test_macho_owned_output import _factory_budget, _tracked_buffers
 
+    # This fixture includes derived roots and tests the relocatable v2 index.
+    # Runtime v3 deliberately rejects those roots; do not inherit its default.
+    monkeypatch.setenv("PCC_PRECISE_STACKMAP_FORMAT", "2")
     objects, paths = [], []
     for unit in range(2):
         name = "_main" if unit == 0 else "_other"

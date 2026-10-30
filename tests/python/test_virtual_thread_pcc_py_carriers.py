@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from pcc1_gate import find_current_pcc1
-from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -25,10 +24,9 @@ RUNTIME_SOURCE = RUNTIME / "py" / "py_virtual_thread_runtime.py"
 
 
 @pytest.fixture(scope="session")
-def threaded_pcc_runtime_archive() -> Path:
-    archive = (
-        cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-    )
+def threaded_pcc_runtime_archive(threaded_pcc_runtime_archive: Path) -> Path:
+    # Delegate admission/provisioning to the shared fixture before local checks.
+    archive = threaded_pcc_runtime_archive
     assert archive.is_file()
     assert RUNTIME not in archive.parents
     return archive

@@ -17,6 +17,9 @@ backend = extern("pcc_gc_backend", (), c_int64)
 metric = extern("pcc_gc_telemetry", (c_int64,), c_int64)
 select_moving = extern("pcc_gc_select_relocation_set", (c_int64,), c_int64)
 step = extern("pcc_gc_step", (c_int64,), c_int64)
+stop_world = extern("pcc_stop_the_world", (), c_int64)
+resume_world = extern("pcc_resume_world", (), c_int64)
+stopped_at_gates = extern("pcc_thread_all_stopped_at_gates", (), c_int64)
 evidence = []
 events = []
 converter = float
@@ -45,10 +48,21 @@ def move_live_objects(phase):
         pending = remaining
         drain_steps += 1
     assert pending == 0
-    before = metric(15)
-    selected = select_moving(4096)
-    processed = step(4096)
-    moved = metric(15) - before
+    # gc.disable() pauses automatic collection, not the CMS thread. Match
+    # production moving steps: hold the world and require every other thread
+    # at a relocation-safe gate. A runtime poll is not such a gate; fail that
+    # precondition rather than retrying until this movement witness passes.
+    stop_status = stop_world()
+    assert stop_status == 0
+    try:
+        assert stopped_at_gates() == 1
+        before = metric(15)
+        selected = select_moving(4096)
+        processed = step(4096)
+        moved = metric(15) - before
+    finally:
+        resume_status = resume_world()
+        assert resume_status == 0
     # The roots and payload must survive the measured relocation window.
     assert len(ballast) == 96
     for index in range(96):

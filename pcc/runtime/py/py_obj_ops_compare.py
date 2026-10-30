@@ -23,6 +23,10 @@ FNV-1a constants (verified to work in pcc-Python signed-i64):
 
 __pcc_runtime_port__ = True
 
+from pcc.runtime.py.py_abi_constants import (
+    PYLISTOBJECT_CAPACITY_OFFSET,
+    PYLISTOBJECT_LENGTH_OFFSET,
+)
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void, c_double
 from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS, PY_TYPE_NOTIMPLEMENTED
 from pcc.runtime.py.py_abi_constants import PY_OBJ_CMP_UNORDERED, C_POINTER_SIZE, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, PYBYTEARRAYOBJECT_DATA_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_ITEM_COUNT_OFFSET, PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJECT_DIGITS_OFFSET, PYINTOBJECT_NDIGITS_OFFSET, PYINTOBJECT_SIGN_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYSTROBJECT_HASH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_VALUEBOX
@@ -32,6 +36,7 @@ from pcc.unsafe import (
     define_global_i32,
     free,
     malloc,
+    memmove,
     memset,
     global_addr,
     global_load_ptr,
@@ -1435,11 +1440,11 @@ _SORT_KEY = 1
 _SORT_COMPARE = 2
 _SORT_VALUES = 3
 _SORT_KEYS = 4
-_SORT_RESULT = 5
-_SORT_ARGS = 6
-_SORT_ITEM = 7
-_SORT_LEFT = 8
-_SORT_RIGHT = 9
+_SORT_ARGS = 5
+_SORT_ITEM = 6
+_SORT_LEFT = 7
+_SORT_RIGHT = 8
+_SORT_REVERSE = 9
 _SORT_ERROR = 10
 _SORT_COUNT = 11
 _SORT_BYTES = 8
@@ -1459,6 +1464,22 @@ py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
 py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
+pcc_gc_mode_lease_shard_index = extern("pcc_gc_mode_lease_shard_index", (c_ptr,), c_int64)
+pcc_gc_mode_lease_reserve_shard = extern("pcc_gc_mode_lease_reserve_shard", (c_int64,), c_int64)
+pcc_gc_mode_lease_release_shard = extern("pcc_gc_mode_lease_release_shard", (c_int64,), c_int64)
+pcc_gc_backend4_retarget_mutator_payload_locked = extern(
+    "pcc_gc_backend4_retarget_mutator_payload_locked",
+    (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
+    c_int64,
+)
+pcc_gc_backend4_zpage_register_owner_payload_span = extern(
+    "pcc_gc_backend4_zpage_register_owner_payload_span",
+    (c_ptr, c_ptr, c_int64),
+    c_int64,
+)
 
 
 def _sorted_error(message) -> int:
@@ -1632,8 +1653,307 @@ def _sorted_merge_indices(slots, tokens, order, scratch, count: int, reverse: in
     return 0
 
 
+def _sorted_reorder_values(values, pairs, scratch, count: int, capacity: int) -> int:
+    # The final merge leaves the same permutation in order and scratch. Read
+    # each scratch index before replacing it with the corresponding object.
+    # Reuse order's larger allocation for old-slot/new-slot pairs, indexed by
+    # OLD index so GC4 can map remembered slots with a binary search.
+    # The values list keeps all element owners: no per-element retain/drop,
+    # and no managed pointer is live solely in an unregistered raw buffer.
+    pcc_py_gc_minor_graph_lock()
+    owner = pcc_gc_load_ptr(null(), values)
+    if (load_i64(owner, PYLISTOBJECT_LENGTH_OFFSET) != count
+            or load_i64(owner, PYLISTOBJECT_CAPACITY_OFFSET) != capacity):
+        pcc_py_gc_minor_graph_unlock()
+        return _sorted_error(cstr("sorted: work list changed during comparison"))
+    old_items = load_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET)
+    if ptr_is_null(old_items) != 0:
+        pcc_py_gc_minor_graph_unlock()
+        return _sorted_error(cstr("sorted: missing work list payload"))
+    index: int = 0
+    while index < count:
+        old_index: int = load_i64(scratch, index * _SORT_BYTES)
+        old_slot = ptr_add(old_items, old_index * _SORT_BYTES)
+        new_slot = ptr_add(scratch, index * _SORT_BYTES)
+        store_ptr(new_slot, 0, pcc_gc_load_ptr(owner, old_slot))
+        store_ptr(pairs, old_index * 2 * _SORT_BYTES, old_slot)
+        store_ptr(pairs, old_index * 2 * _SORT_BYTES + _SORT_BYTES, new_slot)
+        index = index + 1
+    memset(ptr_add(scratch, count * _SORT_BYTES), 0, (capacity - count) * _SORT_BYTES)
+    retargeted: int = pcc_gc_backend4_retarget_mutator_payload_locked(
+        owner, old_items, capacity * _SORT_BYTES,
+        scratch, capacity * _SORT_BYTES, pairs, count,
+    )
+    if retargeted == 0:
+        pcc_py_gc_minor_graph_unlock()
+        return _sorted_error(cstr("sorted: cannot retarget work list payload"))
+    index = 0
+    while index < count:
+        new_slot = ptr_add(scratch, index * _SORT_BYTES)
+        pcc_gc_note_slot_write_barrier(owner, new_slot, load_ptr(new_slot, 0))
+        index = index + 1
+    store_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET, scratch)
+    if retargeted == 2:
+        pcc_gc_backend4_zpage_register_owner_payload_span(
+            owner, scratch, capacity * _SORT_BYTES,
+        )
+    pcc_py_gc_minor_graph_unlock()
+    free(old_items)
+    return 0
+
+
+def _plain_less(left, right) -> int:
+    """``left < right`` when no callback can decide it: 1 or 0, else -1.
+
+    Exact str and int/bool/float pairs order by value; exact tuples of
+    those order by the first differing item, then by length, as
+    _sequence_order does. Anything else needs the comparison protocol, and
+    so does a NaN: unordered values make the result depend on the sorting
+    algorithm, which this path does not share with the general one.
+    """
+    if ptr_is_null(left) != 0 or ptr_is_null(right) != 0:
+        return -1
+    kind_left: int = _type_of(left)
+    kind_right: int = _type_of(right)
+    if (kind_left == PY_TYPE_STR and kind_right == PY_TYPE_STR) or (
+        _is_number_tag(kind_left) != 0 and _is_number_tag(kind_right) != 0
+    ):
+        plain: int = _cmp_threeway(left, right)
+        if plain == PY_OBJ_CMP_UNORDERED:
+            return -1
+        return 1 if plain < 0 else 0
+    if kind_left != PY_TYPE_TUPLE or kind_right != PY_TYPE_TUPLE:
+        return -1
+    length_left: int = load_i64(left, PYTUPLEOBJECT_LEN_OFFSET)
+    length_right: int = load_i64(right, PYTUPLEOBJECT_LEN_OFFSET)
+    verdict: int = -2
+    index: int = 0
+    while verdict == -2:
+        if index >= length_left or index >= length_right:
+            verdict = 1 if length_left < length_right else 0
+        else:
+            item_left = load_ptr(left, PYTUPLEOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
+            item_right = load_ptr(right, PYTUPLEOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
+            if ptr_eq(item_left, item_right) == 0:
+                if ptr_is_null(item_left) != 0 or ptr_is_null(item_right) != 0:
+                    verdict = -1
+                else:
+                    item_kind_left: int = _type_of(item_left)
+                    item_kind_right: int = _type_of(item_right)
+                    if (item_kind_left == PY_TYPE_STR and item_kind_right == PY_TYPE_STR) or (
+                        _is_number_tag(item_kind_left) != 0 and _is_number_tag(item_kind_right) != 0
+                    ):
+                        comparison: int = _cmp_threeway(item_left, item_right)
+                        if comparison == PY_OBJ_CMP_UNORDERED:
+                            verdict = -1
+                        elif comparison != 0:
+                            verdict = 1 if comparison < 0 else 0
+                    else:
+                        verdict = -1
+            index = index + 1
+    return verdict
+
+
+def _sorted_plain_insertion(items, count: int) -> int:
+    """Stable insertion sort of count owners by _plain_less: 0, or -1.
+
+    Each element's place is found before anything moves, so the traced
+    array stays a permutation of its owners at every safepoint and after a
+    comparison that needs the protocol.
+    """
+    index: int = 1
+    while index < count:
+        moving = load_ptr(items, index * C_POINTER_SIZE)
+        position: int = index
+        searching: int = 1
+        while searching != 0 and position > 0:
+            less: int = _plain_less(moving, load_ptr(items, (position - 1) * C_POINTER_SIZE))
+            if less < 0:
+                return -1
+            if less == 0:
+                searching = 0
+            else:
+                position = position - 1
+        if position < index:
+            memmove(
+                ptr_add(items, (position + 1) * C_POINTER_SIZE),
+                ptr_add(items, position * C_POINTER_SIZE),
+                (index - position) * C_POINTER_SIZE,
+            )
+            store_ptr(items, position * C_POINTER_SIZE, moving)
+        index = index + 1
+    return 0
+
+
+def _sorted_plain_merge(items, scratch, count: int) -> int:
+    """Stable bottom-up merge sort by _plain_less: 0, or -1.
+
+    Each pass reads the traced array and writes the untraced scratch, then
+    copies back at once, so the array is a permutation at every safepoint.
+    """
+    width: int = 1
+    while width < count:
+        low: int = 0
+        while low < count:
+            middle: int = low + width
+            if middle > count:
+                middle = count
+            high: int = middle + width
+            if high > count:
+                high = count
+            left: int = low
+            right: int = middle
+            out: int = low
+            while out < high:
+                take_right: int = 0
+                if left >= middle:
+                    take_right = 1
+                elif right < high:
+                    # Ties keep the left run: stable.
+                    take_right = _plain_less(
+                        load_ptr(items, right * C_POINTER_SIZE),
+                        load_ptr(items, left * C_POINTER_SIZE),
+                    )
+                    if take_right < 0:
+                        return -1
+                if take_right != 0:
+                    store_ptr(scratch, out * C_POINTER_SIZE, load_ptr(items, right * C_POINTER_SIZE))
+                    right = right + 1
+                else:
+                    store_ptr(scratch, out * C_POINTER_SIZE, load_ptr(items, left * C_POINTER_SIZE))
+                    left = left + 1
+                out = out + 1
+            low = high
+        memmove(items, scratch, count * C_POINTER_SIZE)
+        width = width * 2
+    return 0
+
+
+def _sorted_plain_reverse(items, count: int) -> None:
+    low: int = 0
+    high: int = count - 1
+    while low < high:
+        swapped = load_ptr(items, low * C_POINTER_SIZE)
+        store_ptr(items, low * C_POINTER_SIZE, load_ptr(items, high * C_POINTER_SIZE))
+        store_ptr(items, high * C_POINTER_SIZE, swapped)
+        low = low + 1
+        high = high - 1
+
+
+def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
+    """GC0 sorted() of a list or tuple whose order needs no callback.
+
+    The sorted list is private until it is published, GC0 never relocates
+    and its cycle collector derives roots from reference counts, so the copy
+    is retained under one graph transaction (pcc_gc_try_init_ptr_locked) and
+    sorted in place without slot roots or leases. One mode-lease reservation
+    keeps a backend switch out. A comparison that may run a callback, a
+    refused retain or an unexpected source releases the copy: nothing
+    observable has happened and the general protocol starts over. reverse
+    keeps stability as CPython does: reverse, sort, reverse. Returns 1 with
+    the list in result_slot, 0 when the general protocol must run, -1 with
+    an exception after an allocation failure.
+    """
+    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+        return 0
+    source = load_ptr(source_slot, 0)
+    if ptr_is_null(source) != 0 or is_tagged_int(source) != 0:
+        return 0
+    kind: int = _type_of(source)
+    if kind != PY_TYPE_LIST and kind != PY_TYPE_TUPLE:
+        return 0
+    shard: int = pcc_gc_mode_lease_shard_index(source)
+    if pcc_gc_mode_lease_reserve_shard(shard) != 0:
+        return 0
+    status: int = 1
+    # A switch may have completed between the gate and the reservation.
+    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+        status = 0
+    out = null()
+    if status == 1:
+        hint: int = 0
+        if kind == PY_TYPE_LIST:
+            hint = load_i64(source, PYLISTOBJECT_LENGTH_OFFSET)
+        else:
+            hint = load_i64(source, PYTUPLEOBJECT_LEN_OFFSET)
+        out = py_list_new(hint)
+        if ptr_is_null(out) != 0:
+            status = -1
+    count: int = 0
+    if status == 1:
+        pcc_py_gc_minor_graph_lock()
+        source_items = ptr_add(source, PYTUPLEOBJECT_ITEMS_OFFSET)
+        if kind == PY_TYPE_LIST:
+            count = load_i64(source, PYLISTOBJECT_LENGTH_OFFSET)
+            source_items = load_ptr(source, PYLISTOBJECT_ITEMS_OFFSET)
+        else:
+            count = load_i64(source, PYTUPLEOBJECT_LEN_OFFSET)
+        if count < 0 or count > load_i64(out, PYLISTOBJECT_CAPACITY_OFFSET):
+            status = 0
+        out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
+        copied: int = 0
+        while status == 1 and copied < count:
+            if pcc_gc_try_init_ptr_locked(
+                ptr_add(out_items, copied * C_POINTER_SIZE),
+                ptr_add(source_items, copied * C_POINTER_SIZE),
+            ) == 0:
+                status = 0
+            else:
+                copied = copied + 1
+                store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, copied)
+        pcc_py_gc_minor_graph_unlock()
+    if status == 1 and count > 1:
+        items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
+        if reverse != 0:
+            _sorted_plain_reverse(items, count)
+        sorted_status: int = 0
+        if count <= 16:
+            sorted_status = _sorted_plain_insertion(items, count)
+        else:
+            scratch = malloc(count * C_POINTER_SIZE)
+            if ptr_is_null(scratch) != 0:
+                sorted_status = -1
+            else:
+                sorted_status = _sorted_plain_merge(items, scratch, count)
+                free(scratch)
+        if sorted_status != 0:
+            status = 0
+        elif reverse != 0:
+            _sorted_plain_reverse(items, count)
+    if status == 1:
+        store_ptr(result_slot, 0, out)
+    elif ptr_is_null(out) == 0:
+        py_decref(out)
+    if status < 0 and py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("sorted: out of memory")))
+    if pcc_gc_mode_lease_release_shard(shard) != 0:
+        pcc_platform_abort()
+        return -1
+    return status
+
+
 @c_abi_export("py_obj_sorted_slots")
 def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, result_slot) -> int:
+    if (ptr_is_null(key_slot) != 0 and ptr_is_null(compare_slot) != 0
+            and ptr_is_null(source_slot) == 0 and ptr_is_null(result_slot) == 0
+            and ptr_is_null(load_ptr(result_slot, 0)) != 0):
+        fast: int = _sorted_gc0(source_slot, reverse, result_slot)
+        if fast > 0:
+            return 0
+        if fast < 0:
+            return -1
+    return _sorted_slots_body(source_slot, key_slot, compare_slot, reverse, null(), result_slot)
+
+
+@c_abi_export("py_obj_sorted_reverse_slots")
+def py_obj_sorted_reverse_slots(source_slot, key_slot, compare_slot, reverse_slot, result_slot) -> int:
+    return _sorted_slots_body(source_slot, key_slot, compare_slot, 0, reverse_slot, result_slot)
+
+
+def _sorted_slots_body(source_slot, key_slot, compare_slot, reverse: int, reverse_slot, result_slot) -> int:
     if ptr_is_null(source_slot) != 0 or ptr_is_null(result_slot) != 0:
         return _sorted_error(cstr("sorted: missing source or result root"))
     if ptr_is_null(load_ptr(result_slot, 0)) == 0:
@@ -1651,10 +1971,10 @@ def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, resul
         status = _sorted_copy(slots, tokens, _SORT_KEY, key_slot)
     if status == 0:
         status = _sorted_copy(slots, tokens, _SORT_COMPARE, compare_slot)
+    if status == 0:
+        status = _sorted_copy(slots, tokens, _SORT_REVERSE, reverse_slot)
     source = ptr_add(slots, _SORT_SOURCE * _SORT_BYTES)
     values = ptr_add(slots, _SORT_VALUES * _SORT_BYTES)
-    result = ptr_add(slots, _SORT_RESULT * _SORT_BYTES)
-    item = ptr_add(slots, _SORT_ITEM * _SORT_BYTES)
     error = ptr_add(slots, _SORT_ERROR * _SORT_BYTES)
     if status == 0:
         store_ptr(values, 0, py_list_new(0))
@@ -1663,45 +1983,50 @@ def py_obj_sorted_slots(source_slot, key_slot, compare_slot, reverse: int, resul
         py_list_extend(load_ptr(values, 0), load_ptr(source, 0))
         if py_err_occurred() != 0:
             status = -1
+    if status == 0 and ptr_is_null(reverse_slot) == 0:
+        # CPython sorted constructs its new list before list.sort parses and
+        # truth-tests reverse. Iterator failures therefore take precedence,
+        # and a truth callback sees the input snapshot already completed.
+        reverse = py_obj_truthy(load_ptr(slots, _SORT_REVERSE * _SORT_BYTES))
+        if py_err_occurred() != 0:
+            status = -1
     if status == 0:
         status = _sorted_prepare_keys(slots, tokens)
     count: int = 0
+    capacity: int = 0
     order = null()
     scratch = null()
     if status == 0:
-        count = py_list_len(load_ptr(values, 0))
-        if count > 1152921504606846975:
+        pcc_py_gc_minor_graph_lock()
+        owner = pcc_gc_load_ptr(null(), values)
+        count = load_i64(owner, PYLISTOBJECT_LENGTH_OFFSET)
+        capacity = load_i64(owner, PYLISTOBJECT_CAPACITY_OFFSET)
+        pcc_py_gc_minor_graph_unlock()
+        if (count < 0 or count > 576460752303423487 or capacity < count
+                or capacity > 1152921504606846975):
             status = _sorted_error(cstr("sorted: index buffer is too large"))
-        elif count > 0:
-            order = malloc(count * 8)
-            scratch = malloc(count * 8)
+        elif count > 1:
+            order = malloc(count * 2 * _SORT_BYTES)
+            # This buffer becomes the list payload after the final merge.
+            # Keep the original capacity for GC4 payload span relocation.
+            scratch = malloc(capacity * _SORT_BYTES)
             if ptr_is_null(order) != 0 or ptr_is_null(scratch) != 0:
                 status = _sorted_error(cstr("sorted: cannot allocate index buffer"))
-    if status == 0:
+    if status == 0 and count > 1:
         index = 0
         while index < count:
-            store_i64(order, index * 8, index)
+            store_i64(order, index * _SORT_BYTES, index)
             index = index + 1
         status = _sorted_merge_indices(slots, tokens, order, scratch, count, reverse)
+        if status == 0:
+            status = _sorted_reorder_values(values, order, scratch, count, capacity)
+            if status == 0:
+                scratch = null()  # The values list now owns this allocation.
     if status == 0:
-        store_ptr(result, 0, py_list_new(count))
-        status = _sorted_adopt(slots, tokens, _SORT_RESULT)
-    index = 0
-    while index < count and status == 0:
-        store_ptr(item, 0, py_list_get(load_ptr(values, 0), load_i64(order, index * 8)))
-        status = _sorted_adopt(slots, tokens, _SORT_ITEM)
+        status = pcc_gc_root_move(result_slot, values)
         if status == 0:
-            py_list_append(load_ptr(result, 0), load_ptr(item, 0))
-            if py_err_occurred() != 0:
-                status = -1
-        if status == 0:
-            _sorted_drop(slots, tokens, _SORT_ITEM)
-        index = index + 1
-    if status == 0:
-        status = pcc_gc_root_move(result_slot, result)
-        if status == 0:
-            token: int = load_i64(tokens, _SORT_RESULT * _SORT_BYTES)
-            store_i64(tokens, _SORT_RESULT * _SORT_BYTES, -1)
+            token: int = load_i64(tokens, _SORT_VALUES * _SORT_BYTES)
+            store_i64(tokens, _SORT_VALUES * _SORT_BYTES, -1)
             if pcc_gc_foreign_lease_release(result_slot, token) < 0:
                 pcc_platform_abort()
                 return -1

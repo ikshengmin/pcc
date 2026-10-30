@@ -8,6 +8,7 @@ from pcc.unsafe import (
     global_load_ptr,
     is_tagged_int,
     load_i32,
+    load_i64,
     load_ptr,
     ptr_is_null,
     stack_alloc,
@@ -97,11 +98,22 @@ py_dealloc_vthread_channel = extern(
     "py_dealloc_vthread_channel", (c_ptr,), c_void
 )
 py_dealloc_generic = extern("py_dealloc_generic", (c_ptr,), c_void)
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
 
 
 @c_abi_export("pcc_gc_tracing_has_sweep_candidate")
 def pcc_gc_tracing_has_sweep_candidate() -> i64:
+    # Only a finished mark sets SWEEP_CANDIDATE (1024), and it commits after
+    # flagging (pcc_gc_tracing_finish_commits). A walk that finds none stays
+    # true until the next commit; schedulers ask once per step, so walking
+    # every tracked object per question made a GC3 collection quadratic.
     pcc_py_gc_minor_graph_lock()
+    commits: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    if load_i64(global_addr("pcc_gc_tracing_no_candidate_commit"), 0) == commits:
+        pcc_py_gc_minor_graph_unlock()
+        return 0
     node = global_load_ptr("pcc_gc_object_head")
     while ptr_is_null(node) == 0:
         if pcc_gc_object_node_is_active(node) == 0:
@@ -113,6 +125,9 @@ def pcc_gc_tracing_has_sweep_candidate() -> i64:
             pcc_py_gc_minor_graph_unlock()
             return 1
         node = load_ptr(node, 16)
+    # A finish that committed during the walk may have flagged nodes behind it.
+    if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits:
+        store_i64(global_addr("pcc_gc_tracing_no_candidate_commit"), 0, commits)
     pcc_py_gc_minor_graph_unlock()
     return 0
 
@@ -159,7 +174,10 @@ def pcc_gc_tracing_finalize_unreachable(obj) -> None:
         py_dealloc_func(obj)
     elif tag == abi_constant("object.type.class"):
         py_class_dealloc(obj)
-    elif tag == abi_constant("object.type.instance"):
+    elif (
+        tag == abi_constant("object.type.instance")
+        or tag == abi_constant("object.type.valuebox")
+    ):
         py_instance_dealloc(obj)
     elif tag == abi_constant("object.type.exc"):
         py_dealloc_exc(obj)
@@ -252,8 +270,13 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # A completed concurrent/incremental mark may leave a pending candidate
     # that is reachable at this sweep boundary.  Revalidate before invoking
     # user finalizers: rescuing it only after __del__ is already too late.
-    # Keep the separate post-finalizer refresh for PEP 442 resurrection.
-    pcc_gc_tracing_recheck_reachability_after_finalizers()
+    # A mark finished in this same stopped world saw no mutator since, so
+    # its verdicts stand. Keep the separate post-finalizer refresh for PEP
+    # 442 resurrection.
+    held: i64 = pcc_thread_world_stop_epoch_held()
+    if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
+    finalizer_runs: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded
     # because their lifecycle is owned by the C-API bridge.
@@ -263,13 +286,25 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
+            # Shell retirement owns this physical object, even when the
+            # same-world shortcut omitted the reachability refresh.
+            if (
+                (flags & 1024) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+                and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+            ):
+                flags = flags & ~1024
+                store_i32(obj, 12, flags)
             if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
                 tag: i64 = load_i32(obj, 8)
                 if pcc_capi_is_cext_type_tag(tag) == 0:
                     py_user_del_dispatch(obj)
         node = nxt
 
-    pcc_gc_tracing_recheck_reachability_after_finalizers()
+    # Only user code -- a finalizer -- can resurrect a candidate or change
+    # the graph during this stopped-world sweep.
+    if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
 
     # PASS 1: clear at most budget candidates without freeing any sibling.
     cleared: i64 = 0
@@ -281,6 +316,14 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             continue
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
+        # Re-evaluate eligibility after callback-capable finalizers.
+        if (
+            (flags & 1024) != 0
+            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+            and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+        ):
+            flags = flags & ~1024
+            store_i32(obj, 12, flags)
         if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
             pcc_gc_tracing_clear_unreachable(obj)
             cleared = cleared + 1
@@ -297,7 +340,19 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
         if (flags & 1024) != 0:
-            if (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
+            # Slot/weakref cleanup may call user code; check again before
+            # generic destruction, without charging a shell to the budget.
+            if (
+                load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+                and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
+            ):
+                store_i32(obj, 12, flags & ~1024)
+            elif (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
+                store_i32(obj, 12, flags & ~1024)
+            elif load_i32(obj, 8) == abi_constant("object.type.class"):
+                # Its instances and subclasses own counted references and
+                # read it while they are freed: it dies by reference count
+                # when the last of them releases it.
                 store_i32(obj, 12, flags & ~1024)
             elif reclaimed < cleared:
                 pcc_gc_tracing_finalize_unreachable(obj)

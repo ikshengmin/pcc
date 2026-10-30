@@ -307,9 +307,17 @@ class SuspendTripwire(Exception):
     pass
 
 
+# pcc_tls_thread_state_py, the kernel's per-thread state word: no-park depth
+# (bits 0-23), scheduler lock held (48), registered (49), parked (50).
+NO_PARK_MASK = (1 << 24) - 1
+SCHEDULER_HELD = 1 << 48
+REGISTERED = 1 << 49
+PARKED = 1 << 50
+
+
 def _tripwire_kernel(filename, held=0, depth=0):
     namespace = _namespace(filename)
-    state = {"pcc_tls_scheduler_lock_held_py": held, "pcc_tls_no_park_depth_py": depth}
+    state = {"pcc_tls_thread_state_py": (SCHEDULER_HELD if held else 0) | depth}
 
     def abort():
         raise SuspendTripwire
@@ -318,6 +326,8 @@ def _tripwire_kernel(filename, held=0, depth=0):
         global_addr=lambda name: name,
         load_i32=lambda name, offset: state[name],
         store_i32=lambda name, offset, value: state.__setitem__(name, value),
+        load_i64=lambda name, offset: state[name],
+        store_i64=lambda name, offset, value: state.__setitem__(name, value),
         pcc_platform_abort=abort,
         _world_init=lambda: pytest.fail("tripwire must precede world initialization"),
         pcc_current_thread_id=lambda: pytest.fail("tripwire must not register"),
@@ -331,10 +341,9 @@ def test_scheduler_marker_detects_missing_lease_before_safepoint(filename):
     namespace, state = _tripwire_kernel(filename, held=1)
     with pytest.raises(SuspendTripwire):
         namespace["pcc_thread_safepoint"]()
-    state["pcc_tls_no_park_depth_py"] = 1
+    state["pcc_tls_thread_state_py"] += 1
     namespace["pcc_thread_safepoint"]()
-    assert state["pcc_tls_scheduler_lock_held_py"] == 1
-    assert state["pcc_tls_no_park_depth_py"] == 1
+    assert state["pcc_tls_thread_state_py"] == SCHEDULER_HELD | 1
 
 
 # The pthread kernel is the only thread kernel (560c23fdf removed the single one).
@@ -353,11 +362,11 @@ def test_stop_world_never_waits_with_scheduler_lock_held(filename, depth):
 def test_scheduler_markers_are_independent_nonparking_state(filename):
     namespace, state = _tripwire_kernel(filename)
     namespace["pcc_thread_scheduler_lock_acquired"]()
-    assert state == {"pcc_tls_scheduler_lock_held_py": 1, "pcc_tls_no_park_depth_py": 0}
+    assert state == {"pcc_tls_thread_state_py": SCHEDULER_HELD}
     with pytest.raises(SuspendTripwire):
         namespace["pcc_thread_scheduler_lock_acquired"]()
     namespace["pcc_thread_scheduler_lock_released"]()
-    assert state == {"pcc_tls_scheduler_lock_held_py": 0, "pcc_tls_no_park_depth_py": 0}
+    assert state == {"pcc_tls_thread_state_py": 0}
     with pytest.raises(SuspendTripwire):
         namespace["pcc_thread_scheduler_lock_released"]()
 
@@ -552,10 +561,15 @@ def test_sink_recursion_never_reacquires_or_registers_under_sink_lock():
 class WorldTraceModel:
     def __init__(self, stopped=True, owner=2):
         self.namespace = _namespace("freestanding_thread_kernel_pthread.py")
-        self.state = dict(pcc_tls_scheduler_lock_held_py=0, pcc_tls_no_park_depth_py=0,
-                          pcc_thread_stop_requested=int(stopped), pcc_stop_owner_thread_id_py=owner,
+        self.state = dict(# The polling thread is registered as thread 1.
+                          pcc_tls_thread_state_py=REGISTERED,
+                          pcc_tls_thread_id_py=1,
+                          # The poll flag and the stopped-world epoch.
+                          pcc_thread_stop_requested=int(stopped),
+                          pcc_thread_world_stop_py=int(stopped),
+                          pcc_stop_owner_thread_id_py=owner,
                           pcc_stop_epoch_py=1, pcc_stop_depth_py=int(stopped),
-                          pcc_tls_thread_parked_py=0, pcc_tls_parked_epoch_py=0,
+                          pcc_tls_parked_epoch_py=0,
                           pcc_parked_thread_count_py=0, pcc_live_thread_count_py=3,
                           # A stop counts exited threads (blocked in kernel
                           # waits) as stopped, with the parked ones.
@@ -610,7 +624,7 @@ class WorldTraceModel:
 
     def wait(self, cond, lock):
         assert self.locked
-        assert self.state["pcc_tls_scheduler_lock_held_py"] == self.state["pcc_tls_no_park_depth_py"] == 0
+        assert self.state["pcc_tls_thread_state_py"] & (SCHEDULER_HELD | NO_PARK_MASK) == 0
         self.actions.append(("wait", self.state["pcc_stop_epoch_py"]))
         assert self.wait_callbacks, "unexpected extra wait"
         self.wait_callbacks.pop(0)()
@@ -618,6 +632,7 @@ class WorldTraceModel:
 
     def resume(self):
         self.state["pcc_thread_stop_requested"] = 0
+        self.state["pcc_thread_world_stop_py"] = 0
         self.state["pcc_stop_owner_thread_id_py"] = 0
         self.state["pcc_parked_thread_count_py"] = 0
 
@@ -629,7 +644,7 @@ class WorldTraceModel:
 
     def log_pair(self, thread_id, epoch, waits):
         assert thread_id == 1 and not self.locked
-        assert self.state["pcc_tls_no_park_depth_py"] == 0
+        assert self.state["pcc_tls_thread_state_py"] & NO_PARK_MASK == 0
         self.log(9, 14, epoch, waits, None)
         self.log(9, 15, epoch, waits, None)
 
@@ -648,7 +663,7 @@ def test_safepoint_trace_distinguishes_observation_spurious_wait_and_resume():
     assert model.events() == [(13, 0, 0), (14, 1, 2), (15, 1, 2)]
     assert model.actions[0] == ("trace", 13, 0, 0)
     assert model.actions[-3:] == [("unlock",), ("trace", 14, 1, 2), ("trace", 15, 1, 2)]
-    assert model.state["pcc_tls_thread_parked_py"] == 0
+    assert model.state["pcc_tls_thread_state_py"] & PARKED == 0
 
 
 def test_observed_stop_that_resumes_before_lock_is_not_reported_as_suspended():
@@ -697,12 +712,12 @@ def test_competing_stw_owner_reports_waited_epoch_before_new_stop():
 
 def test_actual_suspend_boundary_rechecks_no_park_and_unlocks_before_abort():
     model = WorldTraceModel()
-    model.state["pcc_tls_no_park_depth_py"] = 1
+    model.state["pcc_tls_thread_state_py"] += 1
     model.namespace["_thread_trace"] = lambda *args: None
     with pytest.raises(SuspendTripwire):
         model.namespace["pcc_stop_the_world"]()
     assert model.actions == [("lock",), ("unlock",)]
-    assert model.state["pcc_tls_thread_parked_py"] == 0
+    assert model.state["pcc_tls_thread_state_py"] & PARKED == 0
 
 
 def test_raw_sink_transitive_helpers_have_no_allocations_or_safepoints():

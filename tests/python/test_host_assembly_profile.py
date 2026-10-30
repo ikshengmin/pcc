@@ -1983,7 +1983,7 @@ def test_arm_backend_source_bindings_use_real_worker_call_and_existing_report_bo
              and isinstance(node.func, ast.Name) and node.func.id == adapter.ARM_CAPTURE]
     assert len(imports) == len(calls) == 1 and imports[0].lineno < calls[0].lineno
     assert {item.arg: ast.literal_eval(item.value) for item in calls[0].keywords
-            if item.arg != "phase_timing"} == {"optimize": False, "structured_instructions": True}
+            if item.arg != "phase_timing"} == {"optimize": True, "structured_instructions": True}
     assert 'phase_timing.route = "indexed-native-sections"' in worker
     assert worker.index("codegen_ms = int((time.monotonic() - codegen_started)") < worker.index("phase_timing.report(sys.stderr, phase_timing_complete)")
     backend = ast.parse((root / "pcc/backend/self_backend_aarch64_darwin.py").read_text())

@@ -31,6 +31,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_compare_register_line,
     emitted_cset_line,
     emitted_memory_instruction_line,
+    emitted_move_register_line,
 )
 from .self_backend_aarch64_darwin_ops import (
     aarch64_cc,
@@ -46,7 +47,11 @@ from .self_backend_aarch64_darwin_ops import (
 )
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_const_to_reg
 from .self_backend_aarch64_darwin_regalloc import (
+    aarch64_cmpxchg_scalar_projection,
+    aarch64_zero_test_operand,
+    zero_byte_gep_base,
     allocated_scalar_register_indexed,
+    boolean_register_lowering_enabled,
     callee_saved_registers_enabled,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
@@ -134,18 +139,79 @@ def _binop_immediate_line(
     if constant is None:
         return ""
     if op == "and":
+        mask = (1 << width) - 1
+        constant &= mask
         try:
             _logical_imm(constant, width == 64)
         except EncodeError:
             return ""
-        mask = (1 << width) - 1
-        return "  and " + result + ", " + lhs + ", #" + str(constant & mask)
+        return "  and " + result + ", " + lhs + ", #" + str(constant)
     if op == "shl" or op == "lshr" or op == "ashr":
         if constant < 0 or constant >= width:
             return ""
         mnemonic = "lsl" if op == "shl" else ("lsr" if op == "lshr" else "asr")
         return "  " + mnemonic + " " + result + ", " + lhs + ", #" + str(constant)
     return ""
+
+
+def _boolean_literal_indexed(kernel, reference: int) -> int:
+    if reference >= 0:
+        return -1
+    text = kernel.call_texts[-reference - 1]
+    if text == "true" or text == "1":
+        return 1
+    if text == "false" or text == "0":
+        return 0
+    return -1
+
+
+def _emit_boolean_select_indexed(func, kernel, destination, type_id, record, symbols):
+    """Lower scalar i1 constant-arm selects without CSEL or byte spills.
+
+    This is machine lowering, not a poison-propagating IR rewrite. Masking
+    the result to one bit preserves a selected constant independently of
+    padding or the unselected operand's arbitrary machine bits.
+    """
+    header = kernel.type_header(type_id)
+    if header.first != TYPE_KIND_INT or header.second != 1:
+        return None
+    true_bit = _boolean_literal_indexed(kernel, record.third)
+    false_bit = _boolean_literal_indexed(kernel, record.fourth)
+    if true_bit < 0 and false_bit < 0:
+        return None
+    condition = record.second
+    if condition < 0 and _boolean_literal_indexed(kernel, condition) < 0:
+        return None
+    other = record.fourth if true_bit >= 0 else record.third
+    if other < 0 and _boolean_literal_indexed(kernel, other) < 0:
+        return None
+    assigned = allocated_scalar_register_indexed(kernel, destination, type_id)
+    result = reg_name_indexed(kernel, type_id, assigned) if assigned >= 0 else "w12"
+    if true_bit >= 0 and false_bit >= 0 and true_bit == false_bit:
+        lines = ["  mov " + result + ", #" + str(true_bit)]
+    else:
+        name = kernel.value_name(condition) if condition >= 0 else kernel.call_texts[-condition - 1]
+        lines = materialize_scalar_value_indexed(
+            func, kernel, name, type_id, 9, symbols, value_id=condition,
+        )
+        if true_bit >= 0 and false_bit >= 0:
+            if true_bit == 0:
+                lines.extend(["  mov w11, #1", "  eor w9, w9, w11"])
+            lines.append("  and " + result + ", w9, #1")
+        else:
+            name = kernel.value_name(other) if other >= 0 else kernel.call_texts[-other - 1]
+            lines.extend(materialize_scalar_value_indexed(
+                func, kernel, name, type_id, 10, symbols, value_id=other,
+            ))
+            if true_bit == 0 or false_bit == 1:
+                lines.extend(["  mov w11, #1", "  eor w9, w9, w11"])
+            operation = "orr" if true_bit == 1 or false_bit == 1 else "and"
+            lines.append("  " + operation + " " + result + ", w9, w10")
+            lines.append("  and " + result + ", " + result + ", #1")
+    lines.extend(_commit_or_spill_scalar_result_indexed(
+        func, kernel, destination, type_id, result, canonical_boolean=True,
+    ))
+    return lines
 
 
 def _commit_or_spill_scalar_result(
@@ -185,7 +251,13 @@ def _commit_or_spill_scalar_result_indexed(
     dest_value_id: int,
     type_id: int,
     source_reg: str,
+    canonical_boolean: bool = False,
 ) -> list[str]:
+    if canonical_boolean:
+        register = allocated_scalar_register_indexed(kernel, dest_value_id, type_id)
+        if register >= 0:
+            destination = reg_name_indexed(kernel, type_id, register)
+            return [] if destination == source_reg else [emitted_move_register_line(destination, source_reg)]
     allocated_lines = commit_allocated_scalar_result_indexed(
         func,
         dest_value_id,
@@ -1137,12 +1209,18 @@ def emit_compute_instruction_by_id(
                 lhs_register = 9
                 rhs_register = 10
                 result_register = 11
-                select_registers = value_type_header.second in (32, 64) and (
+                boolean_logic = (
+                    boolean_register_lowering_enabled()
+                    and value_type_header.second == 1 and op in ("and", "or", "xor")
+                )
+                select_registers = (value_type_header.second in (32, 64) or boolean_logic) and (
                     binop_record.third >= 0 or lhs.lstrip("-").isdigit()
                     or lhs in ("undef", "poison", "zeroinitializer")
+                    or (boolean_logic and lhs in ("true", "false"))
                 ) and (
                     binop_record.fourth >= 0 or rhs.lstrip("-").isdigit()
                     or rhs in ("undef", "poison", "zeroinitializer")
+                    or (boolean_logic and rhs in ("true", "false"))
                 )
                 if select_registers:
                     selected = allocated_scalar_register_indexed(
@@ -1206,6 +1284,7 @@ def emit_compute_instruction_by_id(
                             indexed_dest_id,
                             value_type_id,
                             reg_name_indexed(indexed_kernel, value_type_id, result_register),
+                            canonical_boolean=boolean_logic,
                         ))
                         return lines
                 lines.extend(
@@ -1240,6 +1319,9 @@ def emit_compute_instruction_by_id(
                         lhs_register, rhs_register, result_register,
                     )
                 )
+                if boolean_logic:
+                    result_name = reg_name_indexed(indexed_kernel, value_type_id, result_register)
+                    lines.append("  and " + result_name + ", " + result_name + ", #1")
                 lines.extend(
                     _commit_or_spill_scalar_result_indexed(
                         func,
@@ -1247,6 +1329,7 @@ def emit_compute_instruction_by_id(
                         indexed_dest_id,
                         value_type_id,
                         reg_name_indexed(indexed_kernel, value_type_id, result_register),
+                        canonical_boolean=boolean_logic,
                     )
                 )
                 return lines
@@ -1371,6 +1454,21 @@ def emit_compute_instruction_by_id(
             if value_type_header.first in (TYPE_KIND_INT, TYPE_KIND_PTR):
                 if not indexed_dest_has_slot:
                     return []
+                if indexed_dest_id in func.aarch64_fused_branch_values:
+                    zero_operand = aarch64_zero_test_operand(indexed_kernel, icmp_record)
+                    if zero_operand >= 0:
+                        source_register = allocated_scalar_register_indexed(
+                            indexed_kernel, zero_operand, value_type_id,
+                        )
+                        if source_register < 0:
+                            source_register = 9
+                        # The terminator tests this value directly. There is
+                        # no instruction or PHI move between it and the branch.
+                        return materialize_scalar_value_indexed(
+                            func, indexed_kernel, indexed_kernel.value_name(zero_operand),
+                            value_type_id, source_register, module_symbols,
+                            value_id=zero_operand,
+                        )
                 # 32/64-bit and pointer compares need no in-place sign
                 # extension, so an operand already in its allocated register
                 # is compared there, and a small non-negative literal becomes
@@ -1460,15 +1558,22 @@ def emit_compute_instruction_by_id(
                 if indexed_dest_id in func.aarch64_fused_branch_values:
                     # The block's br_cond branches on these flags directly.
                     return lines
-                lines.append(emitted_cset_line("w11", aarch64_cc(cond)))
                 result_type_id = indexed_kernel.value_type_id(indexed_dest_id)
+                boolean_registers = boolean_register_lowering_enabled()
+                assigned = (
+                    allocated_scalar_register_indexed(indexed_kernel, indexed_dest_id, result_type_id)
+                    if boolean_registers else -1
+                )
+                result_name = reg_name_indexed(indexed_kernel, result_type_id, assigned) if assigned >= 0 else "w11"
+                lines.append(emitted_cset_line(result_name, aarch64_cc(cond)))
                 lines.extend(
                     _commit_or_spill_scalar_result_indexed(
                         func,
                         indexed_kernel,
                         indexed_dest_id,
                         result_type_id,
-                        "w11",
+                        result_name,
+                        canonical_boolean=boolean_registers,
                     )
                 )
                 return lines
@@ -1654,6 +1759,14 @@ def emit_compute_instruction_by_id(
             ):
                 if not indexed_dest_has_slot:
                     return []
+                boolean_lines = (
+                    _emit_boolean_select_indexed(
+                        func, indexed_kernel, indexed_dest_id, value_type_id,
+                        select_record, module_symbols,
+                    ) if boolean_register_lowering_enabled() else None
+                )
+                if boolean_lines is not None:
+                    return boolean_lines
                 cond_type_id = (
                     indexed_kernel.value_type_id(select_record.second)
                     if select_record.second >= 0
@@ -1805,6 +1918,10 @@ def emit_compute_instruction_by_id(
         )
 
     if kind_id == PARSED_INSTRUCTION_KIND_EXTRACTVALUE:
+        projection: CompilerInt4 = aarch64_cmpxchg_scalar_projection(func, block_id, instruction_index - 1)
+        if projection.first >= 0 and projection.first == indexed_dest_id:
+            # The immediately preceding CAS already published this one field.
+            return []
         dest, aggregate_type, value, _indices, result_type, offset = data
         if not (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             return []
@@ -1873,6 +1990,25 @@ def emit_compute_instruction_by_id(
         if not (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             return []
         if indexed_kernel is not None:
+            zero_base: CompilerInt2 = zero_byte_gep_base(indexed_kernel, data)
+            if zero_base.first >= 0:
+                # Materialize the proven identical address into its home,
+                # rather than staging it through x9 and x11. Coalesced source
+                # and destination registers make this a true no-op.
+                register = allocated_scalar_register_indexed(
+                    indexed_kernel, indexed_dest_id, gep_span.second,
+                )
+                target_register = register if register >= 0 else 9
+                lines = materialize_scalar_value_indexed(
+                    func, indexed_kernel, ptr_value, zero_base.first,
+                    target_register, module_symbols, value_id=zero_base.second,
+                )
+                if register < 0:
+                    lines.extend(_commit_or_spill_scalar_result_indexed(
+                        func, indexed_kernel, indexed_dest_id,
+                        gep_span.second, "x9",
+                    ))
+                return lines
             lines = materialize_scalar_value_indexed(
                 func,
                 indexed_kernel,

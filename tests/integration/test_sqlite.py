@@ -7,7 +7,11 @@ import sys
 import pytest
 
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
-from pcc.driver.project import collect_translation_units, translation_unit_include_dirs
+from pcc.driver.project import (
+    TranslationUnit,
+    collect_translation_units,
+    translation_unit_include_dirs,
+)
 from tests.parallel_jobs import translation_unit_jobs
 
 
@@ -23,6 +27,10 @@ SQLITE_CPP_ARGS = (
     "-DSQLITE_OMIT_WAL=1",
     "-DSQLITE_MAX_MMAP_SIZE=0",
 )
+# PCC leaves ordinary C math calls as ABI symbols.  These two hosted oracle
+# links must supply libm explicitly; the owned/freestanding links use their
+# selected runtime instead.
+SQLITE_HOSTED_LINK_ARGS = ("-lm",)
 
 pytestmark = pytest.mark.xdist_group(name="sqlite")
 
@@ -36,6 +44,57 @@ def _sqlite_units():
 
 def _sqlite_db_path(tmp_path):
     return tmp_path / "runtime.sqlite3"
+
+
+def _link_sqlite_hosted_probe(main_path, object_path, bin_path):
+    return subprocess.run(
+        [
+            "cc",
+            "-I",
+            PROJECTS_DIR,
+            str(main_path),
+            str(object_path),
+            "-o",
+            str(bin_path),
+            # This hosted oracle uses a non-PIC caller and PCC object.
+            # -no-pie only selects ET_EXEC; it does not disable the system
+            # compiler's default PIE code generation for main_path.
+            *(["-fno-pie"] if sys.platform.startswith("linux") else []),
+            *CEvaluator._platform_link_flags(),
+            *SQLITE_HOSTED_LINK_ARGS,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("platform_name", ["linux", "darwin", "win32"])
+def test_sqlite_hosted_probe_supplies_libm_after_object(
+    tmp_path, monkeypatch, platform_name,
+):
+    """Command-construction coverage only; the ABI regression executes it."""
+    calls = []
+
+    def capture_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", capture_run)
+    monkeypatch.setattr(sys, "platform", platform_name)
+    main_path = tmp_path / "main.c"
+    object_path = tmp_path / "sqlite3.o"
+    bin_path = tmp_path / "probe.out"
+    _link_sqlite_hosted_probe(main_path, object_path, bin_path)
+    assert len(calls) == 1
+    command, options = calls[0]
+    assert command[0] == "cc"
+    assert command.index("-lm") > command.index(str(object_path))
+    assert command.count("-lm") == 1
+    assert command.count("-no-pie") == int(platform_name == "linux")
+    assert command.count("-fno-pie") == int(platform_name == "linux")
+    assert options["timeout"] == 60
 
 
 def _run_sqlite_prepare_probe(tmp_path, sqlite_pcc_object, sql):
@@ -82,20 +141,7 @@ int main(void) {{
         encoding="utf-8",
     )
     bin_path = tmp_path / "probe.out"
-    compile_run = subprocess.run(
-        [
-            "cc",
-            "-I",
-            PROJECTS_DIR,
-            str(main_path),
-            str(sqlite_pcc_object),
-            "-o",
-            str(bin_path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    compile_run = _link_sqlite_hosted_probe(main_path, sqlite_pcc_object, bin_path)
     assert (
         compile_run.returncode == 0
     ), f"sqlite probe build failed:\n{compile_run.stdout}\n{compile_run.stderr}"
@@ -155,6 +201,124 @@ def sqlite_pcc_object(tmp_path_factory):
         optimize=False,
     )
     return obj_path
+
+
+@pytest.mark.integration
+def test_sqlite_hosted_fabs_link_preserves_binary64(tmp_path, monkeypatch):
+    """Exercise the prepare probe's real link path without the amalgamation.
+
+    The wrapper is compiled by PCC; the caller/linker is the explicit system
+    oracle.  Checking bits covers both zero signs, infinities and NaN payloads
+    without replacing the C math call with a comparison/negation shortcut.
+    """
+    monkeypatch.setenv("PCC_SELF_OBJ", "pcc")
+    evaluator = CEvaluator(backend="self")
+    units = evaluator.compile_translation_units(
+        [TranslationUnit(
+            "fabs_probe.c", "fabs_probe.c",
+            "double fabs(double);\n"
+            "double probe_fabs(double value) { return fabs(value); }\n",
+        )],
+        jobs=1,
+        use_system_cpp=False,
+        use_compile_cache=False,
+    )
+    assert "call double (double) @fabs(" in units[0][1]
+    object_path = tmp_path / "fabs_probe.o"
+    evaluator.emit_compiled_units(units, emit_obj=str(object_path), optimize=False)
+    main_path = tmp_path / "main.c"
+    main_path.write_text(
+        """
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+double probe_fabs(double);
+int main(void) {
+    const uint64_t cases[] = {
+        UINT64_C(0x0000000000000000), UINT64_C(0x8000000000000000),
+        UINT64_C(0x3ff8000000000000), UINT64_C(0xbff8000000000000),
+        UINT64_C(0x7ff0000000000000), UINT64_C(0xfff0000000000000),
+        UINT64_C(0x7ff8000000000042), UINT64_C(0xfff8000000000042),
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        double value;
+        uint64_t result;
+        memcpy(&value, &cases[i], sizeof(value));
+        value = probe_fabs(value);
+        memcpy(&result, &value, sizeof(result));
+        if (result != (cases[i] & UINT64_C(0x7fffffffffffffff))) {
+            fprintf(stderr, "fabs bit-pattern mismatch at case %u\\n", i);
+            return 1;
+        }
+    }
+    puts("fabs ABI OK");
+    return 0;
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    bin_path = tmp_path / "fabs_probe.out"
+    link = _link_sqlite_hosted_probe(main_path, object_path, bin_path)
+    assert link.returncode == 0, f"fabs probe link failed:\n{link.stdout}\n{link.stderr}"
+    result = subprocess.run(
+        [str(bin_path)], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "fabs ABI OK"
+
+
+@pytest.mark.integration
+def test_sqlite_hosted_external_function_address(tmp_path, monkeypatch):
+    """Regress the non-PIC external-address shape used by SQLite's dlsym.
+
+    A direct call alone does not cover it: x86 uses a PLT call relocation,
+    while taking the external function's address uses a PC-relative one.
+    Both caller and object use the non-PIC ET_EXEC oracle contract, not
+    mixed-PIC interop or a production PIE claim.
+    """
+    monkeypatch.setenv("PCC_SELF_OBJ", "pcc")
+    evaluator = CEvaluator(backend="self")
+    units = evaluator.compile_translation_units(
+        [TranslationUnit(
+            "function_address.c", "function_address.c",
+            "double fabs(double);\n"
+            "typedef double (*math_function)(double);\n"
+            "math_function probe_fabs_address(void) { return fabs; }\n",
+        )],
+        jobs=1,
+        use_system_cpp=False,
+        use_compile_cache=False,
+    )
+    object_path = tmp_path / "function_address.o"
+    evaluator.emit_compiled_units(units, emit_obj=str(object_path), optimize=False)
+    main_path = tmp_path / "main.c"
+    main_path.write_text(
+        """
+#include <math.h>
+#include <stdio.h>
+typedef double (*math_function)(double);
+math_function probe_fabs_address(void);
+int main(void) {
+    math_function resolved = probe_fabs_address();
+    if (resolved != fabs || resolved(-1.5) != 1.5) return 1;
+    puts("external function address ABI OK");
+    return 0;
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    bin_path = tmp_path / "function_address.out"
+    link = _link_sqlite_hosted_probe(main_path, object_path, bin_path)
+    assert link.returncode == 0, f"function address link failed:\n{link.stdout}\n{link.stderr}"
+    if sys.platform.startswith("linux"):
+        image = bin_path.read_bytes()
+        assert image[:4] == b"\x7fELF"
+        assert int.from_bytes(image[16:18], "little") == 2  # ET_EXEC, not ET_DYN
+    result = subprocess.run(
+        [str(bin_path)], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "external function address ABI OK"
 
 
 @pytest.mark.pcc_gate(unavailable=None if os.path.isdir(SQLITE_DIR) else "sqlite-amalgamation-3490100 not found")
@@ -219,6 +383,7 @@ def test_sqlite_runtime_with_system_link_depends_on(tmp_path, sqlite_compiled_un
         optimize=True,
         base_dir=base_dir,
         prog_args=[str(db_path)],
+        link_args=SQLITE_HOSTED_LINK_ARGS,
     )
 
     assert (

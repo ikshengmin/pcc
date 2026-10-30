@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextlib import nullcontext
 import datetime as dt
-import fcntl
 import gc
 import hashlib
 import importlib.util
@@ -16,6 +15,14 @@ import json
 import os
 from pathlib import Path
 import sys
+
+
+try:
+    from scripts.file_lock import exclusive_file_lock
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from file_lock import exclusive_file_lock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -92,9 +99,9 @@ def _text_instruction_inventory():
 @contextmanager
 def _performance_lock():
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOCK_PATH.open("a+", encoding="utf-8") as stream:
+    with ExitStack() as held:
         try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            stream = held.enter_context(exclusive_file_lock(LOCK_PATH, blocking=False))
         except BlockingIOError as exc:
             raise RuntimeError("another performance run holds " + str(LOCK_PATH)) from exc
         owner = {
@@ -105,7 +112,7 @@ def _performance_lock():
         }
         stream.seek(0)
         stream.truncate()
-        stream.write(json.dumps(owner, sort_keys=True) + "\n")
+        stream.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
         stream.flush()
         os.fsync(stream.fileno())
         try:
@@ -115,7 +122,7 @@ def _performance_lock():
             owner["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             stream.seek(0)
             stream.truncate()
-            stream.write(json.dumps(owner, sort_keys=True) + "\n")
+            stream.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
             stream.flush()
             os.fsync(stream.fileno())
 

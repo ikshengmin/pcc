@@ -217,10 +217,33 @@ class CompilerIntArena:
         else:
             if self._closed:
                 raise RuntimeError("compiler int arena is closed")
-            index = 0
-            while index < count:
-                self._values.append(0)
-                index += 1
+            if (type(count) is int and count >= 128
+                    and type(self) is CompilerIntArena
+                    and type(self._values) is list):
+                values = self._values
+                if not values and count <= 9223372036854775807:
+                    # A fresh dense plane needs one final-size allocation.
+                    # In-place repetition keeps existing list aliases valid
+                    # without a full-size temporary or repeated growth.
+                    values.append(0)
+                    values *= count
+                else:
+                    # Nonempty spans retain their prefix with bounded scratch.
+                    block_words = min(count, 4096)
+                    zeros = [0] * block_words
+                    remaining = count
+                    while remaining >= block_words:
+                        values.extend(zeros)
+                        remaining -= block_words
+                    if remaining:
+                        values.extend(zeros[:remaining])
+            else:
+                # Preserve custom scalar/container callbacks and the small
+                # spans for which a separate block would add allocation.
+                index = 0
+                while index < count:
+                    self._values.append(0)
+                    index += 1
         self._length += count
 
     def get(self, index: int) -> int:
@@ -487,6 +510,77 @@ class CompilerIntArena:
             if live_out._values[matrix_index] != outgoing:
                 live_out._values[matrix_index] = outgoing
                 changed = True
+            if live_in._values[matrix_index] != incoming:
+                live_in._values[matrix_index] = incoming
+                changed = True
+            index += 1
+        return changed
+
+    def converge_liveness_incoming_row_unchecked(
+        self,
+        uses: CompilerIntArena,
+        definitions: CompilerIntArena,
+        live_out: CompilerIntArena,
+        live_in: CompilerIntArena,
+        row_start: int,
+        count: int,
+        word_mask: int,
+    ) -> bool:
+        """Publish both rows; report only the incoming dependency change.
+
+        Owned dirty-row scheduling consumes only successor live-in. A new
+        live-out bit killed by this block's definitions cannot affect any
+        predecessor, but must still be stored in the outgoing matrix.
+        Keep the original helper for the callback-sensitive full sweep.
+        """
+
+        changed = False
+        index = 0
+        if self._address != 0:
+            if (
+                uses._address == 0
+                or definitions._address == 0
+                or live_out._address == 0
+                or live_in._address == 0
+            ):
+                raise RuntimeError("compiler arena storage projections disagree")
+            scratch_address = int_to_ptr(self._address)
+            uses_address = int_to_ptr(uses._address)
+            definitions_address = int_to_ptr(definitions._address)
+            live_out_address = int_to_ptr(live_out._address)
+            live_in_address = int_to_ptr(live_in._address)
+            while index < count:
+                matrix_index = row_start + index
+                outgoing = load_i64(scratch_address, index * 8)
+                incoming = load_i64(uses_address, matrix_index * 8) | (
+                    outgoing
+                    & (
+                        word_mask
+                        ^ load_i64(definitions_address, matrix_index * 8)
+                    )
+                )
+                if load_i64(live_out_address, matrix_index * 8) != outgoing:
+                    store_i64(live_out_address, matrix_index * 8, outgoing)
+                if load_i64(live_in_address, matrix_index * 8) != incoming:
+                    store_i64(live_in_address, matrix_index * 8, incoming)
+                    changed = True
+                index += 1
+            return changed
+        if (
+            uses._address != 0
+            or definitions._address != 0
+            or live_out._address != 0
+            or live_in._address != 0
+        ):
+            raise RuntimeError("compiler arena storage projections disagree")
+        while index < count:
+            matrix_index = row_start + index
+            outgoing = self._values[index]
+            incoming = uses._values[matrix_index] | (
+                outgoing & (word_mask ^ definitions._values[matrix_index])
+            )
+            if live_out._values[matrix_index] != outgoing:
+                live_out._values[matrix_index] = outgoing
             if live_in._values[matrix_index] != incoming:
                 live_in._values[matrix_index] = incoming
                 changed = True

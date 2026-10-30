@@ -84,6 +84,31 @@ def _scaffold_forget_import_bindings(facts: dict, stmt, from_import: bool) -> No
         facts.pop(bound, None)
 
 
+def _persist_generator_import_bindings(host, stmt, from_import: bool) -> None:
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if not contexts or contexts[-1].get("resume_function") is not host.current_function:
+        return
+    context = contexts[-1]
+    from pcc.frontends.python.codegen.generator_lowering import register_generator_operand_root
+
+    for imported, alias in stmt.names:
+        name = alias or (imported if from_import else imported.split(".")[0])
+        if (name in context["frame_slots"]
+                or name in host._current_global_names
+                or name not in host._owned_local_names
+                or getattr(host, "_cpy_env_flags", {}).get(name, False)):
+            continue
+        entry = host.env.get(name)
+        if entry is None:
+            continue
+        # Only an actual managed local produced by the import is enrolled.
+        # Compile-time types/intrinsics and global imports acquire no frame
+        # cells. The normal restore/save protocol owns this local thereafter.
+        slot = entry[0]
+        flag = host._ensure_owned_local_flag(name, slot)
+        register_generator_operand_root(host, name, slot, flag)
+
+
 def _scaffold_try_touched_names(stmt) -> set[str]:
     names: set[str] = set()
 
@@ -272,17 +297,21 @@ class StmtDispatchLoweringMixin:
             if _is_import_from_stmt(stmt):
                 _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, True)
                 self._emit_import_from(stmt)
+                _persist_generator_import_bindings(self, stmt, True)
             else:
                 _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, False)
                 self._emit_import(stmt)
+                _persist_generator_import_bindings(self, stmt, False)
             return
         if isinstance(stmt, Import):
             _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, False)
             self._emit_import(stmt)
+            _persist_generator_import_bindings(self, stmt, False)
             return
         if isinstance(stmt, ImportFrom):
             _scaffold_forget_import_bindings(self._ir_builder_env_flags, stmt, True)
             self._emit_import_from(stmt)
+            _persist_generator_import_bindings(self, stmt, True)
             return
         if isinstance(stmt, If):
             self._emit_if(stmt)

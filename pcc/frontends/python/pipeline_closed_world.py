@@ -396,10 +396,19 @@ def _closed_world_module_dependencies(
     all_module_names,
 ):
     """Publish exact in-bundle import edges from each worker-owned AST."""
+    return _closed_world_module_dependencies_with_nodes(
+        parsed_modules, module_names, src_paths, all_module_names, None,
+    )
 
+
+def _closed_world_module_dependencies_with_nodes(
+    parsed_modules, module_names, src_paths, all_module_names, node_rows,
+):
     from pcc.frontends.python.py_ast import Import as _Import
     from pcc.frontends.python.py_ast import ImportFrom as _ImportFrom
     from pcc.frontends.python.py_ast import Type as _Type
+    if node_rows is not None:
+        from pcc.frontends.python.py_ast import Attr as _Attr
 
     known_modules = list(all_module_names)
     rows = []
@@ -409,6 +418,12 @@ def _closed_world_module_dependencies(
         src_paths,
     ):
         dependencies = []
+        # Only the private owned singleton worker supplies this sink.  Attach
+        # it before traversal so the owner can clear it even on an exception.
+        marking_nodes = None
+        if node_rows is not None:
+            marking_nodes = []
+            node_rows.append(marking_nodes)
 
         def add_dependency(candidate: str) -> None:
             resolved = candidate
@@ -438,6 +453,10 @@ def _closed_world_module_dependencies(
             if marker in seen:
                 continue
             seen.add(marker)
+            if marking_nodes is not None and isinstance(
+                node, (_Import, _ImportFrom, _Attr),
+            ):
+                marking_nodes.append(node)
             if _closed_world_is_node(node, _Import):
                 for imported_name, _as_name in _py_ast_field_value(
                     node, "names", ()
@@ -569,6 +588,24 @@ def _mark_closed_world_function_object_exports(
     metadata-decorated package functions are published when required without
     eagerly wrapping every decorated function in the closed world.
     """
+    return _mark_closed_world_function_object_exports_with_nodes(
+        parsed_modules, module_names, src_paths, native_exports,
+        known_module_names, None,
+    )
+
+
+def _mark_closed_world_function_object_exports_with_nodes(
+    parsed_modules, module_names, src_paths, native_exports,
+    known_module_names, node_rows,
+):
+    """Mark function exports that must exist as runtime objects.
+
+    Direct native calls can use an exported entry point without allocating a
+    ``PyFunc``.  Module attribute reads and explicit ``from`` imports cannot:
+    they observe a stable Python function object.  Record only those uses so
+    metadata-decorated package functions are published when required without
+    eagerly wrapping every decorated function in the closed world.
+    """
     from pcc.frontends.python.py_ast import Attr as _Attr
     from pcc.frontends.python.py_ast import Import as _Import
     from pcc.frontends.python.py_ast import ImportFrom as _ImportFrom
@@ -627,14 +664,14 @@ def _mark_closed_world_function_object_exports(
         parts.reverse()
         return parts
 
-    for ast_mod, mod_name, src_path in zip(
+    for position, (ast_mod, mod_name, src_path) in enumerate(zip(
         parsed_modules,
         module_names,
         src_paths,
-    ):
+    )):
         module_aliases = {}
         body = _py_ast_field_value(ast_mod, "body", ())
-        nodes = collect_nodes(body)
+        nodes = collect_nodes(body) if node_rows is None else node_rows[position]
         for node in nodes:
             if isinstance(node, _Import):
                 for imported_name, as_name in _py_ast_field_value(
@@ -946,3 +983,70 @@ def _closed_world_is_identity_decorator(stmt) -> bool:
     return _closed_world_is_node(return_value, _Name) and (
         _py_ast_field_value(return_value, "ident", "") == first_name
     )
+
+
+# Keep defining-module reader identities, not caller-supplied identity tokens.
+_OWNED_EXPORT_FIELD_NAMES = _py_ast_field_names
+_OWNED_EXPORT_FIELD_VALUE = _py_ast_field_value
+_OWNED_EXPORT_IS_NODE = _closed_world_is_node
+_OWNED_EXPORT_RESOLVE_FROM = _resolve_ast_import_from_module
+_OWNED_EXPORT_PACKAGE_PARTS = _package_parts_for_module
+_OWNED_EXPORT_JOIN_PARTS = _join_dotted_parts
+
+
+def _closed_world_owned_export_metadata(
+    parsed_modules, module_names, src_paths, all_module_names, native_exports,
+):
+    """Adjacent dependency/full-mark reuse for the canonical owned worker.
+
+    The facade authenticates the producer and every intervening callback.
+    Its freshly parsed/lifted AST has not escaped to custom callbacks.  The
+    exact root checks below narrow that ownership contract; they do not prove
+    arbitrary user-supplied descendants immutable.  Direct APIs never use it.
+    Return None when the narrow route is unavailable, without reading nodes.
+    """
+    from pcc.frontends.python.py_ast import Module
+
+    if (type(parsed_modules) is not list or len(parsed_modules) != 1
+            or type(module_names) is not list or len(module_names) != 1
+            or type(src_paths) is not list or len(src_paths) != 1
+            or type(all_module_names) is not list
+            or type(native_exports) is not dict):
+        return None
+    module = parsed_modules[0]
+    if (type(module) is not Module or type(module.body) is not tuple
+            or type(module.name) is not str
+            or (module.docstring is not None and type(module.docstring) is not str)
+            or type(module_names[0]) is not str or type(src_paths[0]) is not str):
+        return None
+    for name in all_module_names:
+        if type(name) is not str:
+            return None
+    try:
+        ordinary_readers = (
+            _py_ast_field_names is _OWNED_EXPORT_FIELD_NAMES
+            and _py_ast_field_value is _OWNED_EXPORT_FIELD_VALUE
+            and _closed_world_is_node is _OWNED_EXPORT_IS_NODE
+            and _resolve_ast_import_from_module is _OWNED_EXPORT_RESOLVE_FROM
+            and _package_parts_for_module is _OWNED_EXPORT_PACKAGE_PARTS
+            and _join_dotted_parts is _OWNED_EXPORT_JOIN_PARTS
+        )
+    except NameError:
+        return None
+    if not ordinary_readers:
+        return None
+    node_rows = []
+    try:
+        dependencies = _closed_world_module_dependencies_with_nodes(
+            parsed_modules, module_names, src_paths, all_module_names, node_rows,
+        )
+        uses = _mark_closed_world_function_object_exports_with_nodes(
+            parsed_modules, module_names, src_paths, native_exports,
+            all_module_names, node_rows,
+        )
+        return dependencies, uses
+    finally:
+        # Release this extra list before encoding and on exception tracebacks.
+        for nodes in node_rows:
+            nodes.clear()
+        node_rows.clear()

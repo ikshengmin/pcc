@@ -34,10 +34,13 @@ def _object(source: Path, directory: Path, target: str) -> tuple[str, bytes]:
 # It is deliberately not a replacement runtime or production TLS owner.
 _LEAF_BOUNDARIES = '''
 from pcc import i64
-from pcc.extern import c_abi_export, c_abi_typed_export
+from pcc.extern import c_abi_export, c_abi_typed_export, c_ptr
 from pcc.unsafe import define_global_i32, global_addr, load_i32, store_i32, syscall6
 __pcc_freestanding__ = True
 define_global_i32("leaf_errno", 0)
+@c_abi_typed_export("pcc_errno_location", "ptr", ())
+def errno_location() -> c_ptr:
+    return global_addr("leaf_errno")
 @c_abi_typed_export("pcc_errno_set", "void", ("i32",))
 def errno_set(value: i64) -> None:
     store_i32(global_addr("leaf_errno"), 0, value)
@@ -85,13 +88,15 @@ def test_linux_file_exports_have_owned_cross_target_abi(tmp_path, target):
     text, data = _object(SOURCE, tmp_path, target)
     assert "define external i32 @chmod(ptr " in text
     assert "define external i32 @utime(ptr " in text
+    assert "define external ptr @__errno_location()" in text
     obj = parse_relocatable(data)
     defined = {symbol.name for symbol in obj.symbols if symbol.section_index != 0}
     undefined = {symbol.name for symbol in obj.symbols if symbol.section_index == 0 and symbol.name}
-    assert {"chmod", "utime"} <= defined
+    assert {"chmod", "utime", "__errno_location"} <= defined
     assert undefined == {
         "pcc_errno_set", "pcc_platform_abort", "malloc", "free", "fflush",
         "__fini_array_start", "__fini_array_end",
+        "pcc_errno_linux_c_locale_message", "pcc_errno_location",
     }
     assert "freestanding_linux_libc" in runtime_modules(str(ROOT / "pcc/runtime"), target)
 

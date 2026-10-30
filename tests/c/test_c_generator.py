@@ -8,10 +8,18 @@ from pcc.frontends.c.parse import c_parser
 from pcc.frontends.c.generator import c_generator
 from pcc.frontends.c.ast import  c_ast
 
-_c_parser = c_parser.CParser(
+_c_parser = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _c_parser
+    if _c_parser is None:
+        _c_parser = c_parser.CParser(
                 lex_optimize=True,
                 yacc_debug=False,
                 yacc_optimize=True)
+    return _c_parser
 
 
 def compare_asts(ast1, ast2):
@@ -33,7 +41,7 @@ def compare_asts(ast1, ast2):
 
 
 def parse_to_ast(src):
-    return _c_parser.parse(src)
+    return _get_parser().parse(src)
 
 
 class TestFunctionDeclGeneration(unittest.TestCase):

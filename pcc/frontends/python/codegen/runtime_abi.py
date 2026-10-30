@@ -45,12 +45,15 @@ _PYOBJ = _PTR
 # Table of (return_type, [param_types], var_arg). The names and
 # signatures mirror py_runtime.h line-for-line. Whenever adding a new
 # runtime function, add the C prototype there first, then mirror here.
+# Keep every ABI signature literal at most 50 entries; move overflow to the
+# next chunk without changing aggregate entry order or duplicate semantics.
 def _runtime_signatures_part_0():
     return {
     # ---- GC interface ----------------------------------------------
     "pcc_gc_alloc": (_PYOBJ, [_I64, _I32, _I32], False),
     "pcc_gc_pointer_is_managed": (_I64, [_PYOBJ], False),
     "pcc_gc_pointer_register": (_I64, [_PYOBJ], False),
+    "pcc_gc_pointer_register_static_literal": (_I64, [_PYOBJ], False),
     "pcc_gc_pointer_unregister": (_I64, [_PYOBJ], False),
     "pcc_gc_retain": (_PYOBJ, [_PYOBJ], False),
     "pcc_gc_release": (_VOID, [_PYOBJ], False),
@@ -93,18 +96,23 @@ def _runtime_signatures_part_0():
     "pcc_gc_pin": (_VOID, [_PYOBJ], False),
     "pcc_gc_unpin": (_VOID, [_PYOBJ], False),
     "pcc_gc_foreign_lease_acquire": (_I64, [_PTR], False),
+    "pcc_gc_borrowed_lease_acquire": (_I64, [_PTR], False),
     "pcc_gc_foreign_lease_release": (_I64, [_PTR, _I64], False),
+    "pcc_gc_publish_owned_root": (_I64, [_PTR], False),
     "py_cleanup_one_root_preserving_exception": (_VOID, [_PTR], False),
     "py_cleanup_one_lease_preserving_exception": (_VOID, [_PTR, _I64], False),
     "pcc_gc_root_copy_lease": (_I64, [_PTR, _PTR], False),
-    "pcc_gc_root_move": (_I64, [_PTR, _PTR], False),
-    "pcc_gc_root_copy_borrowed_lease": (_I64, [_PTR, _PTR], False),
-    "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     }
 
 
 def _runtime_signatures_part_1():
     return {
+    "pcc_gc_store_root_known": (_VOID, [_PTR, _PYOBJ], False),
+    "pcc_gc_store_root_take_known": (_VOID, [_PTR, _PYOBJ], False),
+    "pcc_gc_root_move": (_I64, [_PTR, _PTR], False),
+    "pcc_gc_root_copy_borrowed_lease": (_I64, [_PTR, _PTR], False),
+    "pcc_gc_root_copy_local": (_I64, [_PTR, _PTR, _I64], False),
+    "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     "pcc_gc_root_copy_lease_finish": (_VOID, [_PTR], False),
     "pcc_gc_object_is_address_pinned": (_I64, [_PYOBJ], False),
     "pcc_gc_take_pinned_slot": (_PYOBJ, [_PTR, _I64], False),
@@ -689,6 +697,7 @@ def _runtime_signatures_part_15():
     # ---- List ------------------------------------------------------
     "py_list_new": (_PYOBJ, [_I64], False),
     "py_list_append": (_VOID, [_PYOBJ, _PYOBJ], False),
+    "py_list_append_from_slots": (_VOID, [_PTR, _PTR, _I64], False),
     "py_list_get": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_list_getitem": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_list_get_i64": (_I64, [_PYOBJ, _I64], False),
@@ -729,6 +738,7 @@ def _runtime_signatures_part_15():
     "py_dict_from_static_pairs": (_PYOBJ, [_CSTR, _I64], False),
     "py_tuple_from_static_items": (_PYOBJ, [_CSTR, _I64], False),
     "py_list_from_static_items": (_PYOBJ, [_CSTR, _I64], False),
+    "py_list_from_owned_roots": (_I64, [_PTR, _I64, _PTR], False),
     # Nested constant table from a static descriptor; see
     # py_static_aggregate_build in pcc/runtime/py/py_dict.py.
     "py_static_aggregate_build": (_PYOBJ, [_CSTR], False),
@@ -736,13 +746,13 @@ def _runtime_signatures_part_15():
     "py_dict_getitem": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_dict_fromkeys": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_dict_get_default": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
-    "py_dict_pop": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
-    "py_dict_popitem": (_PYOBJ, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_16():
     return {
+    "py_dict_pop": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
+    "py_dict_popitem": (_PYOBJ, [_PYOBJ], False),
     "py_dict_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_dict_del": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_dict_clear": (_VOID, [_PYOBJ], False),
@@ -795,13 +805,13 @@ def _runtime_signatures_part_16():
     "py_obj_call_default": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_default_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
-    "py_obj_call_context_is_deferred": (_I64, [], False),
-    "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_17():
     return {
+    "py_obj_call_context_is_deferred": (_I64, [], False),
+    "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_forward": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_func_call_bound_forward": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_call_method1": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),
@@ -848,6 +858,7 @@ def _runtime_signatures_part_18():
     "py_obj_getattr": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_load_method": (_PYOBJ, [_PYOBJ, _CSTR, _CSTR_PTR], False),
     "py_obj_call_method": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_loaded_method": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _I64], False),
     "py_obj_call_method_kwargs": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_getattr_default": (_PYOBJ, [_PYOBJ, _CSTR], False),
     "py_obj_getattr_maybe": (_PYOBJ, [_PYOBJ, _CSTR], False),
@@ -874,15 +885,16 @@ def _runtime_signatures_part_18():
     "py_obj_delitem": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_assign_subscript": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_delete_subscript": (_I64, [_PYOBJ, _PYOBJ], False),
-    "py_obj_len": (_I64, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_19():
     return {
+    "py_obj_len": (_I64, [_PYOBJ], False),
     "py_obj_contains": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_sorted": (_PYOBJ, [_PYOBJ], False),
     "py_obj_sorted_slots": (_I64, [_PTR, _PTR, _PTR, _I64, _PTR], False),
+    "py_obj_sorted_reverse_slots": (_I64, [_PTR, _PTR, _PTR, _PTR, _PTR], False),
     # In-place list.sort with a key callable over leased slots; 0 or -1.
     "py_list_sort_keyed": (_I64, [_PYOBJ, _PYOBJ, _I64], False),
     }
@@ -909,6 +921,7 @@ def _runtime_signatures_part_20():
     "py_obj_is_slice": (_I64, [_PYOBJ], False),
     "py_obj_iter": (_PYOBJ, [_PYOBJ], False),
     "py_obj_next": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_iter_next": (_PYOBJ, [_PYOBJ], False),
     "py_iter_callable_new": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_user_str_dispatch": (_PYOBJ, [_PYOBJ], False),
     "py_user_repr_dispatch": (_PYOBJ, [_PYOBJ], False),
@@ -946,12 +959,12 @@ def _runtime_signatures_part_20():
     "py_func_new_static_def": (
         _I64, [_PTR, _CSTR, _CSTR, _CSTR, _CSTR, _PYOBJ, _I64, _PTR, _PTR], False,
     ),
-    "py_builtin_function_value": (_PYOBJ, [_PTR, _CSTR], False),
     }
 
 
 def _runtime_signatures_part_21():
     return {
+    "py_builtin_function_value": (_PYOBJ, [_PTR, _CSTR], False),
     "py_builtin_abs_entry": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_func_new_bound": (_PYOBJ, [_PTR, _PYOBJ, _CSTR, _PYOBJ], False),
     "py_func_call": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
@@ -961,6 +974,9 @@ def _runtime_signatures_part_21():
     "py_functools_update_wrapper": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     # ---- Native generator objects ----------------------------------
     "py_gen_frame_new": (_PYOBJ, [_I64], False),
+    "py_gen_inline_frame_new": (_PYOBJ, [_I64], False),
+    "py_gen_from_inline_frame": (_PYOBJ, [_PTR, _PYOBJ], False),
+    "py_gen_frame_len": (_I64, [_PYOBJ], False),
     }
 
 
@@ -1022,6 +1038,9 @@ def _runtime_signatures_part_22():
 
 def _runtime_signatures_part_23():
     return {
+    "py_gen_frame_take": (_PYOBJ, [_PYOBJ, _I64], False),
+    # py_gen_next whose driver consumes the return: (generator, i64 *returned).
+    "py_gen_next_direct": (_PYOBJ, [_PYOBJ, _PTR], False),
     "py_virtual_thread_resume_generator": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_virtual_thread_new": (_PYOBJ, [_PYOBJ], False),
     "py_virtual_thread_start": (_I64, [_PYOBJ], False),
@@ -1320,6 +1339,8 @@ def _runtime_signatures_part_29():
 
 def _runtime_signatures_part_30():
     return {
+    # Adjacent OS chunk is full; keep every signature literal bounded.
+    "py_os_path_lexists": (_I32, [_PYOBJ], False),
     "py_current_exception": (_PYOBJ, [], False),
     "py_clear_exception": (_VOID, [], False),
     "py_exc_new": (_PYOBJ, [_I64, _CSTR], False),
@@ -1416,6 +1437,7 @@ def _runtime_signatures_part_31():
 
 def _runtime_signatures_part_32():
     return {
+    "py_class_new_builtin": (_PYOBJ, [_CSTR, _PTR, _I32, _PTR, _I32], False),
     "py_class_delattr": (_I64, [_PYOBJ, _CSTR], False),
     "py_valuebox_new": (_PYOBJ, [_PYOBJ], False),
     "py_valuebox_get_field": (_PYOBJ, [_PYOBJ, _I32], False),
@@ -1560,6 +1582,12 @@ def _runtime_signatures_part_35():
     "py_cpy_from_pccstr": (_PTR, [_PYOBJ], False),
     "py_cpy_from_pcc_obj": (_PTR, [_PYOBJ], False),
     "py_list_append_fresh_native_instance": (_VOID, [_PYOBJ, _PYOBJ], False),
+    "py_tuple_from_owned_roots": (_I64, [_PTR, _I64, _PTR], False),
+    # Stack-region sharded pin balance and allocation count.
+    "pcc_gc_metric_shard": (_I64, [], False),
+    "pcc_gc_metric_pin_balance": (_I64, [], False),
+    "pcc_gc_metric_allocation_count": (_I64, [], False),
+    "pcc_gc_metric_shard_reset": (_VOID, [_I64], False),
     }
 
 
@@ -1611,8 +1639,9 @@ RUNTIME_FUNCTION_ATTRS: dict[str, frozenset[str]] = {
     "py_str_byte_len": _READONLY_RUNTIME_ATTRS,
     "py_str_utf8": _READONLY_RUNTIME_ATTRS,
     "py_list_len": _READONLY_RUNTIME_ATTRS,
-    "py_list_get_i64": _READONLY_RUNTIME_ATTRS,
-    "py_list_get_i64_nonnegative": _READONLY_RUNTIME_ATTRS,
+    # Scalar list getters may acquire the graph lock and poll the collector.
+    # Their synchronization and GC effects forbid readonly/purity promises;
+    # retain ordinary call semantics instead of willreturn/nounwind claims.
     "py_tuple_len": _READONLY_RUNTIME_ATTRS,
     "py_dict_len": _READONLY_RUNTIME_ATTRS,
     "py_set_len": _READONLY_RUNTIME_ATTRS,
@@ -1646,6 +1675,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
     "py_func_code_class_cache": _PYOBJ,
     "pcc_builtin_function_cache": _PYOBJ,
     "pcc_thread_stop_requested": _I32,
+    "pcc_object_type_epoch": _I64,
     "pcc_gc_backend4_auto_step_pending": _I32,
 }
 
@@ -1655,9 +1685,11 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
 # extra live LLVM type objects while importing this module.
 FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
     {
+        'pcc_gc_backend4_remembered_page_incomplete',
         'pcc_builtin_function_cache_registered',
         'pcc_gc_backend0_frame_roots_enabled',
         'pcc_gc_backend3_frame_root_scan_phase',
+        'pcc_gc_backend3_oldify_suspended',
         'pcc_gc_backend3_remembered_overflow',
         'pcc_gc_backend3_scheduler_root_scan_phase',
         'pcc_gc_backend4_evacuated_bytes_count',
@@ -1725,6 +1757,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_worker_stop_requested',
         'pcc_gc_cms_worker_stops',
         'pcc_gc_cms_worker_traces',
+        'pcc_gc_cms_sweep_pending',
         'pcc_gc_config_initialized',
         'pcc_gc_cycle_requested',
         'pcc_gc_explicit_collect_active',
@@ -1734,13 +1767,11 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_auto_step_pending',
         'pcc_gc_last_alloc_bytes',
         'pcc_gc_mark_active',
-        'pcc_gc_metric_alloc',
         'pcc_gc_metric_load',
         'pcc_gc_metric_pause_hist0',
         'pcc_gc_metric_pause_hist1',
         'pcc_gc_metric_pause_hist2',
         'pcc_gc_metric_pause_hist3',
-        'pcc_gc_metric_pin',
         'pcc_gc_metric_safepoint',
         'pcc_gc_metric_store',
         'pcc_gc_minor_alloc_max',
@@ -1766,6 +1797,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'py_class_attr_cache_epoch',
         'py_gc_callbacks_firing',
         'py_gc_collecting',
+        'pcc_gc_backend0_subset_active',
         'py_gc_enabled',
         'py_gc_freeze_count',
         'py_gc_threshold0',
@@ -1777,7 +1809,9 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        'pcc_object_type_epoch',
         'pcc_gc_tracked_after_collect',
+        'pcc_gc_backend0_subset_count',
         # Width must match freestanding_gc_state and all telemetry endpoints.
         'pcc_gc_metric_step',
         'pcc_gc_metric_max_pause_us',
@@ -1816,6 +1850,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_selector_scan_best_score',
         'pcc_gc_backend4_selector_scan_owner',
         'pcc_gc_table_lock_owner_token',
+        'pcc_gc_table_lock_depth',
         'pcc_gc_tracing_cycle_epoch',
         'pcc_gc_trace_extension_roots_backend',
         'pcc_gc_trace_extension_roots_epoch',
@@ -1824,6 +1859,12 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_finish_claim_backend',
         'pcc_gc_tracing_finish_claim_epoch',
         'pcc_gc_tracing_finish_commits',
+        'pcc_gc_tracing_no_candidate_commit',
+        'pcc_gc_backend4_remembered_page_index_cap',
+        'pcc_gc_backend4_remembered_page_index_count',
+        'pcc_gc_backend4_remembered_page_index_used',
+        'pcc_gc_tracing_finish_stop_epoch',
+        'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
         'pcc_gc_root_registry_revision',
         'pcc_gc_stack_diff_capacity',
@@ -1831,6 +1872,8 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_stackmap_index_count',
         'pcc_gc_stackmap_location_base',
         'pcc_gc_foreign_lease_active',
+        'pcc_gc_static_literal_low',
+        'pcc_gc_static_literal_high',
     }
 )
 
@@ -1860,6 +1903,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_reseed_page_count_cursor',
         'pcc_gc_backend4_reseed_relocation_cursor',
         'pcc_gc_backend4_remembered_page_head',
+        'pcc_gc_backend4_remembered_page_index_slots',
         'pcc_gc_backend4_remembered_slots_head',
         'pcc_gc_backend4_selector_page',
         'pcc_gc_backend4_selector_page_cursor',
@@ -1897,6 +1941,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_trace_cext_pending_obj',
         'py_gc_callbacks',
         'py_gc_head',
+        'pcc_gc_backend0_subset_pairs',
         'py_set_dummy',
         'py_weakref_head',
     }
@@ -1911,11 +1956,31 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     }
 )
 
+# Opaque header storage defined by py_substrate. These are image-static
+# objects, not movable pointer-valued runtime globals such as py_None. Raw
+# address comparisons let the GC kernel recognize their fixed lifetimes.
+FREESTANDING_GC_STATIC_GLOBALS: frozenset[str] = frozenset(
+    {
+        # Raw address-selected mode-guard counters owned by the GC kernel.
+        "pcc_gc_mode_lease_shards",
+        "pcc_gc_static_literal_keys",
+        "pcc_gc_tracked_shards",
+        # Stack-region sharded pin balance and allocation count.
+        "pcc_gc_metric_shards",
+        "py_none_storage",
+        "py_true_storage",
+        "py_false_storage",
+        "py_notimplemented_storage",
+        "py_ellipsis_storage",
+    }
+)
+
 FREESTANDING_GC_RUNTIME_GLOBALS = (
     FREESTANDING_GC_I32_GLOBALS
     | FREESTANDING_GC_I64_GLOBALS
     | FREESTANDING_GC_PTR_GLOBALS
     | FREESTANDING_GC_THREAD_LOCAL_GLOBALS
+    | FREESTANDING_GC_STATIC_GLOBALS
 )
 
 
@@ -2032,6 +2097,7 @@ def _cross_object_signatures_part_0():
     return {
     "pcc_current_thread_id": ((), "c_int64"),
     "pcc_thread_safepoint": ((), "c_void"),
+    "pcc_thread_safepoint_gate": ((), "c_void"),
     "pcc_thread_stop_requested_acquire": ((), "c_int64"),
     "pcc_thread_scheduler_lock_acquired": ((), "c_void"),
     "pcc_thread_scheduler_lock_released": ((), "c_void"),
@@ -2097,12 +2163,21 @@ def _cross_object_signatures_part_0():
     "pcc_gc_frame_node_tls_pool_drain": ((), "c_void"),
     "pcc_gc_forwarding_index_find": (("c_ptr",), "c_ptr"),
     "pcc_gc_forwarding_index_insert": (("c_ptr", "c_ptr"), "c_int64"),
-    "pcc_gc_forwarding_index_remove": (("c_ptr",), "c_ptr"),
     }
 
 
 def _cross_object_signatures_part_1():
     return {
+    "pcc_gc_forwarding_index_remove": (("c_ptr",), "c_ptr"),
+    "pcc_gc_scheduler_root_list_acquire": ((), "c_void"),
+    "pcc_gc_scheduler_root_list_release": ((), "c_void"),
+    "pcc_thread_graph_lock_acquire": (("c_ptr",), "c_void"),
+    "pcc_thread_graph_lock_release": (("c_ptr",), "c_int64"),
+    "pcc_thread_graph_lock_depth": ((), "c_int64"),
+    "pcc_thread_note_deferred_tripwire": ((), "c_void"),
+    "pcc_thread_world_stop_epoch_held": ((), "c_int64"),
+    "pcc_gc_store_buffer_entry_forget": (("c_ptr", "c_ptr"), "c_void"),
+    "pcc_gc_store_buffer_owner_entries": (("c_ptr",), "c_int64"),
     "pcc_gc_tracing_discharge_debt": (("c_int64",), "c_void"),
     "pcc_gc_tracing_debt_threshold": ((), "c_int64"),
     "pcc_gc_stackmap_roots_mode": ((), "c_int64"),
@@ -2165,7 +2240,9 @@ def _cross_object_signatures_part_2():
     "pcc_gc_alloc": (("c_int64", "c_int32", "c_int32"), "c_ptr"),
     "pcc_gc_pointer_is_managed": (("c_ptr",), "c_int64"),
     "pcc_gc_foreign_lease_acquire": (("c_ptr",), "c_int64"),
+    "pcc_gc_borrowed_lease_acquire": (("c_ptr",), "c_int64"),
     "pcc_gc_foreign_lease_release": (("c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc_publish_owned_root": (("c_ptr",), "c_int64"),
     "py_cleanup_one_root_preserving_exception": (("c_ptr",), "c_void"),
     "py_cleanup_one_lease_preserving_exception": (("c_ptr", "c_int64"), "c_void"),
     "pcc_gc_root_copy_lease": (("c_ptr", "c_ptr"), "c_int64"),
@@ -2175,6 +2252,7 @@ def _cross_object_signatures_part_2():
     "pcc_gc_root_copy_lease_finish": (("c_ptr",), "c_void"),
     "pcc_gc_object_is_address_pinned": (("c_ptr",), "c_int64"),
     "pcc_gc_pointer_register": (("c_ptr",), "c_int64"),
+    "pcc_gc_pointer_register_static_literal": (("c_ptr",), "c_int64"),
     "pcc_gc_pointer_unregister": (("c_ptr",), "c_int64"),
     "pcc_capi_is_type_object_value": (("c_ptr",), "c_int64"),
     "py_incref": (("c_ptr",), "c_void"),
@@ -2189,14 +2267,14 @@ def _cross_object_signatures_part_2():
     "pcc_gc_object_node_next": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_set_next": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_object_node_minor_block": (("c_ptr",), "c_ptr"),
-    "pcc_gc_object_node_freeing": (("c_ptr",), "c_int64"),
-    "pcc_gc_object_node_set_freeing": (("c_ptr", "c_int64"), "c_void"),
-    "pcc_gc_object_node_prev": (("c_ptr",), "c_ptr"),
     }
 
 
 def _cross_object_signatures_part_3():
     return {
+    "pcc_gc_object_node_freeing": (("c_ptr",), "c_int64"),
+    "pcc_gc_object_node_set_freeing": (("c_ptr", "c_int64"), "c_void"),
+    "pcc_gc_object_node_prev": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_set_prev": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_object_node_zpage": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_set_zpage": (("c_ptr", "c_ptr"), "c_void"),
@@ -2325,6 +2403,14 @@ def _cross_object_signatures_part_5():
     "pcc_gc_remembered_member_require": (("c_ptr",), "c_void"),
     "pcc_gc_remembered_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_remembered_member_clear": ((), "c_void"),
+    "pcc_gc_remembered_member_exact": ((), "c_int64"),
+    "pcc_gc_remembered_member_taint": ((), "c_void"),
+    "pcc_gc_remembered_member_head": (("c_ptr",), "c_ptr"),
+    "pcc_gc_remembered_member_set_head": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_managed_pointer_index_seen": (("c_ptr",), "c_int64"),
+    "pcc_gc_object_index_seen": (("c_ptr",), "c_int64"),
+    "pcc_gc_index_reclaim_retired": ((), "c_int64"),
+    "pcc_gc_reclaim_retired_index_tables": ((), "c_int64"),
     "pcc_gc_store_buffer_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promote_cext_owner_referents": (
         ("c_ptr",),
@@ -2676,20 +2762,22 @@ def _cross_object_signatures_part_8():
         "c_int64",
     ),
     "pcc_gc_memoryview_refresh_owned_buffer": (("c_ptr",), "c_int64"),
+    "pcc_errno_location": ((), "c_ptr"),
     "pcc_errno_get": ((), "c_int32"),
+    "pcc_errno_linux_c_locale_message": (("c_int32",), "c_ptr"),
     "pcc_errno_message_into": (
         ("c_int32", "c_ptr", "c_int64"),
         "c_int32",
     ),
     "pcc_gc_load_ptr": (("c_ptr", "c_ptr"), "c_ptr"),
     "pcc_gc_note_object_freeing": (("c_ptr",), "c_void"),
-    "pcc_gc_trace_continuation_roots": ((), "c_int64"),
-    "pcc_stop_the_world": ((), "c_int64"),
     }
 
 
 def _cross_object_signatures_part_9():
     return {
+    "pcc_gc_trace_continuation_roots": ((), "c_int64"),
+    "pcc_stop_the_world": ((), "c_int64"),
     "pcc_resume_world": ((), "c_int64"),
     "pcc_capi_is_cext_type_tag": (("c_int64",), "c_int64"),
     "pcc_capi_dealloc_cext_object": (
@@ -2733,10 +2821,12 @@ def _cross_object_signatures_part_9():
     "pcc_gc_default_unlink_tracked_node": (("c_ptr",), "c_void"),
     "pcc_gc_default_drain_deferred_nodes": ((), "c_void"),
     "pcc_gc_default_table_lock": ((), "c_void"),
+    "pcc_gc_tracked_primary_index_cells": (("c_ptr",), "c_ptr"),
     "pcc_gc_default_table_unlock": ((), "c_void"),
     "pcc_gc_tracked_node_pool_cached_count": ((), "c_int64"),
     "pcc_gc_tracked_node_pool_drain": ((), "c_void"),
     "pcc_gc_backend0_visit_subtract": (("c_ptr",), "c_void"),
+    "pcc_gc_backend0_collect_candidates": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc_backend0_is_unreachable": (("c_ptr",), "c_int64"),
     "pcc_gc_backend0_mark_reachable": (("c_ptr",), "c_void"),
     "pcc_gc_backend0_clear_referents": (("c_ptr",), "c_void"),
@@ -2770,15 +2860,15 @@ def _cross_object_signatures_part_9():
     "py_user_del_dispatch": (("c_ptr",), "c_void"),
     "py_weakref_invalidate": (("c_ptr",), "c_void"),
     "py_dealloc_int": (("c_ptr",), "c_void"),
-    "py_dealloc_float": (("c_ptr",), "c_void"),
-    "py_dealloc_str": (("c_ptr",), "c_void"),
-    "py_dealloc_list": (("c_ptr",), "c_void"),
-    "py_dealloc_tuple": (("c_ptr",), "c_void"),
     }
 
 
 def _cross_object_signatures_part_10():
     return {
+    "py_dealloc_float": (("c_ptr",), "c_void"),
+    "py_dealloc_str": (("c_ptr",), "c_void"),
+    "py_dealloc_list": (("c_ptr",), "c_void"),
+    "py_dealloc_tuple": (("c_ptr",), "c_void"),
     "pcc_gc_cms_stop_worker": ((), "c_int64"),
     "pcc_gc_is_cms_worker": ((), "c_int64"),
     "py_cleanup_two_roots_preserving_exception": (("c_ptr", "c_ptr"), "c_void"),
@@ -2812,6 +2902,12 @@ def _cross_object_signatures_part_10():
     "pcc_gc_set_mark_color": (("c_ptr", "c_int64"), "c_void"),
     "pcc_gc_free_watch_begin": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_free_watch_end": (("c_ptr",), "c_int64"),
+    # Stack-region sharded hot statistics owned by root operations.
+    "pcc_gc_metric_shard": ((), "c_int64"),
+    "pcc_gc_metric_pin_balance": ((), "c_int64"),
+    "pcc_gc_metric_allocation_count": ((), "c_int64"),
+    "pcc_gc_metric_shard_reset": (("c_int64",), "c_void"),
+    "pcc_gc_granule_span": (("c_ptr",), "c_ptr"),
     }
 
 
@@ -2870,6 +2966,15 @@ def declare_runtime(module: ir.Module) -> dict[str, ir.Function]:
     The returned dict intentionally only contains functions. To fetch a
     runtime global (``py_None`` etc.), call :func:`declare_runtime_global`.
     """
+    # Explicit owned-runtime ABI opt-in. The self backend preserves the IR
+    # root calls for precise maps, then may expand their proven short paths.
+    # A standalone C declaration of a similarly named symbol has no such promise.
+    marker_name = "__pcc_owned_gc_short_paths_v1"
+    if module.globals.get(marker_name) is None:
+        marker = ir.GlobalVariable(module, _I8, name=marker_name)
+        marker.linkage = "internal"
+        marker.global_constant = True
+        marker.initializer = ir.Constant(_I8, 1)
     funcs: dict[str, ir.Function] = {}
     for item in RUNTIME_SIGNATURES.items():
         name = item[0]

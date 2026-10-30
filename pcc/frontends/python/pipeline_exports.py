@@ -1406,6 +1406,25 @@ def _native_export_from_wire(value):
     return value
 
 
+def _native_export_from_owned_wire(value):
+    """Consume a private JSON tree without rebuilding its dictionaries.
+
+    Only the plain ``json.loads`` boundary below supplies this tree: its
+    containers have no external aliases or user-defined callbacks. Shared
+    caller inputs must continue to use ``_native_export_from_wire``.
+    """
+
+    if isinstance(value, dict):
+        if _EXPORT_DEFAULT_WIRE_KEY in value:
+            return _export_default_from_wire(value)
+        for key, item in value.items():
+            value[key] = _native_export_from_owned_wire(item)
+        return value
+    if isinstance(value, list):
+        return tuple(_native_export_from_owned_wire(item) for item in value)
+    return value
+
+
 def _native_export_wire_module_references(value, known_modules, out) -> None:
     """Collect conservative module-name references from one decoded shard.
 
@@ -1814,10 +1833,14 @@ def _decode_native_exports_wire(text: str, include_function_object_uses: bool = 
     payload = json.loads(text)
     if payload.get("schema") != _NATIVE_EXPORT_WIRE_SCHEMA:
         raise ValueError("invalid frontend native exports file")
-    native_exports = _native_export_from_wire(payload.get("native_exports", {}))
-    derived_class_map = _native_export_from_wire(payload.get("derived_class_map", {}))
+    native_exports = _native_export_from_owned_wire(
+        payload.get("native_exports", {})
+    )
+    derived_class_map = _native_export_from_owned_wire(
+        payload.get("derived_class_map", {})
+    )
     if include_function_object_uses:
-        function_object_uses = _native_export_from_wire(
+        function_object_uses = _native_export_from_owned_wire(
             payload.get("function_object_uses", ())
         )
         return native_exports, derived_class_map, function_object_uses

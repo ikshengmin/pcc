@@ -9,6 +9,21 @@ import pytest
 
 ROOT=Path(__file__).parents[2]/'pcc/runtime/py'
 
+# pcc_tls_thread_state_py: no-park depth (bits 0-23), graph-lock depth
+# (bits 24-47), scheduler lock held (48), registered (49).
+NO_PARK_MASK=(1<<24)-1
+GRAPH_UNIT=1<<24
+SCHEDULER_HELD=1<<48
+REGISTERED=1<<49
+
+
+def no_park_depth(state):
+    return state['pcc_tls_thread_state_py']&NO_PARK_MASK
+
+
+def graph_depth(state):
+    return (state['pcc_tls_thread_state_py']>>24)&NO_PARK_MASK
+
 
 class SuspensionPathReached(Exception):
     pass
@@ -20,16 +35,23 @@ class LockTripwire(Exception):
 
 class GraphPollModel:
     def __init__(self,stop_requested):
-        self.state={'g_tls_pcc_py_gc_minor_graph_lock_depth':0,
-                    'g_pcc_py_gc_minor_graph_lock':0,
-                    'pcc_tls_no_park_depth_py':0,
-                    'pcc_tls_scheduler_lock_held_py':0,
+        self.state={'g_pcc_py_gc_minor_graph_lock':0,
+                    # Thread 7 is registered and running.
+                    'pcc_tls_thread_state_py':REGISTERED,
                     'pcc_tls_thread_id_py':7,
+                    # A pending stop belongs to another thread.
+                    'pcc_stop_owner_thread_id_py':8 if stop_requested else 0,
                     'pcc_thread_stop_requested':stop_requested}
         self.world_entries=[]
         self.env=dict(i64=int,c_ptr=int,
             global_addr=lambda name:name,
             load_i32=lambda address,offset:self.state[address],
+            load_i64=lambda address,offset:self.state[address],
+            store_i64=lambda address,offset,value:self.state.__setitem__(address,value),
+            load_ptr=lambda address,offset:self.state[address],
+            ptr_to_int=lambda value:value,
+            atomic_load_i32=lambda address,offset,order:self.state[address],
+            _world_i64=lambda address:self.state[address],
             store_i32=lambda address,offset,value:self.state.__setitem__(address,value),
             atomic_store_i32=lambda address,offset,value,order:self.state.__setitem__(address,value),
             atomic_cas_i32=self.compare_exchange,
@@ -40,6 +62,7 @@ class GraphPollModel:
             pcc_platform_abort=self.abort)
         self.load('freestanding_thread_kernel_pthread.py',{
             'pcc_thread_no_park_enter','pcc_thread_no_park_exit','pcc_thread_safepoint',
+            'pcc_thread_graph_lock_acquire','pcc_thread_graph_lock_release',
         })
         self.env['thread_safepoint']=self.env['pcc_thread_safepoint']
         self.load('freestanding_runtime_high_substrate.py',{
@@ -71,26 +94,34 @@ class GraphPollModel:
 def test_actual_graph_transaction_suppresses_injected_thread_poll(nested,stop_requested):
     model=GraphPollModel(stop_requested)
     for _ in range(nested):model.env['pcc_py_gc_minor_graph_lock']()
-    assert model.state['g_tls_pcc_py_gc_minor_graph_lock_depth']==nested
+    assert graph_depth(model.state)==nested
     assert model.state['g_pcc_py_gc_minor_graph_lock']==1
-    assert model.state['pcc_tls_no_park_depth_py']==1
+    assert no_park_depth(model.state)==1
     # This is the exact callee emitted at function/loop polling gates. Even
     # with a stop request, its no-park branch precedes initialization/parking.
     model.env['pcc_thread_safepoint']()
     assert model.world_entries==[]
     for _ in range(nested-1):model.env['pcc_py_gc_minor_graph_unlock']()
-    assert model.state['g_tls_pcc_py_gc_minor_graph_lock_depth']==1
-    with pytest.raises(SuspensionPathReached):
+    assert graph_depth(model.state)==1
+    # Releasing the last level polls: a pending stop takes the suspension
+    # path only after the lock word, depth and no-park depth are released;
+    # with nothing pending the poll returns without the world lock.
+    if stop_requested:
+        with pytest.raises(SuspensionPathReached):
+            model.env['pcc_py_gc_minor_graph_unlock']()
+        reached=model.world_entries[0]
+    else:
         model.env['pcc_py_gc_minor_graph_unlock']()
-    reached=model.world_entries[0]
+        assert model.world_entries==[]
+        reached=model.state
     assert reached['g_pcc_py_gc_minor_graph_lock']==0
-    assert reached['g_tls_pcc_py_gc_minor_graph_lock_depth']==0
-    assert reached['pcc_tls_no_park_depth_py']==0
+    assert graph_depth(reached)==0
+    assert no_park_depth(reached)==0
 
 
 @pytest.mark.parametrize('stop_requested',(0,1))
 def test_unleased_scheduler_lock_still_trips_before_suspension(stop_requested):
     model=GraphPollModel(stop_requested)
-    model.state['pcc_tls_scheduler_lock_held_py']=1
+    model.state['pcc_tls_thread_state_py']|=SCHEDULER_HELD
     with pytest.raises(LockTripwire):model.env['pcc_thread_safepoint']()
     assert model.world_entries==[]

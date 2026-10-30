@@ -328,6 +328,27 @@ RUNTIME_ABI_ARROWS: dict[str, RuntimeArrow] = {
         (RuntimeEffect.WRITE_BARRIER, RuntimeEffect.RETAIN, RuntimeEffect.RELEASE),
         "Store a root slot with collector-visible write semantics.",
     ),
+    "pcc_gc_store_root_known": _arrow(
+        "pcc_gc_store_root_known",
+        (RuntimeResource.ROOT_SLOT,),
+        (RuntimeResource.ROOT_SLOT,),
+        (RuntimeEffect.WRITE_BARRIER, RuntimeEffect.RETAIN, RuntimeEffect.RELEASE),
+        "Store proven managed owners, preserving collector and verification fallbacks.",
+    ),
+    "pcc_gc_store_root_take": _arrow(
+        "pcc_gc_store_root_take",
+        (RuntimeResource.ROOT_SLOT,),
+        (RuntimeResource.ROOT_SLOT,),
+        (RuntimeEffect.WRITE_BARRIER, RuntimeEffect.RETAIN, RuntimeEffect.RELEASE),
+        "Transfer a root owner; tracing fallbacks may internally retain and release.",
+    ),
+    "pcc_gc_store_root_take_known": _arrow(
+        "pcc_gc_store_root_take_known",
+        (RuntimeResource.ROOT_SLOT,),
+        (RuntimeResource.ROOT_SLOT,),
+        (RuntimeEffect.WRITE_BARRIER, RuntimeEffect.RETAIN, RuntimeEffect.RELEASE),
+        "Transfer a proven managed owner with the original collector fallbacks.",
+    ),
     "pcc_gc_frame_enter": _arrow(
         "pcc_gc_frame_enter",
         (RuntimeResource.ROOT_SLOT,),

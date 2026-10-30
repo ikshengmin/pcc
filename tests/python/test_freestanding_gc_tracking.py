@@ -14,6 +14,7 @@ from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLO
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 TRACKING_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_tracking.py"
+STATE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_state.py"
 MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_obj_gc.py"
 COLLECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_backend0_collector.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
@@ -27,6 +28,13 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_tracked_node_pool_cached_count",
     "pcc_gc_tracked_node_pool_drain",
     "pcc_gc_tracked_node_recycle",
+    "pcc_gc_tracked_node_pool_take",
+    "pcc_gc_tracked_shard_address",
+    "pcc_gc_tracked_shard_index",
+    "pcc_gc_tracked_primary_index_cells",
+    "pcc_gc_tracked_table_owned_by_current",
+    "pcc_gc_tracked_shard_lock",
+    "pcc_gc_tracked_shard_unlock",
 }
 RAW_FUNCTION_IMPORTS = {
     "free",
@@ -34,6 +42,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_current_native_thread_token",
     "pcc_gc_backend",
     "pcc_thread_safepoint",
+    "pcc_thread_no_park_enter",
+    "pcc_thread_no_park_exit",
+    "pcc_platform_abort",
     "pcc_threads_enabled",
     "py_gc_index_insert",
     "py_gc_index_remove",
@@ -46,6 +57,8 @@ RAW_GLOBAL_IMPORTS = {
     "py_gc_threshold0",
     "pcc_gc_deferred_node_free_head",
     "pcc_gc_table_lock_owner_token",
+    "pcc_gc_table_lock_depth",
+    "pcc_gc_tracked_shards",
     "pcc_gc_tracked_node_pool",
     "pcc_gc_tracked_node_pool_count",
     "py_gc_head",
@@ -103,6 +116,10 @@ typedef union {
 static ObjectStorage objects[THREADS * PER_THREAD];
 static void *tokens[THREADS];
 
+/* A raw pthread that calls into the runtime joins the live set; like a
+ * PyGILState_Ensure thread it must leave it before it exits, or every later
+ * stop-the-world waits for a thread that no longer exists. */
+
 static void *track_range(void *raw) {
     intptr_t thread = (intptr_t)raw;
     tokens[thread] = pcc_current_native_thread_token();
@@ -111,6 +128,7 @@ static void *track_range(void *raw) {
     for (int i = start; i < end; i++) {
         py_gc_track((PyObject *)objects[i].bytes);
     }
+    pcc_thread_unregister_current();
     return NULL;
 }
 
@@ -121,13 +139,25 @@ static void *untrack_range(void *raw) {
     for (int i = start; i < end; i++) {
         py_gc_untrack((PyObject *)objects[i].bytes);
     }
+    pcc_thread_unregister_current();
     return NULL;
 }
 
 static void *collect_rounds(void *raw) {
     (void)raw;
     for (int i = 0; i < 256; i++) py_gc_collect();
+    pcc_thread_unregister_current();
     return NULL;
+}
+
+/* The main thread is registered (py_gc_init polls a safepoint). Waiting in a
+ * raw pthread_join, it must be in the blocking state, as a CPython thread
+ * releases the GIL around a blocking call, or a stop never completes. */
+static void join_all(pthread_t *threads, int count, pthread_t collector) {
+    int64_t entered = pcc_thread_blocking_enter(__builtin_frame_address(0));
+    for (int i = 0; i < count; i++) pthread_join(threads[i], NULL);
+    pthread_join(collector, NULL);
+    pcc_thread_blocking_leave(entered);
 }
 
 int main(void) {
@@ -139,8 +169,7 @@ int main(void) {
     for (intptr_t i = 0; i < THREADS; i++) {
         if (pthread_create(&threads[i], NULL, track_range, (void *)i) != 0) return 2;
     }
-    for (int i = 0; i < THREADS; i++) pthread_join(threads[i], NULL);
-    pthread_join(collector, NULL);
+    join_all(threads, THREADS, collector);
     for (int i = 0; i < THREADS; i++) {
         if (tokens[i] == NULL) return 5;
         for (int j = i + 1; j < THREADS; j++) {
@@ -157,8 +186,7 @@ int main(void) {
     for (intptr_t i = 0; i < THREADS; i++) {
         if (pthread_create(&threads[i], NULL, untrack_range, (void *)i) != 0) return 3;
     }
-    for (int i = 0; i < THREADS; i++) pthread_join(threads[i], NULL);
-    pthread_join(collector, NULL);
+    join_all(threads, THREADS, collector);
     int remaining = 0;
     for (int i = 0; i < THREADS * PER_THREAD; i++) {
         remaining += (int)py_gc_is_tracked((PyObject *)objects[i].bytes);
@@ -238,18 +266,26 @@ def test_gc_tracking_has_one_strict_source_owner_and_one_unlink_rule():
     assert "pcc_gc_default_unlink_tracked_node = extern(" in collector
     assert "freestanding_gc_tracking" in makefile
 
-    assert 'define_global_i8("pcc_py_gc_table_lock", 0)' in tracking
-    assert 'atomic_test_and_set(lock, 0, "acquire")' in tracking
-    assert 'atomic_clear(global_addr("pcc_py_gc_table_lock"), 0, "release")' in tracking
+    state = STATE_SOURCE.read_text(encoding="utf-8")
+    assert '"pcc_gc_tracked_shards"' in state
+    assert '_SHARD_COUNT: i64 = 32' in tracking
+    assert '_SHARD_STRIDE: i64 = 128' in tracking
+    assert '_NODE_SHARD: i64 = 20' in tracking
+    assert 'atomic_cas_i32(shard, _SHARD_LOCK, 0, 1, "acq_rel", "acquire")' in tracking
+    assert 'atomic_store_i32(_tracked_shard_address(index), _SHARD_LOCK, 0, "release")' in tracking
     assert 'global_addr("pcc_gc_table_lock_owner_token")' in tracking
+    assert 'global_addr("pcc_gc_table_lock_depth")' in tracking
     assert "pcc_current_native_thread_token()" in tracking
     assert "pcc_thread_safepoint()" in tracking
-    assert "count >= 4096" in tracking
+    assert "pcc_thread_no_park_enter()" in tracking
+    assert "pcc_thread_no_park_exit()" in tracking
+    assert "_POOL_LIMIT: i64 = 4096" in tracking
+    assert "count >= _POOL_LIMIT" in tracking
     for name in ("py_gc_track", "py_gc_untrack"):
         port_body = tracking.split("def " + name, 1)[1].split("\n\n@", 1)[0]
-        assert "collector_owns_lock" in port_body
-        assert "pcc_gc_default_table_lock()" in port_body
-        assert "pcc_gc_default_table_unlock()" in port_body
+        assert "_tracked_table_owned_by_current()" in port_body
+        assert "_tracked_shard_lock(index)" in port_body
+        assert "_tracked_shard_unlock(index)" in port_body
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
@@ -281,10 +317,10 @@ def test_gc_tracking_object_has_exact_raw_closure_and_atomic_lock(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | {"pcc_py_gc_table_lock"}
-    assert "atomicrmw xchg" in ir_text
-    assert "acquire" in ir_text
-    assert "store atomic i8 0" in ir_text
+    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS
+    assert "cmpxchg ptr" in ir_text
+    assert "acq_rel acquire" in ir_text
+    assert "store atomic i32" in ir_text
     assert "release" in ir_text
 
 
@@ -296,6 +332,17 @@ TRACKING_EXPECTED = (
     "duplicate:1\n"
     "second:2,1\n"
     "untrack-first:1,0,1\n"
+    "empty:0\n"
+)
+# The threaded GC4 tracks the objects it allocates in its own object index;
+# the CPython-compatible table ignores track and untrack, so storage GC4 did
+# not allocate stays untracked and uncounted.
+TRACKING_EXPECTED_GC4 = (
+    "ignored:0\n"
+    "first:0,0\n"
+    "duplicate:0\n"
+    "second:0,0\n"
+    "untrack-first:0,0,0\n"
     "empty:0\n"
 )
 
@@ -348,7 +395,8 @@ def test_production_archive_uniquely_owns_tracking_gc0_to_gc4(
             timeout=30,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == TRACKING_EXPECTED
+        expected = TRACKING_EXPECTED_GC4 if backend == 4 else TRACKING_EXPECTED
+        assert result.stdout == expected, f"GC{backend}"
 
 
 def test_production_archive_tracking_lock_survives_real_pthread_contention(

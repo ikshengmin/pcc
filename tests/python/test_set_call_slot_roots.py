@@ -5,6 +5,8 @@ Movement is injected before root registration/copy, during hash/equality, and
 at lease release; input and output slots must remain authoritative throughout.
 """
 import ast
+from functools import lru_cache
+import os
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,26 @@ from pcc.runtime.py import py_abi_constants as abi
 
 
 PORT = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_set.py"
+
+
+@lru_cache(maxsize=1)
+def _compile_set_call_model(source, filename):
+    """Reuse immutable code, never a model's globals or bound callbacks.
+
+    Key the fixed exec compilation by the actual text and filename, not file
+    metadata, so editing a source in the same process cannot reuse stale code.
+    Keeping one entry also bounds retained source snapshots.
+    """
+    tree = ast.parse(source)
+    names = {"_ptr_is_set", "_perturb_shift5", "_rehash_find_empty_slot",
+             "_entry_key", "_set_read_reload_root", "_set_remove_rooted_slot",
+             "_set_add_rooted_slot"}
+    body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+            and (node.name.startswith("_set_call_") or node.name in names
+                 or node.name == "py_set_call_method_slots")]
+    for node in body:
+        node.decorator_list = []
+    return compile(ast.Module(body=body, type_ignores=[]), filename, "exec")
 
 
 class Block:
@@ -39,21 +61,13 @@ class Memory:
         self.phase, self.fail_copy, self.fail_release = phase, fail_copy, fail_release
         self.depth, self.moves, self.copies, self.collections = 0, 0, 0, 0
         self.roots, self.objects, self.error = {}, [], None
+        self.root_groups = {}
         self.on_equal = None
         self.fail_register, self.fail_allocation = fail_register, fail_allocation
         self.registrations, self.allocations = 0, 0
         self.dummy = object()
         self.none = self.make(None, 0)
         self.none.leases = 1000  # immortal static singleton
-        tree = ast.parse(PORT.read_text())
-        names = {"_ptr_is_set", "_perturb_shift5", "_rehash_find_empty_slot",
-                 "_entry_key", "_set_read_reload_root", "_set_remove_rooted_slot",
-                 "_set_add_rooted_slot"}
-        body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                and (node.name.startswith("_set_call_") or node.name in names
-                     or node.name == "py_set_call_method_slots")]
-        for node in body:
-            node.decorator_list = []
         ns = {name: getattr(abi, name) for name in (
             "PYOBJECTHEADER_TYPE_TAG_OFFSET", "PYTUPLEOBJECT_ITEMS_OFFSET",
             "PYTUPLEOBJECT_LEN_OFFSET", "PY_TYPE_SET")}
@@ -72,6 +86,8 @@ class Memory:
             "pcc_gc_resolve_root_slot_unlocked": lambda p, offset: self.read(p, offset),
             "pcc_gc_scheduler_root_register_handle": self.register,
             "pcc_gc_scheduler_root_unregister_handle": self.unregister,
+            "pcc_gc_register_continuation_root_node": self.register_group,
+            "pcc_gc_unregister_continuation_root_node": self.unregister_group,
             "pcc_gc_root_copy_lease": self.copy, "pcc_gc_root_move": self.move_root,
             "pcc_gc_root_copy_lease_prepare_locked": self.copy_prepare,
             "pcc_gc_root_copy_lease_finish": self.copy_finish,
@@ -98,7 +114,7 @@ class Memory:
             "pcc_gc_store_ptr_plan_commit_sentinel_aware_locked": self.plan_commit,
             "pcc_gc_store_ptr_plan_finish": self.plan_finish,
         })
-        exec(compile(ast.Module(body=body, type_ignores=[]), str(PORT), "exec"), ns)
+        exec(_compile_set_call_model(PORT.read_text(), str(PORT)), ns)
         self.ns = ns
 
     def make(self, value, tag):
@@ -190,6 +206,30 @@ class Memory:
         self.collect("unregister")
         assert self.read(self.roots[handle], 0) is None
         del self.roots[handle]
+
+    def register_group(self, frame_map, slots):
+        self.collect("register")
+        count = self.read(frame_map, 0)
+        assert isinstance(count, int) and count > 0, "scratch roots must own values"
+        members = [self.add(slots, index * 8) for index in range(count)]
+        assert all(self.read(slot, 0) is None for slot in members)
+        self.registrations += 1
+        if self.registrations == self.fail_register:
+            return None
+        node = object()
+        handles = [object() for _ in members]
+        self.root_groups[node] = (frame_map, count, handles)
+        self.roots.update(zip(handles, members))
+        return node
+
+    def unregister_group(self, node):
+        self.collect("unregister")
+        frame_map, count, handles = self.root_groups.pop(node)
+        assert self.read(frame_map, 0) == count, "map must stay live until removal"
+        assert self.read(frame_map, 8) is None, "clear the node before freeing it"
+        for handle in handles:
+            assert self.read(self.roots[handle], 0) is None
+            del self.roots[handle]
 
     def lock(self):
         self.collect("lock")
@@ -435,6 +475,44 @@ class Memory:
         assert all(obj.leases == (1000 if obj is self.none else 0) for obj in self.objects if obj.alive)
         output = self.read(caller, 24)
         return status, self.values(self.read(caller, 0)), (None if output is None or output is self.none else self.values(output))
+
+
+def test_set_call_models_share_code_not_mutable_state():
+    first, second = Memory(), Memory()
+    for name in ("ns", "roots", "root_groups", "objects", "none", "dummy"):
+        assert getattr(first, name) is not getattr(second, name)
+    for name in ("_set_call_error", "py_set_call_method_slots"):
+        left, right = first.ns[name], second.ns[name]
+        assert left is not right and left.__code__ is right.__code__
+        assert left.__globals__ is first.ns and right.__globals__ is second.ns
+    first.ns["_set_call_error"](3, "first")
+    assert first.error == (3, "first") and second.error is None
+    first.error = None
+    first.ns["py_err_occurred"] = lambda: 1
+    first.ns["_set_call_error"](7, "ignored")
+    second.ns["_set_call_error"](19, "second")
+    assert first.error is None and second.error == (19, "second")
+    assert not first.roots and not second.roots
+    assert first.objects == [first.none] and second.objects == [second.none]
+
+
+def test_set_call_model_cache_invalidates_changed_source(tmp_path, monkeypatch):
+    source = PORT.read_text()
+    probe = "\ndef _set_call_cache_probe():\n    return {}\n"
+    port = tmp_path / "py_set.py"
+    port.write_text(source + probe.format(1))
+    monkeypatch.setitem(globals(), "PORT", port)
+    first = Memory()
+    prior = port.stat()
+    # Same path, size and timestamps: only the actual source content differs.
+    port.write_text(source + probe.format(2))
+    os.utime(port, ns=(prior.st_atime_ns, prior.st_mtime_ns))
+    assert port.stat().st_size == prior.st_size
+    assert port.stat().st_mtime_ns == prior.st_mtime_ns
+    second = Memory()
+    assert first.ns["_set_call_cache_probe"]() == 1
+    assert second.ns["_set_call_cache_probe"]() == 2
+    assert first.ns["_set_call_cache_probe"].__code__ is not second.ns["_set_call_cache_probe"].__code__
 
 
 @pytest.mark.parametrize("method,args,expected", [

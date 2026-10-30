@@ -19,14 +19,16 @@ from pcc.unsafe import (
     atomic_cas_i32, atomic_store_i32, call_void_ptr0,
     define_global_i32, define_global_i64, define_global_ptr_null,
     define_global_null_ptr_array, free, global_addr, load_ptr, malloc,
-    ptr_diff, store_ptr,
+    ptr_diff, store_ptr, open_file_flags, seek_file, cstr,
 )
 
 __pcc_freestanding__ = True
 
 abort = extern("pcc_platform_abort", (), c_void)
+pcc_errno_location = extern("pcc_errno_location", (), c_ptr)
 pcc_errno_set = extern("pcc_errno_set", (c_int32,), c_void)
 c_fflush = extern("fflush", (c_ptr,), c_int32)
+errno_c_locale_message = extern("pcc_errno_linux_c_locale_message", (c_int32,), c_ptr)
 
 # atexit node: next@0, callback@8, dynamically_allocated@16; 24-byte LP64.
 # C requires at least 32 registrations: provide that many without allocation.
@@ -35,6 +37,15 @@ define_global_i64("pcc_c_atexit_reserve_used", 0)
 define_global_ptr_null("pcc_c_atexit_head")
 define_global_i32("pcc_c_atexit_lock", 0)
 define_global_i32("pcc_c_exit_started", 0)
+
+
+@c_abi_typed_export("__errno_location", "ptr", ())
+def errno_location_c() -> c_ptr:
+    # This Linux-only libc provider owns the standard accessor at an owned
+    # link. Share the existing cell with syscall wrappers; never create a
+    # second errno or ask host libc for one. Hosted oracle links omit this
+    # provider and resolve the same C declaration in their own libc.
+    return pcc_errno_location()
 
 
 @c_abi_export("mkdir")
@@ -138,6 +149,54 @@ def close_c(fd: i64) -> i64:
         pcc_errno_set(0 - result)
         return -1
     return result
+
+
+@c_abi_typed_export("open", "i32", ("ptr", "i32"))
+@c_abi_variadic_export("open")
+def open_c(path: c_ptr, flags: i64) -> i64:
+    # mode_t is an unsigned C int on both Linux LP64 targets. Do not read an
+    # absent third argument for ordinary opens, including O_DIRECTORY alone.
+    # O_TMPFILE includes the target's O_DIRECTORY bit (040000 on AArch64,
+    # 0200000 on x86-64), in addition to the shared 020000000 bit.
+    machine = target_platform_machine()
+    temporary: i64 = 4210688 if load_i8(machine, 0) == 97 else 4259840
+    mode: i64 = 0
+    if (flags & 64) != 0 or (flags & temporary) == temporary:
+        cursor = va_start()
+        mode = va_arg_i32(cursor)
+        va_end(cursor)
+    # The intrinsic preserves target-native flags and mode, uses openat with
+    # AT_FDCWD, and returns raw negative errno without retrying EINTR.
+    result: i64 = open_file_flags(path, flags, mode, -100)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("lseek", "i64", ("i32", "i64", "i32"))
+def lseek_c(fd: i64, offset: i64, whence: i64) -> i64:
+    # off_t is signed 64-bit on both supported LP64 ABIs. Preserve offsets
+    # above 32 bits and negative relative seeks; never truncate to C int.
+    result: i64 = seek_file(fd, offset, whence)
+    if result < 0:
+        pcc_errno_set(0 - result)
+        return -1
+    return result
+
+
+@c_abi_typed_export("strerror", "ptr", ("i32",))
+def strerror_c(value: i64) -> c_ptr:
+    # The owned errno table returns immutable static C-locale strings. The
+    # unknown case is also immutable: no shared scratch buffer, allocation,
+    # thread teardown obligation, or change to the caller's TLS errno.
+    # C permits a generic unknown-error message; this is not glibc's numeric
+    # "Unknown error N" extension. pcc_errno_message_into retains that separate
+    # caller-buffer contract for Python OSError and other existing consumers.
+    message = errno_c_locale_message(value)
+    if ptr_is_null(message):
+        return cstr("Unknown error")
+    return message
 
 
 # These C leaves make exactly one kernel operation. Preserve successful short

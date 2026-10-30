@@ -91,7 +91,7 @@ def root_clear_count(body, slot):
             if source in aliases and destination not in aliases:
                 aliases.add(destination)
                 changed = True
-    clears = re.findall(r"@pcc_gc_store_root\(ptr (%[^,]+), ptr null\)", body)
+    clears = re.findall(r"@pcc_gc_store_root(?:_take)?\(ptr (%[^,]+), ptr null\)", body)
     return sum(value in aliases for value in clears)
 
 

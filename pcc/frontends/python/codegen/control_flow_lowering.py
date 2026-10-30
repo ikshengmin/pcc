@@ -28,6 +28,12 @@ from pcc.frontends.python.py_ast import (
     While,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.generator_lowering import (
+    begin_generator_statement_spills,
+    finish_generator_statement_spills,
+    plan_generator_expression_spills,
+    unbind_generator_statement_spills,
+)
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
 
 
@@ -135,6 +141,17 @@ class ControlFlowLoweringMixin:
             result = self.builder.phi(ir.IntType(1), name=self._fresh("cond.result"))
             result.add_incoming(left, left_end)
             result.add_incoming(right, right_end)
+            return result
+        # A test that parks after evaluating other operands decides from
+        # frame roots and releases them before either branch runs.
+        spill = plan_generator_expression_spills(self, cond_expr)
+        if spill is not None:
+            spills = begin_generator_statement_spills(self, spill[0])
+            try:
+                result = self._emit_condition_value(spill[1])
+                finish_generator_statement_spills(self, spills)
+            finally:
+                unbind_generator_statement_spills(self, spills)
             return result
         payload = self._maybe_emit_valueclass_constructor_payload(cond_expr.ty, cond_expr)
         if payload is not None:

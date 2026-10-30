@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pcc.ir.optimization.text_tokens import global_name_counts
+
 from . import BackendUnavailable
 from .self_backend_target_match import is_aarch64_linux_triple
 from .self_backend_aarch64_darwin_abi import (
@@ -62,6 +64,21 @@ def function_uses_dynamic_alloca(func: ParsedFunction) -> bool:
     return False
 
 
+def function_uses_darwin_tls(func: ParsedFunction, module_symbols: PreparedModuleSymbols) -> bool:
+    """A TLS address can call dyld even when no call appears in the IR."""
+    if (not module_symbols.thread_local_symbols
+            or is_aarch64_linux_triple(module_symbols.target_triple)):
+        return False
+    kernel = get_indexed_function_kernel(func)
+    for token in kernel.call_texts:
+        if "@" not in token:
+            continue
+        for name in global_name_counts(token):
+            if name in module_symbols.thread_local_symbols:
+                return True
+    return False
+
+
 def emit_function_prologue(
     func: ParsedFunction,
     module_symbols: PreparedModuleSymbols,
@@ -70,6 +87,13 @@ def emit_function_prologue(
     # The allocator is conservative and leaves every preassigned stack slot in
     # place, so an unsupported shape remains byte-for-byte on the spill path.
     allocate_aarch64_block_registers(func)
+    # Darwin TLS materialization calls the TLV resolver and temporarily saves
+    # LR. Even an otherwise frameless IR leaf therefore needs a protected
+    # caller return address in its normal frame. Linux initial-exec TLS does
+    # not call a resolver and keeps the existing leaf treatment.
+    if (func.aarch64_frameless and branch_protection_enabled()
+            and function_uses_darwin_tls(func, module_symbols)):
+        func.aarch64_frameless = False
     # Source-debug builds keep an actual frame chain, including leaf calls.
     # Until full unwind programs cover every prologue/epilogue PC, omitting
     # a leaf frame makes the debugger's frame-pointer walk skip its caller.

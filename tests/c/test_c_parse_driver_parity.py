@@ -23,15 +23,25 @@ from pcc.frontends.c.parse.ast_normalize import normalize, diff  # noqa: E402
 from tests.c_parse_oracle.corpus import CORPUS  # noqa: E402
 
 
-# Module-scope parser instances — both are cheap to reuse.
-_ply = CParser()
+# Reuse one PLY parser per module, initialized on first test use.
+_ply = None
+
+
+def _get_parser():
+    """Reuse this module's parser without constructing it during collection."""
+    global _ply
+    if _ply is None:
+        _ply = CParser()
+    return _ply
+
+
 _native = CParseDriver()
 
 
 @pytest.mark.parametrize("name", sorted(CORPUS))
 def test_native_driver_matches_ply(name: str) -> None:
     src = CORPUS[name]
-    ply_tree = _ply.parse(src, filename=f"<{name}>")
+    ply_tree = _get_parser().parse(src, filename=f"<{name}>")
     native_tree = _native.parse(src, filename=f"<{name}>")
 
     expected = normalize(ply_tree)

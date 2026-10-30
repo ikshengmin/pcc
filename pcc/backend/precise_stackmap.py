@@ -2087,22 +2087,45 @@ def transcode_runtime_table(
             records.append((pc, live_set))
     if cursor != table_base:
         raise PreciseStackMapError("stack-map size disagrees with decoded records")
-    out = bytearray(_RUNTIME_HEADER.pack(
+    header = _RUNTIME_HEADER.pack(
         MAGIC, RUNTIME_TABLE_VERSION, arch, POINTER_SIZE, len(functions),
         len(records), len(live_sets), len(locations), len(rare), 0, 0,
-    ))
+    )
+    # Native bytearray += returns a replacement and copies the whole prefix.
+    # Every row has a fixed width, so allocate once and replace equal-length
+    # slices in place. This also avoids retaining one packed object per row.
+    total_size = (
+        len(header) + len(functions) * _RUNTIME_FUNCTION.size
+        + len(records) * _RUNTIME_RECORD.size
+        + len(live_sets) * _RUNTIME_LIVE_SET.size
+        + len(locations) * _RUNTIME_LOCATION.size
+        + len(rare) * _RUNTIME_RARE.size
+    )
+    out = bytearray(total_size)
+    cursor = len(header)
+    out[:cursor] = header
     new_offsets: dict[int, int] = {}
     for function_id, address, code_size, frame_size, first, count in functions:
-        new_offsets[function_id] = len(out) + 8
-        out += _RUNTIME_FUNCTION.pack(function_id, address, code_size, frame_size, first, count)
+        new_offsets[function_id] = cursor + 8
+        end = cursor + _RUNTIME_FUNCTION.size
+        out[cursor:end] = _RUNTIME_FUNCTION.pack(function_id, address, code_size, frame_size, first, count)
+        cursor = end
     for pc, live_set in records:
-        out += _RUNTIME_RECORD.pack(pc, live_set)
+        end = cursor + _RUNTIME_RECORD.size
+        out[cursor:end] = _RUNTIME_RECORD.pack(pc, live_set)
+        cursor = end
     for first, count in live_sets:
-        out += _RUNTIME_LIVE_SET.pack(first, count)
+        end = cursor + _RUNTIME_LIVE_SET.size
+        out[cursor:end] = _RUNTIME_LIVE_SET.pack(first, count)
+        cursor = end
     for word in locations:
-        out += _RUNTIME_LOCATION.pack(word)
+        end = cursor + _RUNTIME_LOCATION.size
+        out[cursor:end] = _RUNTIME_LOCATION.pack(word)
+        cursor = end
     for record_index, kind, flags, exceptional, continuation in rare:
-        out += _RUNTIME_RARE.pack(record_index, kind, flags, 0, exceptional, continuation)
+        end = cursor + _RUNTIME_RARE.size
+        out[cursor:end] = _RUNTIME_RARE.pack(record_index, kind, flags, 0, exceptional, continuation)
+        cursor = end
     remapped = tuple((function_id, new_offsets[function_id]) for function_id, _old in address_offsets)
     return bytes(out), remapped
 

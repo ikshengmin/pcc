@@ -141,7 +141,7 @@ def test_structseq_marker_still_rejects_an_ordinary_class():
 
     memory = StructSeqMemory()
     ordinary = memory.klass('ordinary', [])
-    ordinary.fields[12] = 2
+    ordinary.fields[12] = memory.ns['PY_FLAG_CLASS_SLOTS_ONLY']
     memory.ns['py_class_mark_structseq'](ordinary)
     assert memory.error.value == (3, 'struct sequence requires a tuple subtype')
     assert not ordinary.fields[12] & memory.ns['_STRUCTSEQ_CLASS_FLAG']

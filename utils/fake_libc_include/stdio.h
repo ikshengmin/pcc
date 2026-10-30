@@ -26,6 +26,11 @@ int getc_unlocked(FILE *stream);
 void flockfile(FILE *stream);
 void funlockfile(FILE *stream);
 int printf(const char *restrict format, ...);
+int vprintf(const char *restrict format, va_list ap);
+int vfprintf(FILE *restrict stream, const char *restrict format, va_list ap);
+int vsprintf(char *restrict buffer, const char *restrict format, va_list ap);
+int vsnprintf(char *restrict buffer, size_t size, const char *restrict format,
+              va_list ap);
 int fflush(FILE *stream);
 int fileno(FILE *stream);
 int fseeko(FILE *stream, off_t offset, int whence);

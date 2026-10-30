@@ -6,6 +6,7 @@ import pytest
 
 from pcc.frontends.python.codegen.attr_load_lowering import AttrLoadLoweringMixin
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from tests.python.root_copy_ir import root_copy_calls
 from tests.python.test_shared_call_binding import _emit
 
 
@@ -31,7 +32,8 @@ def test_projected_fields_publish_real_owner(field, site, tmp_path):
     text = _emit(source)
     (tmp_path/'input.py').write_text(source); (tmp_path/'program.ll').write_text(text)
     if field == 'list':
-        assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy_borrowed_lease\(', text)
+        assert any(copy.source.startswith('%record.value.root.0') for copy in
+                   root_copy_calls(text, local=True, borrowed=True))
         assert 'record.value.root.0' in text
     else:
         assert 'value.attribute.scalar' in text
@@ -58,7 +60,8 @@ def probe(record: Outer):
     text = _emit(source)
     (tmp_path/'program.ll').write_text(text)
     assert 'record.value.root.0_0' in text
-    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy_borrowed_lease\(', text)
+    assert any(copy.source.startswith('%record.value.root.0_0') for copy in
+               root_copy_calls(text, local=True, borrowed=True))
 
 
 def test_nested_payload_box_is_published_before_field_work(tmp_path):
@@ -79,7 +82,8 @@ def probe(record: Outer):
     (tmp_path/'program.ll').write_text(text)
     assert re.search(r'(%[^ ]+) = call [^\n]*@py_valuebox_new\([^\n]*\n\s*store ptr \1, ptr ', text)
     assert re.search(r'\bcall [^\n]*@py_valuebox_set_field\(', text)
-    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy_borrowed_lease\(', text)
+    assert any(copy.source.startswith('%record.value.root.0_0') for copy in
+               root_copy_calls(text, local=True, borrowed=True))
 
 
 def test_module_payload_field_uses_its_mapped_global_slot(tmp_path):

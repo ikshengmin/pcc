@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import platform
-import resource
 import shutil
 import signal
 import subprocess
@@ -255,7 +254,17 @@ def _persisted_samples(samples: list[dict[str, int]]) -> list[dict[str, int]]:
 
 
 def _child_cpu_usage_us() -> tuple[int, int]:
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    # Keep parsing and budget helpers importable on hosts without resource.
+    # Missing measurements must never become a fabricated zero-CPU result.
+    try:
+        import resource
+
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    except (ImportError, AttributeError, OSError, NotImplementedError) as exc:
+        raise GCLongrunGateError(
+            "child CPU usage measurement is unavailable; "
+            "resource.getrusage(resource.RUSAGE_CHILDREN) is required"
+        ) from exc
     return int(usage.ru_utime * 1_000_000), int(usage.ru_stime * 1_000_000)
 
 
@@ -420,6 +429,8 @@ def run_gate(
         raise GCLongrunGateError(f"invalid backend set: {backends}")
     if repeats < 1 or repeats > 10:
         raise GCLongrunGateError("repeats must be between 1 and 10")
+    # Reject unsupported measurement hosts before compiling any workload.
+    _child_cpu_usage_us()
     executable, digest, binary_digest = build_workload(timeout=build_timeout)
     results = []
     for repeat_index in range(1, repeats + 1):

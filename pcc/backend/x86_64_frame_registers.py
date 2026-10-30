@@ -467,8 +467,8 @@ def keep_frame_slots_in_registers(
             for successor in successors[block_id]:
                 out |= live_in[successor]
             entering = uses[block_id] | (out & ~kills[block_id])
-            if out != live_out[block_id] or entering != live_in[block_id]:
-                live_out[block_id] = out
+            live_out[block_id] = out
+            if entering != live_in[block_id]:
                 live_in[block_id] = entering
                 changed = True
             block_id -= 1

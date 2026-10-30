@@ -5,6 +5,9 @@ import re
 
 import pytest
 
+from pcc.frontends.python.codegen.call_object_lowering import (
+    CallObjectLoweringMixin,
+)
 from pcc.frontends.python.codegen.format_lowering import FormatLoweringMixin
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.py_lift import parse_and_lift
@@ -102,6 +105,10 @@ class _FormatHost(FormatLoweringMixin):
     Runtime publication/leases and error preservation have separate IR/runtime
     regressions; real compiled five-GC coverage remains an integration gate.
     """
+    _emit_root_slot_move = CallObjectLoweringMixin._emit_root_slot_move
+    _slot_call_root_is_registered = CallObjectLoweringMixin._slot_call_root_is_registered
+    _slot_call_root_record = CallObjectLoweringMixin._slot_call_root_record
+
     def __init__(self, value):
         self.value = value
         self.builder = _Builder()

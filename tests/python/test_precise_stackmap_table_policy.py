@@ -100,6 +100,24 @@ def test_unspecified_target_uses_the_host_policy(
     assert precise_stackmap_tables_enabled(target) is default_enabled
 
 
+@pytest.mark.parametrize("link_mode", ("", "pcc", "cc"))
+def test_main_publishes_the_table_only_for_the_owned_linker(
+    tmp_path, monkeypatch, link_mode,
+):
+    monkeypatch.setenv("PCC_SELF_LINK", link_mode)
+    monkeypatch.setenv(PRECISE_STACKMAP_TABLES_ENV, "1")
+    source = tmp_path / "publication.py"
+    source.write_text("def value():\n    return 42\nprint(value())\n", encoding="utf-8")
+    output = tmp_path / "publication.ll"
+    pipeline.compile_python(
+        str(source), str(output), emit_llvm_only=True, libpython_mode="off",
+        target_triple="arm64-apple-darwin",
+    )
+    text = output.read_text(encoding="utf-8")
+    assert ("@" + PRECISE_STACKMAP_TABLE_SYMBOL + " = external" in text) is (link_mode != "cc")
+    assert "@pcc_gc_frame_enter_mapped(" in text
+
+
 @pytest.mark.parametrize("triple,default_enabled", _TARGET_POLICIES)
 def test_object_cache_identity_binds_the_policy(monkeypatch, triple, default_enabled):
     monkeypatch.setattr(pipeline_targets, "host_target_triple", lambda: triple)

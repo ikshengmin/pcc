@@ -142,7 +142,33 @@ def test_zlib_runtime_with_self_backend_system_link_depends_on(
 def test_zlib_runtime_with_self_backend_freestanding_libc(
     zlib_compiled_units_self,
     tmp_path,
+    monkeypatch,
 ):
+    # Availability and extraction are different archive contracts: a valid
+    # zlib program need not reference the constant-null-callee trap. Inspect
+    # its real provider before the evaluator removes the temporary archive.
+    provider_witnesses = []
+    original_link_inputs = CEvaluator._freestanding_link_inputs
+
+    def observe_link_inputs(evaluator, *args, **kwargs):
+        inputs = original_link_inputs(evaluator, *args, **kwargs)
+        triple = str(evaluator.target_triple or "").lower()
+        if kwargs.get("enabled") and "linux" in triple and (
+            triple.startswith("x86_64") or triple.startswith("amd64")
+        ):
+            from pcc.backend.elf_x86_64 import EM_X86_64
+            from tests.freestanding_archive_provider import require_elf_archive_function
+
+            archives = inputs[2]
+            assert len(archives) == 1
+            assert os.path.basename(archives[0]) == "libpcc_freestanding_c.a"
+            provider_witnesses.append(require_elf_archive_function(
+                archives[0], member_name="freestanding_runtime_traps.o",
+                symbol_name="pcc_null_callee_trap", machine=EM_X86_64,
+            ))
+        return inputs
+
+    monkeypatch.setattr(CEvaluator, "_freestanding_link_inputs", observe_link_inputs)
     compiled_units, base_dir = zlib_compiled_units_self
     link_map = tmp_path / "zlib-freestanding.map"
     map_flag = (
@@ -173,3 +199,10 @@ def test_zlib_runtime_with_self_backend_freestanding_libc(
     assert "freestanding_mem_str.o" in ownership
     assert "freestanding_allocator.o" in ownership
     assert "vendor_" not in ownership
+    if sys.platform.startswith("linux"):
+        assert "libpcc_freestanding_c.a(freestanding_linux_libc.o)" in ownership
+        assert "libpcc_freestanding_c.a(freestanding_errno.o)" in ownership
+        assert "libpcc_freestanding_c.a(freestanding_gc_state.o)" in ownership
+        assert len(provider_witnesses) == 1
+        assert "libpy_runtime_pcc_py.a" not in ownership
+        assert "libc.a" not in ownership

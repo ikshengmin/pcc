@@ -802,6 +802,32 @@ def _populate_static_native_exports_1(out):
 
 
 def _populate_static_native_exports_2(out):
+    # The standalone lifter calls the same real AST transforms as the
+    # closed-world frontend.  Their values use the ordinary object-pointer
+    # ABI; these declarations must not turn those sibling calls into a
+    # CPython import/getattr/call chain when no sibling context is supplied.
+    out["pcc.frontends.python.freestanding_constants"] = {
+        "fold_module_int_constants": _function_export(
+            ("dyn",), (("dyn",),), (_export_arg("module", ("dyn",)),),
+        ),
+    }
+    out["pcc.frontends.python.builtin_function_values"] = {
+        "inject_builtin_function_values": _function_export(
+            ("dyn",), (("dyn",),), (_export_arg("module", ("dyn",)),),
+        ),
+    }
+    out["pcc.frontends.python.class_body_statements"] = {
+        "lower_class_body_statements": _function_export(
+            ("dyn",),
+            (("dyn",), ("dyn",)),
+            (_export_arg("class_name", ("dyn",)), _export_arg("body", ("dyn",))),
+        ),
+    }
+    out["pcc.frontends.python.method_decorators"] = {
+        "split_general_method_decorators": _function_export(
+            ("dyn",), (("dyn",),), (_export_arg("body", ("dyn",)),),
+        ),
+    }
     out["pcc.frontends.python.py_lift"] = {
         "parse_and_lift": _function_export(
             ("dyn",),
@@ -1936,6 +1962,106 @@ def _native_stdlib_semantic_provider(module_name, export_name):
     return providers.get(export_name, None)
 
 
+def _native_function_object_export(owner, name, return_ty, param_types, call_sig, docstring=None):
+    """Describe a typed native function with a published Python function object."""
+    info = _function_export(return_ty, param_types, call_sig)
+    info["owning_module"] = owner
+    info["export_name"] = name
+    info["returns_none"] = False
+    info["is_async"] = False
+    info["has_return_annotation"] = True
+    info["manual_pointer_abi"] = False
+    info["manual_pointer_abi_symbol"] = ""
+    info["single_definition"] = True
+    info["may_park"] = False
+    info["needs_object"] = True
+    info["docstring"] = docstring
+    return info
+
+
+def _populate_owned_optimizer_exports(out):
+    # These declarations mirror the real source-derived provider exports.
+    # Keep scalar types and function-object/default binding: a generic ptr
+    # declaration would hide the bool ABI and lose keyword-only semantics.
+    text = ("str",)
+    flag = ("bool",)
+    text_list = ("list", text)
+    changed_text = ("tuple", (text, flag))
+    for owner, name, docstring in (
+        ("pcc.ir.optimization.mem2reg", "mem2reg_text", 'Promote what this module can prove, returning ``(text, changed)``.'),
+        ("pcc.ir.optimization.instsimplify", "simplify_module_text", 'Run the simplifier until fixed point; return (new_ir, changed).'),
+        ("pcc.ir.optimization.simplifycfg", "simplify_cfg_text", 'Apply a focused local SimplifyCFG subset across all functions.'),
+        ("pcc.ir.optimization.foldselect", "fold_two_entry_phi_text", None),
+        ("pcc.ir.optimization.instcombine", "instcombine_text", 'Apply local InstCombine-style peepholes; return (new_ir, changed).'),
+    ):
+        out[owner] = {
+            name: _native_function_object_export(
+                owner, name, changed_text, (text,), (_export_arg("ir_text", text),),
+                docstring=docstring,
+            ),
+        }
+
+    # Defaults are actual lifted literals, not None placeholders or serialized
+    # repr strings. The synthetic span carries no provider source location.
+    span = SourceSpan(file="<native-export>", line=0, col=0, end_line=0, end_col=0)
+    attrs_type = ("dict", text, ("set", text))
+    attrs = _export_arg("function_attrs", attrs_type, has_default=True)
+    attrs["default"] = NoneLit(span=span, ty=NoneType(name="None"))
+    owner = "pcc.ir.optimization.dce"
+    out[owner] = {
+        "dce_module_text": _native_function_object_export(
+            owner, "dce_module_text", changed_text, (text, attrs_type),
+            (_export_arg("ir_text", text), attrs),
+            docstring='Remove dead instructions from the IR; return (new_ir, changed).',
+        ),
+    }
+    require_inline = _export_arg(
+        "require_alwaysinline", flag, kind="kw_only", has_default=True,
+    )
+    require_inline["default"] = BoolLit(span=span, ty=BoolType(name="bool"), value=False)
+    include_defs = _export_arg(
+        "include_definitions", flag, kind="kw_only", has_default=True,
+    )
+    include_defs["default"] = BoolLit(span=span, ty=BoolType(name="bool"), value=False)
+    owner = "pcc.ir.optimization.inline"
+    out[owner] = {
+        "inline_module": _native_function_object_export(
+            owner, "inline_module", changed_text, (text, flag, flag),
+            (
+                _export_arg("ir_text", text),
+                _export_arg("", kind="kw_only"),
+                require_inline,
+                include_defs,
+            ),
+        ),
+    }
+    owner = "pcc.frontends.python.compiled_default_passes"
+    out[owner] = {
+        "_has_py_cpy_call": _native_function_object_export(
+            owner, "_has_py_cpy_call", flag, (text,), (_export_arg("ir_text", text),),
+        ),
+        "_mem2reg_function": _native_function_object_export(
+            owner, "_mem2reg_function", text_list, (text_list,),
+            (_export_arg("lines", text_list),),
+            docstring='Owned mem2reg: entry-block single-store promotion, then the\n    single-block scan.  The two are independent and both fail closed.',
+        ),
+        "_sroa_function": _native_function_object_export(
+            owner, "_sroa_function", text_list, (text_list,),
+            (_export_arg("lines", text_list),),
+        ),
+        "run_compiled_default_tier": _native_function_object_export(
+            owner, "run_compiled_default_tier", text, (text, text_list, flag),
+            (
+                _export_arg("ir_text", text),
+                _export_arg("pass_names", text_list),
+                _export_arg("", kind="kw_only"),
+                _export_arg("strict_no_libpython", flag, kind="kw_only"),
+            ),
+            docstring='Run the exact self-hosted tier, leaving unsupported IR unchanged.',
+        ),
+    }
+
+
 def _build_static_native_exports():
     out = {}
     _populate_static_native_exports_0(out)
@@ -1948,6 +2074,7 @@ def _build_static_native_exports():
     _populate_static_native_exports_6(out)
     _populate_static_native_exports_9(out)
     _populate_static_native_exports_7(out)
+    _populate_owned_optimizer_exports(out)
     return out
 
 
@@ -1962,6 +2089,7 @@ _PCC_FRONTEND_STATIC_NATIVE_MODULES = frozenset(
         "pcc.frontends.python.pipeline_frontend_parallel",
         "pcc.frontends.python.pipeline_frontend_workers",
         "pcc.frontends.python.compile_cache",
+        "pcc.frontends.python.compiled_owned_passes",
         "pcc.frontends.python.codegen.layer1_support",
         "pcc.frontends.python.codegen.host_contract",
         "pcc.frontends.python.codegen.self_module_contracts",

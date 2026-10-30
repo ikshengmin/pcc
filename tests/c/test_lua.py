@@ -14,10 +14,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import fcntl
 import hashlib
+from contextlib import ExitStack
 from pathlib import Path
 import pytest
+from scripts.file_lock import exclusive_file_lock
 from pcc.ir import ir
 import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 from pcc.frontends.c.codegen.c_codegen import postprocess_ir_text
@@ -85,17 +86,17 @@ def _test_cache_root():
 
 def _artifact_lock(lock_name):
     lock_path = os.path.join(_test_cache_root(), f"{lock_name}.lock")
-    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    lockfile = open(lock_path, "w")
-    fcntl.flock(lockfile, fcntl.LOCK_EX)
-    return lockfile
-
-
-def _release_artifact_lock(lockfile):
+    lock = ExitStack()
     try:
-        fcntl.flock(lockfile, fcntl.LOCK_UN)
-    finally:
-        lockfile.close()
+        lock.enter_context(exclusive_file_lock(lock_path))
+    except BaseException:
+        lock.close()
+        raise
+    return lock
+
+
+def _release_artifact_lock(lock):
+    lock.close()
 
 
 def _cache_key(*pieces, file_paths=()):

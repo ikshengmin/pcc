@@ -20,10 +20,12 @@ Supported slice today:
 Unsupported shapes still raise ``BackendUnavailable`` instead of guessing.
 """
 from . import BackendUnavailable
+from . import worker_phase_observer as _worker_phase_observer
 from .arm64_asm_driver import (
     AArch64ModuleBuilder,
     StructuredAArch64Module,
     measure_text_layout,
+    _measure_owned_text_layout,
 )
 from .arm64_encode import (
     EMITTED_INSTRUCTION_CALL,
@@ -452,6 +454,9 @@ def emit_aarch64_darwin_asm(ir_text: str, optimize: bool = True) -> str:
     # the large source string no longer shares a frame with every emit pass.
     owned_ir_text = ir_text + ""
     _emit_trace("prepare begin bytes=" + str(len(owned_ir_text)))
+    timing_arm_scope = 0
+    if _worker_phase_observer.active:
+        timing_arm_scope = _worker_phase_observer.arm_text()
     prepared = prepare_module_for_target(
         owned_ir_text,
         aggregate_returned_indirect=_aggregate_returned_indirect,
@@ -461,7 +466,11 @@ def emit_aarch64_darwin_asm(ir_text: str, optimize: bool = True) -> str:
         materialize_legacy_slots=False,
         source_debug=True,
     )
+    if timing_arm_scope:
+        _worker_phase_observer.prepared(timing_arm_scope)
     _emit_trace("prepare end")
+    if timing_arm_scope:
+        _worker_phase_observer.begin_module_emit(timing_arm_scope)
     return _emit_prepared_aarch64_darwin_module(
         prepared,
         optimize,
@@ -795,6 +804,14 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 phase_timing.add(6, phase_start)
     if phase_timing is not None:
         phase_start = phase_timing.start()
+    # All function bodies and native captures have finished. Retire only the
+    # private plans' emission storage before final layout/metadata allocate.
+    # Keep the eager planning and callback order: callbacks or repeated names
+    # can make a later body reuse an earlier dictionary entry. Record/root
+    # metadata and exceptional labels remain live for the final consumers.
+    for plan in stack_map_plans.values():
+        if plan.packed_records is not None:
+            plan.packed_records.retire_emission_state()
     if native_sink is not None:
         if (
             optimize or structured_sections is None or structured_counts is None
@@ -1020,7 +1037,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
     target_offsets: dict[str, int] = {}
     target_text_size = 0
     if functions:
-        target_offsets, target_text_size = measure_text_layout(
+        target_offsets, target_text_size = _measure_owned_text_layout(
             lines, encoded_line_records,
             () if structured_symbol_names is None else structured_symbol_names,
         )
@@ -1255,7 +1272,7 @@ def _parse_cond_zero_branch(line: str) -> tuple[str, str, str] | None:
         reg, target = rest.split(", ", 1)
     except ValueError:
         return None
-    if not reg.startswith("w"):
+    if not reg.startswith(("w", "x")):
         return None
     return opcode, reg, target
 
@@ -1436,6 +1453,74 @@ def _line_uses_reg_alias(line: str, reg: str) -> bool:
     return any(_line_uses_reg(line, alias) for alias in _reg_aliases(reg))
 
 
+_REG_SCAN_ORIGINAL_USES_ALIAS = _line_uses_reg_alias
+_REG_SCAN_ORIGINAL_DEFINES_ALIAS = _line_defines_reg_alias
+_REG_SCAN_ORIGINAL_USES = _line_uses_reg
+_REG_SCAN_ORIGINAL_DEFINES = _line_defines_reg
+_REG_SCAN_ORIGINAL_ALIASES = _reg_aliases
+_REG_SCAN_ORIGINAL_TOKENS = _tokens_for_reg_scan
+
+
+def _line_reg_alias_effect(line: str, reg: str) -> int:
+    """Return use (1), otherwise definition (2), otherwise neither (0).
+
+    The ordinary scratch scan needs both W/X aliases and use-before-def.
+    Parse one line once, without retaining tokens across lines or passes.
+    Direct helpers and replaced readers retain their original call order.
+    """
+    if (
+        type(line) is not str or type(reg) is not str
+        or _line_uses_reg_alias is not _REG_SCAN_ORIGINAL_USES_ALIAS
+        or _line_defines_reg_alias is not _REG_SCAN_ORIGINAL_DEFINES_ALIAS
+        or _line_uses_reg is not _REG_SCAN_ORIGINAL_USES
+        or _line_defines_reg is not _REG_SCAN_ORIGINAL_DEFINES
+        or _reg_aliases is not _REG_SCAN_ORIGINAL_ALIASES
+        or _tokens_for_reg_scan is not _REG_SCAN_ORIGINAL_TOKENS
+    ):
+        if _line_uses_reg_alias(line, reg):
+            return 1
+        if _line_defines_reg_alias(line, reg):
+            return 2
+        return 0
+    if not line.startswith("  "):
+        return 0
+    aliases = _reg_aliases(reg)
+    stripped = line[2:]
+    opcode, sep, rest = stripped.partition(" ")
+    if not sep:
+        tokens = _tokens_for_reg_scan(stripped)
+        for alias in aliases:
+            if alias in tokens:
+                return 1
+        return 0
+
+    defines = False
+    tail = ""
+    # Exactly the definition predicate of _line_defines_reg, including its
+    # conservative treatment of branch prefixes and release stores.
+    if (
+        stripped
+        and not stripped.startswith(("b ", "b.", "bl ", "cbz ", "cbnz "))
+        and opcode not in (
+            "cmp", "cmn", "tst", "fcmp", "ret", "br", "blr", "tbz", "tbnz",
+            "stur", "str", "stlr", "sturb", "strb", "stlrb", "sturh", "strh",
+            "stlrh", "stp",
+        )
+    ):
+        dest, sep2, tail = rest.partition(", ")
+        defines = dest in aliases
+        if not sep2:
+            tail = ""
+    # A defining first operand equals exactly one alias, so removing it
+    # cannot hide the other alias. Partial writes must still read it.
+    source = tail if defines and opcode not in ("movk", "bfi", "bfxil") else rest
+    tokens = _tokens_for_reg_scan(source)
+    for alias in aliases:
+        if alias in tokens:
+            return 1
+    return 2 if defines else 0
+
+
 def _can_drop_zero_mov_after_store(
     lines: list[str], start_index: int, reg: str
 ) -> bool:
@@ -1452,9 +1537,10 @@ def _can_drop_zero_mov_after_store(
             )
         ):
             return False
-        if _line_uses_reg_alias(line, reg):
+        effect = _line_reg_alias_effect(line, reg)
+        if effect == 1:
             return False
-        if _line_defines_reg_alias(line, reg):
+        if effect == 2:
             return True
         index += 1
     return True
@@ -1696,9 +1782,10 @@ def _scratch_dead_after(lines: list[str], start_index: int, reg: str) -> bool:
             ("  b ", "  b.", "  cbz ", "  cbnz ", "  tbz ", "  tbnz ", "  blr ", "  br ")
         ):
             return False
-        if _line_uses_reg_alias(line, reg):
+        effect = _line_reg_alias_effect(line, reg)
+        if effect == 1:
             return False
-        if _line_defines_reg_alias(line, reg):
+        if effect == 2:
             return True
         index += 1
     return True
@@ -2780,6 +2867,14 @@ def _emit_dense_indexed_function_blocks(
     layout_count = len(kernel.block_layout_ids)
     block_position = 0
     block_count = layout_count if layout_count else len(kernel.block_names)
+    # The native owner consumes labels, not assembly formatting. Keep their
+    # existing typed path instead of rendering and reparsing a label line at
+    # every block; inter-block blank lines have no native representation.
+    # Custom sinks/builders retain their append callbacks and exact text.
+    native_block_labels = (
+        type(native_sink) is _NativeAArch64Emission
+        and type(native_sink.builder) is AArch64ModuleBuilder
+    )
     direct_targets = _direct_branch_targets_in_range(kernel)
     while block_position < block_count:
         block_id = (
@@ -2788,7 +2883,9 @@ def _emit_dense_indexed_function_blocks(
             else block_position
         )
         block_name = kernel.block_names[block_id]
-        if block_position == 0:
+        if native_block_labels:
+            native_sink.builder.append_label(_block_label(func.name, block_name))
+        elif block_position == 0:
             if native_sink is None:
                 lines.append(_block_label(func.name, block_name) + ":")
             else:

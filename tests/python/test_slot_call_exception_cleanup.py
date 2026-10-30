@@ -71,7 +71,10 @@ class CleanupModel(CallObjectLoweringMixin):
         _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py",
                    {"py_weakref_invalidate"}, self.weakref_ns)
         self.swap_ns = dict(
-            global_load_ptr=lambda name: self.tls_handle,
+            global_load_ptr=lambda name: (
+                self.pending if name == "py_tls_current_exc_storage" else self.tls_handle
+            ),
+            load_ptr=self.root_word,
             global_store_ptr=self.tls_store, global_addr=lambda name: name,
             null=lambda: 0, ptr_is_null=lambda value: int(value == 0),
             pcc_gc_load_ptr=lambda owner, slot: (
@@ -126,6 +129,10 @@ class CleanupModel(CallObjectLoweringMixin):
     def store_flag(self, value, flag):
         self.flags[flag] = value.value
         self.events.append(("flag", flag))
+
+    def root_word(self, slot, offset):
+        assert offset == 0
+        return self.roots[slot]
 
     def tls_store(self, name, value):
         if name == "py_tls_current_exc_storage":
@@ -458,8 +465,8 @@ TWO_ROOT_PROGRAM = textwrap.dedent('''\
             probe(consume)
         except ValueError as caught:
             assert caught is selected
-            # The argument list's owner must have been released by the
-            # two-root error edge before control reaches this handler.
+            # The completed argument's owner must have been released by
+            # the two-root error edge before this handler can observe it.
             assert events == ["finalizer", "weakref"]
             assert references[-1]() is None
         else:
@@ -480,6 +487,7 @@ def _assert_two_root_program_error_edge():
     _codegen, text = _emit(TWO_ROOT_PROGRAM, "two_root_cleanup")
     verify_stackmaps(text)
     body = _function(text, "user_two_root_cleanup_probe")
+    assert "@py_list_new(" not in body and "@py_tuple_from_list(" not in body
     blocks = dict(re.findall(r"^([\w.]+):\n(.*?)(?=^[\w.]+:|^})", body, re.M | re.S))
     aliases = dict(re.findall(r"(%[\w.]+) = bitcast ptr (%[\w.]+) to ptr", body))
 
@@ -497,7 +505,7 @@ def _assert_two_root_program_error_edge():
         if call is None:
             continue
         roots = tuple(original(slot) for slot in call.groups())
-        if not (".args.operand." in roots[0] and ".args.list.operand." in roots[1]):
+        if not (".args.operand." in roots[0] and ".args.item.operand." in roots[1]):
             continue
         leaves = re.findall(r"@pcc_gc_frame_leave_lifo\(ptr (%[\w.]+)\)", block)
         assert tuple(original(slot) for slot in leaves) == tuple(reversed(roots))

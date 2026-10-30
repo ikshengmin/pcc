@@ -6,6 +6,7 @@ import re
 import pytest
 
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from tests.python.root_copy_ir import root_copy_calls
 from tests.python.test_shared_call_binding import _emit, _function
 
 
@@ -41,7 +42,8 @@ def test_payload_name_boxes_into_owned_slot_before_field_work(field, site, tmp_p
     assert "@pcc_gc_foreign_lease_acquire(" in function
     if field == "list":
         assert "record.value.root.1" in function
-        assert "@pcc_gc_root_copy_borrowed_lease(" in function
+        assert any(copy.source.startswith("%record.value.root.1") for copy in
+                   root_copy_calls(function, local=True, borrowed=True))
 
 
 def test_nested_payload_name_copies_each_registered_pointer_leaf(tmp_path):
@@ -69,7 +71,9 @@ def probe(record: Record):
         assert re.search(re.escape(value) + r" = call [^\n]*\n\s*store ptr " + re.escape(value) + r", ptr ", function)
     assert "record.value.root.0_0" in function
     assert "record.value.root.1" in function
-    assert function.count("@pcc_gc_root_copy_borrowed_lease(") >= 2
+    copies = root_copy_calls(function, local=True, borrowed=True)
+    for leaf in ("%record.value.root.0_0", "%record.value.root.1"):
+        assert any(copy.source.startswith(leaf) for copy in copies), leaf
 
 
 @pytest.mark.parametrize("global_statement", (False, True))
@@ -97,17 +101,18 @@ def test_erased_expression_type_uses_the_actual_payload_binding(monkeypatch):
 
     original = L1CodeGen._emit_slot_call_operand
 
-    def erased(self, expr, label):
+    def erased(self, expr, label, borrow_stable=False):
         if isinstance(expr, Name) and expr.ident == "record":
             expr = replace(expr, ty=DynType(name="dyn"))
-        return original(self, expr, label)
+        return original(self, expr, label, borrow_stable=borrow_stable)
 
     monkeypatch.setattr(L1CodeGen, "_emit_slot_call_operand", erased)
     source = PREFIX.replace("FIELD", "list") + "def probe(record: Record):\n    return take(value=record)\n"
     function = _function(_emit(source))
     assert "@py_valuebox_new(" in function
     assert "record.value.root.1" in function
-    assert "@pcc_gc_root_copy_borrowed_lease(" in function
+    assert any(copy.source.startswith("%record.value.root.1") for copy in
+               root_copy_calls(function, local=True, borrowed=True))
 
 
 def test_live_import_staging_is_not_a_payload_owner():

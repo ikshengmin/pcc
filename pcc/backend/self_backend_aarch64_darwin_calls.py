@@ -25,6 +25,7 @@ from .self_backend_aarch64_darwin_abi import (
 )
 from .self_backend_aarch64_darwin_flow import emit_bit_count_intrinsic_call
 from .self_backend_aarch64_darwin_regalloc import (
+    commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
 )
 from .self_backend_aarch64_darwin_materialize import (
@@ -44,6 +45,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_compare_register_line,
     emitted_cset_line,
     emitted_direct_call_line,
+    emitted_global_address_lines,
     emitted_memory_instruction_line,
     emitted_movewide_instruction_line,
 )
@@ -2377,11 +2379,25 @@ def emit_call_instruction_indexed(
         )
         lines.append("  blr x12")
     else:
-        lines.append(
-            emitted_direct_call_line(
-                asm_symbol_prevalidated(callee, module_symbols)
+        from .self_backend_aarch64_gc_calls import gc_short_call_lines
+
+        fast_call = None
+        if (not is_vararg_call and not stack_size
+                and callee.startswith("pcc_gc_")
+                and "__pcc_owned_gc_short_paths_v1" in module_symbols.internal_symbols):
+            fast_call = gc_short_call_lines(
+                func, callee, call_id, ret_kind_id,
+                tuple(kernel.type_kind_id(kernel.call_arg(header.fourth + i).first)
+                      for i in range(arg_count)), module_symbols,
             )
-        )
+        if fast_call is not None:
+            lines.extend(fast_call)
+        else:
+            lines.append(
+                emitted_direct_call_line(
+                    asm_symbol_prevalidated(callee, module_symbols)
+                )
+            )
     if stack_size:
         lines.extend(emit_add_offset("sp", "sp", stack_size, scratch_reg="x15"))
     dest_offset = (
@@ -2493,6 +2509,37 @@ def emit_call_instruction(
                 f"self backend llvm.trap expects 0 args in {func.name!r}"
             )
         return ["  brk #0"]
+    if not is_indirect and callee in ("llvm.threadlocal.address", "llvm.threadlocal.address.p0"):
+        if (len(args) != 1 or not ret_type.is_ptr or not args[0][0].is_ptr
+                or not args[0][1].startswith("@")
+                or args[0][1][1:] not in module_symbols.thread_local_symbols):
+            raise BackendUnavailable(
+                "llvm.threadlocal.address requires one thread-local global pointer"
+            )
+        if dest is None or not parsed_function_has_value_slot(func, dest):
+            return []
+        from .self_backend_aarch64_darwin_addr import materialize_global_address
+
+        if is_aarch64_linux_triple(module_symbols.target_triple):
+            lines = materialize_global_address(args[0][1][1:], "x9", module_symbols)
+            result_register = 9
+        else:
+            # This is an explicit IR call: liveness and the protected frame
+            # already preserve live caller values and LR. Unlike implicit
+            # TLS address formation inside another instruction, it need not
+            # save caller-clobbered registers or NZCV around the resolver.
+            symbol = asm_symbol(args[0][1][1:], module_symbols)
+            lines = emitted_global_address_lines("x0", symbol, False)
+            lines.append(emitted_memory_instruction_line("ldr", "x16", "x0"))
+            lines.append("  blr x16")
+            result_register = 0
+        committed = commit_allocated_scalar_result(
+            func, dest, ret_type, "x" + str(result_register),
+        )
+        if committed is None:
+            committed = store_value_regs_to_value_slot(func, dest, result_register)
+        lines.extend(committed)
+        return lines
     if not is_indirect and callee.startswith("llvm.frameaddress."):
         # Every prologue saves the caller's x29/x30 and points x29 at them; a
         # call keeps even a leaf off the frameless path, so x29 is this frame.

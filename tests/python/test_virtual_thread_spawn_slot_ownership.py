@@ -30,37 +30,58 @@ def _spawn_source(generator=False, sink=True, module_scope=False, resume=False):
     return source + "def probe():\n" + ("    vt.yield_now()\n" if resume else "") + "    return " + expression + "\n"
 
 
-def _assert_singleton_root_cleanup(block, addresses):
-    """Recognize the audited helper without hiding caller-slot retirement.
+CLEANUP_HELPERS = {
+    "py_cleanup_one_root_preserving_exception": 1,
+    "py_cleanup_two_roots_preserving_exception": 2,
+}
 
-    The production helper saves/restores the selecting exception internally;
-    tests in test_owned_cleanup_helpers execute that body with hostile moving
-    callbacks. Here the exact caller owner must remain live through the call
-    and retire immediately afterward on this real error CFG.
+
+def _cleanup_helper(ins, addresses):
+    for helper in CLEANUP_HELPERS:
+        if addresses.called(ins, helper):
+            return helper
+    return None
+
+
+def _assert_singleton_root_cleanup(block, addresses):
+    """Recognize the audited helpers without hiding caller-slot retirement.
+
+    One or two lexical operand roots are cleared by one helper call, which
+    saves/restores the selecting exception internally (two roots share one
+    exception scope); tests in test_owned_cleanup_helpers execute those
+    bodies with hostile moving callbacks. Here each exact caller owner must
+    remain live through the call and retire, in reverse registration order,
+    immediately afterward on this real error CFG.
     """
     calls = [ins for ins in block.instructions if ins.kind == "call"]
-    assert (len(calls) == 2
-            and addresses.called(calls[0], "py_cleanup_one_root_preserving_exception")
-            and not calls[0].data[3]
-            and addresses.called(calls[1], "pcc_gc_frame_leave_lifo")
-            and not calls[1].data[3]), (
+    helper = _cleanup_helper(calls[0], addresses) if calls else None
+    count = CLEANUP_HELPERS.get(helper, 0)
+    assert (count > 0 and len(calls) == count + 1 and not calls[0].data[3]
+            and all(addresses.called(leave, "pcc_gc_frame_leave_lifo") and not leave.data[3]
+                    for leave in calls[1:])), (
             "singleton cleanup needs helper before its sole caller retirement"
         )
     assert all(ins.kind == "call" or (ins.kind == "cast" and ins.data[0] == "bitcast")
                for ins in block.instructions), "singleton cleanup cannot overwrite its owner"
-    helper_args, leave_args = addresses.args(calls[0]), addresses.args(calls[1])
-    assert len(helper_args) == len(leave_args) == 1
-    owner = addresses.slot(helper_args[0])
-    assert owner == addresses.slot(leave_args[0]), "singleton helper must clear the retired owner"
-    addresses.require_owning(owner, allow_lifo=True)
-    assert any(addresses.called(ins, "pcc_gc_frame_enter_lifo")
-               and not ins.data[3]
-               and addresses.slot(addresses.args(ins)[1]) == owner for _, _, ins in addresses.rows), (
-        "singleton helper requires the caller's lexical registration"
-    )
+    helper_args = addresses.args(calls[0])
+    assert len(helper_args) == count
+    leave_args = [addresses.args(leave) for leave in calls[1:]]
+    assert all(len(arguments) == 1 for arguments in leave_args)
+    owners = tuple(addresses.slot(argument) for argument in helper_args)
+    retired = tuple(addresses.slot(arguments[0]) for arguments in reversed(leave_args))
+    assert owners == retired, "singleton helper must clear the retired owner"
+    assert len(set(owners)) == len(owners), "singleton helper must clear the retired owner"
+    for owner in owners:
+        addresses.require_owning(owner, allow_lifo=True)
+        assert any(addresses.called(ins, "pcc_gc_frame_enter_lifo")
+                   and not ins.data[3]
+                   and addresses.slot(addresses.args(ins)[1]) == owner
+                   for _, _, ins in addresses.rows), (
+            "singleton helper requires the caller's lexical registration"
+        )
     assert block.terminator.kind == "br", "singleton cleanup must branch to its error target"
     assert block.terminator.data[0] != block.name, "singleton cleanup cannot loop before its error target"
-    return owner
+    return owners
 
 
 def _assert_spawn_contract(text, mutate_cleanup=None):
@@ -82,7 +103,7 @@ def _assert_spawn_contract(text, mutate_cleanup=None):
                 for index, ins in enumerate(block.instructions)]
     addresses = RootSlotContract(blocks, module.globals_)
     helper_clears = {block.name: _assert_singleton_root_cleanup(block, addresses)
-                     for block in blocks if any(addresses.called(ins, "py_cleanup_one_root_preserving_exception")
+                     for block in blocks if any(_cleanup_helper(ins, addresses) is not None
                                                 for ins in block.instructions)}
     # Local helper-before-leave shape plus the complete frame-state proof
     # establishes that its caller owner is live throughout the helper call.
@@ -132,7 +153,7 @@ def _assert_spawn_contract(text, mutate_cleanup=None):
                 cleared.extend(slot(args(row)[0]) for row in error.instructions
                                if called(row, "pcc_gc_store_root") and args(row)[1] == "null")
                 if error.name in helper_clears:
-                    cleared.append(helper_clears[error.name])
+                    cleared.extend(helper_clears[error.name])
                 term = error.terminator
                 if term.kind == "br":
                     error = by_name[term.data[0]]
@@ -177,7 +198,11 @@ def test_spawn_publishes_all_owners_before_cleanup(generator, direct, sink, scop
 def test_spawn_allocation_errors_keep_cleanup_and_strict_stale_rejection():
     from pcc.frontends.python.codegen.errors import L1CodegenError
     text = _assert_spawn_contract(_emit(_spawn_source()))
-    assert "@py_tls_exc_swap_slot(" in text
+    # Cleanup preserves the exception that selected the error edge: inline
+    # through the TLS swap, or inside an audited helper (executed with
+    # hostile callbacks by test_owned_cleanup_helpers).
+    assert ("@py_tls_exc_swap_slot(" in text
+            or any("@" + helper + "(" in text for helper in CLEANUP_HELPERS))
     with pytest.raises(L1CodegenError, match="lacks an immediate owned-result handoff"):
         _emit("def probe():\n    return slot_stale_probe()\n")
 
@@ -207,9 +232,11 @@ def _mutate_singleton_spawn_cleanup(blocks, mutation, applied):
     # the unmodified positive, not an invalid/unbound pointer spelling.
     other = next(value for _, value in publications if addresses.slot(value) != root)
     target, index, helper = next((block, index, ins) for block, index, ins in addresses.rows
-                                if addresses.called(ins, "py_cleanup_one_root_preserving_exception")
-                                and addresses.slot(addresses.args(ins)[0]) == root)
+                                if _cleanup_helper(ins, addresses) is not None
+                                and root in [addresses.slot(value)
+                                             for value in addresses.args(ins)])
     instructions = target.instructions
+    helper_slots = [addresses.slot(value) for value in addresses.args(helper)]
 
     def with_args(ins, arguments):
         return SimpleNamespace(kind=ins.kind, data=ins.data[:4] + (arguments,) + ins.data[5:])
@@ -218,7 +245,10 @@ def _mutate_singleton_spawn_cleanup(blocks, mutation, applied):
         instructions.pop(index)
     elif mutation in ("wrong-valid-owner", "null-owner"):
         value = other if mutation == "wrong-valid-owner" else "null"
-        instructions[index] = with_args(helper, ((helper.data[4][0][0], value),))
+        arguments = list(helper.data[4])
+        position = helper_slots.index(root)
+        arguments[position] = (arguments[position][0], value)
+        instructions[index] = with_args(helper, tuple(arguments))
     elif mutation in ("missing-retirement", "retire-before-helper"):
         leave_index = next(i for i, ins in enumerate(instructions)
                            if addresses.called(ins, "pcc_gc_frame_leave_lifo"))
@@ -226,7 +256,9 @@ def _mutate_singleton_spawn_cleanup(blocks, mutation, applied):
         if mutation == "retire-before-helper":
             # Reuse the already-defined helper address to preserve valid SSA
             # while moving retirement ahead of the potentially reentrant drop.
-            instructions.insert(index, with_args(leave, helper.data[4]))
+            retired = addresses.slot(addresses.args(leave)[0])
+            argument = helper.data[4][helper_slots.index(retired)]
+            instructions.insert(index, with_args(leave, (argument,)))
     else:
         assert mutation == "bypass-cleanup"
         predecessor = next(block for block in copied if block.terminator.kind == "br"
@@ -258,8 +290,9 @@ def test_spawn_singleton_cleanup_rejects_wrong_owner_or_retirement(
 
 @pytest.mark.parametrize("runtime, diagnostic", [
     ("py_cleanup_one_root_preserving_exception", "singleton cleanup needs helper before"),
-    ("pcc_gc_frame_enter_lifo", "singleton helper requires the caller's lexical registration"),
-    ("pcc_gc_frame_leave_lifo", "singleton cleanup needs helper before"),
+    ("py_cleanup_two_roots_preserving_exception", "singleton cleanup needs helper before"),
+    ("pcc_gc_frame_enter_lifo_mapped", "singleton helper requires the caller's lexical registration"),
+    ("pcc_gc_frame_leave_lifo_mapped", "singleton cleanup needs helper before"),
 ])
 def test_spawn_singleton_cleanup_rejects_same_name_indirect_calls(
     singleton_spawn_ir, runtime, diagnostic,

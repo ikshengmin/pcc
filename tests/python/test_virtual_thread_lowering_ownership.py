@@ -166,8 +166,37 @@ def _callback_lifetime_program(failing_argument=False):
     return program
 
 
+# A status-failure edge first calls the module's private reporter, which
+# raises the selecting exception only when none is pending. Its body may only
+# make these calls: no root, lease, frame or saved exception owner is touched.
+_STATUS_REPORTER_CALLS = frozenset((
+    "py_err_occurred",
+    "py_exc_new",
+    "py_raise",
+    "py_current_exception",
+    "py_exc_append_frame_source",
+))
+
+
+def _status_reporters(module):
+    """Names of the verified slot-status reporters defined in ``module``."""
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+
+    reporters = set()
+    for fn in module.functions:
+        if not fn.name.lstrip("_").startswith("pcc_slot_call_status_report"):
+            continue
+        blocks = get_indexed_function_kernel(fn).materialize_legacy_blocks(fn)
+        calls = [ins for block in blocks for ins in block.instructions if ins.kind == "call"]
+        assert calls and all(not ins.data[3] and ins.data[2] in _STATUS_REPORTER_CALLS
+                             for ins in calls), "unmodeled slot-status reporter body"
+        reporters.add(fn.name)
+    return reporters
+
+
 def _assert_callback_exception_owner_path(
     blocks, start, expected_roots, expected_leases, expected_target, one_slot_maps,
+    reporters=frozenset(),
 ):
     """Follow the real cleanup CFG while tracking the selecting TLS owner."""
     by_name = {block.name: block for block in blocks}
@@ -201,8 +230,18 @@ def _assert_callback_exception_owner_path(
                     "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo",
                     "py_tls_exc_swap_slot", "py_clear_exception", "py_err_occurred",
                     "pcc_gc_foreign_lease_release", "pcc_gc_store_root",
-                ), "unmodeled runtime call on protected cleanup path"
-            if ins.kind == "store" and slot(ins.data[3]) in swap_slots:
+                ) or (ins.data[2] in reporters and not ins.data[3]), (
+                    "unmodeled runtime call on protected cleanup path"
+                )
+            if ins.kind == "call" and ins.data[2] in reporters:
+                # It establishes the selecting exception, so it must come
+                # before anything saves, disposes or replaces it.
+                assert (tls is incoming and not saved and not registered
+                        and not drops and not releases), (
+                    "status report must precede every cleanup step"
+                )
+                trace.append((block.name, "report-selecting-exception", "TLS"))
+            elif ins.kind == "store" and slot(ins.data[3]) in swap_slots:
                 owner = slot(ins.data[3])
                 assert saved.get(owner) is not incoming, "direct store destroys the selecting exception owner"
                 assert ins.data[1] == "null"
@@ -345,8 +384,10 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
         and slot(following.data[3]) == args_slot for _, _, following in rows))
     list_slot = slot(loads[args(args_tuple)[0]])
     dispatch = by_name["gen.dispatch"]
+    # A resume moves each saved owner out of the frame (take); the copying
+    # read is the older spelling of the same restore.
     restore_calls = {ins.data[0]: args(ins)[1] for ins in dispatch.instructions
-                     if called(ins, "py_gen_frame_get")}
+                     if called(ins, "py_gen_frame_take") or called(ins, "py_gen_frame_get")}
     restored = {slot(ins.data[3]): restore_calls[ins.data[1]]
                 for ins in dispatch.instructions
                 if ins.kind == "store" and ins.data[1] in restore_calls}
@@ -430,12 +471,15 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
     assert partial
     if mutate_cleanup is not None:
         blocks = mutate_cleanup(blocks, cleanup_start, roots)
+    reporters = _status_reporters(module)
     traces = [_assert_callback_exception_owner_path(
         blocks, cleanup_start, tuple(reversed(roots)), (args_slot, callable_slot), expected_target, one_slot_maps,
+        reporters,
     )]
     for candidate in partial:
         traces.append(_assert_callback_exception_owner_path(
             blocks, candidate.name, (list_slot, args_slot, callable_slot), (), expected_target, one_slot_maps,
+            reporters,
         ))
     return traces
 
@@ -545,6 +589,21 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
     with pytest.raises(AssertionError, match=diagnostic):
         _assert_callback_slot_contract(text, mutate_cleanup=mutate)
     assert applied == [mutation], "the negative case must reach the ownership validator"
+
+
+def test_callback_exception_owner_contract_rejects_unmodeled_status_reporter():
+    from tests.python.test_slot_call_operand_roots import _emit
+
+    text = _emit(_callback_lifetime_program())
+    header = next(line for line in text.splitlines(keepends=True)
+                  if line.startswith("define internal void @pcc_slot_call_status_report"))
+    body_start = text.index(header) + len(header)
+    entry = text.index("entry:\n", body_start) + len("entry:\n")
+    # Clearing TLS would discard a pending selecting exception.
+    mutated = text[:entry] + "  call void () @py_clear_exception()\n" + text[entry:]
+    _assert_callback_slot_contract(text)
+    with pytest.raises(AssertionError, match="unmodeled slot-status reporter body"):
+        _assert_callback_slot_contract(mutated)
 
 
 def test_callback_exception_owner_contract_rejects_zero_frame_map():

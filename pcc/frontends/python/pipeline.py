@@ -609,6 +609,14 @@ _closed_world_is_identity_decorator = _pipeline_closed_world._closed_world_is_id
 
 _build_context_owner = _pipeline_context
 build_closed_world_context = _build_context_owner.build_closed_world_context
+
+# The optimized metadata route belongs only to this ordinary producer and the
+# unchanged callbacks between its owned AST construction and metadata reads.
+_OWNED_EXPORT_BUILD_CONTEXT = build_closed_world_context
+_OWNED_EXPORT_WRITE_AST = _write_py_ast_wire
+_OWNED_EXPORT_REEXPORT_EDGES = _closed_world_reexport_edges
+_OWNED_EXPORT_DEPENDENCIES = _closed_world_module_dependencies
+_OWNED_EXPORT_MARK_OBJECTS = _mark_closed_world_function_object_exports
 _annotate_closed_world_vthread_effects = (
     _build_context_owner.annotate_closed_world_vthread_effects
 )
@@ -1209,6 +1217,7 @@ def run_self_backend_indexed_emit_worker(
                     pass
             _emit_indexed_module_file(
                 sidecar_path, output_path, artifact_kind,
+                optimize=True,
                 phase_timing=phase_timing, handoff_request=handoff_request,
             )
             publish_handoff_result(handoff_request)
@@ -1226,7 +1235,9 @@ def run_self_backend_indexed_emit_worker(
                 except Exception:
                     pass
         else:
-            _emit_indexed_module_file(sidecar_path, output_path, artifact_kind)
+            _emit_indexed_module_file(
+                sidecar_path, output_path, artifact_kind, optimize=True,
+            )
         complete = True
         return 0
     except Exception as exc:
@@ -3099,7 +3110,24 @@ def _shell_quote_arg(text: str) -> str:
     return _pipeline_frontend_workers.shell_quote_arg(text)
 
 
+_OWNED_EXPORT_WORKER_TIMING = _python_frontend_worker_timing_enabled
+
+
 def _run_python_multi_export_worker(manifest) -> int:
+    owned_metadata = None
+    try:
+        ordinary_callbacks = (
+            build_closed_world_context is _OWNED_EXPORT_BUILD_CONTEXT
+            and _python_frontend_worker_timing_enabled is _OWNED_EXPORT_WORKER_TIMING
+            and _write_py_ast_wire is _OWNED_EXPORT_WRITE_AST
+            and _closed_world_reexport_edges is _OWNED_EXPORT_REEXPORT_EDGES
+            and _closed_world_module_dependencies is _OWNED_EXPORT_DEPENDENCIES
+            and _mark_closed_world_function_object_exports is _OWNED_EXPORT_MARK_OBJECTS
+        )
+    except NameError:
+        ordinary_callbacks = False
+    if ordinary_callbacks:
+        owned_metadata = _pipeline_closed_world._closed_world_owned_export_metadata
     return _pipeline_frontend_worker_execution.run_export_worker(
         manifest,
         worker_timing_enabled=_python_frontend_worker_timing_enabled,
@@ -3110,6 +3138,7 @@ def _run_python_multi_export_worker(manifest) -> int:
         mark_function_object_exports=_mark_closed_world_function_object_exports,
         write_native_exports_wire=_write_native_exports_wire,
         write_reexport_edges_wire=_write_reexport_edges_wire,
+        owned_export_metadata=owned_metadata,
     )
 
 
@@ -3889,7 +3918,11 @@ def compile_python_multi(
             )
             try:
                 if (
-                    sys.platform.startswith("linux")
+                    (
+                        sys.platform.startswith("linux")
+                        or sys.platform == "win32"
+                        or sys.platform == "darwin"
+                    )
                     and _python_frontend_worker_timing_enabled()
                     and not str(
                         os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
@@ -4404,11 +4437,7 @@ def compile_python_multi(
         # output is still valid LLVM IR (each module's header lines
         # are duplicated but ``llvm-as`` tolerates redundant
         # target-triple / datalayout directives).
-        combined = str(
-            "\n\n".join(
-                f"; ---- module: {name} ----\n{text}" for name, text in module_ir_texts
-            )
-        )
+        combined = _pipeline_targets.combine_module_ir_texts(module_ir_texts)
         out_path = str(out_path)
         if verbose:
             _log(
