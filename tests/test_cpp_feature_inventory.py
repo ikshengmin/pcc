@@ -10,8 +10,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,8 +25,7 @@ inventory = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(inventory)
 
 
-@unittest.skipUnless(os.environ.get("PCC_CPP_INVENTORY_LIBCLANG"),
-                     "set PCC_CPP_INVENTORY_LIBCLANG to an existing libclang")
+@pytest.mark.pcc_gate(env="PCC_CPP_INVENTORY_LIBCLANG")
 class CppFeatureInventoryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -287,6 +289,64 @@ int example() {
         self.assertFalse(result["is_owned_pcc1_execution"])
         self.assertEqual(result["analysis_owner"], "development-reference-libclang")
         self.assertEqual(result["schema"], "pcc.developer-cpp-feature-inventory.v1")
+
+
+def _inventory_collection_items():
+    markers = CppFeatureInventoryTests.pytestmark
+    references = [
+        SimpleNamespace(
+            nodeid=f"tests/test_cpp_feature_inventory.py::CppFeatureInventoryTests::{name}",
+            iter_markers=lambda kind: iter(mark for mark in markers if mark.name == kind),
+        )
+        for name in unittest.TestLoader().getTestCaseNames(CppFeatureInventoryTests)
+    ]
+    independent = SimpleNamespace(
+        nodeid="tests/test_cpp_feature_inventory.py::test_inventory_gate_keeps_independent_tests",
+        iter_markers=lambda kind: iter(()),
+    )
+    return references, independent
+
+
+@pytest.mark.parametrize("configured", [None, "", " \t\n", "explicit-library"])
+def test_inventory_gate_keeps_independent_tests(monkeypatch, configured):
+    from tests.conftest import pytest_collection_modifyitems
+
+    if configured is None:
+        monkeypatch.delenv("PCC_CPP_INVENTORY_LIBCLANG", raising=False)
+    else:
+        monkeypatch.setenv("PCC_CPP_INVENTORY_LIBCLANG", configured)
+    references, independent = _inventory_collection_items()
+    items = [*references, independent]
+    deselected = []
+    config = SimpleNamespace(
+        hook=SimpleNamespace(pytest_deselected=lambda *, items: deselected.extend(items))
+    )
+    pytest_collection_modifyitems(config, items)
+    available = bool(configured and configured.strip())
+    assert references
+    assert items == ([*references, independent] if available else [independent])
+    assert deselected == ([] if available else references)
+    assert not getattr(CppFeatureInventoryTests, "__unittest_skip__", False)
+
+
+def test_inventory_explicit_bad_library_is_selected_and_fails(tmp_path, monkeypatch):
+    from tests.conftest import _pcc_gate_blocked_reason
+
+    # A configured-but-broken reference is a failed run, not an unavailable
+    # prerequisite that collection may silently remove.
+    library = tmp_path / "not-a-libclang.so"
+    library.write_bytes(b"not a shared library\n")
+    monkeypatch.setenv("PCC_CPP_INVENTORY_LIBCLANG", str(library))
+    references, _independent = _inventory_collection_items()
+    assert all(_pcc_gate_blocked_reason(item) is None for item in references)
+    case = CppFeatureInventoryTests(
+        "test_real_cpp17_nodes_and_declaration_only_operator_count"
+    )
+    try:
+        with pytest.raises(OSError):
+            case.setUp()
+    finally:
+        case.temporary.cleanup()
 
 
 if __name__ == "__main__":

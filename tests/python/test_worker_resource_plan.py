@@ -390,18 +390,37 @@ def wait_for(predicate):
 def exists(name):
     return (root / name).exists()
 
-def seen(event, number):
+def publish(name, value):
+    marker = root / name
+    temporary = root / (name + "." + str(os.getpid()) + ".tmp")
+    temporary.write_text(value)
+    temporary.replace(marker)
+
+def rows():
     trace = root / "progressive.tsv"
-    return trace.exists() and any(
-        line.split("\\t")[:2] == [event, str(number)]
-        for line in trace.read_text().splitlines()
-    )
+    return [line.split("\\t") for line in trace.read_text().splitlines(keepends=True)
+            if line.endswith("\\n")] if trace.exists() else []
+
+def seen(event, number, pid=None):
+    return any(row[:2] == [event, str(number)]
+               and (pid is None or row[2] == str(pid)) for row in rows())
+
+def draining():
+    history = rows()
+    for position, row in enumerate(history):
+        if row[:2] == ["cancel", "1"]:
+            return any(item[0] == "backoff" for item in history[position + 1:])
+    return False
+
+def acknowledged(phase):
+    marker = root / ("observed." + str(os.getpid()) + "." + phase)
+    return marker.exists() and marker.read_text() == os.environ[RESOURCE_TOKEN_ENV]
 
 count = root / ("attempts" + str(index))
 attempt = int(count.read_text()) + 1 if count.exists() else 1
 count.write_text(str(attempt))
 record = str(os.getpid()) + "\\t" + os.environ[RESOURCE_TOKEN_ENV]
-(root / ("started." + str(index) + "." + str(attempt))).write_text(record)
+publish("started." + str(index) + "." + str(attempt), record)
 
 def overlap(name, peers):
     records = [root / ("started." + str(peer) + ".1") for peer in peers]
@@ -409,7 +428,7 @@ def overlap(name, peers):
     pids = [int(path.read_text().split("\\t")[0]) for path in records]
     for pid in pids:
         os.kill(pid, 0)
-    (root / name).write_text(" ".join(str(pid) for pid in pids))
+    publish(name, " ".join(str(pid) for pid in pids))
 
 payloads = [bytearray(4 * 1024 ** 2)]
 if index == 0:
@@ -419,19 +438,23 @@ if index == 0:
     payloads.append(bytearray(growth))
     publish_worker_resource("leader-grown")
     wait_for(lambda: seen("cancel", 1))
-    time.sleep(0.15)
+    # Keep the leader alive until admission actually waits for it to drain.
+    # A fixed sleep can expire before the coordinator runs under xdist.
+    wait_for(lambda: draining() or seen("start", 2))
+    assert draining() and not seen("start", 2)
 elif index == 1 and attempt == 1:
     publish_worker_resource("first-phase")
-    (root / "first-phase").touch()
+    publish("first-phase", record)
     overlap("initial-overlap1", [0, 1])
     wait_for(lambda: False)
 elif index == 1:
     publish_worker_resource("retry-first-phase")
-    time.sleep(0.08)
+    wait_for(lambda: seen("start", index, os.getpid()))
+    wait_for(lambda: acknowledged("retry-first-phase"))
     payloads.append(bytearray(growth))
     publish_worker_resource("retry-second-phase")
-    (root / "second-phase").write_text(str(time.monotonic()))
-    time.sleep(0.2)
+    publish("second-phase", str(time.monotonic()))
+    wait_for(lambda: acknowledged("retry-second-phase"))
 else:
     # Old admission starts task 2 beside the draining leader, then admits
     # the retry beside task 2. Keep task 2's report until the leader retires
@@ -440,12 +463,10 @@ else:
     publish_worker_resource("tail-small")
     overlap("restored-overlap" + str(index), [2, 3])
     wait_for(lambda: exists("restored-overlap" + str(5 - index)))
-    time.sleep(0.05)
 
 publish_worker_resource("complete")
-(root / ("complete." + str(index) + "." + str(attempt))).write_text(
-    Path(os.environ[RESOURCE_REPORT_ENV]).read_text()
-)
+publish("complete." + str(index) + "." + str(attempt),
+        Path(os.environ[RESOURCE_REPORT_ENV]).read_text())
 """)
     owner = workers._coordinator_rss_bytes()
     startup_peak = max(owner, workers._worker_peak_rss_bytes())
@@ -463,6 +484,19 @@ publish_worker_resource("complete")
     reaped = set()
     original_retire = pool._retire_resource_worker
     original_killpg = os.killpg
+    original_read = policy.read_worker_resource
+
+    def acknowledge_report(path, pid, token=""):
+        report = original_read(path, pid, token)
+        if report is not None and report[0] in ("retry-first-phase", "retry-second-phase"):
+            # Observe the real reader result without substituting its RSS or
+            # changing admission. Each phase stays live until the scheduler
+            # has accepted this PID/token's report, not for an assumed delay.
+            marker = tmp_path / ("observed." + str(pid) + "." + report[0])
+            temporary = marker.with_suffix(".tmp")
+            temporary.write_text(token)
+            temporary.replace(marker)
+        return report
 
     def record_retire(pid):
         original_retire(pid)
@@ -474,6 +508,7 @@ publish_worker_resource("complete")
 
     monkeypatch.setattr(pool, "_retire_resource_worker", record_retire)
     monkeypatch.setattr(os, "killpg", reject_signal_after_reap)
+    monkeypatch.setattr(policy, "read_worker_resource", acknowledge_report)
     pool.run_resource_worker_processes(commands, tasks, 2, budget,
                                       observations=observations, trace_path=str(trace))
     rows = [line.split("\t") for line in trace.read_text().splitlines()]
@@ -483,6 +518,9 @@ publish_worker_resource("complete")
     assert len(retry_starts) == 2
     events = {(row[0], row[1]): row for row in rows if row[0] in ("start", "retire")}
     assert float(events["retire", "0"][6]) < float(retry_starts[1][6])
+    assert any(row[0] == "backoff" and
+               float(cancelled[0][6]) < float(row[6]) < float(events["retire", "0"][6])
+               for row in rows)
     assert int(retry_starts[1][3]) == int(retry_starts[1][4])
     assert float(events["retire", "1"][6]) < float(events["start", "2"][6])
     assert float(events["start", "3"][6]) < float(events["retire", "2"][6])
@@ -1040,6 +1078,16 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
     assert "uses: actions/upload-artifact@v6" in evidence
     paths = evidence.split("          path: |\n", 1)[1].splitlines()
     assert [path.strip() for path in paths if path.strip()] == [
+        "build/bootstrap-pytest-self*/profile/stage*.result.json",
+        "build/bootstrap-pytest-self*/profile/stage*.process.*/result.json",
+        # The existing five-GC Stage2/3 transport is finite text evidence,
+        # not permission to upload bootstrap binaries or entire directories.
+        *[
+            f"build/bootstrap-pytest-self{suffix}/profile/stage{stage}.process.{kind}"
+            for suffix in ("", "-gc1", "-gc2", "-gc3", "-gc4")
+            for stage in (2, 3)
+            for kind in ("stdout", "stderr", "samples.tsv")
+        ],
         "build/bootstrap/stage*.process.*/result.json",
         "build/bootstrap/stage*.process.*/samples.tsv",
         "build/bootstrap/stage*.process.*/target.stdout",
