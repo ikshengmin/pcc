@@ -97,6 +97,104 @@ int example() {
         self.assertEqual(result["ast_status"], "parsed", result["diagnostics"])
         self.assertEqual(result["features"], {})
 
+    def test_explicit_roots_include_project_and_generated_headers_not_external(self):
+        project, build, external = (self.root / name for name in ("project", "build", "project-extra"))
+        for directory in (project, build, external):
+            directory.mkdir()
+        header = project / "owned.hpp"
+        header.write_text('template<class T> struct Owned { ~Owned() {} };\n')
+        (build / "generated.hpp").write_text('template<class T> struct Generated {};\n')
+        outside = external / "external.hpp"
+        outside.write_text('template<class T> struct External {};\n')
+        (project / "linked.hpp").symlink_to(outside)
+        source = self.root / "input.cpp"
+        source.write_text('#include "project/owned.hpp"\n#include "build/generated.hpp"\n'
+                          '#include "project/linked.hpp"\nint value;\n')
+        result = self.clang.parse(source, ["-x", "c++", "-std=c++17"],
+                                  include_roots=[project, build])
+        self.assertEqual(result["ast_status"], "parsed", result["diagnostics"])
+        sites = result["feature_sites"]["class_template"]
+        self.assertEqual({site["spelling"] for site in sites}, {"Owned", "Generated"})
+        self.assertEqual({site["file"] for site in sites},
+                         {str(header), str(build / "generated.hpp")})
+        self.assertNotIn(str(outside), result["observed_files"])
+        self.assertEqual(result["observed_files"][str(header)],
+                         hashlib.sha256(header.read_bytes()).hexdigest())
+        self.assertEqual(result["feature_sites"]["destructor"][0]["file"], str(header))
+
+    def project_reports(self):
+        project = self.root / "project"
+        project.mkdir()
+        (project / "shared.hpp").write_text("".join(
+            f"template<class T> struct Shared{index} {{}};\n" for index in range(12)))
+        reports = []
+        for name in ("first", "second"):
+            source = self.root / f"{name}.cpp"
+            source.write_text('#include "project/shared.hpp"\n'
+                              f'namespace {name} {{ int value; }}\n')
+            reports.append(self.clang.parse(source, ["-x", "c++", "-std=c++17"],
+                                            include_roots=[project]))
+        return reports
+
+    def test_merge_uses_all_sites_not_five_location_samples_or_tu_node_sum(self):
+        reports = self.project_reports()
+        self.assertEqual(len(reports[0]["features"]["class_template"]["locations"]), 5)
+        self.assertEqual(len(reports[0]["feature_sites"]["class_template"]), 12)
+        merged = inventory.merge_reports(reports)
+        self.assertEqual(merged["ast_status"], "parsed")
+        self.assertEqual(merged["features"]["class_template"]["source_sites"], 12)
+        self.assertEqual(merged["features"]["class_template"]["files"], 1)
+        self.assertEqual(merged["features"]["namespace"]["source_sites"], 2)
+        self.assertFalse(merged["is_owned_pcc1_execution"])
+
+    def test_merge_rejects_changed_header_identity_and_main_only_reports(self):
+        reports = self.project_reports()
+        header = str(self.root / "project/shared.hpp")
+        reports[1]["observed_files"][header] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "source identity changed"):
+            inventory.merge_reports(reports)
+        with self.assertRaisesRegex(ValueError, "explicit include roots"):
+            inventory.merge_reports([self.parse("int value;")])
+
+    def test_merge_partial_and_unavailable_inputs_never_become_parsed(self):
+        reports = self.project_reports()
+        source = self.root / "missing.cpp"
+        source.write_text('#include "missing.hpp"\n#include "project/shared.hpp"\n')
+        partial = self.clang.parse(source, ["-x", "c++", "-std=c++17"],
+                                   include_roots=[self.root / "project"])
+        self.assertEqual(partial["ast_status"], "partial")
+        merged = inventory.merge_reports([*reports, partial])
+        self.assertEqual(merged["ast_status"], "partial")
+        self.assertEqual(merged["translation_unit_statuses"], {"parsed": 2, "partial": 1})
+        unavailable = dict(partial, ast_status="unavailable", feature_sites={})
+        self.assertEqual(inventory.merge_reports([*reports, unavailable])["ast_status"], "unavailable")
+
+    def test_cli_explicit_include_root_and_merge_without_loading_libclang(self):
+        project = self.root / "project"
+        project.mkdir()
+        (project / "header.hpp").write_text('template<class T> struct Header {};\n')
+        source, output = self.root / "input.cpp", self.root / "report.json"
+        source.write_text('#include "project/header.hpp"\n')
+        process = subprocess.run(
+            [sys.executable, str(SCRIPT), "--libclang",
+             os.environ["PCC_CPP_INVENTORY_LIBCLANG"], "--source", str(source),
+             "--include-root", str(project), "--output", str(output),
+             "--", "-x", "c++", "-std=c++17"],
+            check=False, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        merged_output = self.root / "merged.json"
+        process = subprocess.run(
+            [sys.executable, str(SCRIPT), "--merge", str(output), str(output),
+             "--output", str(merged_output)],
+            check=False, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        merged = json.loads(merged_output.read_text())
+        self.assertEqual(merged["features"]["class_template"]["source_sites"], 1)
+        self.assertEqual(merged["report_inputs"][0]["sha256"],
+                         hashlib.sha256(output.read_bytes()).hexdigest())
+
     def test_callback_failure_breaks_scan_and_propagates_after_native_visit(self):
         failure = RuntimeError("injected cursor observer failure")
         lib = self.clang.lib

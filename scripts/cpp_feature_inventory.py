@@ -117,8 +117,11 @@ class Clang:
         finally:
             self.lib.clang_disposeString(value)
 
-    def parse(self, source: Path, arguments: list[str]):
+    def parse(self, source: Path, arguments: list[str], *, include_roots=()):
         source = source.resolve()
+        roots = tuple(Path(root).resolve(strict=True) for root in include_roots)
+        if any(not root.is_dir() for root in roots):
+            raise ValueError("include roots must be existing directories")
         source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
         encoded = [arg.encode() for arg in arguments]
         argv = (C.c_char_p * len(encoded))(*encoded)
@@ -138,6 +141,12 @@ class Clang:
                       "feature_scope": "active main-file AST nodes; included headers excluded",
                       "parse_error": error, "diagnostics": [],
                       "ast_status": "unavailable", "features": {}, "cursor_kinds": {}}
+            observed_files = {str(source): source_digest}
+            if roots:
+                result.update(
+                    feature_scope="active AST nodes in main file and explicit include roots",
+                    include_roots=[str(root) for root in roots],
+                    observed_files=observed_files, feature_sites={})
             # A non-null output does not override a failed parse API result.
             # Do not inspect an AST whose construction was reported unsuccessful.
             if error != 0 or not unit:
@@ -155,6 +164,7 @@ class Clang:
             result["ast_status"] = "partial" if has_errors else "parsed"
             kinds = collections.Counter()
             features = {}
+            feature_sites = {}
 
             def tokens(cursor):
                 data, size = C.POINTER(CXToken)(), C.c_uint()
@@ -173,8 +183,14 @@ class Clang:
                     self.lib.clang_getCursorLocation(cursor), C.byref(file),
                     C.byref(line), C.byref(column), C.byref(offset))
                 filename = self.string(self.lib.clang_getFileName(file)) if file else ""
-                if filename != str(source):
-                    return 1  # Skip included-header subtrees, not project-owned source.
+                if not filename:
+                    return 1
+                path = Path(filename).resolve()
+                if path != source and not any(path.is_relative_to(root) for root in roots):
+                    return 1  # System/external subtrees are outside the explicit scope.
+                filename = str(path)
+                if roots and filename not in observed_files:
+                    observed_files[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
                 kind = self.string(self.lib.clang_getCursorKindSpelling(cursor.kind))
                 kinds[kind] += 1
                 observed = []
@@ -200,10 +216,15 @@ class Clang:
                 for feature in observed:
                     row = features.setdefault(feature, {"nodes": 0, "locations": []})
                     row["nodes"] += 1
+                    location = {"line": line.value, "column": column.value,
+                                "spelling": spelling}
+                    if roots:
+                        location["file"] = filename
+                        site = dict(location, kind=kind)
+                        key = (filename, line.value, column.value, kind, spelling)
+                        feature_sites.setdefault(feature, {})[key] = site
                     if len(row["locations"]) < 5:
-                        row["locations"].append({"line": line.value,
-                                                "column": column.value,
-                                                "spelling": spelling})
+                        row["locations"].append(location)
                 return 2
 
             visitor_error = None
@@ -226,8 +247,13 @@ class Clang:
                 raise RuntimeError("AST feature collection failed") from visitor_error
             result["cursor_kinds"] = dict(sorted(kinds.items()))
             result["features"] = dict(sorted(features.items()))
-            if hashlib.sha256(source.read_bytes()).hexdigest() != source_digest:
-                raise RuntimeError("source changed during AST inventory")
+            if roots:
+                result["feature_sites"] = {
+                    feature: [sites[key] for key in sorted(sites)]
+                    for feature, sites in sorted(feature_sites.items())}
+            for filename, digest in observed_files.items():
+                if hashlib.sha256(Path(filename).read_bytes()).hexdigest() != digest:
+                    raise RuntimeError("source changed during AST inventory: " + filename)
             return result
         finally:
             if unit:
@@ -235,16 +261,71 @@ class Clang:
             self.lib.clang_disposeIndex(index)
 
 
+def merge_reports(reports):
+    """Union source sites, not AST-node counts or template instantiations."""
+    if not reports:
+        raise ValueError("at least one report is required")
+    files, sites, units = {}, {}, []
+    for report in reports:
+        if not report.get("include_roots"):
+            raise ValueError("merging requires reports made with explicit include roots")
+        if report["ast_status"] not in {"parsed", "partial", "unavailable"}:
+            raise ValueError("unknown AST status")
+        units.append({key: report[key] for key in (
+            "source", "source_sha256", "arguments", "include_roots", "ast_status")})
+        for filename, digest in report["observed_files"].items():
+            if filename in files and files[filename] != digest:
+                raise ValueError("source identity changed across reports: " + filename)
+            files[filename] = digest
+        for feature, locations in report["feature_sites"].items():
+            for site in locations:
+                if site["file"] not in report["observed_files"]:
+                    raise ValueError("feature site has no source identity")
+                key = tuple(site[name] for name in ("file", "line", "column", "kind", "spelling"))
+                sites.setdefault(feature, {})[key] = site
+    statuses = collections.Counter(unit["ast_status"] for unit in units)
+    status = "unavailable" if statuses["unavailable"] else "partial" if statuses["partial"] else "parsed"
+    return {
+        "schema": "pcc.developer-cpp-feature-inventory.merge.v1",
+        "analysis_owner": "development-reference-libclang",
+        "is_owned_pcc1_execution": False, "ast_status": status,
+        "translation_unit_statuses": dict(statuses), "translation_units": units,
+        "feature_scope": "union of observed source sites across translation units; not semantic coverage",
+        "observed_files": dict(sorted(files.items())),
+        "features": {feature: {
+            "source_sites": len(locations),
+            "files": len({site["file"] for site in locations.values()}),
+            "locations": [locations[key] for key in sorted(locations)]}
+            for feature, locations in sorted(sites.items())},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--libclang", required=True)
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--libclang")
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--include-root", action="append", type=Path, default=[])
+    parser.add_argument("--merge", nargs="+", type=Path, metavar="REPORT")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.merge:
+        if args.source or args.libclang or args.include_root or args.arguments:
+            parser.error("--merge cannot be combined with parse arguments")
+        inputs = [path.read_bytes() for path in args.merge]
+        result = merge_reports([json.loads(data) for data in inputs])
+        result["report_inputs"] = [
+            {"path": str(path.resolve()), "sha256": hashlib.sha256(data).hexdigest()}
+            for path, data in zip(args.merge, inputs)]
+        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        print(json.dumps({"ast_status": result["ast_status"],
+                          "translation_unit_statuses": result["translation_unit_statuses"]}))
+        return 0 if result["ast_status"] == "parsed" else 2
+    if not args.source or not args.libclang:
+        parser.error("parsing requires --source and --libclang")
     clang = Clang(args.libclang)
     flags = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
-    result = clang.parse(args.source, flags)
+    result = clang.parse(args.source, flags, include_roots=args.include_root)
     result["analysis_owner"] = "development-reference-libclang"
     result["version"] = clang.string(clang.lib.clang_getClangVersion())
     result["is_owned_pcc1_execution"] = False
