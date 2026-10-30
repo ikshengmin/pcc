@@ -1001,6 +1001,7 @@ class NativeTextModulesLoweringMixin:
             "re." + attr.name,
             expr.args,
             expr.kwargs,
+            expr,
         )
 
     def _native_re_ordered_arguments(self, args, kwargs, names):
@@ -1020,14 +1021,79 @@ class NativeTextModulesLoweringMixin:
             ordered[2] = self._native_re_flags_operand_expr(ordered[2])
         return tuple(ordered)
 
+    def _emit_native_re_fullmatch_call(self, expr: Call) -> Optional[ir.Value]:
+        # Bind names separately from evaluation order: keyword order must not
+        # move callbacks or expose earlier NEW operands across later calls.
+        names = ("pattern", "string", "flags")
+        if len(expr.args) > 3:
+            return None
+        arguments = dict(zip(names, expr.args))
+        for name, value in expr.kwargs:
+            if name not in names or name in arguments:
+                return None
+            arguments[name] = value
+        if "pattern" not in arguments or "string" not in arguments:
+            return None
+        flags_expr = arguments.get("flags")
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("re.fullmatch.result")
+            roots.append(output)
+        operands = []
+        values = {}
+        order = expr.operand_order
+        if not order:
+            order = tuple(("arg", i) for i in range(len(expr.args))) + tuple(
+                ("kw", i) for i in range(len(expr.kwargs))
+            )
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            for kind, index in order:
+                argument = expr.args[index] if kind == "arg" else expr.kwargs[index][1]
+                operand = self._native_re_flags_operand_expr(argument) if argument is flags_expr else argument
+                root = self._emit_slot_call_operand(operand, "re.fullmatch.argument")
+                operands.append(root)
+                roots.append(root)
+                values[id(argument)] = root
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            helper = "py_re_fullmatch"
+            suffix = ()
+            if flags_expr is not None:
+                flags = self._slot_call_runtime_call(
+                    "py_index_i64_checked", (values[id(flags_expr)],), span=flags_expr.span,
+                )
+                helper = "py_re_fullmatch_flags"
+                suffix = (flags,)
+            self._slot_call_runtime_call(
+                helper, (values[id(arguments["pattern"])], values[id(arguments["string"])]),
+                result_slot=output, suffix_args=suffix, span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(operands))
+            if sink is None:
+                return self._take_slot_call_root(output)
+            return self.builder.load(output, name=self._fresh("re.fullmatch.current"))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+
     def _emit_native_re_value_call(
         self,
         kind: str,
         args: tuple[Expr, ...],
         kwargs: tuple[tuple[str, Expr], ...],
+        expr: Optional[Call] = None,
     ) -> Optional[ir.Value]:
         if kind not in ("re.match", "re.search", "re.fullmatch"):
             return None
+        if kind == "re.fullmatch":
+            return self._emit_native_re_fullmatch_call(expr) if expr is not None else None
         args = self._native_re_ordered_arguments(args, kwargs, ("pattern", "string", "flags"))
         if args is None or len(args) < 2 or len(args) > 3:
             return None

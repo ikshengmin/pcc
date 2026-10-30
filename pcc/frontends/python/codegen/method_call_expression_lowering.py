@@ -325,7 +325,7 @@ class MethodCallExpressionLoweringMixin:
         span,
         call_expr: Optional[Call] = None,
     ) -> ir.Value:
-        if call_expr is not None and self._slot_call_result_sink(call_expr) is not None:
+        if call_expr is not None:
             # Preserve the original Call identity through lookup and invocation.
             # The shared object-call ABI roots the callable before its arguments
             # and publishes the NEW result before retiring any of those owners.
@@ -511,10 +511,14 @@ class MethodCallExpressionLoweringMixin:
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
-        output = self._slot_call_result_sink(expr)
+        sink = self._slot_call_result_sink(expr)
+        output = sink
         roots = []
+        if output is None:
+            output = self._new_slot_call_root(label + ".result")
+            roots.append(output)
         try:
-            self._try_err_block = self._slot_call_cleanup_block((), target)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             receiver = self._emit_slot_call_operand(attr.obj, label + ".receiver")
             roots.append(receiver)
@@ -531,6 +535,10 @@ class MethodCallExpressionLoweringMixin:
                 "py_obj_load_method", (receiver,), result_slot=method,
                 suffix_args=(self._attr_name_ptr(attr.name), loaded_self),
                 span=expr.span,
+            )
+            self._emit_attribute_error_if_null(
+                self.builder.load(method, name=self._fresh(label + ".checked.method")),
+                attr.name, attr.span,
             )
             has_self = self.builder.zext(
                 self.builder.icmp_unsigned(
@@ -550,10 +558,12 @@ class MethodCallExpressionLoweringMixin:
                 "py_obj_call_loaded_method", (method, receiver, args),
                 result_slot=output, suffix_args=(has_self,), span=expr.span,
             )
-            self._release_slot_call_roots(tuple(roots))
+            self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
+        if sink is None:
+            return self._take_slot_call_root(output)
         return self.builder.load(output, name=self._fresh(label + ".output"))
 
     def _resumable_may_park_method(self, owner, method_name: str) -> bool:

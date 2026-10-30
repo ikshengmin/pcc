@@ -43,4 +43,5 @@ def test_legacy_singleton_removed_without_removing_pattern_instance_dependency()
     assert 'define_global_ptr_null("pcc_re_match_class")' not in source
     assert 'instance = pcc_re_match_instance_guarded()' in source
     assert 'py_instance_new = extern(' in source
-    assert 'define_global_ptr_null("pcc_re_pattern_class")' in source
+    assert 'define_global_ptr_null("pcc_re_pattern_class")' not in source
+    assert 'define_global_ptr_null("pcc_re_pattern_class")' in (ROOT/"py_re_match_class.py").read_text()

@@ -12,9 +12,24 @@ def _normalizer():
     tree = ast.parse(source.read_text())
     definitions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                    and node.name in ("_normalize_verbose_pattern", "_normalize_compile_pattern")]
-    namespace = {}
+    for node in definitions:
+        node.decorator_list = []
+    output = {}
+    namespace = {"c_ptr": object, "pcc_gc_retain": lambda value: value,
+                 "pcc_re_publish_copy_lease": lambda value, slot: slot.update(value=value) or 1,
+                 "PYOBJECTHEADER_FLAGS_OFFSET": 12, "PY_FLAG_GC_PINNED": 64,
+                 "load_i32": lambda value, offset: 0, "atomic_rmw_i32": lambda *args: 0, "pcc_gc_pin": lambda value: None,
+                 "pcc_gc_unpin": lambda value: None,
+                 "pcc_gc_store_root": lambda slot, value: slot.update(value=value),
+                 "pcc_gc_foreign_lease_acquire": lambda slot: 1,
+                 "py_err_occurred": lambda: 0,
+                 "store_i64": lambda slot, offset, value: slot.update(token=value),
+                 "load_ptr": lambda slot, offset: slot["value"]}
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(source), "exec"), namespace)
-    return namespace["_normalize_compile_pattern"]
+    def run(pattern, flags):
+        namespace["_normalize_compile_pattern"](pattern, flags, output, {}, {}, {}, {})
+        return output["value"]
+    return run
 
 
 @pytest.mark.parametrize("pattern, flags, texts", [
@@ -79,3 +94,57 @@ def test_keyword_and_dynamic_regex_compile_emit_owned_calls(tmp_path):
         assert "@py_re_compile_obj" in body.group(), name
         assert "@py_cpy_" not in body.group(), name
         assert "strict.nolib.stub" not in body.group(), name
+
+
+@pytest.mark.parametrize("initial_pin", [0, 64])
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("fail_lease", [0, 1, 2, 3])
+def test_normalizer_slot_handoff_preserves_prior_pin_and_failed_output_owner(initial_pin, verbose, fail_lease):
+    """Source handoff model only; the actual generated cleanup is checked in IR."""
+    source = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_re_engine_runtime.py"
+    nodes = [node for node in ast.parse(source.read_text()).body if isinstance(node, ast.FunctionDef)
+             and node.name in ("_normalize_verbose_pattern", "_normalize_compile_pattern")]
+    for node in nodes:
+        node.decorator_list = []
+    pins = {}
+    def flags(value, offset):
+        return pins.setdefault(id(value), initial_pin)
+    def pin(value):
+        pins[id(value)] = flags(value, 12) | 64
+    def unpin(value):
+        pins[id(value)] = flags(value, 12) & ~64
+    def restore(op, value, offset, mask, order):
+        assert (op, offset, mask, order) == ("or", 12, 64, "relaxed")
+        pins[id(value)] |= mask
+    lease_calls = []
+    def publish(value, slot):
+        pins.setdefault(id(value), initial_pin)
+        lease_calls.append(slot)
+        if len(lease_calls) == fail_lease:
+            return -1
+        slot["value"] = value
+        return 1
+    ns = dict(c_ptr=object, PYOBJECTHEADER_FLAGS_OFFSET=12, PY_FLAG_GC_PINNED=64,
+              pcc_gc_retain=lambda value: value, pcc_gc_pin=pin, pcc_gc_unpin=unpin,
+              load_i32=flags, atomic_rmw_i32=restore,
+              pcc_gc_store_root=lambda slot,value: slot.update(value=value),
+              pcc_re_publish_copy_lease=publish,
+              load_ptr=lambda slot,offset: slot["value"], py_err_occurred=lambda: 0,
+              store_i64=lambda slot,offset,value: slot.update(token=value))
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), ns)
+    output, scratch, token, projection, projection_token = {}, {}, {}, {}, {}
+    result = ns["_normalize_compile_pattern"]("(?i)a b" if verbose else "(?i)ab",
+                                                64 if verbose else 0, output, scratch, token, projection, projection_token)
+    assert result == (-1 if 0 < fail_lease <= (3 if verbose else 1) else 1)
+    assert pins and all(value == initial_pin for value in pins.values())
+    if verbose and fail_lease == 1:
+        assert not projection and not scratch and not output and not token
+    elif verbose and fail_lease == 2:
+        assert not scratch and not output and not token
+        assert projection_token["token"] == 1
+    elif fail_lease == (3 if verbose else 1):
+        assert not output
+    else:
+        assert output["value"] == ("ab", 2)
+        if verbose:
+            assert token["token"] == projection_token["token"] == 1

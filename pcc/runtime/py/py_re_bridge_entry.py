@@ -1,8 +1,8 @@
-"""Guarded raw regex entry; managed implementation is supplied separately.
+"""Guarded raw regex entries for slot-owned compile, fullmatch and callbacks.
 
-This entry is not dispatched by re yet. A managed body must write its final NEW
-result into the provided owning slot, preserve TLS errors, retire every
-other temporary/lease, pin the result and return its prior-pin token. Callers are registered PCC threads and
+Every managed body writes its final NEW
+result into the provided owning slot, preserves TLS errors, retires every
+other temporary/lease, pins the result and returns its prior-pin token. Callers are registered PCC threads and
 hold no graph/container/scheduler lock or inherited no-park region. No raw argument may cross an entry poll.
 """
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
@@ -33,6 +33,8 @@ pcc_re_engine_fullmatch_into = extern(
 
 pcc_re_match_method_into = extern("pcc_re_match_method_into", (c_ptr, c_ptr), c_int64)
 pcc_re_pattern_fullmatch_into = extern("pcc_re_pattern_fullmatch_into", (c_ptr, c_ptr), c_int64)
+pcc_re_pattern_install_into = extern("pcc_re_pattern_install_into", (c_ptr, c_ptr, c_int64), c_int64)
+pcc_re_compile_pattern_into = extern("pcc_re_compile_pattern_into", (c_ptr, c_ptr, c_int64), c_int64)
 pcc_re_match_instance_into = extern("pcc_re_match_instance_into", (c_ptr,), c_int64)
 
 define_global_i32("pcc_re_entry_borrowed_map", -2)
@@ -70,8 +72,12 @@ def _re_guarded(pattern: c_ptr, text: c_ptr, flags: int, kind: int) -> c_ptr:
         prior = pcc_re_match_method_into(borrowed, result)
     elif kind == 2:
         prior = pcc_re_match_instance_into(result)
-    else:
+    elif kind == 3:
         prior = pcc_re_pattern_fullmatch_into(borrowed, result)
+    elif kind == 4:
+        prior = pcc_re_pattern_install_into(borrowed, result, flags)
+    else:
+        prior = pcc_re_compile_pattern_into(borrowed, result, flags)
     pcc_gc_note_frame_leave(result)
     pcc_gc_note_frame_leave(borrowed)
     # All potentially parking work is complete; return transfer is raw.
@@ -106,3 +112,54 @@ def pcc_re_pattern_fullmatch_guarded(captures: c_ptr, args: c_ptr) -> c_ptr:
 @c_abi_export("pcc_re_pattern_fullmatch_address")
 def pcc_re_pattern_fullmatch_address() -> c_ptr:
     return function_addr("pcc_re_pattern_fullmatch_guarded")
+
+
+@c_abi_export("pcc_re_pattern_install_guarded")
+def pcc_re_pattern_install_guarded(instance: c_ptr, pattern: c_ptr, flags: int) -> c_ptr:
+    return _re_guarded(instance, pattern, flags, 4)
+
+
+@c_abi_export("py_re_compile_obj")
+def py_re_compile_obj(pattern: c_ptr, flags: int) -> c_ptr:
+    return _re_guarded(pattern, null(), flags, 5)
+
+
+@c_abi_export("py_re_engine_fullmatch_flags")
+def py_re_engine_fullmatch_flags(pattern: c_ptr, text: c_ptr, flags: int) -> c_ptr:
+    return _re_guarded(pattern, text, flags, 0)
+
+
+@c_abi_export("py_re_fullmatch")
+def py_re_fullmatch(pattern: c_ptr, text: c_ptr) -> c_ptr:
+    return _re_guarded(pattern, text, 0, 0)
+
+
+@c_abi_export("py_re_fullmatch_flags")
+def py_re_fullmatch_flags(pattern: c_ptr, text: c_ptr, flags: int) -> c_ptr:
+    return _re_guarded(pattern, text, flags, 0)
+
+
+pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+define_global_i32("pcc_re_publish_borrowed_map", -1)
+
+
+@c_abi_export("pcc_re_publish_copy_lease")
+def pcc_re_publish_copy_lease(value: c_ptr, output: c_ptr) -> int:
+    """Copy a live source into a registered empty output; never mutate pin bits.
+
+    The source's caller-owned lifetime spans this call. Entry has no held locks
+    or inherited no-park. Negative copy status leaves output unchanged/empty.
+    """
+    if pcc_thread_no_park_depth() != 0:
+        pcc_platform_abort()
+        return -1
+    pcc_thread_no_park_enter()
+    borrowed: c_ptr = stack_alloc(8)
+    store_ptr(borrowed, 0, value)
+    if pcc_gc_note_frame_enter_checked(global_addr("pcc_re_publish_borrowed_map"), borrowed) != 1:
+        pcc_platform_abort()
+        return -1
+    pcc_thread_no_park_exit()
+    token: int = pcc_gc_root_copy_borrowed_lease(output, borrowed)
+    pcc_gc_note_frame_leave(borrowed)
+    return token

@@ -350,26 +350,8 @@ def py_re_match_flags(pattern, text, flags: int):
     return _re_match_impl(pattern, text, flags, 0)
 
 
-@c_abi_export("py_re_fullmatch")
-def py_re_fullmatch(pattern, text):
-    return py_re_fullmatch_flags(pattern, text, 0)
 
 
-@c_abi_export("py_re_fullmatch_flags")
-def py_re_fullmatch_flags(pattern, text, flags: int):
-    none = global_load_ptr("py_None")
-    if ptr_is_null(pattern) or ptr_is_null(text):
-        return none
-    if _type_of(pattern) != PY_TYPE_STR or _type_of(text) != PY_TYPE_STR:
-        return none
-    if (flags & ~26) == 0:  # 26 == re.I|re.M|re.S — the engine flag mask
-        return py_re_engine_fullmatch_flags(pattern, text, flags)
-    py_raise_owned(
-        py_exc_new(
-            11, cstr("pcc re: flags outside the native regex subset (no-libpython)")
-        )
-    )
-    return null()
 
 
 @c_abi_export("py_re_search")

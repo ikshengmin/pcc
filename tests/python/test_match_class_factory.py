@@ -14,16 +14,18 @@ SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_re_match_class
 
 
 class Model:
-    def __init__(self, failure=None, barrier=None):
+    def __init__(self, failure=None, barrier=None, kind="match"):
+        self.cache = "pcc_re_"+kind+"_class"
         self.failure = failure
         self.barrier = barrier
         self.slots = {"pcc_re_match_class": 0, "pcc_re_match_class_root_handle": 0,
                       "pcc_re_match_class_mutex_bits": 0, 101: 0, 102: 0}
+        self.slots.update({"pcc_re_pattern_class":0,"pcc_re_pattern_class_root_handle":0,"pcc_re_pattern_class_mutex_bits":0,103:0,104:0})
         self.objects = {}
         self.next_object = 1000
         self.tokens = {}
         self.next_token = 1
-        self.roots = {101, 102}
+        self.roots = {101,102,103,104}
         self.mutexes = {}
         self.next_mutex = 2000
         self.atomic_lock = threading.Lock()
@@ -63,7 +65,7 @@ class Model:
         for node in nodes:
             node.decorator_list = []
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
-        self.factory = self.namespace["pcc_re_match_class_copy_lease"]
+        self.factory = self.namespace["pcc_re_"+kind+"_class_copy_lease"]
 
     def error(self, operation, detail):
         if not getattr(self.local, "error", None):
@@ -95,13 +97,14 @@ class Model:
         return 0
 
     def new_class(self, name, bases, count, fields, nfields):
-        assert (name, bases, count, fields, nfields) == ("re.Match", 0, 0, 0, 0)
+        assert name in ("re.Match","re.Pattern")
+        assert (bases,count,fields,nfields)==(0,0,0,0)
         if self.failure == "allocation":
             return 0
         with self.atomic_lock:
             self.next_object += 1
             result = self.next_object
-            self.objects[result] = {"refs": 1, "leases": 0, "immortal": False, "tracked": True}
+            self.objects[result] = {"refs": 1, "leases": 0, "immortal": False, "tracked": True,"name":name}
             self.allocations.append(result)
         if self.barrier:
             self.barrier.wait(timeout=5)
@@ -145,9 +148,9 @@ class Model:
     def copy(self, destination, source):
         assert destination in self.roots and source in self.roots
         assert self.slots[destination] == 0
-        if self.failure == "global_copy" and destination == "pcc_re_match_class":
+        if self.failure == "global_copy" and destination in ("pcc_re_match_class","pcc_re_pattern_class"):
             return -1
-        if self.failure == "cached_copy" and source == "pcc_re_match_class":
+        if self.failure == "cached_copy" and source in ("pcc_re_match_class","pcc_re_pattern_class"):
             return -1
         obj = self.slots[source]
         assert obj in self.objects
@@ -169,22 +172,23 @@ class Model:
 
     def untrack(self, obj):
         assert self.objects[obj]["leases"] >= 2
-        assert self.slots["pcc_re_match_class"] == obj
+        assert obj in (self.slots["pcc_re_match_class"],self.slots["pcc_re_pattern_class"])
         self.objects[obj]["tracked"] = False
 
     def immortalize(self, op, obj, offset, mask, order):
         assert (op, offset, mask, order) == ("or", 12, 1, "relaxed")
         assert self.objects[obj]["leases"] >= 2
-        assert self.slots["pcc_re_match_class"] == obj
+        assert obj in (self.slots["pcc_re_match_class"],self.slots["pcc_re_pattern_class"])
         self.objects[obj]["immortal"] = True
 
 
-def test_first_and_cached_factory_return_same_class_with_independent_leases():
-    model = Model()
+@pytest.mark.parametrize("kind", ["match", "pattern"])
+def test_first_and_cached_factory_return_same_class_with_independent_leases(kind):
+    model = Model(kind=kind)
     first = model.factory(101)
     second = model.factory(102)
     assert first == second == 1
-    assert model.slots[101] == model.slots[102] == model.slots["pcc_re_match_class"]
+    assert model.slots[101] == model.slots[102] == model.slots[model.cache]
     assert len(model.allocations) == 1 and model.register_count == 1
     obj = model.objects[model.slots[101]]
     assert obj["immortal"] and not obj["tracked"] and obj["leases"] == 2
@@ -194,10 +198,11 @@ def test_first_and_cached_factory_return_same_class_with_independent_leases():
 
 
 @pytest.mark.parametrize("failure", ["mutex", "first_lock", "allocation", "publish", "lease", "second_lock", "register", "global_copy"])
-def test_failure_does_not_publish_class_or_leak_candidate_owner_or_lease(failure):
-    model = Model(failure)
+@pytest.mark.parametrize("kind", ["match", "pattern"])
+def test_failure_does_not_publish_class_or_leak_candidate_owner_or_lease(kind, failure):
+    model = Model(failure,kind=kind)
     assert model.factory(101) == -1
-    assert model.slots[101] == 0 and model.slots["pcc_re_match_class"] == 0
+    assert model.slots[101] == 0 and model.slots[model.cache] == 0
     assert not model.objects and not model.tokens
     assert getattr(model.local, "error", None)
     # A successfully registered empty global root is reused on retry.
@@ -207,21 +212,23 @@ def test_failure_does_not_publish_class_or_leak_candidate_owner_or_lease(failure
     assert model.register_count == 1
 
 
-def test_two_real_host_threads_publish_one_identity_and_free_collectible_loser():
-    model = Model(barrier=threading.Barrier(2))
+@pytest.mark.parametrize("kind", ["match", "pattern"])
+def test_two_real_host_threads_publish_one_identity_and_free_collectible_loser(kind):
+    model = Model(barrier=threading.Barrier(2),kind=kind)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(model.factory, 101)
         second = pool.submit(model.factory, 102)
         tokens = [first.result(timeout=10), second.result(timeout=10)]
     assert all(token > 0 for token in tokens)
-    assert model.slots[101] == model.slots[102] == model.slots["pcc_re_match_class"]
+    assert model.slots[101] == model.slots[102] == model.slots[model.cache]
     assert len(model.allocations) == 2 and len(model.freed) == 1
     assert len(model.objects) == 1 and model.register_count == 1
     assert next(iter(model.objects.values()))["leases"] == 2
 
 
-def test_invalid_nonempty_result_is_unchanged():
-    model = Model()
+@pytest.mark.parametrize("kind", ["match", "pattern"])
+def test_invalid_nonempty_result_is_unchanged(kind):
+    model = Model(kind=kind)
     model.slots[101] = 77
     assert model.factory(101) == -1
     assert model.slots[101] == 77
@@ -229,28 +236,47 @@ def test_invalid_nonempty_result_is_unchanged():
 
 
 
-def test_cached_copy_failure_preserves_global_owner_and_empty_result():
-    model = Model()
+@pytest.mark.parametrize("kind", ["match", "pattern"])
+def test_cached_copy_failure_preserves_global_owner_and_empty_result(kind):
+    model = Model(kind=kind)
     first = model.factory(101)
     model.release(101, first)
     model.store_root(101, 0)
-    winner = model.slots["pcc_re_match_class"]
+    winner = model.slots[model.cache]
     model.failure = "cached_copy"
     assert model.factory(102) == -1
-    assert model.slots[102] == 0 and model.slots["pcc_re_match_class"] == winner
+    assert model.slots[102] == 0 and model.slots[model.cache] == winner
     assert len(model.objects) == 1 and not model.tokens
 
 
-def test_cached_owner_is_reloaded_from_registered_global_after_modeled_relocation():
-    model = Model()
+@pytest.mark.parametrize("kind", ["match", "pattern"])
+def test_cached_owner_is_reloaded_from_registered_global_after_modeled_relocation(kind):
+    model = Model(kind=kind)
     first = model.factory(101)
     model.release(101, first)
     model.store_root(101, 0)
-    old = model.slots["pcc_re_match_class"]
+    old = model.slots[model.cache]
     moved = old + 100
     assert model.objects[old]["leases"] == 0
     model.objects[moved] = model.objects.pop(old)
-    model.slots["pcc_re_match_class"] = moved
+    model.slots[model.cache] = moved
     second = model.factory(102)
     assert second >= 0 and model.slots[102] == moved
     assert len(model.allocations) == 1
+
+
+def test_both_classes_publish_independently_during_four_thread_race():
+    model=Model(barrier=threading.Barrier(4))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        calls=[pool.submit(model.namespace["pcc_re_"+kind+"_class_copy_lease"],slot)
+               for kind,slot in [("match",101),("pattern",102),("match",103),("pattern",104)]]
+        assert all(f.result(timeout=10)==1 for f in calls)
+    assert model.slots[101]==model.slots[103]==model.slots["pcc_re_match_class"]
+    assert model.slots[102]==model.slots[104]==model.slots["pcc_re_pattern_class"]
+    assert model.slots[101]!=model.slots[102]
+    assert model.slots["pcc_re_match_class_mutex_bits"]!=model.slots["pcc_re_pattern_class_mutex_bits"]
+    assert len(model.objects)==2 and len(model.freed)==2 and model.register_count==2
+    assert model.objects[model.slots[101]]["name"]=="re.Match"
+    assert model.objects[model.slots[102]]["name"]=="re.Pattern"
+    for slot in (101,102,103,104):model.release(slot,1)
+    assert not model.tokens

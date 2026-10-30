@@ -246,65 +246,9 @@ class MethodCallFallbackLoweringMixin:
                     [obj],
                     name=self._fresh("dyn.bit_count"),
                 )
-            if self._slot_call_result_sink(expr) is not None:
-                return self._emit_slot_method_call(expr, "method." + attr.name)
-            recv_obj = self._emit_as_object(attr.obj)
-            release_receiver = self._method_receiver_is_owned(attr.obj, recv_obj)
-            if not expr.kwargs and self._split_starstar_kwargs_unpack(expr.args) is None:
-                return self._emit_loaded_method_call(
-                    recv_obj,
-                    self._attr_name_ptr(attr.name),
-                    attr.name,
-                    expr.args,
-                    expr.span,
-                    attribute_error_span=attr.span,
-                    dynamic_result=True,
-                    release_receiver=release_receiver,
-                )
-            method_obj = self.builder.call(
-                self.runtime["py_obj_getattr"],
-                [recv_obj, self._attr_name_ptr(attr.name)],
-                name=self._fresh(f"dyn.attr.{attr.name}"),
-            )
-            # The bound method holds its own reference to the receiver; a
-            # receiver this expression created is consumed here.
-            if release_receiver:
-                self._gc_release(recv_obj)
-            self._emit_attribute_error_if_null(method_obj, attr.name, attr.span)
-            kwdict_unpack = self._split_starstar_kwargs_unpack(expr.args)
-            arg_exprs = expr.args
-            kwargs_expr = None
-            if kwdict_unpack is not None:
-                arg_exprs, kwargs_expr = kwdict_unpack
-            args_tuple = self._emit_dynamic_call_args_tuple(arg_exprs)
-            kwargs_obj = self._emit_dynamic_call_kwargs_object(
-                expr.kwargs,
-                kwargs_expr,
-                expr.span,
-            )
-            result = self.builder.call(
-                self.runtime["py_obj_call"],
-                [method_obj, args_tuple, kwargs_obj],
-                name=self._fresh(f"dyn.method.{attr.name}"),
-            )
-            self._gc_release(args_tuple)
-            if expr.kwargs or kwargs_expr is not None:
-                self._gc_release(kwargs_obj)
-            # `py_obj_getattr` returns a NEW reference on every path: fields and
-            # `__dict__`/`__class__` incref, the dynamic-attr path goes through
-            # `py_dict_get` (which increfs), a descriptor `__get__` yields an
-            # owned result, and a plain method builds a fresh bound object via
-            # `py_instance_bind_method`.  `py_obj_call` only borrows the
-            # callable, so this frame owns `method_obj` and must consume it.
-            # Without this release EVERY dynamic method call leaked its bound
-            # method object: two million `obj.method()` calls whose method
-            # returns None (so the result cannot be the leak) grew RSS to
-            # 2.8 GB.  Release before the error check so the unwind path does
-            # not leak it either.
-            self._gc_release(method_obj)
-            self._emit_post_call_err_check(expr.span)
-            self._note_owned_dynamic_call_value(result)
-            return result
+            # General dynamic calls need the same operand/result transaction
+            # whether a containing expression supplied a sink or not.
+            return self._emit_slot_method_call(expr, "method." + attr.name)
         if (
             isinstance(obj_ty, ByteArrayType)
             and attr.name == "clear"

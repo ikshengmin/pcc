@@ -1,19 +1,21 @@
-"""pcc-Python owner of the regex engine's managed-object bridge.
+"""Legacy regex adapters and general compile-pattern normalization.
 
-The byte-regex core remains a separate oracle-sized low-level slice for now.
-This module owns all construction of Match/Pattern objects and the public
-findall/sub/split/truth adapters, so the production archive no longer needs
-``py_re_engine_obj.o``.
+Match/Pattern construction and fullmatch live in the guarded slot-owned bridge.
+Legacy search/findall/sub/split callbacks retain their existing behavior; their
+whole-runtime collector qualification remains separate from this boundary.
 """
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_INT, PY_TYPE_STR
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_INT, PY_TYPE_STR,
+)
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
+    function_addr,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
@@ -32,6 +34,9 @@ from pcc.unsafe import (
     store_ptr,
 )
 
+
+pcc_re_publish_copy_lease = extern("pcc_re_publish_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_retain = extern("pcc_gc_retain", (c_ptr,), c_ptr)
 
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_slice_i64 = extern(
@@ -86,7 +91,6 @@ pcc_re_engine_group_names_flags = extern(
 )
 
 
-define_global_ptr_null("pcc_re_pattern_class")
 
 
 def _none():
@@ -153,14 +157,6 @@ def _raise_engine_status(status: int) -> None:
         )
 
 
-def _pattern_class():
-    cls = global_load_ptr("pcc_re_pattern_class")
-    if ptr_is_null(cls) != 0:
-        cls = py_class_new_builtin(cstr("re.Pattern"), null(), 0, null(), 0)
-        if ptr_is_null(cls) == 0:
-            store_i32(cls, 12, load_i32(cls, 12) | 1)
-            global_store_ptr("pcc_re_pattern_class", cls)
-    return cls
 
 
 def _span_at(spans, index: int) -> int:
@@ -452,32 +448,6 @@ def py_re_engine_truth(pattern, text, search: int):
     return py_re_engine_truth_flags_from(pattern, text, 0, search, 0, -1)
 
 
-@c_abi_export("py_re_engine_fullmatch_flags")
-def py_re_engine_fullmatch_flags(pattern, text, flags: int):
-    none = _none()
-    if ptr_is_null(pattern) != 0 or ptr_is_null(text) != 0:
-        return none
-    if _type_of(pattern) != PY_TYPE_STR or _type_of(text) != PY_TYPE_STR:
-        return none
-    if (flags & ~26) != 0:
-        py_raise_owned(
-            py_exc_new(11, cstr("pcc re: flags outside the native regex subset (no-libpython)"))
-        )
-        return null()
-    caps = stack_alloc(512)
-    ngroups = stack_alloc(8)
-    store_i64(ngroups, 0, 0)
-    text_bytes = py_str_utf8(text)
-    text_length: int = _cstrlen(text_bytes)
-    status: int = _run(pattern, text, flags, 0, 0, text_length, caps, ngroups)
-    if status == 1:
-        if load_i64(caps, 8) == text_length:
-            return _new_match(pattern, text, caps, load_i64(ngroups, 0), flags)
-        return none
-    if status == 0:
-        return none
-    _raise_engine_status(status)
-    return null()
 
 
 def _findall_group(text, caps, group: int):
@@ -1015,6 +985,7 @@ def _finditer_from_args(pattern, args, flags: int):
     return result
 
 
+@c_abi_export("pcc_re_pattern_legacy_callback")
 def _pattern_method_call(captures, args):
     none = _none()
     if ptr_is_null(captures) != 0 or py_tuple_len(captures) < 3:
@@ -1121,7 +1092,7 @@ def _add_pattern_method(instance, name, pattern, kind: int, flags: int) -> None:
     py_decref(fn)
 
 
-def _normalize_verbose_pattern(pattern: str) -> str:
+def _normalize_verbose_pattern(pattern: str, result_slot: c_ptr) -> int:
     """Remove verbose trivia without joining distinct regex tokens."""
     output = []
     index = 0
@@ -1186,15 +1157,18 @@ def _normalize_verbose_pattern(pattern: str) -> str:
         previous = character
         separated = False
         index += 1
-    return "".join(output)
+    normalized: str = "".join(output)
+    return pcc_re_publish_copy_lease(normalized, result_slot)
 
 
-def _normalize_compile_pattern(pattern: str, flags: int) -> tuple[str, int]:
+@c_abi_export("pcc_re_normalize_compile_pattern_into")
+def _normalize_compile_pattern(pattern: str, flags: int, output: c_ptr, verbose_output: c_ptr, verbose_token_slot: c_ptr, projection_output: c_ptr, projection_token_slot: c_ptr) -> int:
     """Project supported global flags onto the owned byte-regex engine."""
-    if pattern.startswith("(?"):
-        end = pattern.find(")")
+    working: str = pattern
+    if working.startswith("(?"):
+        end = working.find(")")
         if end >= 0:
-            letters = pattern[2:end]
+            letters = working[2:end]
             inline = 0
             supported = bool(letters)
             for letter in letters:
@@ -1211,43 +1185,31 @@ def _normalize_compile_pattern(pattern: str, flags: int) -> tuple[str, int]:
                 else:
                     supported = False
             if supported:
-                pattern = pattern[end + 1:]
+                working = working[end + 1:]
                 flags |= inline
     if flags & ~122:
         raise NotImplementedError("pcc re: re.compile flags are outside the native regex subset")
     if flags & 64:
-        pattern = _normalize_verbose_pattern(pattern)
-    return pattern, flags & 26
+        # Inline projection may be a new string, not the caller-leased input.
+        # Publish and lease it before the verbose helper's ordinary prologue.
+        projection_token: int = pcc_re_publish_copy_lease(working, projection_output)
+        if projection_token < 0:
+            return -1
+        store_i64(projection_token_slot, 0, projection_token)
+        verbose_token: int = _normalize_verbose_pattern(load_ptr(projection_output, 0), verbose_output)
+        if verbose_token < 0:
+            return -1
+        store_i64(verbose_token_slot, 0, verbose_token)
+        if py_err_occurred() != 0:
+            return 0
+        working: str = pcc_gc_retain(load_ptr(verbose_output, 0))
+    # Publish an independent output owner before compiler-generated cleanup.
+    # The raw bridge registers a borrowed slot before any poll and returns a
+    # counted output lease that survives compiler-generated return cleanup.
+    normalized: tuple[str, int] = (working, flags & 26)
+    return pcc_re_publish_copy_lease(normalized, output)
 
 
-@c_abi_export("py_re_compile_obj")
-def py_re_compile_obj(pattern, flags: int):
-    if ptr_is_null(pattern) != 0 or _type_of(pattern) != PY_TYPE_STR:
-        py_raise_owned(py_exc_new(3, cstr("pcc re: re.compile pattern must be a string")))
-        return null()
-    normalized, engine_flags = _normalize_compile_pattern(pattern, flags)
-    pattern_text = py_str_utf8(normalized)
-    if ptr_is_null(pattern_text) != 0 or pcc_re_engine_supported_flags(pattern_text, engine_flags) == 0:
-        py_raise_owned(
-            py_exc_new(
-                11, cstr("pcc re: pattern outside the native regex subset (no-libpython)")
-            )
-        )
-        return null()
-    cls = _pattern_class()
-    if ptr_is_null(cls) != 0:
-        return _none()
-    instance = py_instance_new(cls)
-    if ptr_is_null(instance) != 0:
-        return _none()
-    py_obj_setattr(instance, cstr("pattern"), pattern)
-    _add_pattern_method(instance, cstr("match"), normalized, 0, engine_flags)
-    _add_pattern_method(instance, cstr("search"), normalized, 1, engine_flags)
-    _add_pattern_method(instance, cstr("findall"), normalized, 2, engine_flags)
-    _add_pattern_method(instance, cstr("sub"), normalized, 3, engine_flags)
-    _add_pattern_method(instance, cstr("split"), normalized, 4, engine_flags)
-    _add_pattern_method(instance, cstr("finditer"), normalized, 5, engine_flags)
-    return instance
 
 
 @c_abi_export("py_re_engine_pattern_supported")
@@ -1260,3 +1222,9 @@ def py_re_engine_pattern_supported(pattern) -> int:
     if pcc_re_engine_supported(pattern_text) != 0:
         return 1
     return 0
+
+
+@c_abi_export("pcc_re_pattern_legacy_address")
+def pcc_re_pattern_legacy_address() -> c_ptr:
+    # Legacy methods keep their existing callback; construction is slot-owned.
+    return function_addr("pcc_re_pattern_legacy_callback")

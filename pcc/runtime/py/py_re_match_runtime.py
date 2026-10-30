@@ -1,8 +1,7 @@
 """Owned regex Match construction behind the guarded slot-only entry.
 
-Development closure: the public re dispatch is not wired to this module yet.
 The raw entry registers the two borrowed argument slots and all owning slots
-before this module's ordinary entry poll. Every raw address used by a runtime
+before this module's ordinary entry poll. Every managed object address used by a runtime
 call has an explicit counted lease; temporary ownership ends in one finish.
 """
 __pcc_runtime_port__ = True
@@ -248,6 +247,9 @@ def _re_bytes_ascii(data: c_ptr, length: int) -> int:
 
 def _re_run_fullmatch(slots: c_ptr, tokens: c_ptr, flags: int, start: int, endpos: int) -> None:
     ok: int = 1
+    if (flags & ~26) != 0:
+        _re_error(slots, tokens, 11, cstr("pcc re: flags outside the native regex subset (no-libpython)"))
+        ok = 0
     if ok != 0:
         if py_str_check(load_ptr(slots, _RE_PATTERN * 8)) == 0 or py_str_check(load_ptr(slots, _RE_TEXT * 8)) == 0:
             _re_error(slots, tokens, 3, cstr("fullmatch requires string pattern and text"))
@@ -568,7 +570,11 @@ def _re_pattern_bound(slots: c_ptr, tokens: c_ptr, index: int) -> int:
 
 @c_abi_export("pcc_re_pattern_fullmatch_into")
 def pcc_re_pattern_fullmatch_into(borrowed: c_ptr, slots: c_ptr) -> int:
-    """Callback captures are (pattern, kind, flags); args are (text, pos?, end?)."""
+    """Callback captures are (pattern, kind, flags); args are (text, pos?, end?).
+
+    This native function has no keyword signature yet: generic function dispatch
+    explicitly rejects keyword arguments before entering this positional bridge.
+    """
     tokens: c_ptr = stack_alloc(_RE_SLOTS * 8)
     memset(tokens, 0, _RE_SLOTS * 8)
     ok: int = _re_copy_input(slots, tokens, 12, borrowed, 0)
@@ -622,4 +628,134 @@ def pcc_re_match_instance_into(slots: c_ptr) -> int:
         store_i64(tokens, _RE_CLASS * 8, token)
         store_ptr(slots, _RE_RESULT * 8, py_instance_new(load_ptr(class_slot, 0)))
         _re_adopt(slots, tokens, _RE_RESULT)
+    return _re_finish(slots, tokens)
+
+
+pcc_re_pattern_fullmatch_address = extern("pcc_re_pattern_fullmatch_address", (), c_ptr)
+
+
+def _re_pattern_install(slots: c_ptr, tokens: c_ptr, flags: int) -> None:
+    # Prepare the static return before mutation, then reuse the constructor's
+    # general capture/function installation with a different receiver slot.
+    store_ptr(slots, _RE_RESULT * 8, global_load_ptr("py_None"))
+    if _re_adopt(slots, tokens, _RE_RESULT) == 0:
+        return
+    _re_pattern_add_method(slots, tokens, 2, cstr("fullmatch"), 6, flags, pcc_re_pattern_fullmatch_address())
+
+
+@c_abi_export("pcc_re_pattern_install_into")
+def pcc_re_pattern_install_into(borrowed: c_ptr, slots: c_ptr, flags: int) -> int:
+    """Install only the optional fullmatch method; caller supplies rooted inputs."""
+    tokens: c_ptr = stack_alloc(_RE_SLOTS * 8)
+    memset(tokens, 0, _RE_SLOTS * 8)
+    ok: int = _re_copy_input(slots, tokens, 2, borrowed, 0)
+    if ok != 0:
+        ok = _re_copy_input(slots, tokens, 3, borrowed, 1)
+    if ok != 0:
+        _re_pattern_install(slots, tokens, flags)
+    return _re_finish(slots, tokens)
+
+
+pcc_re_normalize_compile_pattern_into = extern("pcc_re_normalize_compile_pattern_into", (c_ptr, c_int64, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+pcc_re_engine_supported_flags = extern("pcc_re_engine_supported_flags", (c_ptr, c_int64), c_int32)
+pcc_re_pattern_class_copy_lease = extern("pcc_re_pattern_class_copy_lease", (c_ptr,), c_int64)
+pcc_re_pattern_legacy_address = extern("pcc_re_pattern_legacy_address", (), c_ptr)
+
+
+def _re_pattern_add_method(slots: c_ptr, tokens: c_ptr, receiver: int, name: c_ptr, kind: int, flags: int, callback: c_ptr) -> int:
+    # Pattern instance/result0 and normalized text3 stay leased throughout.
+    store_ptr(slots, _RE_CAPTURES * 8, py_tuple_new(3))
+    if _re_adopt(slots, tokens, _RE_CAPTURES) == 0:
+        return 0
+    store_ptr(slots, _RE_KIND * 8, py_int_from_i64(kind))
+    if _re_adopt(slots, tokens, _RE_KIND) == 0:
+        return 0
+    store_ptr(slots, _RE_ITEM * 8, py_int_from_i64(flags))
+    if _re_adopt(slots, tokens, _RE_ITEM) == 0:
+        return 0
+    py_tuple_set_item(load_ptr(slots, _RE_CAPTURES * 8), 0, load_ptr(slots, _RE_TEXT * 8))
+    if py_err_occurred() != 0:
+        return 0
+    py_tuple_set_item(load_ptr(slots, _RE_CAPTURES * 8), 1, load_ptr(slots, _RE_KIND * 8))
+    if py_err_occurred() != 0:
+        return 0
+    py_tuple_set_item(load_ptr(slots, _RE_CAPTURES * 8), 2, load_ptr(slots, _RE_ITEM * 8))
+    if py_err_occurred() != 0:
+        return 0
+    store_ptr(slots, _RE_FUNCTION * 8, py_func_new_named(callback, load_ptr(slots, _RE_CAPTURES * 8), name))
+    if _re_adopt(slots, tokens, _RE_FUNCTION) == 0:
+        return 0
+    status: int = py_obj_setattr(load_ptr(slots, receiver * 8), name, load_ptr(slots, _RE_FUNCTION * 8))
+    if status != 0 or py_err_occurred() != 0:
+        py_runtime_error_if_unset(cstr("re.Pattern"), cstr("method installation failed"))
+        return 0
+    _re_drop(slots, tokens, _RE_FUNCTION)
+    _re_drop(slots, tokens, _RE_ITEM)
+    _re_drop(slots, tokens, _RE_KIND)
+    _re_drop(slots, tokens, _RE_CAPTURES)
+    return 1
+
+
+def _re_compile_pattern(slots: c_ptr, tokens: c_ptr, flags: int) -> None:
+    if py_str_check(load_ptr(slots, _RE_PATTERN * 8)) == 0:
+        _re_error(slots, tokens, 3, cstr("pcc re: re.compile pattern must be a string"))
+        return
+    # Preserve the existing general verbose/global-inline normalization.
+    normalized_token: int = pcc_re_normalize_compile_pattern_into(load_ptr(slots, _RE_PATTERN * 8), flags, ptr_add(slots, _RE_NAMES * 8), ptr_add(slots, 12 * 8), ptr_add(tokens, 12 * 8), ptr_add(slots, 13 * 8), ptr_add(tokens, 13 * 8))
+    if normalized_token < 0:
+        py_runtime_error_if_unset(cstr("re.Pattern"), cstr("normalization owner lease failed"))
+        return
+    store_i64(tokens, _RE_NAMES * 8, normalized_token)
+    if py_err_occurred() != 0:
+        return
+    store_ptr(slots, _RE_TEXT * 8, py_tuple_get(load_ptr(slots, _RE_NAMES * 8), 0))
+    if _re_adopt(slots, tokens, _RE_TEXT) == 0:
+        return
+    store_ptr(slots, _RE_SPANS * 8, py_tuple_get(load_ptr(slots, _RE_NAMES * 8), 1))
+    if _re_adopt(slots, tokens, _RE_SPANS) == 0:
+        return
+    engine_flags: int = py_index_i64_checked_slots(ptr_add(slots, _RE_SPANS * 8))
+    if py_err_occurred() != 0:
+        return
+    _re_drop(slots, tokens, _RE_NAMES)
+    if strlen(py_str_utf8(load_ptr(slots, _RE_TEXT * 8))) != py_str_byte_len(load_ptr(slots, _RE_TEXT * 8)):
+        _re_error(slots, tokens, 11, cstr("pcc re: embedded-NUL patterns outside native engine capability"))
+        return
+    if pcc_re_engine_supported_flags(py_str_utf8(load_ptr(slots, _RE_TEXT * 8)), engine_flags) == 0:
+        _re_error(slots, tokens, 11, cstr("pcc re: pattern outside the native regex subset (no-libpython)"))
+        return
+    token: int = pcc_re_pattern_class_copy_lease(ptr_add(slots, _RE_CLASS * 8))
+    if token < 0:
+        py_runtime_error_if_unset(cstr("re.Pattern"), cstr("class publication failed"))
+        return
+    store_i64(tokens, _RE_CLASS * 8, token)
+    store_ptr(slots, _RE_RESULT * 8, py_instance_new(load_ptr(slots, _RE_CLASS * 8)))
+    if _re_adopt(slots, tokens, _RE_RESULT) == 0:
+        return
+    status: int = py_obj_setattr(load_ptr(slots, _RE_RESULT * 8), cstr("pattern"), load_ptr(slots, _RE_PATTERN * 8))
+    if status != 0 or py_err_occurred() != 0:
+        py_runtime_error_if_unset(cstr("re.Pattern"), cstr("pattern attribute installation failed"))
+        return
+    callback: c_ptr = pcc_re_pattern_legacy_address()
+    if _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("match"), 0, engine_flags, callback) == 0:
+        return
+    if _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("search"), 1, engine_flags, callback) == 0:
+        return
+    if _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("findall"), 2, engine_flags, callback) == 0:
+        return
+    if _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("sub"), 3, engine_flags, callback) == 0:
+        return
+    if _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("split"), 4, engine_flags, callback) == 0:
+        return
+    if _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("finditer"), 5, engine_flags, callback) == 0:
+        return
+    _re_pattern_add_method(slots, tokens, _RE_RESULT, cstr("fullmatch"), 6, engine_flags, pcc_re_pattern_fullmatch_address())
+
+
+@c_abi_export("pcc_re_compile_pattern_into")
+def pcc_re_compile_pattern_into(borrowed: c_ptr, slots: c_ptr, flags: int) -> int:
+    tokens: c_ptr = stack_alloc(_RE_SLOTS * 8)
+    memset(tokens, 0, _RE_SLOTS * 8)
+    if _re_copy_input(slots, tokens, _RE_PATTERN, borrowed, 0) != 0:
+        _re_compile_pattern(slots, tokens, flags)
     return _re_finish(slots, tokens)

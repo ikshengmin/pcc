@@ -1,4 +1,4 @@
-"""Raw bridge model/IR only; the managed fullmatch body is not implemented here."""
+"""Raw bridge model/IR checks; not native execution or collector qualification."""
 import ast
 from pathlib import Path
 import re
@@ -134,6 +134,12 @@ def test_raw_trampoline_ir_has_no_poll_before_guard_or_managed_prologue(tmp_path
     assert calls[0] == "pcc_thread_no_park_depth"
     assert calls.index("pcc_thread_no_park_enter") < calls.index("pcc_gc_note_frame_enter_checked")
     assert calls.count("pcc_gc_note_frame_enter_checked") == 2
+    publisher = re.search(r"^define[^\n]*@pcc_re_publish_copy_lease\([^\n]*\).*?^}", text, re.M | re.S).group()
+    assert "@pcc_thread_stop_requested" not in publisher
+    assert "@pcc_gc_frame_enter(" not in publisher
+    assert "@pcc_gc_pin(" not in publisher and "@pcc_gc_unpin(" not in publisher
+    assert publisher.index("@pcc_thread_no_park_exit(") < publisher.index("@pcc_gc_root_copy_borrowed_lease(")
+    assert publisher.index("@pcc_gc_root_copy_borrowed_lease(") < publisher.index("@pcc_gc_note_frame_leave(")
     assert calls.index("pcc_thread_no_park_exit") < calls.index("pcc_re_engine_fullmatch_into")
     # LLVM block layout is not execution order: callback branch blocks can be
     # printed after the join. The take block must return without another call.
@@ -192,3 +198,77 @@ def test_inherited_no_park_is_fail_stop_before_root_or_managed_work():
         model.run(10, 20, 2)
     assert model.events == []
     assert model.depth == 1 and not model.roots
+
+
+def test_compile_normalization_returns_tokens_through_cleanup_not_raw_objects(tmp_path, monkeypatch):
+    from pcc.frontends.python.owned_runtime_build import _compile_runtime_module
+    source = SOURCE.with_name("py_re_engine_runtime.py")
+    monkeypatch.setenv("PCC_RUNTIME_DIR", str(source.parent.parent))
+    output = tmp_path / "engine.ll"
+    _compile_runtime_module("py_re_engine_runtime", str(source), str(output), "x86_64-unknown-linux-gnu")
+    text = output.read_text()
+    assert "strict.nolib.stub" not in text
+    for name, slot in (("pcc_re_normalize_compile_pattern_into", "output"),
+                       ("user_py_re_engine_runtime__normalize_verbose_pattern", "result_slot")):
+        body = re.search(r"^define[^\n]*@" + name + r"\([^\n]*\).*?^}", text, re.M | re.S)
+        assert body is not None
+        body = body.group()
+        assert body.startswith("define external i64 ") or body.startswith("define i64 ")
+        assert "ret ptr" not in body
+        assert "@pcc_re_publish_copy_lease(" in body
+        if slot == "output":
+            assert "ptr %working.addr." in body
+            assert re.search(r"@pcc_gc_frame_enter\(ptr [^,]+, ptr %working.addr.", body)
+    assert not re.search(r"^define[^\n]*@py_re_compile_obj\(", text, re.M)
+    assert not re.search(r"^define[^\n]*@py_re_engine_fullmatch_flags\(", text, re.M)
+    compile_body = re.search(r"^define[^\n]*@pcc_re_normalize_compile_pattern_into\([^\n]*\).*?^}", text, re.M | re.S).group()
+    assert compile_body.index("@pcc_re_publish_copy_lease(") < compile_body.index("@user_py_re_engine_runtime__normalize_verbose_pattern(")
+    assert "store i64" in compile_body and "ptr %projection_token_slot" in compile_body
+
+
+
+@pytest.mark.parametrize("failure", ["", "registration", "copy", "outer_guard"])
+def test_normalizer_publication_roots_borrowed_value_before_poll_without_pin_mutation(failure):
+    state = {"depth": int(failure == "outer_guard"), "root": False, "output": {}, "events": []}
+    borrowed = {}
+    def register(frame_map, slot):
+        assert state["depth"] == 1 and slot[0] == 10
+        if failure == "registration":
+            return 0
+        state["root"] = True
+        return 1
+    def exit_guard():
+        assert state["root"]
+        state["depth"] -= 1
+        borrowed[0] = 11  # A collector rewrites the traced borrowed slot.
+    def copy(output, source):
+        assert state["root"] and state["depth"] == 0 and source[0] == 11
+        state["events"].append("copy")
+        if failure == "copy":
+            return -1
+        output[0] = source[0]
+        return 1
+    def leave(slot):
+        assert state["root"] and slot is borrowed
+        state["root"] = False
+    ns = dict(c_ptr=object, pcc_thread_no_park_depth=lambda: state["depth"],
+              pcc_thread_no_park_enter=lambda: state.update(depth=state["depth"]+1),
+              pcc_thread_no_park_exit=exit_guard, stack_alloc=lambda size: borrowed,
+              store_ptr=lambda slot,offset,value: slot.__setitem__(offset,value), global_addr=lambda name:name,
+              pcc_gc_note_frame_enter_checked=register, pcc_gc_note_frame_leave=leave,
+              pcc_gc_root_copy_borrowed_lease=copy,
+              pcc_platform_abort=lambda: (_ for _ in ()).throw(RuntimeError("root failure")))
+    node = next(n for n in ast.parse(SOURCE.read_text()).body
+                if isinstance(n, ast.FunctionDef) and n.name == "pcc_re_publish_copy_lease")
+    node.decorator_list = []
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), ns)
+    if failure in ("registration", "outer_guard"):
+        with pytest.raises(RuntimeError, match="root failure"):
+            ns[node.name](10, state["output"])
+        assert not state["events"] and not state["output"]
+    else:
+        assert ns[node.name](10, state["output"]) == (-1 if failure == "copy" else 1)
+        assert state["output"] == ({} if failure == "copy" else {0: 11})
+        assert not state["root"] and state["depth"] == 0
+    called = {n.func.id for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert not called.intersection({"pcc_gc_pin", "pcc_gc_unpin", "atomic_rmw_i32"})
