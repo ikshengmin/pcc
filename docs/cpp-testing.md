@@ -1,6 +1,6 @@
 # C++ testing: ordinary checks and project execution
 
-The target is complete C++17, not the currently accepted int-only frontend
+The target is complete C++17, not the currently accepted arithmetic/free-function frontend
 slice. This harness preserves the same separation as the C tests: ordinary
 frontend/contract tests, executed integration programs, then pinned real
 projects. A passing small corpus does not establish C++17 conformance.
@@ -99,3 +99,20 @@ diagnostics, emitted execution, native pcc1 execution, and a project use site:
 Do not turn these requirements into expected failures that make a whole-language
 completion claim green. Maintain exact receipts for executed scopes and leave
 unimplemented, failed, and unrun boundaries visible.
+
+## Arithmetic-overload execution increment
+
+`tests/cpp/test_cpp_overload_execution.py` adds executed selection controls for
+short-to-int promotion, float-to-double promotion versus integer conversion,
+distinct same-width long/long-long overloads, bool identity, and the LP64 usual
+arithmetic conversion of unsigned int plus long. Every positive case executes
+the owned ELF twice and compares exact stdout/stderr/status with an explicit
+C++17 reference. The host helper binds both C++ semantics and C lowering to the
+same Linux x86-64 target, rather than borrowing the host's data model.
+
+The original translation unit containing a long-double overload is retained as
+a negative capability test. It requires an explicit
+`cpp.unsupported.extended-float` diagnostic before object emission on the
+selected target. **Extended-float value/ABI lowering remains unimplemented**;
+this rejection is not a successful C++17 program execution. The separate
+float/double/long positive case establishes only supported overload ranking.

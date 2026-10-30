@@ -97,7 +97,7 @@ def compile_host_cpp(units: tuple[tuple[str, str], ...]) -> HostArtifact:
     object_bytes = []
     entry_symbol = None
     for filename, source in units:
-        parser = CppParser()
+        parser = CppParser(target_triple=TARGET)
         ast = parser.parse(source, filename)
         selected_entry = entry_definition(parser.scope.lookup(ENTRY))
         if selected_entry is not None:
