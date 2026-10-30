@@ -375,6 +375,10 @@ def test_scheduler_markers_are_independent_nonparking_state(filename):
 def test_scheduler_tracks_ownership_only_after_successful_operations(lock_status, unlock_status):
     namespace = _namespace("py_virtual_thread_runtime.py")
     actions = []
+    # No wakeup is pending, so the unlock reads the request slot and signals
+    # nothing.
+    namespace.update(global_addr=lambda name: name, load_i64=lambda name, offset: 0,
+                     store_i64=lambda name, offset, value: None)
 
     def abort():
         actions.append("abort")
