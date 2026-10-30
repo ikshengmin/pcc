@@ -119,6 +119,12 @@ N_TYPE = 0x0E
 N_EXT = 0x01
 N_WEAK_REF = 0x0040
 
+# A shared image may bind an explicitly named provider in the main executable.
+# The chained import table uses the signed special ordinal; nlist stores its
+# eight-bit representation in the high byte of n_desc.
+BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE = -1
+EXECUTABLE_ORDINAL = 0xFF
+
 N_UNDF = 0x0
 N_ABS = 0x2
 N_SECT = 0xE

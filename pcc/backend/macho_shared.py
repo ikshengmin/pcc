@@ -2,7 +2,8 @@
 
 Reuse the owned linker's relocation, import, TLS and section layout, then
 publish that layout as MH_DYLIB with a dyld export trie and a fresh signature.
-Only libSystem imports are supported; other library inputs fail explicitly.
+Imports bind either to libSystem or an explicit main-executable inventory;
+other library inputs fail explicitly. No runtime archive is linked here.
 """
 
 from __future__ import annotations
@@ -17,10 +18,13 @@ from .macho_codesign import _signature_size, build_signature, parse_signature
 from .macho_exec import (
     PAGE,
     TEXT_BASE,
+    _link_shared_template,
     _libsystem_exports_symbol,
+    _validated_symbol_inventory,
     link_executable,
     prepare_executable_object,
 )
+from .macho_exports import _uleb, build_exports_trie as _exports_trie
 from .macho_obj import Section, TextSymbol, TEXT_SECTION_FLAGS
 from .native_object import NativeObject
 from .self_backend_target_match import is_aarch64_darwin_triple
@@ -45,73 +49,21 @@ def validate_link_args(link_args):
         raise BackendUnavailable("owned Darwin linking does not support link argument " + repr(argument))
 
 
-def _uleb(value):
-    if value < 0:
-        raise ValueError("negative Mach-O export value")
-    result = bytearray()
-    while value >= 128:
-        result.append((value & 127) | 128)
-        value >>= 7
-    result.append(value)
-    return bytes(result)
-
-
-def _exports_trie(exports):
-    # Radix edges keep arbitrarily long symbol names out of the recursion
-    # stack. Node offsets use a small monotone fixed-point calculation.
-    nodes = [{"terminal": None, "children": []}]
-    pending = [(0, sorted(exports))]
-    while pending:
-        index, rows = pending.pop()
-        groups = {}
-        for name, address, flags in rows:
-            if not name:
-                nodes[index]["terminal"] = _uleb(flags) + _uleb(address)
-            else:
-                groups.setdefault(name[0], []).append((name, address, flags))
-        for key in sorted(groups):
-            group = groups[key]
-            first, last = group[0][0], group[-1][0]
-            length = 0
-            while length < min(len(first), len(last)) and first[length] == last[length]:
-                length += 1
-            child = len(nodes)
-            nodes.append({"terminal": None, "children": []})
-            nodes[index]["children"].append((first[:length], child))
-            pending.append((child, [(name[length:], address, flags) for name, address, flags in group]))
-    offsets = [0] * len(nodes)
-    while True:
-        encoded = []
-        for node in nodes:
-            terminal = node["terminal"] or b""
-            children = node["children"]
-            if len(children) > 255:
-                raise BackendUnavailable("Mach-O export node exceeds the dyld child limit")
-            record = _uleb(len(terminal)) + terminal + bytes([len(children)])
-            for edge, child in children:
-                record += edge + b"\0" + _uleb(offsets[child])
-            encoded.append(record)
-        current = 0
-        updated = []
-        for record in encoded:
-            updated.append(current)
-            current += len(record)
-        if updated == offsets:
-            return b"".join(encoded)
-        offsets = updated
-
-
-def _check_imports(merged):
+def _check_imports(merged, host_import_symbols=()):
     # Share the executable linker's native loader intrinsic and host oracle.
     # Do not turn an unsupported import into a different execution owner.
     for symbol in merged.symbols:
+        if symbol.section_index and symbol.name in host_import_symbols:
+            raise BackendUnavailable("owned shared library defines a host-provider symbol: " + symbol.name)
         if symbol.section_index or symbol.weak_reference:
+            continue
+        if symbol.name in host_import_symbols:
             continue
         if not _libsystem_exports_symbol(symbol.name):
             raise BackendUnavailable("owned shared library has an unsupported libSystem import: " + symbol.name)
 
 
-def _with_text_entry(merged):
+def _with_text_entry(merged, reserved_symbols=()):
     entries = [symbol for symbol in merged.symbols
                if symbol.section_index
                and merged.sections[symbol.section_index - 1].segname == "__TEXT"
@@ -121,6 +73,7 @@ def _with_text_entry(merged):
         # dylib has none, so add a private, owned RET solely for that layout;
         # publication removes LC_MAIN and never exports this linker symbol.
         names = {symbol.name for symbol in merged.symbols}
+        names.update(reserved_symbols)
         name = "__pcc_shared_link_entry"
         while name in names:
             name += "_"
@@ -138,20 +91,27 @@ def _with_text_entry(merged):
     return merged, entries[0].name
 
 
-def link_shared_library(objects, *, target, identity, link_args=()):
+def link_shared_library(objects, *, target, identity, link_args=(), host_import_symbols=()):
     """Return a signed, loadable Mach-O dylib, without an external linker."""
     validate_target(target)
     validate_link_args(link_args)
+    host_import_symbols = _validated_symbol_inventory(host_import_symbols, "host import symbols")
     merged = prepare_executable_object(objects)
     definitions = [symbol for symbol in merged.symbols if symbol.section_index]
     if not definitions:
         raise BackendUnavailable("owned shared library requires at least one concrete definition")
-    merged, entry = _with_text_entry(merged)
-    _check_imports(merged)
+    merged, entry = _with_text_entry(merged, host_import_symbols)
+    _check_imports(merged, host_import_symbols)
     token = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     identifier = ("pcc-shared-" + token).encode("ascii")
     install_name = ("@rpath/libpcc_" + token + ".dylib").encode("ascii")
-    executable = link_executable([merged], entry=entry, identifier=identifier)
+    if host_import_symbols:
+        executable = _link_shared_template(
+            [merged], entry=entry, identifier=identifier,
+            host_import_symbols=host_import_symbols,
+        )
+    else:
+        executable = link_executable([merged], entry=entry, identifier=identifier)
     obj = spec.parse_object(executable)
     signature = parse_signature(executable)
     image = bytearray(executable[:signature.dataoff])

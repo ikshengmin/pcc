@@ -1025,6 +1025,7 @@ def _merge_input_symbols(
             raise LinkError(f"symbol {name!r} has an unsupported type")
         if (
             name[:1] in ("l", "L")
+            and not (sym_type & spec.N_EXT)
             and symbol_index not in targeted_indices
         ):
             # Mach-O assembler-local temporaries that nothing references:
@@ -1032,7 +1033,8 @@ def _merge_input_symbols(
             # the merge. `ld -r` drops them, and so does this — keeping
             # them would make every multi-object link collide on `ltmp0`.
             # Referenced L-labels (pcc emits cstring labels this way) are
-            # real targets and are kept.
+            # real targets and are kept. External definitions are never
+            # assembler-local temporaries, regardless of their spelling.
             continue
         name = local_rename.get(name, name)
         if sym_type & spec.N_EXT:

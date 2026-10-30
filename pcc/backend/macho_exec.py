@@ -38,6 +38,7 @@ from pcc.unsafe import (
 from . import macho_spec as spec
 from .macho_codesign import _CD_HEADER_SIZE as _CD_FIXED
 from .macho_codesign import _align8, build_signature
+from .macho_exports import build_exports_trie
 from .macho_archive import ArchiveError, read_archive, select_members
 from .macho_obj import _build_string_table
 from .macho_link import (
@@ -160,9 +161,26 @@ def _libsystem_exports_symbol(symbol: str) -> bool:
         raise LinkError("cannot load target libSystem to resolve " + repr(symbol)) from exc
 
 
-def _validate_import_names(imports, weak_imports) -> None:
+def _validated_symbol_inventory(symbols, label):
+    """Keep explicit provider/export inventories exact and deterministic."""
+    if not isinstance(symbols, (list, tuple)):
+        raise LinkError(label + " must be a list or tuple of symbol names")
+    if not symbols:
+        return ()
+    names = set()
+    for name in symbols:
+        if not isinstance(name, str) or not name or not name.isascii() or "\0" in name:
+            raise LinkError(label + " contains an invalid dyld symbol name")
+        if name in names:
+            raise LinkError(label + " contains duplicate symbol " + repr(name))
+        names.add(name)
+    return tuple(sorted(names))
+
+
+def _validate_import_names(imports, weak_imports, host_import_symbols=()) -> None:
     missing = [name for name in imports
-               if name not in weak_imports and not _libsystem_exports_symbol(name)]
+               if name not in weak_imports and name not in host_import_symbols
+               and not _libsystem_exports_symbol(name)]
     if missing:
         raise LinkError(
             "undefined Mach-O symbol(s): " + ", ".join(repr(name) for name in missing)
@@ -610,6 +628,7 @@ def prepare_executable_object(
     archive_selections=None,
     compact_budget=None,
     coordinator_timing=None,
+    required_symbols=(),
 ):
     """Resolve a final link job into its reusable relocatable state.
 
@@ -629,6 +648,11 @@ def prepare_executable_object(
     inclusive duration. Semantic layout, if requested, follows the merge.
     """
 
+    required_symbols = _validated_symbol_inventory(required_symbols, "required symbols")
+    if required_symbols and semantic_manifest is not None:
+        raise LinkError("explicit required symbols do not support semantic layout")
+    if required_symbols and compact_budget is not None:
+        raise LinkError("explicit required symbols do not support compact input")
     validate_started = 0
     if coordinator_timing is not None:
         validate_started = coordinator_timing.begin("macho_prepare_validate")
@@ -658,6 +682,9 @@ def prepare_executable_object(
         archives_started = coordinator_timing.begin("macho_prepare_archives")
     if archives:
         already_defined, pending = _external_symbol_state(resolved_objects)
+        for name in required_symbols:
+            if name not in already_defined:
+                pending.add(name)
         for archive_index, archive in enumerate(archives):
             try:
                 members = read_archive(archive)
@@ -693,6 +720,9 @@ def prepare_executable_object(
             if ((type(archives) is not list and type(archives) is not tuple)
                     or archive_index + 1 < len(archives)):
                 already_defined, pending = _external_symbol_state(resolved_objects)
+                for name in required_symbols:
+                    if name not in already_defined:
+                        pending.add(name)
         # Archive members are inputs too.  Validate the selected set before the
         # relocatable core consumes it; unselected members were already parsed
         # by read_archive and a malformed member failed above.
@@ -704,6 +734,12 @@ def prepare_executable_object(
         # archive. Leave the caller's archive collection and buffers untouched.
         members = pulled = selected_members = member = None
         already_defined = pending = None
+    if required_symbols:
+        provided, _pending = _external_symbol_state(resolved_objects)
+        missing = [name for name in required_symbols if name not in provided]
+        if missing:
+            raise LinkError("required Mach-O symbols are not defined: " + ", ".join(missing))
+        provided = _pending = missing = None
     merge_started = 0
     if coordinator_timing is not None:
         coordinator_timing.complete("macho_prepare_archives", archives_started)
@@ -753,6 +789,7 @@ def link_executable(
     _consume_inputs: bool = False,
     _direct_source_view: bool = False,
     link_receipt=None,
+    export_symbols=(),
 ) -> bytes:
     # Finish only after the preparation frame has returned. In a compiled
     # caller, temporary arguments may stay owned until that frame exits.
@@ -760,6 +797,7 @@ def link_executable(
     plan = _prepare_executable_inputs(
         objects, archives, entry, minos, identifier, semantic_manifest,
         _consume_inputs, _direct_source_view, receipt,
+        export_symbols=export_symbols,
     )
     image = _finish_executable_image(plan, identifier, None)
     if link_receipt is not None:
@@ -770,12 +808,28 @@ def link_executable(
     return image
 
 
+def _link_shared_template(objects, *, entry, identifier, host_import_symbols=()):
+    """Private executable-shaped layout; only the shared publisher may use it.
+
+    A public executable cannot import undefined names from another main
+    executable. The temporary image is therefore never returned by that API.
+    """
+    plan = _prepare_executable_inputs(
+        objects, (), entry, (12, 0), identifier, None, False, False,
+        host_import_symbols=host_import_symbols,
+    )
+    return _finish_executable_image(plan, identifier, None)
+
+
 def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
                                semantic_manifest, consume_inputs,
-                               direct_source_view, link_receipt=None):
+                               direct_source_view, link_receipt=None,
+                               export_symbols=(), host_import_symbols=()):
     # Preserve fail-closed option validation before parsing potentially large
     # inputs.  ``link_prepared_executable`` validates again for direct users.
     minos = _validate_minos(minos)
+    export_symbols = _validated_symbol_inventory(export_symbols, "export symbols")
+    host_import_symbols = _validated_symbol_inventory(host_import_symbols, "host import symbols")
     selections = [] if link_receipt is not None else None
     if link_receipt is not None:
         link_receipt["archive_members"] = selections
@@ -787,11 +841,14 @@ def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
             _consume_inputs=consume_inputs,
             _source_view=direct_source_view,
             archive_selections=selections,
+            required_symbols=export_symbols,
         ),
         entry=entry,
         minos=minos,
         identifier=identifier,
         link_receipt=link_receipt,
+        export_symbols=export_symbols,
+        host_import_symbols=host_import_symbols,
     )
 
 
@@ -804,6 +861,7 @@ def link_prepared_executable(
     phase_callback=None,
     compact_budget=None,
     coordinator_timing=None,
+    export_symbols=(),
 ) -> bytes:
     """Finalize one validated, already-merged object as an executable.
 
@@ -813,7 +871,7 @@ def link_prepared_executable(
     """
     if compact_budget is None:
         plan = _prepare_executable_image(merged, entry=entry, minos=minos,
-                                         identifier=identifier)
+                                         identifier=identifier, export_symbols=export_symbols)
         if coordinator_timing is None:
             return _finish_executable_image(plan, identifier, phase_callback)
         return _finish_executable_image(
@@ -823,6 +881,7 @@ def link_prepared_executable(
     plan = _prepare_executable_image(
         merged, entry=entry, minos=minos, identifier=identifier,
         compact_budget=compact_budget,
+        export_symbols=export_symbols,
     )
     # An owned source view retires its payloads while the image is prepared,
     # so measure what the source still keeps alive afterwards.
@@ -848,8 +907,16 @@ def _prepare_executable_image(
     link_receipt=None,
     compact_budget=None,
     _owned_output=None,
+    export_symbols=(),
+    host_import_symbols=(),
 ):
     """Resolve addresses into immutable output regions, without allocating an image."""
+
+    export_symbols = _validated_symbol_inventory(export_symbols, "export symbols")
+    host_import_symbols = _validated_symbol_inventory(host_import_symbols, "host import symbols")
+    if (export_symbols or host_import_symbols) and (compact_budget is not None or _owned_output is not None):
+        raise LinkError("explicit Mach-O symbol inventories do not support compact output")
+    host_imports = set(host_import_symbols)
 
     import sys as execution_runtime
     if execution_runtime.implementation.name == "cpython":
@@ -907,6 +974,15 @@ def _prepare_executable_image(
             }
             imports = [name for name in imports if name != table_symbol]
             weak_imports.discard(table_symbol)
+    collisions = [name for name in host_import_symbols if name in defined]
+    if collisions:
+        raise LinkError("shared image defines host-provider symbols: " + ", ".join(collisions))
+    for name in export_symbols:
+        symbol = defined.get(name)
+        if symbol is None:
+            raise LinkError("requested Mach-O export is not defined: " + name)
+        if not symbol["n_type"] & spec.N_EXT or symbol["n_type"] & spec.N_PEXT:
+            raise LinkError("requested Mach-O export is not public: " + name)
     if entry not in defined:
         raise LinkError(f"entry symbol {entry!r} is not defined by the inputs")
     entry_symbol = defined[entry]
@@ -1033,7 +1109,7 @@ def _prepare_executable_image(
             "undefined symbol(s) have no relocation naming an import: "
             + ", ".join(repr(name) for name in unreferenced_imports)
         )
-    _validate_import_names(imports, weak_imports)
+    _validate_import_names(imports, weak_imports, host_imports)
     code_imports = [n for n in imports if n in code_imports_set]
 
     # Thread block: __thread_data then __thread_bss, concatenated with each
@@ -1240,10 +1316,12 @@ def _prepare_executable_image(
         + 24                                              # LC_MAIN
         + _align(24 + len(LIBSYSTEM) + 1, 8)              # LC_LOAD_DYLIB
         + 16                                              # LC_CODE_SIGNATURE
+        + (16 if export_symbols else 0)                   # LC_DYLD_EXPORTS_TRIE
     )
     ncmds = (
         1 + 1 + 1 + (1 if data_out else 0) + (1 if debug_out else 0) + 1  # segments
         + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1     # the nine others
+        + (1 if export_symbols else 0)
     )
 
     cursor = spec.MACH_HEADER_64.size + sizeofcmds
@@ -1973,7 +2051,8 @@ def _prepare_executable_image(
         if len(sym_blob) >= (1 << 23):
             raise LinkError("chained-import symbol string offset exceeds 23 bits")
         import_entries.append(
-            1 | ((1 if name in weak_imports else 0) << 8) | (len(sym_blob) << 9)
+            (spec.EXECUTABLE_ORDINAL if name in host_imports else 1)
+            | ((1 if name in weak_imports else 0) << 8) | (len(sym_blob) << 9)
         )
         sym_blob += name.encode() + b"\0"
     while len(sym_blob) % 8:
@@ -2068,7 +2147,8 @@ def _prepare_executable_image(
         strx = string_offsets[name]
         nlist_parts.append(spec.NLIST_64_STRUCT.pack(
             strx, spec.N_UNDF | spec.N_EXT, spec.NO_SECT,
-            (1 << 8) | (spec.N_WEAK_REF if name in weak_imports else 0), 0,
+            ((spec.EXECUTABLE_ORDINAL if name in host_imports else 1) << 8)
+            | (spec.N_WEAK_REF if name in weak_imports else 0), 0,
         ))
     nlists = b"".join(nlist_parts)
     nlist_parts.clear()
@@ -2077,7 +2157,17 @@ def _prepare_executable_image(
         if _owned_output is not None:
             _owned_output.phase("symbols_end")
     strtab_off = symtab_off + len(nlists)
-    sig_off = _align(strtab_off + len(strtab), 16)
+    export_rows = []
+    for name in export_symbols:
+        if name not in sym_addr:
+            raise LinkError("requested Mach-O export has no emitted address: " + name)
+        symbol = defined[name]
+        section = sections[symbol["n_sect"] - 1]
+        flags = 1 if section["flags"] & spec.SECTION_TYPE == _S_THREAD_LOCAL_VARIABLES else 0
+        export_rows.append((name.encode("ascii"), sym_addr[name] - TEXT_BASE, flags))
+    exports = build_exports_trie(export_rows) if export_symbols else b""
+    exports_off = strtab_off + len(strtab)
+    sig_off = _align(exports_off + len(exports), 16)
     # __LINKEDIT must COVER the code signature: dyld's strict validation
     # rejects a binary whose signature sits outside the segment (observed as
     # "main executable failed strict validation"). The blob size is knowable
@@ -2172,6 +2262,9 @@ def _prepare_executable_image(
     cmds += struct.pack("<IIIIII", spec.LC_LOAD_DYLIB, dylib_size, 24,
                         0, 0x10000, 0x10000)
     cmds += LIBSYSTEM.ljust(dylib_size - 24, b"\0")
+    if export_symbols:
+        cmds += struct.pack("<IIII", spec.LC_DYLD_EXPORTS_TRIE, 16,
+                            exports_off, len(exports))
     if link_receipt is not None:
         # Describe the load command and ordinal actually emitted. libSystem
         # may reexport these names; this makes no physical symbol-owner claim.
@@ -2179,9 +2272,16 @@ def _prepare_executable_image(
             {"ordinal": 1, "install_name": LIBSYSTEM.decode("ascii")},
         ]
         link_receipt["imports"] = [
-            {"symbol": name, "library_ordinal": 1, "weak": name in weak_imports}
+            {"symbol": name,
+             "library_ordinal": spec.BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE if name in host_imports else 1,
+             "weak": name in weak_imports}
             for name in imports
         ]
+        if export_symbols:
+            link_receipt["exports"] = [
+                {"symbol": name, "image_offset": sym_addr[name] - TEXT_BASE}
+                for name in export_symbols
+            ]
     cmds += struct.pack("<IIII", spec.LC_CODE_SIGNATURE, 16, sig_off, sig_size)
 
     if len(cmds) != sizeofcmds:
@@ -2245,6 +2345,8 @@ def _prepare_executable_image(
         OutputRegion(symtab_off, bytes(nlists), "symbol table"),
         OutputRegion(strtab_off, bytes(strtab), "string table"),
     ))
+    if export_symbols:
+        regions.append(OutputRegion(exports_off, exports, "export trie"))
     return sig_off, regions, sig_size, text_filesize
 
 
