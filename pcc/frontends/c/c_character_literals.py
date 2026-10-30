@@ -17,7 +17,7 @@ from pcc.frontends.c.c_abi_layout import (
 )
 
 
-def parse_c_character_constant(src, start=0, target_triple=None):
+def parse_c_character_constant(src, start=0, target_triple=None, *, cpp=False):
     """Return (value, C integer type name, end offset) for one literal."""
     target = c_target_triple(target_triple)
     pos = start
@@ -104,6 +104,8 @@ def parse_c_character_constant(src, start=0, target_triple=None):
         for byte in values:
             value = ((value << 8) | byte) & 0xffffffff
         if len(values) == 1:
+            if cpp:
+                type_name = "char"
             if value >= 128 and not builtin_integer_is_unsigned(["char"], target):
                 value -= 256
         elif value >= 0x80000000:

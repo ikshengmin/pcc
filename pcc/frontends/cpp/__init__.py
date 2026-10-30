@@ -1,6 +1,7 @@
 """Owned C++ frontend under construction; see docs/cpp-frontend.md.
 
-This is not yet the public driver and is not a complete C++17 implementation.
+The public driver admits C++ translation units, but this is not a complete
+C++17 implementation.
 Unsupported semantics fail before they can be lowered through the C frontend.
 """
 

@@ -538,7 +538,10 @@ class _MacroReplacement:
 
 
 class Preprocessor:
-    def __init__(self, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None):
+    def __init__(self, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c"):
+        if language not in ("c", "c++17"):
+            raise ValueError("unsupported owned preprocessor language: " + language)
+        self.language = language
         self.base_dir = base_dir or "."
         self.include_dirs = list(include_dirs or [])
         self.system_include_dirs = [os.path.join(
@@ -1131,14 +1134,31 @@ class Preprocessor:
         expanded = self._expand_line(expanded)
         # Replace identifier tokens only: letters and escapes inside character
         # constants have already survived macro expansion and must stay intact.
-        expanded = "".join(
-            token.leading + ("0" if IDENTIFIER_RE.fullmatch(token.text) else token.text)
-            for token in self._macro_tokens(expanded)
-        )
+        pieces = []
+        for token in self._macro_tokens(expanded):
+            spelling = token.text
+            if self.language == "c++17":
+                # C++ boolean literals and alternative operator tokens retain
+                # their language meaning after macro expansion. They are not
+                # undefined identifiers and must not be replaced with zero.
+                spelling = {
+                    "true": "1", "false": "0", "and": "&&", "or": "||",
+                    "not": "!", "bitand": "&", "bitor": "|", "xor": "^",
+                    "compl": "~", "not_eq": "!=", "and_eq": "&=",
+                    "or_eq": "|=", "xor_eq": "^=",
+                }.get(spelling, spelling)
+            if IDENTIFIER_RE.fullmatch(spelling):
+                spelling = "0"
+            pieces.append(token.leading + spelling)
+        expanded = "".join(pieces)
         # Evaluate using a narrow integer-only expression evaluator.
         # eval() is out of scope for the self-host target (see
         # scripts/audit_selfhost.py banned-builtin list).
         try:
+            if self.language == "c++17":
+                from pcc.frontends.cpp.preprocessor_expr import evaluate_cpp17_condition
+
+                return bool(evaluate_cpp17_condition(expanded, self.target_triple))
             return bool(_eval_cpp_expr(expanded, self.target_triple))
         except _CppExprError as exc:
             raise RuntimeError(
@@ -1490,7 +1510,7 @@ class Preprocessor:
         return [token for record in pasted for token in record.tokens]
 
 
-def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None):
-    """Preprocess C source code."""
-    pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args, target_triple=target_triple)
+def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c"):
+    """Preprocess source in the explicitly selected language (C by default)."""
+    pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args, target_triple=target_triple, language=language)
     return pp.preprocess(source)

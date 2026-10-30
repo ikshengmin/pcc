@@ -6,12 +6,40 @@ step: semantic analysis, object lifetime, ABI lowering and execution must be
 implemented and independently tested. The target chain must not invoke an
 external C/C++ compiler, Clang/LLVM, host Python or libpython.
 
-## Experimental entry
+## Entry points and current boundary
 
-`pcc.frontends.cpp.CppParser().parse(source, filename)` is an experimental API.
-It is **not** the public C++ CLI, a complete C++ compiler, or a NumPy build path.
-The public extension/language routing will be integrated separately. Unsupported
-C++ must never be handed to the C parser as a fallback.
+The public driver selects the owned C++ frontend for `.cc`, `.cpp`, `.cxx`,
+`.c++` and `.C` translation-unit names. For example:
+
+```sh
+pcc example.cpp --emit-obj example.o --no-cache
+pcc example.cpp --emit-llvm example.ll --no-cache
+```
+
+C++ source uses the owned preprocessor with `__cplusplus=201703L`, without C
+extension cleanup or the fake C standard headers. Conditional preprocessing
+preserves C++ boolean/alternative tokens and 64-bit intmax/uintmax signedness,
+including ternary arm conversions and exact integer division. Unsupported or
+undefined live operations diagnose. The default C preprocessor behavior is
+unchanged. Explicit include paths and
+`--cpp-arg=-std=c++17` are supported; other dialects and missing library features
+fail explicitly. Unsupported C++ is never retried with the C parser.
+`pcc.frontends.cpp.CppParser().parse(source, filename)` remains available for
+frontend development. Existing C passes, code generation and owned emitters are
+reused. C++ source participates in compilation-cache content identity.
+
+The public CLI object-emission tests execute those exact objects using the owned
+ELF linker and an ABI startup observer, then compare with an explicit G++17
+reference. File dependencies use the same owned preprocessor and C++ semantic
+main discovery, without C's system-preprocessor/regex fallback. Mixed-language
+and directory dependencies of a C++ input are explicitly rejected until owned
+discovery is implemented. These are
+host-compiler tests, not native pcc1 or full-runtime final
+link/run qualification. Final linking still uses the existing runtime archive
+requirements. Directory collection, make-derived C++ projects, complete C++17
+and the complete NumPy build remain open; scalar entry routing does not establish
+those capabilities.
+
 Cross-target callers must give `CppParser(target_triple=...)` the same target as
 the C generator's pass context; do not infer the target's scalar model from the
 Python host.

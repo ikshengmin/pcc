@@ -86,7 +86,8 @@ def collect_project(path, sources_from_make=None, cpp_args=None):
     raise FileNotFoundError(f"Not found: {path}")
 
 
-def collect_translation_units(path, sources_from_make=None, dependencies=None, cpp_args=None):
+def collect_translation_units(path, sources_from_make=None, dependencies=None, cpp_args=None,
+                              target_triple=None):
     """Collect translation units from a file or directory.
 
     When dependencies are provided, the primary input must contribute the single
@@ -97,6 +98,7 @@ def collect_translation_units(path, sources_from_make=None, dependencies=None, c
     """
     return _collect_translation_units_with_dependencies(
         path,
+        target_triple=target_triple,
         sources_from_make=sources_from_make,
         dependencies=dependencies,
         cpp_args=_main_detection_cpp_args(
@@ -238,7 +240,7 @@ def translation_unit_include_dirs(units):
 
 
 def _collect_translation_units_with_dependencies(
-    path, sources_from_make=None, dependencies=None, cpp_args=None
+    path, sources_from_make=None, dependencies=None, cpp_args=None, target_triple=None
 ):
     path = os.path.abspath(path)
     dependency_specs = parse_dependency_specs(dependencies)
@@ -252,6 +254,7 @@ def _collect_translation_units_with_dependencies(
         return (
             _collect_directory_units(
                 path,
+                target_triple=target_triple,
                 sources_from_make=sources_from_make,
                 cpp_args=cpp_args,
             ),
@@ -263,7 +266,7 @@ def _collect_translation_units_with_dependencies(
         dep_units, _ = _collect_input_units(
             dep.path, sources_from_make=dep.sources_from_make
         )
-        dep_main_units, dep_other_units = _split_main_units(dep_units, cpp_args=cpp_args)
+        dep_main_units, dep_other_units = _split_main_units(dep_units, cpp_args=cpp_args, target_triple=target_triple)
         if dep_main_units:
             names = ", ".join(unit.name for unit in dep_main_units)
             raise ValueError(
@@ -274,6 +277,7 @@ def _collect_translation_units_with_dependencies(
     primary_main_units, primary_other_units = _split_main_units(
         primary_units,
         cpp_args=cpp_args,
+        target_triple=target_triple,
     )
     if os.path.isfile(path):
         if len(primary_main_units) != 1:
@@ -325,10 +329,10 @@ def _collect_directory(dirpath, sources_from_make=None, cpp_args=None):
     return '\n'.join(parts)
 
 
-def _collect_directory_units(dirpath, sources_from_make=None, cpp_args=None):
+def _collect_directory_units(dirpath, sources_from_make=None, cpp_args=None, target_triple=None):
     """Collect a directory as independent translation units."""
     units, _ = _collect_input_units(dirpath, sources_from_make=sources_from_make)
-    main_files, other_units = _split_main_units(units, cpp_args=cpp_args)
+    main_files, other_units = _split_main_units(units, cpp_args=cpp_args, target_triple=target_triple)
 
     if not main_files:
         raise ValueError(f"No main() function found in {dirpath}/*.c")
@@ -376,7 +380,7 @@ def _collect_input_cpp_arg_groups(path, sources_from_make=None):
     raise FileNotFoundError(f"Not found: {path}")
 
 
-def _split_main_units(units, cpp_args=None):
+def _split_main_units(units, cpp_args=None, target_triple=None):
     main_units = []
     other_units = []
     include_dirs = translation_unit_include_dirs(units)
@@ -384,6 +388,7 @@ def _split_main_units(units, cpp_args=None):
         if _has_main(
             unit.source,
             unit.path,
+            target_triple=target_triple,
             include_dirs=include_dirs,
             cpp_args=cpp_args,
         ):
@@ -1026,8 +1031,23 @@ def _resolve_source_path(dirpath, source_path):
     return os.path.join(dirpath, source_path)
 
 
-def _has_main(source, path=None, include_dirs=None, cpp_args=None):
+def _has_main(source, path=None, include_dirs=None, cpp_args=None, target_triple=None):
     """Check if source contains a main() function definition."""
+    from pcc.frontends.cpp.driver import is_cpp_path, preprocess_cpp
+    if path is not None and is_cpp_path(path):
+        from pcc.frontends.cpp import CppParser
+
+        # C++ dependency discovery must share the owned preprocessing/Sema
+        # boundary. Never invoke C's system-preprocessor/regex fallback here.
+        processed = preprocess_cpp(source, base_dir=os.path.dirname(path),
+                                   include_dirs=include_dirs, cpp_args=cpp_args,
+                                   target_triple=target_triple)
+        parser = CppParser(target_triple=target_triple)
+        parser.parse(processed, path)
+        symbol = parser.scope.lookup("main")
+        if symbol is None:
+            return False
+        return any(item.defined for item in getattr(symbol, "overloads", (symbol,)))
     main_pattern = re.compile(
         r"\b(?:int|void)\s+main\s*\([^;{}]*\)\s*\{",
         re.MULTILINE | re.DOTALL,

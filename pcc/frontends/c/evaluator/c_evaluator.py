@@ -313,7 +313,7 @@ def _compiler_cache_tracked_files():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pcc_dir = resolve_pcc_dir_from_environment(__file__)
     tracked_files = [os.path.abspath(__file__)]
-    roots = [base_dir] + [os.path.join(pcc_dir, dirname) for dirname in ("ir", "backend", "driver", "support")]
+    roots = [base_dir, os.path.join(pcc_dir, "frontends", "cpp")] + [os.path.join(pcc_dir, dirname) for dirname in ("ir", "backend", "driver", "support")]
     for package_dir in roots:
         try:
             for root, dirs, files in os.walk(package_dir):
@@ -951,13 +951,18 @@ def _compile_preprocessed_translation_unit_artifact(
     from pcc.frontends.c.passes import PassContext, PassPipeline
     from pcc.frontends.c.c_abi_layout import c_target_triple
 
-    from pcc.frontends.c.parse import make_c_parser
-    ast = make_c_parser().parse(codestr)
+    selected_target = c_target_triple(target_triple or (pass_ctx.target_triple if pass_ctx is not None else None))
+    from pcc.frontends.cpp.driver import is_cpp_path
+    if is_cpp_path(unit_name):
+        from pcc.frontends.cpp import CppParser
+        ast = CppParser(target_triple=selected_target).parse(codestr, unit_name)
+    else:
+        from pcc.frontends.c.parse import make_c_parser
+        ast = make_c_parser().parse(codestr)
 
     # --- Pass Framework Integration ---
     if pass_pipeline is None:
         pass_pipeline = PassPipeline.default()
-    selected_target = c_target_triple(target_triple or (pass_ctx.target_triple if pass_ctx is not None else None))
     if pass_ctx is None:
         pass_ctx = PassContext(opt_level=frontend_opt_level, target_triple=selected_target)
     else:
@@ -1044,14 +1049,23 @@ def _compile_translation_unit_artifact_job(
     evaluation_entry=None,
 ):
     unit_base_dir = os.path.dirname(unit.path) if unit.path else base_dir
-    codestr = _preprocess_translation_unit_source(
-        unit.source,
-        unit_base_dir,
-        use_system_cpp,
-        include_dirs=include_dirs,
-        cpp_args=cpp_args,
-        target_triple=target_triple,
-    )
+    from pcc.frontends.cpp.driver import is_cpp_path, preprocess_cpp
+    if is_cpp_path(unit.name):
+        if use_system_cpp:
+            raise ValueError("owned C++ input does not support the system preprocessor")
+        codestr = preprocess_cpp(
+            unit.source, base_dir=unit_base_dir, include_dirs=include_dirs,
+            cpp_args=cpp_args, target_triple=target_triple,
+        )
+    else:
+        codestr = _preprocess_translation_unit_source(
+            unit.source,
+            unit_base_dir,
+            use_system_cpp,
+            include_dirs=include_dirs,
+            cpp_args=cpp_args,
+            target_triple=target_triple,
+        )
 
     # SEC-P1-UBSAN: when opt-in trapping is active the emitted IR differs from
     # the cached un-instrumented artifact, so bypass the on-disk artifact cache

@@ -1281,6 +1281,22 @@ def execute_cli(
         return 1
 
     try:
+        from pcc.frontends.cpp.driver import is_cpp_path
+        if dependencies:
+            from pcc.driver.project import parse_dependency_specs
+
+            dependency_specs = parse_dependency_specs(dependencies)
+            cpp_input = os.path.isfile(path) and is_cpp_path(path)
+            cpp_dependency = any(os.path.isfile(item.path) and is_cpp_path(item.path)
+                                 for item in dependency_specs)
+            if cpp_input or cpp_dependency:
+                if (not cpp_input or any(
+                        item.sources_from_make or not os.path.isfile(item.path)
+                        or not is_cpp_path(item.path) for item in dependency_specs)):
+                    raise ValueError(
+                        "owned C++ dependencies currently require individual C++ files; "
+                        "mixed-language/directory discovery is not implemented"
+                    )
         if prepare_cmds:
             run_prepare_commands(prepare_cmds)
         if ensure_make_goal_specs:
@@ -1307,6 +1323,7 @@ def execute_cli(
         if use_multi_input:
             units, base_dir = collect_translation_units(
                 path,
+                target_triple=target_triple,
                 sources_from_make=sources_from_make,
                 dependencies=dependencies,
                 cpp_args=cpp_args,
@@ -1375,7 +1392,7 @@ def execute_cli(
                     )
                 else:
                     snippet_unit = TranslationUnit(
-                        name=os.path.basename(path),
+                        name=os.path.basename(path) if os.path.isfile(path) else "__merged_project__.c",
                         path=os.path.abspath(path) if os.path.isfile(path) else None,
                         source=source,
                     )
@@ -1447,18 +1464,29 @@ def execute_cli(
                         cache_dir=cache_dir,
                     )
             else:
-                ret = pcc.evaluate(
-                    source,
-                    optimize=opt_level,
-                    llvmdump=llvmdump,
-                    base_dir=base_dir,
-                    prog_args=_copy_seq(prog_args),
-                    include_dirs=include_dirs,
-                    cpp_args=merged_cpp_args,
-                    link_args=_copy_seq(link_args),
-                    use_compile_cache=not no_cache,
-                    cache_dir=cache_dir,
-                )
+                from pcc.frontends.cpp.driver import is_cpp_path
+                if os.path.isfile(path) and is_cpp_path(path):
+                    ret = pcc.evaluate_translation_units(
+                        [TranslationUnit(name=os.path.basename(path),
+                                         path=os.path.abspath(path), source=source)],
+                        optimize=opt_level, llvmdump=llvmdump, base_dir=base_dir,
+                        prog_args=_copy_seq(prog_args), include_dirs=include_dirs,
+                        cpp_args=merged_cpp_args, link_args=_copy_seq(link_args),
+                        use_compile_cache=not no_cache, cache_dir=cache_dir,
+                    )
+                else:
+                    ret = pcc.evaluate(
+                        source,
+                        optimize=opt_level,
+                        llvmdump=llvmdump,
+                        base_dir=base_dir,
+                        prog_args=_copy_seq(prog_args),
+                        include_dirs=include_dirs,
+                        cpp_args=merged_cpp_args,
+                        link_args=_copy_seq(link_args),
+                        use_compile_cache=not no_cache,
+                        cache_dir=cache_dir,
+                    )
     except (
         BackendUnavailable,
         ValueError,
