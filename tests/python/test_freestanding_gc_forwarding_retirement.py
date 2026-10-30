@@ -1028,9 +1028,14 @@ def test_forwarding_retirement_across_three_remap_epochs(
     implementation = _link_forwarding_retirement_probe(
         tmp_path, "forwarding_retirement_pcc_python", pcc_runtime_archive
     )
-    result = subprocess.run(
-        [str(implementation)], capture_output=True, text=True, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    # What the retired C runtime oracle printed.
-    assert result.stdout == "2\n0\n0\n0,1\n2,3,2,1\n"
+    # The probe steps the collector directly while the threaded runtime's
+    # collector thread runs. Each run must retire on the same epoch: a step
+    # that decided relocation on that thread's momentary gate state retired
+    # one or two steps late, or never, in 2-8 of 20 runs.
+    for _ in range(20):
+        result = subprocess.run(
+            [str(implementation)], capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        # What the retired C runtime oracle printed.
+        assert result.stdout == "2\n0\n0\n0,1\n2,3,2,1\n"

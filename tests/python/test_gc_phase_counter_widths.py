@@ -182,6 +182,9 @@ def _host_functions(*, other_mutators=()):
         "pcc_thread_all_stopped_at_gates": lambda: int(all(
             state == "parked" and at_gate for state, at_gate in other_mutators
         )),
+        # Explicit collects and the automatic GC4 step own the stopped world
+        # before they step; a direct call is modeled separately below.
+        "pcc_thread_owns_stopped_world": lambda: 1,
         "_init_config": noop,
         "_object_graph_lock": noop,
         "_object_graph_unlock": noop,
@@ -384,6 +387,33 @@ def test_host_source_gc4_relocation_requires_other_mutators_at_application_gates
     # paths, rather than replacing its quiescence condition in the test.
     assert calls == expected
 
+
+
+@pytest.mark.parametrize("backend", (0, 3, 4))
+@pytest.mark.parametrize("stopped", (0, -1))
+def test_host_source_direct_moving_step_owns_its_stopped_world(backend, stopped):
+    # pcc_thread_all_stopped_at_gates answers only for a stopped world. A
+    # direct GC3/GC4 step (no stopped world of its caller) stops it for the
+    # step and resumes it after; a refused stop does no work. Other
+    # collectors' steps take no world.
+    memory, functions = _host_functions(other_mutators=(("parked", 1),))
+    memory.set("pcc_gc_backend_selected", backend)
+    memory.set("pcc_gc_forwarding_population", 1)
+    events = []
+    functions["pcc_thread_owns_stopped_world"] = lambda: int("stop" in events and "resume" not in events)
+    functions["pcc_stop_the_world"] = lambda: events.append("stop") or stopped
+    functions["pcc_resume_world"] = lambda: events.append("resume") or 0
+    retire = "pcc_gc_backend4_remap_and_retire_stopped_world"
+    functions[retire] = lambda: events.append("retire") or 1
+    result = functions["pcc_gc_step"](7)
+    if backend == 0:
+        assert events == [] and result == 0
+    elif stopped != 0:
+        assert events == ["stop"] and result == 0
+    elif backend == 4:
+        assert events == ["stop", "retire", "resume"] and result == 1
+    else:
+        assert events == ["stop", "resume"]
 
 
 def test_host_source_pause_accumulation_max_and_full_reset_keep_high_bits():

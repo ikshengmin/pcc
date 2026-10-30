@@ -136,6 +136,19 @@ def pcc_gc_step(budget: i64) -> i64:
         return 0
     if backend == 1 or backend == 2:
         return pcc_gc_incremental_concurrent_step(budget)
+    # GC3 and GC4 steps copy, remap and retire objects only when every other
+    # mutator is parked at an application gate, which
+    # pcc_thread_all_stopped_at_gates answers for a stopped world. Explicit
+    # collects and the automatic GC4 step stop the world before stepping; a
+    # direct call that had not read the collector thread's gate state at a
+    # random instant, so relocation and retirement ran or were skipped by
+    # timing. Stop the world for such a call, as
+    # pcc_gc_backend4_remap_and_retire_stopped_world does.
+    acquired_world: i64 = 0
+    if (backend == 3 or backend == 4) and pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            return 0
+        acquired_world = 1
     if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
         # Stack-map step 3: automatic steps run where an allocation triggered
         # them; compare that stack's mapped roots with the registered ones
@@ -295,6 +308,8 @@ def pcc_gc_step(budget: i64) -> i64:
                     )
 
     pcc_gc_tracing_record_pause(start_us, pcc_platform_monotonic_us())
+    if acquired_world != 0:
+        pcc_resume_world()
     return processed
 
 
