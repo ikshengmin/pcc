@@ -2816,6 +2816,21 @@ def _instance_field_load(inst, offset: int, out) -> int:
         store_ptr(out, 0, value)
         return 0
     if _gc_backend_selected_fast() == 0:
+        # NULL, a tagged int and the image's static singletons are never
+        # freed and need no count: one word load, which sees the field
+        # before or after any concurrent store, returns them without the
+        # transaction. Only the address is examined, never a header.
+        word: int = atomic_load_i64(inst, offset, "relaxed")
+        immediate = int_to_ptr(word)
+        if (
+            word == 0
+            or (word & 1) != 0
+            or ptr_eq(immediate, global_addr("py_none_storage")) != 0
+            or ptr_eq(immediate, global_addr("py_true_storage")) != 0
+            or ptr_eq(immediate, global_addr("py_false_storage")) != 0
+        ):
+            store_ptr(out, 0, immediate)
+            return 0
         # GC0 never relocates: one transaction around the load and retain,
         # unless acquiring it parked through a backend switch.
         pcc_py_gc_minor_graph_lock()
