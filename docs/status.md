@@ -427,11 +427,12 @@ privatization, per-carrier scheduler state, and P0 packages 4 and 5
 (protocol-free compiled code, biased counts). GC0 pins and mode/slot
 leases (about 343 and 281 calls per one-worker request, about 7% of self
 time) exist for a runtime switch into a moving collector; removing them
-changes that contract and is a maintainer decision.
+changes that contract and is a maintainer decision (decided 2026-10-30, see
+the structural program below).
 
-Found in these rounds, not fixed: `a, b = vt.recv(r)` and
-`s, r = vt.mpsc(n)` fail to compile ("slot-call Call lacks an immediate
-owned-result handoff"; indexing the result compiles). Failing identically
+Found in these rounds and fixed since by `8078b230f`: `a, b = vt.recv(r)`
+and `s, r = vt.mpsc(n)` failed to compile ("slot-call Call lacks an
+immediate owned-result handoff"). Failing identically
 on unmodified arms: `test_gc_tracked_node_pool.py` expects `pool:4096` on
 GC4, which tracks nothing under threads (GC0-3 print it);
 `test_native_init_field_rhs_type.py::test_class_self_call_argument_types_reach_literal_dispatch_target`
@@ -442,6 +443,47 @@ source is missing). GC1 and GC2 do not collect every cyclic object with
 `test_dead_object_untrack_skip.py` uses acyclic nodes. Repro: the archive's
 `freeze.py <arm> <rev>`, `guard_build.py <arm>`, `check_workers.py <arm> 2`,
 `guard_measure.py <base> <cand> <tag>` and `summarize.py <tag>.json`.
+
+Structural program (2026-10-30, maintainer direction: do all structural
+items, correctness first). Order: virtual-thread result unpacking, a fixed
+collector, per-object container locks (P0 plan package 9: lists, then
+instances, then dicts), per-carrier scheduler state (package 10), then P0
+packages 4 and 5.
+- `8078b230f`: owned virtual-thread results (channel, oneshot, receive,
+  select, join, result, exception, sender clone, TCP receive) are published
+  into the operand root waiting for them, so tuple unpacking and method
+  operands compile; `test_vthread_owned_results_as_operands.py` runs GC0-4.
+- `4bba76893`: the collector is fixed at the first managed allocation
+  (`pcc_gc_fix_backend`: `pcc_gc_alloc`, or registering a raw
+  `PY_FLAG_GC_MALLOC_ALLOC` object); data-segment images do not fix it, since
+  C-ABI image constructors register literals before a C program's `main`
+  selects. GC0-2 address leases are the no-op token 0 unless the provenance
+  probe is on or the configuration is uninitialized; GC0 pins stay (cycle
+  collector roots). In-process backend switching is no longer a contract
+  (maintainer direction): switch-only tests were removed and switching
+  probes now run one process per collector. r72 (hd53 -> fz56, host load
+  8-10): one worker +0.15% QPS (cycles -1.40%, instructions -2.77%), four
+  workers +0.33% (cycles -1.05%); same-run asyncio 80,836 / 259,450.
+  Validation: the focused 32-file contract set, run from sealed arms with
+  `PCC_TEST_NO_NATIVE_PROVISIONING=1`, fails identically on base and
+  candidate; most of those base failures are `NativeProvisioningError`
+  (tests that provision their own runtime), the rest stale IR/source-shape
+  assertions (`test_gc_root_precision.py`, `test_gc_backend_generational.py`).
+- In progress, uncommitted: container locks. The kernel has 512 striped
+  0/1 words (`pcc_container_lock`, and `pcc_container_lock_pair`, which takes
+  two stripes in index order for `list.extend(list)` and `a + b`); holders
+  are no-park, never take the graph lock or a second container lock (both
+  abort) and run no user code. `py_list.py` routes every list transaction
+  through `_list_lock`, still the graph lock until `_lists_lock_themselves()`
+  is switched on after the other modules that touch list internals
+  (`sorted`, `str.join`, `bytes.join`, `pcc_list_snapshot_commit_slots`,
+  `gc.callbacks`, tuple splat, generator frames) are converted and the
+  checked-lease path (graph lock under the provenance probe) is kept out of
+  container regions. Pre-existing GC0 races fixed on the way: `in`, `index`
+  and `count` compared borrowed items with no lock, `copy`, `*` and slicing
+  read items unlocked, and sanity checks read length and capacity before
+  locking (false negatives under concurrent growth). Open: GC1-4 slicing
+  still reads source items without a lock.
 
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
