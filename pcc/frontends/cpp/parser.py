@@ -10,6 +10,7 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.declarators import parse_plain_name
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
 from pcc.frontends.cpp.types import (
     ArithmeticTypes, TYPE_WORDS, canonical_type, c_type_names,
@@ -197,16 +198,12 @@ class CppParser:
             dtype = self._type()
         else:
             dtype = self._type()
-            name = self._identifier()
+            name = self._declarator_name()
         self._expect(";")
         self.scope.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
 
     def _declarator_name(self):
-        if self._accept("("):
-            token = self._declarator_name()
-            self._expect(")")
-            return token
-        return self._identifier()
+        return parse_plain_name(self.cursor, self._identifier)
 
     def _is_declaration(self):
         if not self._is_type(self._peek()):
@@ -237,7 +234,7 @@ class CppParser:
 
     def _function(self):
         result_type = self._type()
-        name = self._identifier()
+        name = self._declarator_name()
         self._expect("(")
         params = []
         parent = self.scope
@@ -251,7 +248,7 @@ class CppParser:
                     dtype = self._type()
                     param = None
                     if self._peek().value not in (",", ")"):
-                        param = self._identifier()
+                        param = self._declarator_name()
                         # A preceding parameter can hide an outer type in a
                         # later parameter declaration, including prototypes.
                         self.scope.declare(Symbol(param.value, "value", param.coord, dtype=dtype))

@@ -24,6 +24,16 @@ consumed. `T(a);` is recognized tentatively as a declaration only when lookup
 finds a type; speculation restores the token cursor and makes no declarations.
 A local value hides an outer type, including in function parameter scopes.
 
+Named declarators now share a recursive syntax component. The public frontend
+admits redundant grouping around scalar, function, parameter and typedef names,
+without changing lookup or overload identity. The richer syntax model retains
+pointer/reference/array/function chunks, per-level cv qualifiers, qualified-name
+segments and callback payloads. Those are syntax records, **not** implemented
+pointer/reference/lifetime semantics: the public `parse_plain_name` capability
+gate still rejects them before C AST output. Six grouped-name programs, including
+a two-translation-unit case, have host-owned emitted execution and separate
+G++17 byte-oracle tests; this is not a native C++ driver qualification.
+
 Currently accepted semantics are deliberately narrow: arithmetic free functions,
 arithmetic aliases, prototypes, single-object block declarations, nested lexical
 blocks, arithmetic, direct calls and returns. Types keep canonical C++ identity
