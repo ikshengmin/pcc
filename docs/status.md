@@ -361,6 +361,40 @@ unhashable dict and set keys raise hash()'s message instead of 3.14's
 returning the default; `set().add([])` inside a lambda fails to compile
 ("slot-call operand has no authoritative source or owned result: Call").
 
+Rounds R31-R40 (2026-10-30, same README, receipts `r47`-`r59`) took back
+what the shared-field fix cost, then reached the per-operation floor.
+Accepted: only instance-field stores take the store-plan transaction and
+GC0 field reads use one plain transaction (`af0b6cca0`; locking every GC0
+store had cost 1w -7.8%, 4w -16.5%), lease-free exact-list guard tags
+(`5dd9f7148`), a borrowed parameter searched for a literal (`efa97eb67`),
+full-list growth inside the append transaction (`baf50e8eb`) and GC0
+call-root pins for a take without the graph lock (`a10582529`). Rejected,
+patches archived: lease-free tag reads in scalar slot calls, inline atomic
+counts in `pcc_gc_store_root` (the self backend grew it from 259 to 400
+instructions, 1w -3.0%), and an append's list type checked before its
+transaction (neutral). Direct cumulative from `899c4fb79` to `d9c427060`:
+one worker 29,066 -> 31,660 QPS (+9.4%, cycles -8.2% 7/7), four workers
+37,801 -> 48,044 (+23.3%, cycles -19.3% 7/7); from the previous batch's
+`59e6a4cfa` the net is +2.0% / -2.0% (noise), sync payload 213.8k ->
+198.3k instructions per request; same-run asyncio 80,080 / 254,545 QPS
+(2.5x / 5.3x ahead). Reassessment: per request pcc retires 487k
+instructions at one worker against asyncio's 168k, and at four workers
+spends 263k cycles against 105k at one (IPC 4.6 -> 2.5; asyncio 41k ->
+55k). The sync payload (dict and json, no virtual threads) is 198k, so the
+TaskScope/virtual-thread layer and coroutine frames carry about 290k of
+the 487k. Of the four-worker inflation the graph lock is about 23%, the
+virtual-thread scheduler mutex 18% (trylock spins and sched_yield), GC0
+tracking 8% (global acq_rel counters `py_gc_tracked_count` and
+`pcc_gc_tracked_node_pool_count`, plus 32 address-hashed shard locks every
+carrier touches), leases and shared refcounts 5% each. Racy reference
+builds without graph transactions on the GC0 container fast paths (append,
+field load and store, dict get and materialize, list get) gain only 1w
++3.5% to +6.4% and 4w +10.5%, which bounds privatizing non-escaping
+containers on this request. Leads by measured share: the per-request cost
+of the virtual-thread layer and coroutine frames, per-carrier scheduler
+queues, GC0 tracking counters and shard locality, then container
+privatization.
+
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
 Current route, at the user's explicit request: **arm1:8084 first, us1:8089
