@@ -50,6 +50,11 @@ def _bootstrap_subprocess_run(args, *, check=False):
 
 
 def _native_bootstrap_executable() -> str:
+    # Recognize this native runtime, not an explicitly selected compiler.
+    # Installed CPython console scripts are also named ``pcc``; a filename
+    # or PATH match alone does not establish the current execution owner.
+    if sys.implementation.name != "pcc":
+        return ""
     argv0 = str(sys.argv[0] if len(sys.argv) > 0 else "" or "").strip()
     base = os.path.basename(argv0).lower()
     if not argv0 or not base.startswith("pcc") or argv0.endswith(".py"):
