@@ -35,6 +35,11 @@ class Symbol:
         self.owner = None
         self.namespace_scope = None
         self.internal_linkage = False
+        # Function language linkage is part of its semantic type/identity,
+        # not a post-lowering symbol-name patch. None means no specification.
+        self.requested_language_linkage = None
+        self.language_linkage = "C++"
+        self.declaration_scopes = []
         # Constant-expression proof belongs to this declaration identity, not
         # to its spelling or C AST. Publish only after successful initialization.
         self.constant_fact = None
@@ -59,6 +64,8 @@ class Scope:
         self.inline = inline
         self.anonymous = anonymous
         self.unnamed_namespace = None
+        if parent is None:
+            self.c_linkage_functions = {}
         self.internal_linkage = anonymous or (parent is not None and parent.internal_linkage)
 
     def namespace(self):
@@ -274,7 +281,7 @@ class Scope:
         if previous is not None and previous.kind == symbol.kind == "function":
             for own in previous.overloads:
                 for imported in symbol.overloads:
-                    if (own is not imported and own.owner is self
+                    if (own is not imported and (own.owner is self or self in own.declaration_scopes)
                             and not own.template_parameters and not imported.template_parameters
                             and own.parameters == imported.parameters):
                         raise CppDiagnostic("cpp.using-declaration-conflict",
@@ -326,9 +333,15 @@ class Scope:
                         continue
                 elif candidate.parameters != symbol.parameters:
                     continue
-                if candidate.owner is not self:
+                if (candidate.owner is not self and self not in candidate.declaration_scopes
+                        and not (symbol.requested_language_linkage == "C"
+                                 and candidate.language_linkage == "C")):
                     raise CppDiagnostic("cpp.using-declaration-conflict",
                                         "declaration conflicts with an imported function", symbol.coord)
+                if (symbol.requested_language_linkage is not None
+                        and symbol.requested_language_linkage != candidate.language_linkage):
+                    raise CppDiagnostic("cpp.conflicting-language-linkage",
+                                        "function redeclared with different language linkage", symbol.coord)
                 if not symbol.template_parameters and candidate.dtype != symbol.dtype:
                     raise CppDiagnostic("cpp.return-type-overload",
                                         "functions cannot differ only in return type", symbol.coord)
@@ -337,16 +350,36 @@ class Scope:
                                         f"redefinition of '{symbol.name}'", symbol.coord)
                 if definition:
                     candidate.defined = True
+                if self not in candidate.declaration_scopes:
+                    candidate.declaration_scopes.append(self)
                 return candidate
-            previous.overloads.append(symbol)
-        else:
-            group = Symbol(symbol.name, "function", symbol.coord)
-            group.overloads.append(symbol)
-            self.names[symbol.name] = group
-        symbol.owner = self
-        symbol.internal_linkage = self.namespace().internal_linkage
-        if not symbol.template_parameters:
+        symbol.language_linkage = symbol.requested_language_linkage or "C++"
+        if symbol.language_linkage == "C":
+            registry = self.global_scope().c_linkage_functions
+            canonical = registry.get(symbol.name)
+            if canonical is not None:
+                if canonical.parameters != symbol.parameters or canonical.dtype != symbol.dtype:
+                    raise CppDiagnostic("cpp.conflicting-c-linkage-type",
+                                        "a C-linkage function cannot be overloaded across namespaces", symbol.coord)
+                if definition and canonical.defined:
+                    raise CppDiagnostic("cpp.redefinition",
+                                        "C-linkage function already has a definition", symbol.coord)
+                symbol = canonical
+            else:
+                registry[symbol.name] = symbol
+            symbol.c_name = symbol.name
+        elif not symbol.template_parameters:
             symbol.c_name = mangle_function(symbol.name, symbol.parameters, self.namespace_path())
+        if previous is None:
+            previous = Symbol(symbol.name, "function", symbol.coord)
+            self.names[symbol.name] = previous
+        if symbol not in previous.overloads:
+            previous.overloads.append(symbol)
+        if symbol.owner is None:
+            symbol.owner = self
+            symbol.internal_linkage = self.namespace().internal_linkage
+        if self not in symbol.declaration_scopes:
+            symbol.declaration_scopes.append(self)
         if definition:
             symbol.defined = True
         return symbol

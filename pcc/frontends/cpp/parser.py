@@ -144,6 +144,7 @@ class CppParser:
         self.pending_instances = []
         self.loop_depth = 0
         self.assignment_index = 0
+        self.language_linkage = None
         self.cursor = TokenCursor(self._tokenize(text, filename))
         declarations = self._declarations()
         instances = []
@@ -166,13 +167,16 @@ class CppParser:
             return c_ast.FileAST(prototypes + declarations + instances)
         return c_ast.FileAST(declarations)
 
-    def _declarations(self, namespace_body=False):
+    def _declarations(self, namespace_body=False, single=False):
         declarations = []
         while self._peek().kind != "EOF" and not (namespace_body and self._peek().value == "}"):
             if self._accept(";"):
                 continue
             value = self._peek().value
-            if value == "namespace" or value == "inline":
+            if (value == "extern" and
+                    self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
+                declarations.extend(self._linkage_specification())
+            elif value == "namespace" or value == "inline":
                 declarations.extend(self._namespace())
             elif value in ("class", "struct", "union"):
                 declarations.append(parse_class(self))
@@ -184,7 +188,37 @@ class CppParser:
                 self._template()
             else:
                 declarations.append(self._function())
+            if single:
+                break
         return declarations
+
+    def _linkage_specification(self):
+        keyword = self._expect("extern")
+        if self.scope.kind != "namespace":
+            raise CppDiagnostic("cpp.linkage-scope",
+                                "a language linkage specification requires namespace scope", keyword.coord)
+        language = self.cursor.take()
+        if language.value not in ('"C"', '"C++"'):
+            raise CppDiagnostic("cpp.unsupported.language-linkage",
+                                "only C and C++ language linkage strings are implemented", language.coord)
+        previous = self.language_linkage
+        self.language_linkage = language.value[1:-1]
+        try:
+            if self._accept("{"):
+                declarations = self._declarations(namespace_body=True)
+                self._expect("}")
+                return declarations
+            if self._peek().value in (";", "}") or self._peek().kind == "EOF":
+                raise CppDiagnostic("cpp.linkage-declaration",
+                                    "language linkage requires a declaration", self._peek().coord)
+            if (self._peek().value == "static" or
+                    self._peek().value == "extern" and
+                    self.cursor.tokens[self.cursor.position + 1].kind != "STRING_LITERAL"):
+                raise CppDiagnostic("cpp.linkage-storage",
+                                    "a declaration directly in a linkage specification cannot specify storage", self._peek().coord)
+            return self._declarations(single=True)
+        finally:
+            self.language_linkage = previous
 
     def _namespace(self):
         inline = self._accept("inline") is not None
@@ -484,6 +518,9 @@ class CppParser:
 
     def _template(self):
         keyword = self._expect("template")
+        if self.language_linkage == "C":
+            raise CppDiagnostic("cpp.template-c-linkage",
+                                "templates cannot have C language linkage", keyword.coord)
         if self.scope.namespace_path():
             raise CppDiagnostic("cpp.unsupported.namespace-templates",
                                 "namespace templates require qualified template ABI and lookup", keyword.coord)
@@ -512,6 +549,11 @@ class CppParser:
             self.parsing_template = False
 
     def _function(self, template_parameters=(), declaration_scope=None):
+        # A storage-only extern is not a language linkage specification.
+        self._accept("extern")
+        if self._peek().value == "static":
+            raise CppDiagnostic("cpp.unsupported.function-storage",
+                                "static function name/type linkage is not implemented", self._peek().coord)
         result_type = self._type()
         params = []
         parameter_symbols = []
@@ -574,6 +616,10 @@ class CppParser:
             if is_enum_type(pointee) and pointee.internal_linkage:
                 raise CppDiagnostic("cpp.unsupported.enum-linkage",
                                     "function signatures involving internal-linkage enum types are not implemented", name.coord)
+        if (name.value == "main" and self.language_linkage is not None
+                and (not parent.namespace_path() or self.language_linkage == "C")):
+            raise CppDiagnostic("cpp.main-language-linkage",
+                                "main cannot have a language linkage specification", name.coord)
         definition = self._peek().value == "{"
         if name.value == "main" and not parent.namespace_path() and params:
             self._unsupported(name, "main parameters are not implemented")
@@ -584,6 +630,15 @@ class CppParser:
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.template_parameters = template_parameters
+        new_symbol.requested_language_linkage = self.language_linkage
+        if self.language_linkage == "C":
+            if any(not self.types.integral(dtype) and dtype != "void"
+                   for dtype in (result_type,) + new_symbol.parameters):
+                raise CppDiagnostic("cpp.unsupported.c-linkage-signature",
+                                    "C-linkage signatures currently require fundamental integer/void types", name.coord)
+            if parent.internal_linkage:
+                raise CppDiagnostic("cpp.unsupported.c-linkage-internal",
+                                    "C function type with internal name linkage is not implemented", name.coord)
         registry = self.scope if declaration_scope is None else declaration_scope
         symbol = registry.declare_function(new_symbol, definition)
         if template_parameters:
@@ -652,6 +707,10 @@ class CppParser:
 
     def _statement(self):
         token = self._peek()
+        if (token.value == "extern" and
+                self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
+            raise CppDiagnostic("cpp.linkage-scope",
+                                "language linkage specifications are not block declarations", token.coord)
         if token.value == "enum":
             raise CppDiagnostic("cpp.unsupported.enum-local-scope",
                                 "local enum identity and ABI naming are not implemented", token.coord)
@@ -1107,6 +1166,22 @@ class CppParser:
 
     def _primary(self):
         token = self.cursor.take()
+        if token.value == "static_cast":
+            self._expect("<")
+            dtype = self._abstract_pointer_type(self._type())
+            self._expect(">")
+            self._expect("(")
+            expression = self._expression()
+            self._expect(")")
+            if (dependent(dtype) or dependent(expression.dtype)
+                    or not self.types.integral(dtype)
+                    or not self.types.integral(expression.dtype)):
+                raise CppDiagnostic("cpp.unsupported.static-cast",
+                                    "static_cast currently requires fundamental integer operands", token.coord)
+            node = self._convert(expression, dtype, token.coord, force=True)
+            return Expression(node, unqualified(dtype), constant_fact=converted_fact(
+                self._constant_fact(expression), dtype, self.types, token.coord,
+            ))
         if token.value == "nullptr":
             if self.parsing_template:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
