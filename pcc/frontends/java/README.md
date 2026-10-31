@@ -63,6 +63,15 @@ owned CFG; both arms are semantically checked, and a constant selected value doe
 not make a conditional expression constant when another operand is nonconstant.
 Reference/poly/boxing conditional expressions remain explicit runtime boundaries.
 
+Source-owned `switch` statements support byte/short/char/int selectors, checked
+constant labels (including comma lists), colon fallthrough groups and arrow
+statement/block rules. Duplicate/range checks, switch-block lexical scope,
+definite assignment at every dispatch entry and break/continue targets precede
+IR emission. Switch expressions, reference/enum/pattern labels and runtime
+exception paths remain separate capabilities. `do` loops execute the body before
+the boolean test, continue at that test, and intersect body/continue/break states;
+constant conditions do not erase Java's syntactic reachability checks.
+
 Integral division/remainder and their compound assignments support nonzero
 constant-expression divisors, preserving truncation toward zero, dividend-signed
 remainders and int/long minimum divided by minus one. Neither float-based

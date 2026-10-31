@@ -21,7 +21,7 @@ class SourceLowerer:
         self.module.triple = target
         self.functions = {}
         self.i32 = ir.IntType(32)
-        self.loops = []
+        self.controls = []
 
     @staticmethod
     def scalar_type(dtype):
@@ -172,7 +172,9 @@ class SourceLowerer:
                 self.builder.ret_void()
             return
         if kind in ("break", "continue"):
-            self.builder.branch(self.loops[-1][0 if kind == "continue" else 1])
+            target = (self.controls[-1][1] if kind == "break" else
+                      next(target[0] for target in reversed(self.controls) if target[0] is not None))
+            self.builder.branch(target)
             return
         if kind == "if":
             condition, yes, no = node.children
@@ -193,6 +195,49 @@ class SourceLowerer:
             if not node.completes:
                 self.builder.unreachable()
             return
+        if kind == "switch":
+            selector, *groups = node.children
+            value = self.expression(selector)
+            done = self.function.append_basic_block("switch_done")
+            blocks = [self.function.append_basic_block("switch_group") for group in groups]
+            default = next((block for group, block in zip(groups, blocks)
+                            if any(label.kind == "default" for label in group.value)), done)
+            dispatch = self.builder.switch(value, default)
+            for group, block in zip(groups, blocks):
+                for label in group.value:
+                    if label.kind == "case":
+                        dispatch.add_case(ir.Constant(value.type, label.constant), block)
+            self.controls.append((None, done))
+            for index, (group, block) in enumerate(zip(groups, blocks)):
+                self.builder.position_at_end(block)
+                for child in group.children:
+                    self.statement(child)
+                if not self.builder.block.is_terminated:
+                    target = blocks[index + 1] if node.value == "colon" and index + 1 < len(blocks) else done
+                    self.builder.branch(target)
+            self.controls.pop()
+            self.builder.position_at_end(done)
+            if not node.completes:
+                self.builder.unreachable()
+            return
+        if kind == "do":
+            condition, body = node.children
+            body_block = self.function.append_basic_block("do_body")
+            check = self.function.append_basic_block("do_check")
+            done = self.function.append_basic_block("do_done")
+            self.builder.branch(body_block)
+            self.builder.position_at_end(body_block)
+            self.controls.append((check, done))
+            self.statement(body)
+            self.controls.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(check)
+            self.builder.position_at_end(check)
+            self.builder.cbranch(self.expression(condition), body_block, done)
+            self.builder.position_at_end(done)
+            if not node.completes:
+                self.builder.unreachable()
+            return
         if kind in ("while", "for"):
             if kind == "for":
                 initial, condition, update, body = node.children
@@ -208,9 +253,9 @@ class SourceLowerer:
             self.builder.position_at_end(check)
             self.builder.cbranch(self.expression(condition), body_block, done)
             self.builder.position_at_end(body_block)
-            self.loops.append((update_block, done))
+            self.controls.append((update_block, done))
             self.statement(body)
-            self.loops.pop()
+            self.controls.pop()
             if not self.builder.block.is_terminated:
                 self.builder.branch(update_block)
             if update is not None:

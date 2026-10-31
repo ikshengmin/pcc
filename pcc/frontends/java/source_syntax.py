@@ -25,7 +25,7 @@ PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
               "<<": 8, ">>": 8, ">>>": 8, "+": 9, "-": 9,
               "*": 10, "/": 10, "%": 10}
 ASSIGNMENTS = frozenset(("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>="))
-LEXEME = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*|[0-9][A-Za-z0-9_]*|>>>=|>>>|>>=|<<=|==|!=|<=|>=|&&|\|\||\+\+|--|[+*/%&|^\-]=|<<|>>|[{}()[\];,.?:+*/%&|^!~<>=\-]")
+LEXEME = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*|[0-9][A-Za-z0-9_]*|>>>=|>>>|>>=|<<=|==|!=|<=|>=|&&|\|\||\+\+|--|->|[+*/%&|^\-]=|<<|>>|[{}()[\];,.?:+*/%&|^!~<>=\-]")
 CHAR_LITERAL = re.compile(r"'(?:[^'\\\r\n]|\\(?:[btnfrs\"'\\]|[0-3][0-7]{2}|[0-7]{1,2}))'")
 
 
@@ -290,6 +290,16 @@ class SourceParser:
             condition = self.expression()
             self.expect(")")
             return Node("while", token, children=[condition, self.statement()])
+        if self.accept("do"):
+            body = self.statement()
+            self.expect("while")
+            self.expect("(")
+            condition = self.expression()
+            self.expect(")")
+            self.expect(";")
+            return Node("do", token, children=[condition, body])
+        if self.accept("switch"):
+            return self.switch_statement(token)
         if self.accept("for"):
             self.expect("(")
             initial = Node("empty", token) if self.peek().text == ";" else self.simple(allow_declaration=True)
@@ -307,9 +317,47 @@ class SourceParser:
             self.take()
             self.expect(";")
             return Node(token.text, token)
+        if token.text in ("case", "default"):
+            token.error("case/default requires a directly enclosing switch block")
         node = self.simple(allow_declaration=in_block)
         self.expect(";")
         return node
+
+    def switch_statement(self, token):
+        self.expect("(")
+        selector = self.expression()
+        self.expect(")")
+        self.expect("{")
+        groups, style = [], None
+        while not self.accept("}"):
+            label_token = self.take()
+            if label_token.text == "default":
+                labels = [Node("default", label_token)]
+            elif label_token.text == "case":
+                labels = [Node("case", label_token, children=[self.expression()])]
+                while self.accept(","):
+                    labels.append(Node("case", label_token, children=[self.expression()]))
+            else:
+                label_token.error("switch block requires a case/default label")
+            if self.accept(":"):
+                current = "colon"
+                statements = []
+                while self.peek().text not in ("case", "default", "}"):
+                    statements.append(self.statement(in_block=True))
+            elif self.accept("->"):
+                current = "arrow"
+                if self.peek().text == "{":
+                    statements = [self.block()]
+                else:
+                    statements = [self.simple()]
+                    self.expect(";")
+            else:
+                self.peek().error("expected ':' or '->' after switch label")
+            if style is not None and style != current:
+                label_token.error("cannot mix switch rules and statement groups")
+            style = current
+            groups.append(Node("switch_group", label_token, labels, statements))
+        return Node("switch", token, style or "colon", [selector, *groups])
 
     def simple(self, allow_declaration=False):
         token = self.peek()

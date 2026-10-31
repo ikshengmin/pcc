@@ -66,7 +66,7 @@ class SourceAnalyzer:
         self.current_field = None
         self.method = None
         self.scopes = []
-        self.loops = []
+        self.controls = []
 
     def declare_methods(self):
         if self.program.name == "java/lang/Object":
@@ -113,7 +113,7 @@ class SourceAnalyzer:
             self.declare_methods()
         for method in self.program.methods:
             self.method = method
-            self.scopes, self.loops = [{}], []
+            self.scopes, self.controls = [{}], []
             self.constant_locals = {}
             assigned = set()
             for parameter, dtype, is_final in zip(method.parameters, method.parameter_types, method.parameter_final):
@@ -398,6 +398,64 @@ class SourceAnalyzer:
                 assigned = y
             else:
                 assigned = y & n
+        elif kind == "switch":
+            selector, *groups = node.children
+            self.expression(selector, assigned)
+            if selector.dtype not in {"byte", "short", "char", "int"}:
+                selector.token.error("switch selector requires byte, short, char or int")
+            self.scopes.append({})
+            context = {"break": []}
+            self.controls.append(context)
+            values, has_default = set(), False
+            outgoing, rule_exits = None, []
+            for group in groups:
+                for label in group.value:
+                    if label.kind == "default":
+                        if has_default:
+                            label.token.error("duplicate default label")
+                        has_default = True
+                    else:
+                        expression = label.children[0]
+                        # Constant-label reads still require definite assignment
+                        # at dispatch; a preceding group's initializer may be
+                        # skipped even when the referenced variable is final.
+                        self.expression(expression, assigned)
+                        self.assignment_value(expression, selector.dtype)
+                        if expression.constant is None:
+                            expression.token.error("case label requires a constant expression")
+                        label.constant = expression.constant
+                        if label.constant in values:
+                            label.token.error("duplicate case value")
+                        values.add(label.constant)
+                state = (assigned & outgoing if node.value == "colon" and outgoing is not None
+                         else set(assigned))
+                for child in group.children:
+                    if state is None:
+                        child.token.error("unreachable statement")
+                    state = self.statement(child, state)
+                outgoing = state
+                group.completes = state is not None
+                if node.value == "arrow" and state is not None:
+                    rule_exits.append(state)
+            self.controls.pop()
+            self.scopes.pop()
+            paths = context["break"] + rule_exits
+            if node.value == "colon" and outgoing is not None:
+                paths.append(outgoing)
+            if not has_default:
+                paths.append(assigned)
+            assigned = set.intersection(*paths) if paths else None
+        elif kind == "do":
+            condition, body = node.children
+            loop = {"break": [], "continue": []}
+            self.controls.append(loop)
+            outgoing = self.statement(body, assigned)
+            self.controls.pop()
+            test_paths = loop["continue"] + ([outgoing] if outgoing is not None else [])
+            test_state = set.intersection(*test_paths) if test_paths else set(self.method.locals)
+            _, when_false = self.condition(condition, test_state)
+            paths = loop["break"] + ([when_false] if test_paths and condition.constant is not True else [])
+            assigned = set.intersection(*paths) if paths else None
         elif kind in ("while", "for"):
             self.scopes.append({})
             if kind == "for":
@@ -410,20 +468,21 @@ class SourceAnalyzer:
             if condition.constant is False:
                 body.token.error("unreachable loop body")
             loop = {"break": [], "continue": []}
-            self.loops.append(loop)
+            self.controls.append(loop)
             outgoing = self.statement(body, when_true)
             if update is not None:
                 paths = loop["continue"] + ([outgoing] if outgoing is not None else [])
                 state = set.intersection(*paths) if paths else set(self.method.locals)
                 self.statement(update, state)
-            self.loops.pop()
+            self.controls.pop()
             paths = loop["break"] + ([] if condition.constant is True else [when_false])
             assigned = set.intersection(*paths) if paths else None
             self.scopes.pop()
         elif kind in ("break", "continue"):
-            if not self.loops:
-                node.token.error(kind + " requires an enclosing loop")
-            self.loops[-1][kind].append(assigned)
+            target = next((context for context in reversed(self.controls) if kind in context), None)
+            if target is None:
+                node.token.error(kind + " requires an enclosing loop" + (" or switch" if kind == "break" else ""))
+            target[kind].append(assigned)
             assigned = None
         elif kind != "empty":
             raise AssertionError("unknown source statement " + kind)
