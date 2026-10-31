@@ -6,10 +6,10 @@ interpreter or external compiler is on this lowering route.
 from pcc.ir.compat import ir
 
 from .artifact import JavaCompilation, method_symbol
-from .integer_semantics import emit_binary, emit_narrow
+from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
 
 
-OPERATIONS = {"+": "add", "-": "sub", "*": "mul", "&": "and", "|": "or", "^": "xor",
+OPERATIONS = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv", "%": "srem", "&": "and", "|": "or", "^": "xor",
               "<<": "shl", ">>": "ashr", ">>>": "lshr"}
 
 
@@ -110,6 +110,8 @@ class SourceLowerer:
                 right = self.coerce(right, dtype)
             if node.value in ("==", "!=", "<", "<=", ">", ">="):
                 return self.builder.icmp_signed(node.value, left, right)
+            if node.value in ("/", "%"):
+                return emit_nonzero_division(self.builder, OPERATIONS[node.value], left, node.children[1].constant)
             return emit_binary(self.builder, OPERATIONS[node.value], left, right)
         raise AssertionError("unlowered typed source expression " + kind)
 
@@ -137,7 +139,9 @@ class SourceLowerer:
                     right, operation = self.expression(node.children[0]), OPERATIONS[node.value[:-1]]
                 if operation not in ("shl", "ashr", "lshr"):
                     right = self.coerce(right, node.operation_type)
-                value = self.coerce(emit_binary(self.builder, operation, left, right), node.symbol.dtype)
+                value = (emit_nonzero_division(self.builder, operation, left, node.children[0].constant)
+                         if operation in ("sdiv", "srem") else emit_binary(self.builder, operation, left, right))
+                value = self.coerce(value, node.symbol.dtype)
             self.builder.store(value, slot)
             return
         if kind == "expression":

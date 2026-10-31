@@ -118,7 +118,6 @@ def test_source_semantic_errors_are_rejected_before_ir(body, helpers, message, m
 
 @pytest.mark.parametrize("original,message", [
     (source("return 1/0;"), "ArithmeticException"),
-    (source("int x=1;x%=2;return x;"), "ArithmeticException"),
     ("import p.Library;" + source("return 1;"), "dependency resolution"),
     ("class C extends D {}", "shared Java runtime"),
     ("class C {static int value;}", "fields"),

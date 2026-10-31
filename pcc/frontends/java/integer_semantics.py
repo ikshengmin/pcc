@@ -15,6 +15,30 @@ def wrap_i32(value):
     return wrap_integer(value, 32)
 
 
+def evaluate_division(operation, left, right, width):
+    """JLS 15.17 integer arithmetic, with a separately proven nonzero divisor."""
+    assert operation in ("/", "%") and right != 0
+    quotient = abs(left) // abs(right)
+    if (left < 0) != (right < 0):
+        quotient = -quotient
+    # Compute the remainder before wrapping MIN / -1; its result is zero.
+    return wrap_integer(quotient if operation == "/" else left - quotient * right, width)
+
+
+def emit_nonzero_division(builder, operation, left, divisor):
+    """Emit only the source-sema-proven nonthrowing integral division domain.
+
+    IR signed division has an overflow/poison boundary at MIN / -1, whereas
+    Java returns MIN (and remainder zero). Avoid that IR operation entirely.
+    The caller must still evaluate the dividend once, even for remainder -1.
+    """
+    assert operation in ("sdiv", "srem") and divisor is not None and divisor != 0
+    if divisor == -1:
+        zero = ir.Constant(left.type, 0)
+        return builder.sub(zero, left) if operation == "sdiv" else zero
+    return getattr(builder, operation)(left, ir.Constant(left.type, divisor))
+
+
 def emit_binary(builder, operation, left, right):
     if operation in ("shl", "ashr", "lshr"):
         width = left.type.width

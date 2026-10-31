@@ -116,7 +116,7 @@ def test_invalid_scalar_source_never_reaches_lowering(result, body, helpers, mes
         compile_source(source(result, body, helpers), descriptor="()" + DESCRIPTOR[result])
 
 
-@pytest.mark.parametrize("body", ["return 1L/0L;", "long x=1L;x%=2L;return x;"])
+@pytest.mark.parametrize("body", ["return 1L/0L;"])
 def test_long_division_does_not_replace_arithmetic_exception_with_trap(body):
     with pytest.raises(UnsupportedJava, match="ArithmeticException"):
         compile_source(source("long", body), descriptor="()J")

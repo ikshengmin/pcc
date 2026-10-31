@@ -7,7 +7,7 @@ boundaries keep its structured definite-assignment rules explicit.
 from dataclasses import dataclass
 import re
 
-from .integer_semantics import wrap_integer
+from .integer_semantics import evaluate_division, wrap_integer
 from .diagnostics import UnsupportedJava
 
 
@@ -145,6 +145,10 @@ class SourceAnalyzer:
         if node.dtype not in INTEGRAL:
             node.token.error("integer value required, got " + str(node.dtype))
 
+    def require_nonzero_constant_divisor(self, node):
+        if node.constant is None or node.constant == 0:
+            node.token.error("nonconstant or zero integer divisor requires shared ArithmeticException support", True)
+
     def assignment_value(self, node, target):
         if target == "boolean":
             if node.dtype != "boolean":
@@ -277,8 +281,6 @@ class SourceAnalyzer:
         if kind != "binary":
             raise AssertionError("untyped source expression " + kind)
         second = node.children[1]
-        if op in ("/", "%"):
-            node.token.error("integer division/remainder requires shared ArithmeticException support", True)
         if op in ("&&", "||"):
             if first.dtype != "boolean" or second.dtype != "boolean":
                 node.token.error("conditional logical operators require boolean operands")
@@ -292,11 +294,15 @@ class SourceAnalyzer:
             self.require_int(second)
             node.operation_type = promoted(first.dtype, second.dtype, shift=op in ("<<", ">>", ">>>"))
             node.dtype = "boolean" if op in ("==", "!=", "<", "<=", ">", ">=") else node.operation_type
+        if op in ("/", "%"):
+            self.require_nonzero_constant_divisor(second)
         if first.constant is not None and second.constant is not None:
             a, b = first.constant, second.constant
             width = 64 if node.operation_type == "long" else 32
             wrap = lambda value: wrap_integer(value, width)
             operations = {"+": lambda: wrap(a + b), "-": lambda: wrap(a - b),
+                          "/": lambda: evaluate_division("/", a, b, width),
+                          "%": lambda: evaluate_division("%", a, b, width),
                           "*": lambda: wrap(a * b), "&": lambda: a & b, "|": lambda: a | b,
                           "^": lambda: a ^ b, "<<": lambda: wrap(a << (b & (width - 1))),
                           ">>": lambda: a >> (b & (width - 1)), ">>>": lambda: wrap((a & ((1 << width) - 1)) >> (b & (width - 1))),
@@ -346,7 +352,7 @@ class SourceAnalyzer:
                 self.require_int(node.children[0])
                 node.operation_type = promoted(dtype, node.children[0].dtype, shift=node.value in ("<<=", ">>=", ">>>="))
             if node.value in ("/=", "%="):
-                node.token.error("integer division/remainder requires shared ArithmeticException support", True)
+                self.require_nonzero_constant_divisor(node.children[0])
             assigned.add(node.symbol)
         elif kind == "expression":
             self.expression(node.children[0], assigned)

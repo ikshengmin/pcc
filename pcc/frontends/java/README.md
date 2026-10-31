@@ -55,8 +55,15 @@ expressions become constant variables; a runtime call initializer is still
 evaluated exactly once and read from its local slot. Blank final locals remain an
 explicit definite-unassignment boundary, not an assumed value or dropped declaration.
 
-Heap objects/arrays, runtime fields and class initialization, exceptions including int
-division/remainder, monitors, strings and library/runtime APIs remain explicit
+Integral division/remainder and their compound assignments support nonzero
+constant-expression divisors, preserving truncation toward zero, dividend-signed
+remainders and int/long minimum divided by minus one. Neither float-based
+constant evaluation nor overflowing signed IR division is used. Zero or dynamic
+divisors remain unsupported until the shared ArithmeticException path exists;
+an initialized non-final variable is not assumed constant.
+
+Heap objects/arrays, runtime fields and class initialization, exceptions,
+monitors, strings and library/runtime APIs remain explicit
 capability errors. They must use the shared pcc-Python GC/scheduler/exception
 contracts, not an independent Java runtime or a host-JDK fallback. A class's
 implicit `Object` instance signatures cannot be redeclared as static methods.
