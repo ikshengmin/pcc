@@ -14,6 +14,24 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = "x86_64-unknown-linux-gnu"
 
 
+def _assert_no_implicit_pointer_management(body):
+    # Mixed int/bool expressions can retain their own boxed scalar result.
+    # That does not authorize retaining the raw sentinel/value parameter (or
+    # an alias), creating a root for it, or calling other managed GC helpers.
+    scalar_values = set(re.findall(
+        r"^\s*(%[\w.$]+) = call ptr \(i32\) @py_bool_from_bit\(i32 [^\n)]+\)$",
+        body, re.M,
+    ))
+    scalar_values.update(value for value, integer in re.findall(
+        r"^\s*(%[\w.$]+) = inttoptr i64 (-?\d+) to ptr$", body, re.M,
+    ) if int(integer) & 1)
+    for helper, arguments in re.findall(r"\bcall\b[^\n]*@(pcc_gc_\w+)\(([^)]*)\)", body):
+        if helper == "pcc_gc_safepoint":
+            continue
+        assert helper == "pcc_gc_retain", (helper, arguments)
+        assert arguments.startswith("ptr ") and arguments[4:] in scalar_values, arguments
+
+
 def test_capi_exception_runtime_compiles_through_owned_builder(tmp_path):
     output = tmp_path / "py_capi_exc_runtime.ll"
     _compile_runtime_module(
@@ -35,10 +53,24 @@ def test_capi_exception_runtime_compiles_through_owned_builder(tmp_path):
                    "_capi_set_unicode_encode_value"):
         match = re.search(r"^define[^\n]*@[^\n]*" + helper + r"\(ptr %\w+\)[^\n{]*\{\n(.*?)^}", text, re.M | re.S)
         assert match, helper
-        # Production runtime libraries own their roots explicitly. Passing a
-        # sentinel through a helper must not synthesize a managed root/retain.
-        assert not re.search(r"\bcall\b[^\n]*@pcc_gc_(?!safepoint)", match.group(1))
+        _assert_no_implicit_pointer_management(match.group(1))
     assert re.search(r"\bcall\b[^\n]*@py_unicode_encode_error_normalize\(ptr", text)
+
+
+@pytest.mark.parametrize("managed", [
+    "%r = call ptr (ptr) @pcc_gc_retain(ptr %type)",
+    "%alias = bitcast ptr %type to ptr\n%r = call ptr (ptr) @pcc_gc_retain(ptr %alias)",
+    "call void (ptr, ptr) @pcc_gc_store_root(ptr %slot, ptr %value)",
+    "%raw = inttoptr i64 8 to ptr\n%r = call ptr (ptr) @pcc_gc_retain(ptr %raw)",
+])
+def test_raw_helper_management_check_rejects_sentinel_roots_and_retains(managed):
+    scalar = ("%zero = inttoptr i64 1 to ptr\n"
+              "%kept = call ptr (ptr) @pcc_gc_retain(ptr %zero)\n"
+              "%boolean = call ptr (i32) @py_bool_from_bit(i32 1)\n"
+              "%kept_bool = call ptr (ptr) @pcc_gc_retain(ptr %boolean)\n")
+    _assert_no_implicit_pointer_management(scalar)
+    with pytest.raises(AssertionError):
+        _assert_no_implicit_pointer_management(scalar + managed)
 
 
 @pytest.mark.parametrize("runtime_port", [False, True], ids=["application", "runtime-port"])

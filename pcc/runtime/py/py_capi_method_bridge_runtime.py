@@ -11,7 +11,7 @@ Owned surface (stable C ABI names):
 
   pcc_capi_builtin_object_getattr
   pcc_capi_method_func_new
-  pcc_capi_method_call_entry
+  pcc_capi_method_call_entry (in py_capi_method_entry)
   pcc_capi_prepare_call_args
 
 Public object type tags come from the generated ``py_abi_constants`` module.
@@ -87,6 +87,7 @@ pcc_capi_builtin_type_token = extern("pcc_capi_builtin_type_token", (c_ptr,), c_
 py_obj_lt = extern("py_obj_lt", (c_ptr, c_ptr), c_int64)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
+pcc_capi_method_call_entry_address = extern("pcc_capi_method_call_entry_address", (), c_ptr)
 
 
 def _py_none() -> c_ptr:
@@ -99,15 +100,6 @@ def _py_false() -> c_ptr:
 
 def _type_error(message) -> None:
     py_raise_owned(py_exc_new(3, message))  # PY_EXC_TYPEERROR
-
-
-def _method_require_result(result):
-    if ptr_is_null(result):
-        py_runtime_error_if_unset(
-            cstr("pcc_capi_method_call_entry"),
-            cstr("C extension method returned NULL without setting an exception"),
-        )
-    return result
 
 
 @c_abi_typed_export("pcc_capi_prepare_call_args", "ptr", ("ptr",))
@@ -276,252 +268,8 @@ def pcc_capi_method_func_new(self_obj, method) -> c_ptr:
     return null()
 
 
-@c_abi_typed_export("pcc_capi_method_call_entry", "ptr", ("ptr", "ptr"))
-def pcc_capi_method_call_entry(captures, args) -> c_ptr:
-    if (
-        ptr_is_null(captures) or is_tagged_int(captures)
-        or load_i32(captures, 8) != PY_TYPE_TUPLE or py_tuple_len(captures) != 3
-    ):
-        _type_error(cstr("invalid C method capture"))
-        return null()
-    if ptr_is_null(args):
-        args = py_tuple_new(0)
-        if ptr_is_null(args):
-            return PyErr_NoMemory()
-    elif is_tagged_int(args) or load_i32(args, 8) != PY_TYPE_TUPLE:
-        _type_error(cstr("C method args must be a tuple"))
-        return null()
-    else:
-        py_incref(args)
-
-    self_obj = py_tuple_get(captures, 0)
-    method_ptr_obj = py_tuple_get(captures, 1)
-    flags_obj = py_tuple_get(captures, 2)
-    if ptr_is_null(self_obj) or ptr_is_null(method_ptr_obj) or ptr_is_null(flags_obj):
-        py_decref(args)
-        if not ptr_is_null(self_obj):
-            py_decref(self_obj)
-        if not ptr_is_null(method_ptr_obj):
-            py_decref(method_ptr_obj)
-        if not ptr_is_null(flags_obj):
-            py_decref(flags_obj)
-        _type_error(cstr("invalid C method capture"))
-        return null()
-
-    method = int_to_ptr(py_int_value_i64(method_ptr_obj))
-    flags: int = py_int_value_i64(flags_obj)
-    nargs = py_tuple_len(args)
-    result = null()
-    args_ready: int = 1
-
-    if (
-        not ptr_is_null(method) and not ptr_is_null(load_ptr(method, 8))
-        and (flags & (0x0002)) == 0
-    ):
-        prepared = pcc_capi_prepare_call_args(args)
-        if ptr_is_null(prepared):
-            args_ready = 0
-        else:
-            py_decref(args)
-            args = prepared
-            nargs = py_tuple_len(args)
-
-    if args_ready == 0:
-        if py_err_occurred() == 0:
-            PyErr_NoMemory()
-    elif ptr_is_null(method) or ptr_is_null(load_ptr(method, 8)):
-        _type_error(cstr("invalid C method"))
-    elif (flags & (0x0080)) != 0 and (flags & (0x0002)) != 0:
-        if nargs != 2:
-            _type_error(cstr("invalid C keyword method call"))
-        else:
-            call_args = py_tuple_get(args, 0)
-            kwargs = py_tuple_get(args, 1)
-            if (
-                ptr_is_null(call_args) or ptr_is_null(kwargs)
-                or is_tagged_int(call_args) or load_i32(call_args, 8) != PY_TYPE_TUPLE
-                or (kwargs != _py_none()
-                    and (is_tagged_int(kwargs) or load_i32(kwargs, 8) != PY_TYPE_DICT))
-            ):
-                _type_error(cstr("invalid C keyword method call"))
-            else:
-                result = _method_require_result(
-                    _fast_keyword_call(self_obj, method, call_args, kwargs)
-                )
-            if not ptr_is_null(call_args):
-                py_decref(call_args)
-            if not ptr_is_null(kwargs):
-                py_decref(kwargs)
-    elif (flags & (0x0001)) != 0 and (flags & (0x0002)) != 0:
-        if nargs != 2:
-            _type_error(cstr("invalid C keyword method call"))
-        else:
-            call_args = py_tuple_get(args, 0)
-            kwargs = py_tuple_get(args, 1)
-            if (
-                ptr_is_null(call_args) or ptr_is_null(kwargs)
-                or is_tagged_int(call_args) or load_i32(call_args, 8) != PY_TYPE_TUPLE
-                or (kwargs != _py_none()
-                    and (is_tagged_int(kwargs) or load_i32(kwargs, 8) != PY_TYPE_DICT))
-            ):
-                _type_error(cstr("invalid C keyword method call"))
-            else:
-                result = _method_require_result(
-                    call_ptr3(load_ptr(method, 8), self_obj, call_args, kwargs)
-                )
-            if not ptr_is_null(call_args):
-                py_decref(call_args)
-            if not ptr_is_null(kwargs):
-                py_decref(kwargs)
-    elif (flags & (0x0004)) != 0:
-        if nargs != 0:
-            _type_error(cstr("method takes no arguments"))
-        else:
-            result = _method_require_result(
-                call_ptr1(load_ptr(method, 8), self_obj)
-            )
-    elif (flags & (0x0008)) != 0:
-        if nargs != 1:
-            _type_error(cstr("method takes exactly one argument"))
-        else:
-            arg = py_tuple_get(args, 0)
-            result = _method_require_result(
-                call_ptr2(load_ptr(method, 8), self_obj, arg)
-            )
-            if not ptr_is_null(arg):
-                py_decref(arg)
-    elif (flags & (0x0080)) != 0 and (flags & (0x0002)) == 0:
-        vector = null()
-        ok: int = 1
-        if nargs > 0:
-            vector = calloc(nargs, 8)
-            if ptr_is_null(vector):
-                PyErr_NoMemory()
-                ok = 0
-        i: int = 0
-        while ok != 0 and i < nargs:
-            item = py_tuple_get(args, i)
-            if ptr_is_null(item):
-                ok = 0
-            else:
-                store_ptr(vector, i * 8, item)
-            i += 1
-        if ok != 0:
-            result = _method_require_result(
-                call_ptr_ptr_ptr_i64_ptr(
-                    load_ptr(method, 8), self_obj, vector, nargs, null()
-                )
-            )
-        i = 0
-        while i < nargs:
-            if not ptr_is_null(vector):
-                item2 = load_ptr(vector, i * 8)
-                if not ptr_is_null(item2):
-                    py_decref(item2)
-            i += 1
-        if not ptr_is_null(vector):
-            free(vector)
-    elif (flags & (0x0001)) != 0:
-        result = _method_require_result(
-            call_ptr2(load_ptr(method, 8), self_obj, args)
-        )
-    else:
-        _type_error(cstr("unsupported C method flags"))
-
-    py_decref(args)
-    if not ptr_is_null(self_obj):
-        py_decref(self_obj)
-    if not ptr_is_null(method_ptr_obj):
-        py_decref(method_ptr_obj)
-    if not ptr_is_null(flags_obj):
-        py_decref(flags_obj)
-    return result
-
-
-
-
 def _method_call_entry_addr() -> c_ptr:
-    return function_addr("pcc_capi_method_call_entry")
-
-def _fast_keyword_call(self_obj, method, call_args, kwargs) -> c_ptr:
-    positional_count = py_tuple_len(call_args)
-    if kwargs == _py_none():
-        keyword_count = 0
-    else:
-        keyword_count = py_dict_len(kwargs)
-    total_count = positional_count + keyword_count
-    vector = null()
-    items = null()
-    keyword_names = null()
-    result = null()
-    ready: int = 1
-    if total_count > 0:
-        vector = calloc(total_count, 8)
-        if ptr_is_null(vector):
-            PyErr_NoMemory()
-            ready = 0
-    i: int = 0
-    while ready != 0 and i < positional_count:
-        item = py_tuple_get(call_args, i)
-        if ptr_is_null(item):
-            ready = 0
-        else:
-            store_ptr(vector, i * 8, item)
-        i += 1
-    if ready != 0 and keyword_count > 0:
-        items = py_dict_items(kwargs)
-        keyword_names = py_tuple_new(keyword_count)
-        if (
-            ptr_is_null(items) or ptr_is_null(keyword_names)
-            or py_list_len(items) != keyword_count
-        ):
-            ready = 0
-    i = 0
-    while ready != 0 and i < keyword_count:
-        pair = py_list_get(items, i)
-        key = null()
-        value = null()
-        if (
-            not ptr_is_null(pair) and not is_tagged_int(pair)
-            and load_i32(pair, 8) == PY_TYPE_TUPLE and py_tuple_len(pair) == 2
-        ):
-            key = py_tuple_get(pair, 0)
-            value = py_tuple_get(pair, 1)
-        if ptr_is_null(key) or ptr_is_null(value) or is_tagged_int(key) or load_i32(key, 8) != PY_TYPE_STR:
-            _type_error(cstr("keyword names must be strings"))
-            ready = 0
-        else:
-            py_tuple_set_item(keyword_names, i, key)
-            store_ptr(vector, (positional_count + i) * 8, value)
-            value = null()
-        if not ptr_is_null(key):
-            py_decref(key)
-        if not ptr_is_null(value):
-            py_decref(value)
-        if not ptr_is_null(pair):
-            py_decref(pair)
-        i += 1
-    if ready != 0:
-        # METH_FASTCALL|METH_KEYWORDS: nargs counts POSITIONAL args only; the
-        # keyword values follow in the vector with names in keyword_names.
-        result = call_ptr_ptr_ptr_i64_ptr(
-            load_ptr(method, 8), self_obj, vector, positional_count, keyword_names
-        )
-    i = 0
-    while i < total_count:
-        if not ptr_is_null(vector):
-            item3 = load_ptr(vector, i * 8)
-            if not ptr_is_null(item3):
-                py_decref(item3)
-        i += 1
-    if not ptr_is_null(vector):
-        free(vector)
-    if not ptr_is_null(items):
-        py_decref(items)
-    if not ptr_is_null(keyword_names):
-        py_decref(keyword_names)
-    return result
-
+    return pcc_capi_method_call_entry_address()
 
 @c_abi_typed_export("pcc_capi_builtin_object_getattr", "ptr", ("ptr", "ptr"))
 def pcc_capi_builtin_object_getattr(obj, name) -> c_ptr:

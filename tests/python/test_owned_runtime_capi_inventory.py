@@ -8,6 +8,7 @@ import pytest
 
 from pcc.frontends.python import owned_runtime_build as owned
 from pcc.tools import runtime_archive_provenance as provenance
+from tests.python.test_owned_runtime_selection import hermetic_runtime_admission
 
 
 @pytest.mark.parametrize("host_newline", ["\r\n", "\n"])
@@ -17,7 +18,7 @@ from pcc.tools import runtime_archive_provenance as provenance
     ("arm64-apple-darwin", "_"),
 ])
 def test_owned_runtime_writes_canonical_capi_inventory(
-    tmp_path, monkeypatch, host_newline, target, prefix,
+    tmp_path, monkeypatch, hermetic_runtime_admission, host_newline, target, prefix,
 ):
     runtime = tmp_path / "runtime"
     sources = runtime / "py"
@@ -51,6 +52,7 @@ def test_owned_runtime_writes_canonical_capi_inventory(
         return builtins.open(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(owned, "open", host_open, raising=False)
+    hermetic_runtime_admission()
     archive = tmp_path / "output" / "libpy_runtime_pcc_py.a"
     owned.build_runtime_archive(str(runtime), str(archive), target)
 

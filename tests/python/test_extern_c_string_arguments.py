@@ -6,7 +6,11 @@ import re
 import pytest
 
 from pcc.frontends.python.pipeline import compile_python
+from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+from pcc.backend.self_backend_parse import parse_self_backend_module
 from tests.owned_ir_validation import verify_ir_text
+from tests.python.root_copy_ir import root_copy_calls
+from tests.python.root_slot_contract import RootSlotContract
 
 
 HEADER = '''from pcc.extern import extern, c_str, c_ptr, c_rawptr, c_obj, c_int64, c_abi_export
@@ -33,6 +37,120 @@ def _body(text, name):
     return match[1]
 
 
+def _probe_roots(text):
+    module = parse_self_backend_module(text)
+    function = next(fn for fn in module.functions if fn.name == "user_string_args_probe")
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    return RootSlotContract(blocks, module.globals_)
+
+
+def _paths_to_consumer(roots, producer_block, offset, is_consumer):
+    """Every CFG path reaching this producer's exact successful handoff."""
+    by_name = {block.name: block for block in roots.blocks}
+    successors = {}
+    for block in roots.blocks:
+        term = block.terminator
+        if term.kind == "br":
+            successors[block.name] = term.data[:1]
+        elif term.kind == "br_cond":
+            successors[block.name] = term.data[1:]
+        else:
+            assert term.kind in ("ret", "ret_void", "unreachable"), term.kind
+            successors[block.name] = ()
+    reaching = {block.name for block in roots.blocks
+                if any(is_consumer(ins) for ins in block.instructions)}
+    assert reaching, "published result has no consumer"
+    while True:
+        previous = set(reaching)
+        reaching.update(name for name, targets in successors.items()
+                        if name != producer_block.name and any(target in reaching for target in targets))
+        if previous == reaching:
+            break
+    pending = [(producer_block, offset, [], frozenset())]
+    paths = []
+    while pending:
+        block, start, path, visited = pending.pop()
+        assert block.name not in visited, "handoff must not cross another producer iteration"
+        visited = visited | {block.name}
+        for ins in block.instructions[start:]:
+            path.append(ins)
+            if is_consumer(ins):
+                paths.append(path)
+                break
+        else:
+            targets = [name for name in successors[block.name]
+                       if name in reaching and name != producer_block.name]
+            assert targets, "producer does not reach its successful handoff"
+            pending.extend((by_name[name], 0, list(path), visited) for name in targets)
+    assert paths
+    return paths
+
+
+def _assert_independent_extern_result(text, symbol, argument_count):
+    roots = _probe_roots(text)
+    slot, called, args = roots.slot, roots.called, roots.args
+    invocations = [(block, index, ins) for block, index, ins in roots.rows if called(ins, symbol)]
+    assert len(invocations) == 1
+    block, index, invoke = invocations[0]
+    published = block.instructions[index + 1]
+    assert published.kind == "store" and published.data[1] == invoke.data[0], (
+        "foreign result needs an immediate first store before any parking cleanup"
+    )
+    output = slot(published.data[3])
+    output_frame = roots.require_owning(output, allow_lifo=True)[:2]
+    acquisitions = [ins for _, _, ins in roots.rows if called(ins, "pcc_gc_foreign_lease_acquire")]
+    inputs = [ins for ins in acquisitions if slot(args(ins)[0]) != output]
+    publications = [ins for ins in acquisitions if slot(args(ins)[0]) == output]
+    assert len(inputs) == argument_count and len(publications) == 1
+    operands = [slot(args(ins)[0]) for ins in inputs]
+    assert len(set(operands + [output])) == argument_count + 1
+    for operand in operands:
+        roots.require_owning(operand)
+
+    # Bind those leases to the actual foreign arguments, following only the
+    # managed-root load and optional UTF-8 projection, not arbitrary SSA names.
+    origins = {ins.data[0]: slot(args(ins)[1]) for _, _, ins in roots.rows
+               if called(ins, "pcc_gc_load_ptr")}
+    for _, _, ins in roots.rows:
+        if called(ins, "py_str_utf8"):
+            origins[ins.data[0]] = origins[args(ins)[0]]
+    assert [origins[value] for value in args(invoke) if value in origins] == operands
+
+    def consumes(ins):
+        return called(ins, "pcc_gc_take_pinned_slot") and slot(args(ins)[0]) == output
+
+    for path in _paths_to_consumer(roots, block, index + 2, consumes):
+        retired = False
+        for ins in path:
+            if ins.kind == "store":
+                assert slot(ins.data[3]) != output, "result overwritten before handoff"
+            if called(ins, "pcc_gc_store_root"):
+                assert slot(args(ins)[0]) != output, "result cleared before handoff"
+            if called(ins, "pcc_gc_frame_leave") or called(ins, "pcc_gc_frame_leave_lifo"):
+                if slot(args(ins)[0]) == output_frame:
+                    assert not retired
+                    retired = True
+                    continue
+            if retired and ins.kind == "call":
+                assert consumes(ins), "result registration retired before the final take"
+        releases = [ins for ins in path if called(ins, "pcc_gc_foreign_lease_release")]
+        assert [(slot(args(ins)[0]), args(ins)[1]) for ins in releases] == [
+            (output, publications[0].data[0]),
+            *[(slot(args(ins)[0]), ins.data[0]) for ins in reversed(inputs)],
+        ]
+        takes = [ins for ins in path if called(ins, "pcc_gc_take_pinned_slot")]
+        assert [slot(args(ins)[0]) for ins in takes] == list(reversed(operands)) + [output]
+        reloads = [position for position, ins in enumerate(path) if ins.kind == "load"
+                   and ins.data[0].startswith("extern.result.current") and slot(ins.data[3]) == output]
+        assert len(reloads) == 1 and reloads[0] > max(path.index(ins) for ins in takes[:-1])
+        assert publications[0] in path and path.index(publications[0]) < path.index(releases[0])
+    # No stale raw return pointer may be reused after cleanup; consumers must
+    # reload/take the independent output slot even when the object aliases an input.
+    body = _body(text, "probe")
+    assert len(re.findall(r"%" + re.escape(invoke.data[0]) + r"(?![\w.$])", body)) == 2
+    roots.assert_frame_exits()
+
+
 def test_c_string_projection_follows_all_argument_evaluation(tmp_path):
     text = _compile(tmp_path, '''
 def probe(left: str, make, collect) -> int:
@@ -40,10 +158,19 @@ def probe(left: str, make, collect) -> int:
 ''')
     body = _body(text, "probe")
     foreign = body.index("@c_string_pair_probe(")
-    callbacks = [m.start() for m in re.finditer("@py_obj_call\\(", body)]
+    callback_calls = list(re.finditer(r"@py_obj_call_slots\(([^)]*)\)", body))
+    callbacks = [match.start() for match in callback_calls]
     projections = [m.start() for m in re.finditer("@py_str_utf8\\(", body)]
     assert len(projections) == 2
-    assert callbacks and max(callbacks) < min(projections) < foreign
+    assert len(callbacks) == 2 and max(callbacks) < min(projections) < foreign
+    roots = _probe_roots(text)
+    for name, callback in zip(("make", "collect"), callback_calls):
+        slots = re.findall(r"ptr (%[\w.$]+)", callback[1])
+        assert len(slots) == 4 and len({roots.slot(value[1:]) for value in slots}) == 4
+        for value in slots:
+            roots.require_owning(value[1:], allow_lifo=True)
+        copies = [copy for copy in root_copy_calls(body) if copy.destination == slots[0]]
+        assert len(copies) == 1 and copies[0].source.startswith("%" + name + ".addr.")
     assert "extern.argument.cleanup" in body
     assert "extern.pin.prior" in body
     assert "@pcc_gc_take_pinned_slot(" in body
@@ -67,11 +194,35 @@ def test_c_string_managed_result_survives_alias_cleanup(tmp_path):
 def probe(value: str):
     return identity(value, value)
 ''')
-    body = _body(text, "probe")
-    foreign = body.index("@c_string_identity_probe(")
-    assert "extern.result.alias.prior" in body[foreign:]
-    assert "extern.result.root" in body[foreign:]
-    assert body[foreign:].count("@pcc_gc_take_pinned_slot(") >= 3
+    _assert_independent_extern_result(text, "c_string_identity_probe", 2)
+
+
+@pytest.mark.parametrize("mutation", ["missing-publication", "late-publication", "aliased-output", "early-clear"])
+def test_extern_result_contract_rejects_unprotected_handoffs(tmp_path, mutation):
+    text = _compile(tmp_path, '''
+def probe(value: str):
+    return identity(value, value)
+''')
+    _assert_independent_extern_result(text, "c_string_identity_probe", 2)
+    publication = re.search(
+        r"^  (%[\w.$]+) = call ptr [^\n]*@c_string_identity_probe\([^\n]*\)\n"
+        r"(  store ptr \1, ptr (%[\w.$]+)\n)", text, re.M,
+    )
+    assert publication
+    stored = publication[2]
+    if mutation == "missing-publication":
+        replacement = ""
+    elif mutation == "late-publication":
+        replacement = "  call void () @pcc_gc_safepoint()\n" + stored
+    elif mutation == "aliased-output":
+        argument = re.search(r"@pcc_gc_foreign_lease_acquire\(ptr (%extern\.argument[^)]+)\)", text)
+        assert argument
+        replacement = stored.replace(publication[3], argument[1])
+    else:
+        replacement = stored + "  store ptr null, ptr " + publication[3] + "\n"
+    damaged = text.replace(stored, replacement, 1)
+    with pytest.raises(AssertionError):
+        _assert_independent_extern_result(damaged, "c_string_identity_probe", 2)
 
 
 @pytest.mark.parametrize("directive", ["__pcc_freestanding__", "__pcc_runtime_port__"])
@@ -513,8 +664,9 @@ def test_foreign_lease_helpers_match_native_host_method_signatures():
     exports=_default_native_module_exports('pcc.frontends.python.codegen.layer1')
     methods=exports['pcc.frontends.python.codegen.layer1']['L1CodeGen']['methods']
     native={item['name']:item for item in methods}
-    assert len(static) == len(L1_CODEGEN_STATIC_METHODS) == 366
+    assert len(static) == len(L1_CODEGEN_STATIC_METHODS) == len(L1_CODEGEN_HOST_METHODS)
     assert tuple(item['name'] for item in L1_CODEGEN_STATIC_METHODS) == L1_CODEGEN_HOST_METHODS
+    assert len(native) == len(methods) and set(static) <= set(native)
     for name,parameters in expected.items():
         assert name in L1_CODEGEN_HOST_METHODS
         assert tuple(p['name'] for p in static[name]['call_sig']) == parameters
@@ -535,14 +687,15 @@ def probe(text: str, raw: c_ptr) -> int:
 
 
 def test_c_obj_only_extern_counts_owner_across_callback(tmp_path):
-    body=_body(_compile(tmp_path, '''
+    text = _compile(tmp_path, '''
 only_object = extern("c_obj_callback_probe", (c_obj, c_ptr), c_obj)
 def probe(value, callback: c_ptr):
     return only_object(value, callback)
-'''),"probe")
+''')
+    body = _body(text, "probe")
     foreign=body.index("@c_obj_callback_probe(")
-    assert body.count("@pcc_gc_foreign_lease_acquire(") == 1
-    assert body.index("@pcc_gc_foreign_lease_acquire(") < foreign
-    assert "@pcc_gc_foreign_lease_release(" in body[foreign:]
-    assert "extern.result.alias.prior" in body[foreign:]
+    assert body[:foreign].count("@pcc_gc_foreign_lease_acquire(") == 1
+    _assert_independent_extern_result(text, "c_obj_callback_probe", 1)
+    assert not re.search(r"ptrtoint ptr %callback\b", body)
+    assert not re.search(r"@pcc_gc_store_root\([^\n]*, ptr %callback\)", body)
     assert "@py_str_utf8(" not in body

@@ -171,7 +171,7 @@ def container_runtime_model(tmp_path, monkeypatch):
     ("source", "source does not match its receipt"),
     ("target", "does not match"),
     ("codegen", "stale for current codegen"),
-    ("threads", "does not match"),
+    ("threads", r"^PCC_WITH_THREADS=0: the single-thread runtime was removed; every native runtime is threaded$"),
     ("refcount", "does not match"),
     ("inventory", "does not match"),
     ("missing_config", "does not match"),

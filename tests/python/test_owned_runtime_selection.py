@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +20,58 @@ TARGETS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-w
 
 def _forbidden(*_args, **_kwargs):
     raise AssertionError("unexpected old archive shortcut, subprocess, or rebuild")
+
+
+@pytest.fixture
+def hermetic_runtime_admission(monkeypatch):
+    """Admit only an explicitly requested, in-process orchestration model.
+
+    Keep the real reservation guard installed everywhere else. Install the
+    compiler/worker/process tripwires before a test supplies its tiny frontend
+    or archive model, and recheck them at the local admission boundary.
+    """
+    from pcc.driver import native_provisioning
+    from pcc.frontends.python import pipeline
+
+    real_guard = native_provisioning.require_native_provisioning_allowed
+    real_compile = owned._compile_runtime_module
+    marker = Path(native_provisioning.__file__).resolve().parents[2] / "build" / native_provisioning.GUARD_NAME
+
+    def reservation():
+        return (os.environ.get("PCC_TEST_NO_NATIVE_PROVISIONING"),
+                marker.read_bytes() if marker.exists() else None)
+
+    original_reservation = reservation()
+    escapes = (
+        (owned, "_build_runtime_modules_in_workers"),
+        (owned, "run_worker_processes"),
+        (pipeline, "compile_python"),
+        (pipeline, "_run_runtime_make"),
+        (subprocess, "Popen"),
+        (subprocess, "run"),
+        (subprocess, "check_call"),
+        (subprocess, "check_output"),
+        (os, "system"),
+    )
+    for owner, name in escapes:
+        monkeypatch.setattr(owner, name, _forbidden)
+    monkeypatch.setattr(owned, "_compile_runtime_module", _forbidden)
+
+    def check_model():
+        assert all(getattr(owner, name) is _forbidden for owner, name in escapes)
+        assert owned._compile_runtime_module is not real_compile
+        assert native_provisioning.require_native_provisioning_allowed is real_guard
+        assert reservation() == original_reservation
+
+    def admit():
+        check_model()
+        # Patch only this imported binding, after the model is isolated. The
+        # driver/test-fixture admission functions and marker remain unchanged.
+        monkeypatch.setattr(owned, "require_native_provisioning_allowed", check_model)
+
+    yield admit
+    assert native_provisioning.require_native_provisioning_allowed is real_guard
+    assert reservation() == original_reservation
 
 
 def _manifest(runtime_dir, target, *, threads=True, refcount="atomic"):
@@ -76,7 +130,9 @@ def _selection_options(root):
 
 @pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize("initial_refcount", ["atomic", "biased"])
-def test_native_runtime_switches_configuration_in_both_directions(runtime_root, monkeypatch, target, initial_refcount):
+def test_native_runtime_switches_configuration_in_both_directions(
+    runtime_root, monkeypatch, hermetic_runtime_admission, target, initial_refcount,
+):
     # Every runtime is threaded; the refcount strategy is the remaining
     # configuration axis, and the removed single-thread runtime fails.
     monkeypatch.setattr(selection, "sys", SimpleNamespace(platform="win32" if "windows" in target else "linux"))
@@ -101,6 +157,7 @@ def test_native_runtime_switches_configuration_in_both_directions(runtime_root, 
     other = "biased" if initial_refcount == "atomic" else "atomic"
     monkeypatch.setattr(provenance, "verify_runtime_archive_manifest", verify)
     monkeypatch.setattr(owned, "build_runtime_archive", build)
+    hermetic_runtime_admission()
     monkeypatch.setenv("PCC_REFCOUNT_KIND", initial_refcount)
     assert selection.ensure_runtime(False, **options) == str(packaged)
     assert builds == []
@@ -208,7 +265,9 @@ def test_runtime_dir_override_applies_to_cross_target_cache(runtime_root, tmp_pa
     assert owned.ensure_target_runtime(str(tmp_path / "absent-default"), target) == str(expected)
 
 
-def test_fresh_owned_build_must_pass_current_codegen_admission(runtime_root, monkeypatch):
+def test_fresh_owned_build_must_pass_current_codegen_admission(
+    runtime_root, monkeypatch, hermetic_runtime_admission,
+):
     target = TARGETS[3]
     builds = []
 
@@ -219,6 +278,7 @@ def test_fresh_owned_build_must_pass_current_codegen_admission(runtime_root, mon
     monkeypatch.setattr(owned, "build_runtime_archive", build)
     monkeypatch.setattr(provenance, "verify_runtime_archive_manifest", lambda *_a, **_k: _manifest(runtime_root, target))
     monkeypatch.setattr(provenance, "manifest_is_stale_for_current_codegen", lambda _receipt: True)
+    hermetic_runtime_admission()
     with pytest.raises(ValueError, match="stale codegen provenance"):
         owned.ensure_target_runtime(str(runtime_root), target)
     assert len(builds) == 1
@@ -315,7 +375,9 @@ def test_owned_runtime_frontend_uses_runtime_pass_policy_and_restores_applicatio
     assert os.environ["PCC_DIRECT_INDEXED_KERNEL_CAPTURE"] == "1"
 
 
-def test_simulated_owned_darwin_builder_preserves_public_and_private_capi_inventory(runtime_root, monkeypatch):
+def test_simulated_owned_darwin_builder_preserves_public_and_private_capi_inventory(
+    runtime_root, monkeypatch, hermetic_runtime_admission,
+):
     from pcc.backend.macho_obj import Section, TextSymbol, emit_object
     from pcc.backend import owned_object_emit
     from pcc.ir.optimization import driver as optimizer
@@ -345,6 +407,7 @@ def test_simulated_owned_darwin_builder_preserves_public_and_private_capi_invent
     monkeypatch.setattr(owned_object_emit, "emit_owned_object", emit_member)
     monkeypatch.setattr(selection.subprocess, "run", _forbidden)
     monkeypatch.setattr(provenance, "codegen_checksum", lambda: "0" * 64)
+    hermetic_runtime_admission()
     archive = runtime_root / "simulated.a"
     owned.build_runtime_archive(str(runtime_root), str(archive), target)
     assert len(emitted) == len(names)

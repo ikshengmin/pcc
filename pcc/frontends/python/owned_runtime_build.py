@@ -56,6 +56,7 @@ _THREAD_KERNEL_MODULE = "freestanding_thread_kernel_pthread"
 _NO_IMPLICIT_POLL_MODULES = (
     _THREAD_KERNEL_MODULE, "py_runtime_log", "py_tempfile", "py_os_mkdir",
     "py_cleanup_runtime", "py_exc_traceback", "py_re_bridge_entry",
+    "py_capi_method_entry",
 )
 
 

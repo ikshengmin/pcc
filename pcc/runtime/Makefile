@@ -70,7 +70,7 @@ PY_MODULES = py_cleanup_runtime py_file_lock py_tuple py_tuple_slice py_obj_stub
 PY_MODULES += py_tempfile py_os_mkdir py_os_walk
 PY_MODULES += py_recursion_runtime
 PY_MODULES += py_binary_repeat_runtime
-PY_MODULES += py_virtual_thread_runtime freestanding_runtime_debug py_capi_core_runtime py_capi_memory_runtime py_capi_stdio_runtime py_capi_numeric_runtime py_capi_collections_runtime py_capi_exc_runtime py_capi_dict_runtime py_capi_object_runtime py_capi_type_runtime py_capi_unicode_runtime py_capi_capsule_runtime py_capi_set_runtime py_capi_misc_runtime py_capi_cfunction_runtime py_capi_object_call_runtime py_capi_method_bridge_runtime py_capi_object_attr_runtime py_capi_number_runtime py_capi_sequence_runtime py_capi_mapping_runtime py_capi_import_runtime py_capi_unicode_search_runtime py_capi_unicode_writer_runtime py_capi_buffer_runtime py_capi_module_runtime py_capi_cext_runtime py_capi_module_state_runtime py_capi_private_runtime py_capi_slice_runtime py_capi_seqiter_runtime py_capi_contextvar_runtime py_capi_call_runtime py_capi_arg_runtime py_capi_str_conv_runtime py_capi_buildvalue_runtime py_capi_type_descriptor_runtime py_capi_visit_runtime
+PY_MODULES += py_virtual_thread_runtime freestanding_runtime_debug py_capi_core_runtime py_capi_memory_runtime py_capi_stdio_runtime py_capi_numeric_runtime py_capi_collections_runtime py_capi_exc_runtime py_capi_dict_runtime py_capi_object_runtime py_capi_type_runtime py_capi_unicode_runtime py_capi_capsule_runtime py_capi_set_runtime py_capi_misc_runtime py_capi_cfunction_runtime py_capi_object_call_runtime py_capi_method_bridge_runtime py_capi_method_entry py_capi_method_call_runtime py_capi_object_attr_runtime py_capi_number_runtime py_capi_sequence_runtime py_capi_mapping_runtime py_capi_import_runtime py_capi_unicode_search_runtime py_capi_unicode_writer_runtime py_capi_buffer_runtime py_capi_module_runtime py_capi_cext_runtime py_capi_module_state_runtime py_capi_private_runtime py_capi_slice_runtime py_capi_seqiter_runtime py_capi_contextvar_runtime py_capi_call_runtime py_capi_arg_runtime py_capi_str_conv_runtime py_capi_buildvalue_runtime py_capi_type_descriptor_runtime py_capi_visit_runtime
 PY_MODULES += freestanding_thread_kernel_pthread
 
 OBJS_PY  = $(patsubst %,$(OBJDIR_PY)/%.o,$(PY_MODULES))
@@ -320,6 +320,13 @@ $(OBJDIR_PY)/py_re_bridge_entry.o: $(PYDIR)/py_re_bridge_entry.py | $(OBJDIR_PY)
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/py_re_bridge_entry.ll $(OBJDIR_PY)/py_re_bridge_entry.opt.ll
 	mv $(OBJDIR_PY)/py_re_bridge_entry.opt.ll $(OBJDIR_PY)/py_re_bridge_entry.ll
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_re_bridge_entry.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
+
+# C-method admission/publication is raw; only its slot-owned body may poll.
+$(OBJDIR_PY)/py_capi_method_entry.o: $(PYDIR)/py_capi_method_entry.py | $(OBJDIR_PY)
+	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_IMPLICIT_THREAD_SAFEPOINTS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/py_capi_method_entry.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_RUNTIME_IR_PASSES)" $(OBJDIR_PY)/py_capi_method_entry.ll $(OBJDIR_PY)/py_capi_method_entry.opt.ll
+	mv $(OBJDIR_PY)/py_capi_method_entry.opt.ll $(OBJDIR_PY)/py_capi_method_entry.ll
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/py_capi_method_entry.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
 $(OBJDIR_PY):
 	mkdir -p $(OBJDIR_PY)

@@ -3487,16 +3487,18 @@ def test_c_api_method_bridge_is_owned_by_pcc_python(
     pcc_runtime_archive: Path,
 ) -> None:
     """The C-extension method bridge (call entry, wrapper, list.sort bridge)
-    must be owned by py_capi_method_bridge_runtime.o."""
+    must be owned by the managed bridge and raw method-entry objects."""
     owners = _defined_symbol_owners(pcc_runtime_archive)
     expected_owner = {"py_capi_method_bridge_runtime.o"}
     for symbol in (
         "pcc_capi_builtin_object_getattr",
         "pcc_capi_method_func_new",
-        "pcc_capi_method_call_entry",
         "pcc_capi_prepare_call_args",
     ):
         assert owners[symbol] == expected_owner, symbol
+    assert owners["pcc_capi_method_call_entry"] == {"py_capi_method_entry.o"}
+    assert owners["pcc_capi_method_invoke_into"] == {"py_capi_method_entry.o"}
+    assert owners["pcc_capi_method_call_into"] == {"py_capi_method_call_runtime.o"}
 
 
 def test_c_api_object_attr_surface_is_owned_by_pcc_python(
