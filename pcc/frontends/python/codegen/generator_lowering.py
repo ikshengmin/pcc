@@ -1650,8 +1650,48 @@ def _emit_conditional_spill(host, operand):
     return root
 
 
-def begin_generator_statement_spills(host, hoists):
-    """Evaluate each spilled operand into a frame root and bind its name."""
+def _generator_spill_last_uses(hoists, consumer, inplace=None):
+    """Last completed hoist using each root, or the final consumer boundary.
+
+    Count references in every later operand and the rebuilt statement, not
+    emitted Name loads: a borrowed load is not an ownership handoff, and an
+    augmented target can read the same receiver/index again when storing.
+    Unreferenced roots conservatively keep their statement-wide lifetime.
+    """
+    final = len(hoists)
+    last = {ident: final for ident, _operand in hoists}
+    consumers = [operand for _ident, operand in hoists] + [consumer]
+    if inplace is not None:
+        consumers[-1] = (consumer, inplace[3])
+    for index, operand in enumerate(consumers):
+        pending = [operand]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, Name):
+                if node.ident in last:
+                    last[node.ident] = index
+                continue
+            if isinstance(node, tuple):
+                pending.extend(node)
+                continue
+            for field in _dataclass_field_names(node):
+                if field != "span" and field != "ty":
+                    pending.append(_dataclass_field_value(node, field, None))
+    if inplace is not None:
+        # These two uses are encoded as identifiers, not AST Name nodes.
+        last[inplace[1]] = final
+        last[inplace[2]] = final
+    return last
+
+
+def begin_generator_statement_spills(host, hoists, consumer, inplace=None):
+    """Root each hoist, then retire roots whose last expression completed.
+
+    The operand emitter returns only after publishing its result and retiring
+    input leases. Releasing a dependency here is therefore safe even when the
+    result aliases it. Roots needed by later hoists or the final consumer stay
+    live; errors before completion still enter the existing cleanup chain.
+    """
     previous = host._current_try_err_block()
     spills = {
         "roots": [],
@@ -1660,12 +1700,27 @@ def begin_generator_statement_spills(host, hoists):
         "cpy": host._cpy_operand_cleanup_block,
         "target": previous if previous is not None else host._ensure_fn_err_exit(),
     }
-    for ident, operand in hoists:
+    last_uses = _generator_spill_last_uses(hoists, consumer, inplace)
+    retire_after = [[] for _operand in hoists]
+    for ident, index in last_uses.items():
+        if index < len(hoists):
+            retire_after[index].append(ident)
+    live = {}
+    for index, (ident, operand) in enumerate(hoists):
         hint = host._class_hint_for_expr(operand)
         root = (_emit_conditional_spill(host, operand)
                 if isinstance(operand, (BoolExpr, IfExpr))
                 else host._emit_slot_call_operand(operand, "spill"))
         _bind_spill_root(host, spills, ident, root, hint)
+        live[ident] = root
+        retired = tuple(live.pop(name) for name in retire_after[index])
+        if retired:
+            host._release_slot_call_roots(retired)
+            spills["roots"] = list(live.values())
+            host._try_err_block = host._slot_call_cleanup_block(
+                tuple(spills["roots"]), spills["target"],
+            )
+            host._cpy_operand_cleanup_block = host._try_err_block
     return spills
 
 
@@ -1679,7 +1734,7 @@ def emit_generator_operand_spills(host, operand, label):
     plan = plan_generator_expression_spills(host, operand)
     if plan is None:
         return None
-    spills = begin_generator_statement_spills(host, plan[0])
+    spills = begin_generator_statement_spills(host, plan[0], plan[1])
     try:
         result = host._emit_slot_call_operand(plan[1], label)
         finish_generator_statement_spills(host, spills)

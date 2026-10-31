@@ -394,7 +394,7 @@ class L1CodeGenEntrypointMixin:
                 if lexical_context is not None and lexical_context["next_state"] != lexical_state:
                     raise L1CodegenError("synchronous operand-root statement emitted a suspension")
             else:
-                spills = begin_generator_statement_spills(self, spill[0])
+                spills = begin_generator_statement_spills(self, spill[0], spill[1], spill[2])
                 try:
                     rebuilt = spill[1]
                     if spill[2] is not None:

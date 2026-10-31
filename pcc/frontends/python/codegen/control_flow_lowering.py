@@ -146,7 +146,7 @@ class ControlFlowLoweringMixin:
         # frame roots and releases them before either branch runs.
         spill = plan_generator_expression_spills(self, cond_expr)
         if spill is not None:
-            spills = begin_generator_statement_spills(self, spill[0])
+            spills = begin_generator_statement_spills(self, spill[0], spill[1])
             try:
                 result = self._emit_condition_value(spill[1])
                 finish_generator_statement_spills(self, spills)
