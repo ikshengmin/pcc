@@ -76,7 +76,6 @@ INVALID = (
 )
 
 UNSUPPORTED = (
-    'extern "C" int f(int*);',
     'extern "C" double f(double);',
     'extern "Fortran" int f();',
     'extern "C" {static int f(){return 1;}}',
@@ -86,6 +85,17 @@ UNSUPPORTED = (
     'int f(){int x=0;return static_cast<int>(&x);}',
     'template<class T>T f(T x){return static_cast<T>(x);}',
 )
+
+
+def test_previously_unsupported_pointer_declaration_preserves_its_original_source():
+    # This exact former capability case is now a supported typed declaration,
+    # not deleted or rewritten into an integer surrogate.
+    from pcc.frontends.cpp.types import PointerType
+    parser = CppParser()
+    parser.parse('extern "C" int f(int*);')
+    function = parser.scope.names['f'].overloads[0]
+    assert function.language_linkage == 'C' and function.c_name == 'f'
+    assert function.parameters == (PointerType('int'),) and not function.defined
 
 
 @pytest.mark.parametrize("name,source", CASES, ids=[x[0] for x in CASES])

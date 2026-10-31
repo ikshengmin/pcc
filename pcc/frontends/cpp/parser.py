@@ -718,10 +718,16 @@ class CppParser:
         new_symbol.template_parameters = template_parameters
         new_symbol.requested_language_linkage = self.language_linkage
         if self.language_linkage == "C":
-            if any(not self.types.integral(dtype) and dtype != "void"
+            # Pointers retain their complete semantic pointee type here. The
+            # declarator/type owners have already rejected unsupported function
+            # pointers, references and object types. C linkage changes the
+            # function's name/identity, not pointee cv/nominal identity or layout.
+            # Incomplete object pointees and void are valid: this admission
+            # neither completes them nor promises cross-language layout.
+            if any(not self.types.integral(dtype) and dtype != "void" and not pointer_type(dtype)
                    for dtype in (result_type,) + new_symbol.parameters):
                 raise CppDiagnostic("cpp.unsupported.c-linkage-signature",
-                                    "C-linkage signatures currently require fundamental integer/void types", name.coord)
+                                    "C-linkage signatures require fundamental integers, void, or object/void pointers", name.coord)
             if parent.internal_linkage:
                 raise CppDiagnostic("cpp.unsupported.c-linkage-internal",
                                     "C function type with internal name linkage is not implemented", name.coord)
