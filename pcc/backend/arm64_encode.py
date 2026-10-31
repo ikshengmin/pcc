@@ -216,6 +216,74 @@ def _mem(tok: str) -> tuple[int, int, str]:
     return base, imm, "pre" if pre else ""
 
 
+# --- ARMv8.1 LSE atomics -----------------------------------------------------
+
+_LSE_ORDERING_SUFFIXES = ("", "a", "l", "al")
+# (o3, opc) of the atomic memory operation class: LDADD/LDCLR/LDEOR/LDSET and SWP.
+_LSE_RMW_OPCODES = {
+    "ldadd": (0, 0), "ldclr": (0, 1), "ldeor": (0, 2), "ldset": (0, 3), "swp": (1, 0),
+}
+
+
+def lse_atomic_mnemonic_parts(mnemonic: str):
+    """Split an LSE mnemonic into (base, ordering, size), or return None.
+
+    ``base`` is ldadd/ldclr/ldeor/ldset/swp/cas; ``ordering`` is "", "a", "l"
+    or "al" (acquire/release bits); ``size`` is "b", "h" or "" (W or X by the
+    registers).  The ordering suffix precedes the size suffix: ``ldaddalb``.
+    """
+    name = mnemonic.lower()
+    for base in ("ldadd", "ldclr", "ldeor", "ldset", "swp", "cas"):
+        if not name.startswith(base):
+            continue
+        rest = name[len(base):]
+        size = ""
+        if rest.endswith("b") or rest.endswith("h"):
+            size = rest[-1]
+            rest = rest[:-1]
+        if rest in _LSE_ORDERING_SUFFIXES:
+            return base, rest, size
+        return None
+    return None
+
+
+def lse_atomic_kind(mnemonic: str) -> int:
+    """0: not LSE. 1: LD<op>/SWP read Rs and write Rt. 2: CAS reads Rs and Rt and writes Rs."""
+    parts = lse_atomic_mnemonic_parts(mnemonic)
+    if parts is None:
+        return 0
+    return 2 if parts[0] == "cas" else 1
+
+
+def _encode_lse_atomic(mn: str, ops: list, line: str) -> int:
+    """LD<op>/SWP: size 111000 A R 1 Rs o3 opc 00 Rn Rt; CAS: size 0010001 L 1 Rs o0 11111 Rn Rt."""
+    parts = lse_atomic_mnemonic_parts(mn)
+    if parts is None or len(ops) != 3:
+        raise EncodeError(f"bad LSE atomic: {line!r}")
+    base, ordering, size_suffix = parts
+    rs, s64 = _reg(ops[0])
+    rt, t64 = _reg(ops[1])
+    rn, imm, mode = _mem(ops[2])
+    if imm or mode:
+        raise EncodeError(f"{mn} takes a bare [Xn|SP] address: {line!r}")
+    if s64 != t64:
+        raise EncodeError(f"{mn} register widths differ: {line!r}")
+    if size_suffix:
+        if s64:
+            raise EncodeError(f"{mn} takes W registers: {line!r}")
+        size = 0 if size_suffix == "b" else 1
+    else:
+        size = 3 if s64 else 2
+    acquire = 1 if ordering in ("a", "al") else 0
+    release = 1 if ordering in ("l", "al") else 0
+    if base == "cas":
+        return ((size << 30) | 0x08A07C00 | (acquire << 22) | (rs << 16)
+                | (release << 15) | (rn << 5) | rt)
+    o3, opc = _LSE_RMW_OPCODES[base]
+    return ((size << 30) | 0x38200000 | (acquire << 23) | (release << 22) | (rs << 16)
+            | (o3 << 15) | (opc << 12) | (rn << 5) | rt)
+
+
 # --- bitmask (logical) immediates -------------------------------------------
 
 
@@ -376,8 +444,11 @@ def _enc_logical_reg(
     )
 
 
+_MOVEWIDE_OPC = {"movn": 0, "movz": 2, "movk": 3}
+
+
 def _enc_movewide(opc: int, rd, imm16: int, shift: int, is64: bool) -> int:
-    # opc: 2 movz, 3 movk
+    # opc: 0 movn, 2 movz, 3 movk
     if not 0 <= imm16 <= 0xFFFF:
         raise EncodeError(f"move-wide immediate {imm16} out of 16-bit range")
     if shift % 16 != 0 or shift // 16 > (3 if is64 else 1):
@@ -545,7 +616,7 @@ def encode_emitted_move(line: str) -> int | None:
     if mnemonic_end < 0:
         return None
     mnemonic = line[2:mnemonic_end]
-    if mnemonic not in ("mov", "movz", "movk"):
+    if mnemonic not in ("mov", "movz", "movk", "movn"):
         return None
     destination_start = mnemonic_end + 1
     destination_end = line.find(", ", destination_start)
@@ -620,7 +691,7 @@ def encode_emitted_move(line: str) -> int | None:
     if shift < 0 or shift > max_shift or shift % 16:
         return None
     return _enc_movewide(
-        2 if mnemonic == "movz" else 3,
+        _MOVEWIDE_OPC[mnemonic],
         destination_number,
         immediate,
         shift,
@@ -668,7 +739,7 @@ def encode_emitted_movewide_parts(
     immediate: int,
     shift: int = 0,
 ) -> int:
-    if mnemonic not in ("movz", "movk"):
+    if mnemonic not in ("movz", "movk", "movn"):
         raise EncodeError("unsupported emitted move-wide mnemonic " + mnemonic)
     if shift < 0:
         raise EncodeError("negative emitted move-wide shift")
@@ -679,7 +750,7 @@ def encode_emitted_movewide_parts(
     if destination_kind not in (_EMITTED_REG_X, _EMITTED_REG_W):
         raise EncodeError("emitted move-wide requires an integer register")
     return _enc_movewide(
-        2 if mnemonic == "movz" else 3,
+        _MOVEWIDE_OPC[mnemonic],
         destination_code & 63,
         immediate,
         shift,
@@ -3259,8 +3330,8 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             return _enc_addsub_imm(0, rd, rm, 0, d64)
         return _enc_logical_reg(1, rd, 31, rm, d64)
 
-    if mn in ("movz", "movk"):
-        opc = 2 if mn == "movz" else 3
+    if mn in ("movz", "movk", "movn"):
+        opc = _MOVEWIDE_OPC[mn]
         rd, d64 = _reg(ops[0])
         imm16 = _imm(ops[1])
         shift = 0
@@ -3380,6 +3451,9 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         if ops:
             raise EncodeError(f"clrex operands not proven: {line!r}")
         return 0xD5033F5F
+
+    if lse_atomic_kind(mn):
+        return _encode_lse_atomic(mn, ops, line)
 
     if mn == "dmb":
         if len(ops) != 1 or ops[0].strip().lower() != "ish":
@@ -3535,6 +3609,15 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         rd, d64 = _reg(ops[0])
         rm, _ = _reg(ops[1])
         return _enc_addsub_reg(1, rd, 31, rm, d64)
+
+    if mn == "mvn":  # alias of orn rd, zr, rm (shifted register, no shift)
+        if len(ops) != 2:
+            raise EncodeError(f"mvn takes two registers: {line!r}")
+        rd, d64 = _reg(ops[0])
+        rm, m64 = _reg(ops[1])
+        if d64 != m64:
+            raise EncodeError(f"mvn register widths differ: {line!r}")
+        return (0xAA2003E0 if d64 else 0x2A2003E0) | (rm << 16) | rd
 
     if mn in ("asr", "lsr", "lsl") and ops[2].startswith("#"):
         rd, d64 = _reg(ops[0])

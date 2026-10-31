@@ -36,6 +36,7 @@ from .arm64_encode import (
     STRUCTURED_FIXUP_CALL,
     append_emitted_instruction_record,
     intern_emitted_symbol,
+    lse_atomic_kind,
 )
 from .code_profile import apply_function_order_profile
 from .precise_stackmap import precise_stackmap_tables_enabled
@@ -1399,6 +1400,12 @@ def _line_defines_reg(line: str, reg: str) -> bool:
     opcode, sep, rest = stripped.partition(" ")
     if not sep:
         return False
+    lse_kind = lse_atomic_kind(opcode)
+    if lse_kind:
+        # LD<op>/SWP write their second register; CAS writes its first.
+        first, _sep, after = rest.partition(", ")
+        second, _sep2, _address = after.partition(", ")
+        return (second if lse_kind == 1 else first) == reg
     if opcode in (
         "cmp",
         "cmn",
@@ -1436,6 +1443,13 @@ def _line_uses_reg(line: str, reg: str) -> bool:
     opcode, sep, rest = stripped.partition(" ")
     if not sep:
         return reg in _tokens_for_reg_scan(stripped)
+    lse_kind = lse_atomic_kind(opcode)
+    if lse_kind:
+        # LD<op>/SWP read Rs and the address, never their Rt; CAS reads all.
+        first, _sep, after = rest.partition(", ")
+        _second, _sep2, address = after.partition(", ")
+        used = first + " " + address if lse_kind == 1 else rest
+        return reg in _tokens_for_reg_scan(used)
     # These partial writes preserve bits from the previous destination.  They
     # define it and use it, including when the scan observes its W/X alias.
     # Treating the destination as write-only can delete its initialization.
@@ -1493,6 +1507,17 @@ def _line_reg_alias_effect(line: str, reg: str) -> int:
             if alias in tokens:
                 return 1
         return 0
+
+    lse_kind = lse_atomic_kind(opcode)
+    if lse_kind:
+        # Exactly _line_uses_reg/_line_defines_reg for the LSE operand roles.
+        first, _sep, after = rest.partition(", ")
+        second, _sep2, address = after.partition(", ")
+        used_tokens = _tokens_for_reg_scan(first + " " + address if lse_kind == 1 else rest)
+        for alias in aliases:
+            if alias in used_tokens:
+                return 1
+        return 2 if (second if lse_kind == 1 else first) in aliases else 0
 
     defines = False
     tail = ""

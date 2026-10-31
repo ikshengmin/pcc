@@ -139,6 +139,34 @@ def _exclusive_pair_ops(func, kind: str, ordering: str, suffix: str) -> tuple[st
     return load_op + suffix, store_op + suffix
 
 
+_LSE_RMW_BASE = {
+    "add": "ldadd",
+    "sub": "ldadd",
+    "and": "ldclr",
+    "or": "ldset",
+    "xchg": "swp",
+}
+
+_LSE_ORDERING_SUFFIX = {
+    "monotonic": "",
+    "acquire": "a",
+    "release": "l",
+    "acq_rel": "al",
+    "seq_cst": "al",
+}
+
+
+def _lse_atomics_available(module_symbols: PreparedModuleSymbols) -> bool:
+    """Every arm64 macOS machine implements ARMv8.1 LSE (Apple M1 and later).
+
+    Linux AArch64 does not guarantee it (Cortex-A53/A72 are ARMv8.0), so that
+    target keeps the exclusive-monitor loops.
+    """
+    from .self_backend_target_match import is_aarch64_darwin_triple
+
+    return is_aarch64_darwin_triple(module_symbols.target_triple)
+
+
 def _cmpxchg_merged_ordering(success: str, failure: str) -> str:
     # LLVM's AtomicCmpXchgInst::getMergedOrdering: one LL/SC loop carries
     # both orderings, so its load-exclusive must also meet the failure order.
@@ -659,19 +687,39 @@ def emit_memory_instruction_by_id(
         if address_register is None:
             address_register = "x9"
             lines = materialize_pointer(func, ptr_name, 9, module_symbols)
-        lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
         r_val = reg_name(value_type, 10)
         r_old = reg_name(value_type, 11)
         r_new = reg_name(value_type, 12)
-        label = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
-        lines.append(f"{label}:")
-        lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
-        if op == "xchg":
-            lines.append(emitted_move_register_line(r_new, r_val))
+        if _lse_atomics_available(module_symbols):
+            # One LSE instruction (LLVM's +lse lowering): sub adds the
+            # negation and and clears the complement.  Rs is only read, so an
+            # allocated operand is used in place; the old value lands in r_old.
+            source = allocated_register_name(func, value, value_type)
+            if op in ("sub", "and"):
+                if source is None:
+                    lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
+                    source = r_val
+                lines.append(f"  {'neg' if op == 'sub' else 'mvn'} {r_val}, {source}")
+                source = r_val
+            elif source is None:
+                lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
+                source = r_val
+            mnemonic = (
+                _LSE_RMW_BASE[op] + _LSE_ORDERING_SUFFIX[ordering]
+                + _atomic_size_suffix(value_type)
+            )
+            lines.append(f"  {mnemonic} {source}, {r_old}, [{address_register}]")
         else:
-            lines.append(f"  {_ATOMIC_RMW_COMPUTE[op]} {r_new}, {r_old}, {r_val}")
-        lines.append(f"  {store_exclusive} w13, {r_new}, [{address_register}]")
-        lines.append(emitted_branch_line("cbnz", label, "w13"))
+            lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
+            label = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
+            lines.append(f"{label}:")
+            lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
+            if op == "xchg":
+                lines.append(emitted_move_register_line(r_new, r_val))
+            else:
+                lines.append(f"  {_ATOMIC_RMW_COMPUTE[op]} {r_new}, {r_old}, {r_val}")
+            lines.append(f"  {store_exclusive} w13, {r_new}, [{address_register}]")
+            lines.append(emitted_branch_line("cbnz", label, "w13"))
         used = (indexed_kernel.value_is_used(indexed_dest_id) if indexed_kernel is not None
                 else value_has_uses(func, dest))
         if (not value_type.is_int or used) and (
@@ -720,17 +768,35 @@ def emit_memory_instruction_by_id(
             lines = materialize_pointer(func, ptr_name, 9, module_symbols)
         lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
         lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
-        base = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
-        lines.append(f"{base}_retry:")
-        lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
-        lines.append(emitted_compare_register_line(r_old, r_exp))
-        lines.append(emitted_branch_line("b.ne", base + "_fail"))
-        lines.append(f"  {store_exclusive} w13, {r_des}, [{address_register}]")
-        lines.append(emitted_branch_line("cbnz", base + "_retry", "w13"))
-        lines.append(emitted_branch_line("b", base + "_done"))
-        lines.append(f"{base}_fail:")
-        lines.append("  clrex")
-        lines.append(f"{base}_done:")
+        if _lse_atomics_available(module_symbols):
+            # CAS returns the observed value in its Rs operand; seed that
+            # register with the expected value, keep the expected copy for
+            # the success flag, and compare after (LLVM's +lse lowering).
+            # Both operands stay in scratch registers so neither can share a
+            # register with the observed result.
+            ordering_suffix = _LSE_ORDERING_SUFFIX[_cmpxchg_merged_ordering(success, failure)]
+            if value_type.width in (8, 16):
+                # CASB/CASH compare the low bits and zero-extend the observed
+                # value; compare against the same zero-extended expectation.
+                lines.append(f"  and {r_exp}, {r_exp}, #{'0xff' if value_type.width == 8 else '0xffff'}")
+            lines.append(emitted_move_register_line(r_old, r_exp))
+            lines.append(
+                f"  cas{ordering_suffix}{_atomic_size_suffix(value_type)} "
+                f"{r_old}, {r_des}, [{address_register}]"
+            )
+            lines.append(emitted_compare_register_line(r_old, r_exp))
+        else:
+            base = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
+            lines.append(f"{base}_retry:")
+            lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
+            lines.append(emitted_compare_register_line(r_old, r_exp))
+            lines.append(emitted_branch_line("b.ne", base + "_fail"))
+            lines.append(f"  {store_exclusive} w13, {r_des}, [{address_register}]")
+            lines.append(emitted_branch_line("cbnz", base + "_retry", "w13"))
+            lines.append(emitted_branch_line("b", base + "_done"))
+            lines.append(f"{base}_fail:")
+            lines.append("  clrex")
+            lines.append(f"{base}_done:")
         if projection.first >= 0 and indexed_kernel is not None:
             projected_name = indexed_kernel.value_name(projection.first)
             if projection.third == 0:

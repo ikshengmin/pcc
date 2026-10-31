@@ -20,6 +20,7 @@ import re
 from typing import Protocol
 
 from . import BackendUnavailable
+from .arm64_encode import lse_atomic_kind
 from .self_backend_analysis import instruction_used_values, terminator_used_values
 from .self_backend_ir import (
     PARSED_INSTRUCTION_KINDS,
@@ -774,6 +775,11 @@ def _aarch64_register_dead_in_block(
             if opcode in ("bl", "blr"):
                 return True
             continue
+        if lse_atomic_kind(opcode):
+            # LD<op>/SWP read their first register and CAS reads both; their
+            # written register is not the first operand alone.  Treat any
+            # appearance as a read.
+            return False
         # A plain destination write kills the old value; anything else reads it.
         destination, _comma, remainder = operands.partition(",")
         if (

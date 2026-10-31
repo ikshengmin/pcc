@@ -54,6 +54,30 @@ def emit_const_to_reg(value_type: TypeDesc, reg: str, value: int) -> list[str]:
     return emit_const_to_reg_bits(bits, reg, value)
 
 
+def _movn_chunk_indexes(bits: int, reg: str, chunks: list[int]) -> list[int] | None:
+    """The non-0xFFFF chunk indexes when MOVN takes fewer moves than MOVZ.
+
+    MOVN sets every bit of its register outside the inverted chunk, so it
+    is used only when the register is exactly the constant's width: an i32
+    built in an X register must keep its upper half zero. None selects the
+    MOVZ sequence; an empty list is all ones (a single ``movn reg, #0``).
+    """
+    if not ((bits == 64 and reg.startswith("x")) or (bits == 32 and reg.startswith("w"))):
+        return None
+    if len(chunks) * 16 != bits:
+        return None
+    nonzero = 0
+    inverted: list[int] = []
+    for index, chunk in enumerate(chunks):
+        if chunk != 0:
+            nonzero += 1
+        if chunk != 0xFFFF:
+            inverted.append(index)
+    if len(inverted) >= max(nonzero, 1):
+        return None
+    return inverted
+
+
 def emit_const_to_reg_bits(bits: int, reg: str, value: int) -> list[str]:
     # Arithmetic right shift plus a 16-bit mask produces the desired two's
     # complement chunks for negative values without constructing ``1 << 64``.
@@ -66,6 +90,20 @@ def emit_const_to_reg_bits(bits: int, reg: str, value: int) -> list[str]:
             chunk_width = 16
         chunk_mask = (1 << chunk_width) - 1
         chunks.append((value >> shift) & chunk_mask)
+    inverted = _movn_chunk_indexes(bits, reg, chunks)
+    if inverted is not None:
+        if not inverted:
+            return [emitted_movewide_instruction_line("movn", reg, 0)]
+        lines = [
+            emitted_movewide_instruction_line(
+                "movn", reg, ~chunks[inverted[0]] & 0xFFFF, inverted[0] * 16, True,
+            )
+        ]
+        for index in inverted[1:]:
+            lines.append(
+                emitted_movewide_instruction_line("movk", reg, chunks[index], index * 16, True)
+            )
+        return lines
     first_index = 0
     while first_index < len(chunks) and chunks[first_index] == 0:
         first_index += 1
@@ -121,6 +159,22 @@ def append_const_to_reg_bits(
     value: int,
 ) -> None:
     """Publish immediate chunks directly without an intermediate sequence."""
+    chunks: list[int] = []
+    chunk_shift = 0
+    while chunk_shift < bits:
+        chunks.append((value >> chunk_shift) & 0xFFFF)
+        chunk_shift += 16
+    inverted = _movn_chunk_indexes(bits, reg, chunks)
+    if inverted is not None:
+        if not inverted:
+            owner.append_movewide(fragment, "movn", reg, 0)
+            return
+        owner.append_movewide(
+            fragment, "movn", reg, ~chunks[inverted[0]] & 0xFFFF, inverted[0] * 16,
+        )
+        for index in inverted[1:]:
+            owner.append_movewide(fragment, "movk", reg, chunks[index], index * 16)
+        return
     shift = 0
     emitted_first = False
     while shift < bits:
