@@ -287,6 +287,32 @@ def _function(text, name):
     return match.group(0)
 
 
+def _owned_tuple_source_slots(addresses, block, index, invoke):
+    """Resolve the actual address vector, not raw values or a helper name."""
+    sources, count, output = addresses.args(invoke)
+    base, offset = addresses.slot(sources)
+    count = int(count)
+    assert offset == 0 and count > 0
+    assert addresses._pointer_cells(base) == count, "tuple source vector length drift"
+    stores = {}
+    for ins in block.instructions[:index]:
+        if ins.kind == "store":
+            owner, cell = addresses.slot(ins.data[3])
+            if owner == base:
+                assert ins.data[0].is_ptr
+                stores[cell] = ins.data[1]
+    expected = tuple(range(0, count * addresses.POINTER_BYTES, addresses.POINTER_BYTES))
+    assert set(stores) == set(expected), "tuple sources need every exact address cell"
+    roots = tuple(addresses.slot(stores[cell]) for cell in expected)
+    assert len(set(roots)) == count, "tuple sources must be distinct owning cells"
+    for root in roots:
+        addresses.require_owning(root, allow_lifo=True)
+    destination = addresses.slot(output)
+    addresses.require_owning(destination, allow_lifo=True)
+    assert destination not in roots, "tuple destination aliases an input owner"
+    return roots
+
+
 def _assert_generator_function_slots(module, function, symbol, mode, mutation=None):
     from pcc.backend.self_backend_kernel import get_indexed_function_kernel
     from tests.python.root_slot_contract import RootSlotContract
@@ -320,6 +346,34 @@ def _assert_generator_function_slots(module, function, symbol, mode, mutation=No
                 blocks.append(SimpleNamespace(name=name, instructions=[damaged],
                                               terminator=SimpleNamespace(kind="br", data=(term.data[2],))))
                 block.terminator = SimpleNamespace(kind="br_cond", data=(term.data[0], name, term.data[2]))
+        elif mutation in ("wrong-tuple-source", "raw-tuple-source", "truncated-tuple-vector"):
+            addresses = RootSlotContract(blocks, module.globals_)
+            output = addresses.slot(published.data[3])
+            transfer_block, transfer_index, transfer = next(
+                (owner, position, ins) for owner in blocks
+                for position, ins in enumerate(owner.instructions)
+                if addresses.called(ins, "py_tuple_from_owned_roots")
+                and output in _owned_tuple_source_slots(addresses, owner, position, ins)
+            )
+            if mutation == "truncated-tuple-vector":
+                arguments = list(transfer.data[4])
+                arguments[1] = (arguments[1][0], str(int(arguments[1][1]) - 1))
+                transfer_block.instructions[transfer_index] = SimpleNamespace(
+                    kind="call", data=transfer.data[:4] + (tuple(arguments),) + transfer.data[5:])
+            else:
+                vector = addresses.slot(addresses.args(transfer)[0])[0]
+                position, store = next(
+                    (position, ins) for position, ins in enumerate(transfer_block.instructions[:transfer_index])
+                    if ins.kind == "store" and addresses.slot(ins.data[3])[0] == vector
+                    and addresses.slot(ins.data[1]) == output
+                )
+                replacement = invoke.data[0]
+                if mutation == "wrong-tuple-source":
+                    receiver = addresses.args(invoke)[0]
+                    replacement = next(ins.data[3] for _, _, ins in addresses.rows
+                                       if ins.kind == "load" and ins.data[0] == receiver)
+                transfer_block.instructions[position] = SimpleNamespace(
+                    kind="store", data=(store.data[0], replacement) + store.data[2:])
         else:
             assert mutation == "premature-result-retirement"
             leave = next(ins for owner in blocks for ins in owner.instructions
@@ -332,6 +386,7 @@ def _assert_generator_function_slots(module, function, symbol, mode, mutation=No
     rows = addresses.rows
     slot, called, args = addresses.slot, addresses.called, addresses.args
     loads = {ins.data[0]: ins.data[3] for _, _, ins in rows if ins.kind == "load"}
+    locations = {id(ins): (block, index) for block, index, ins in rows}
     by_name = {block.name: block for block in blocks}
     invocations = [(block, index, ins) for block, index, ins in rows if called(ins, symbol)]
     assert invocations
@@ -350,6 +405,11 @@ def _assert_generator_function_slots(module, function, symbol, mode, mutation=No
         def is_consumer(ins):
             if mode == "take":
                 return called(ins, "pcc_gc_take_pinned_slot") and slot(args(ins)[0]) == output
+            if mode == "owned-tuple":
+                if not called(ins, "py_tuple_from_owned_roots"):
+                    return False
+                owner, position = locations[id(ins)]
+                return output in _owned_tuple_source_slots(addresses, owner, position, ins)
             return called(ins, mode) and any(
                 value in loads and slot(loads[value]) == output for value in args(ins)
             )
@@ -404,7 +464,7 @@ def _assert_generator_function_slots(module, function, symbol, mode, mutation=No
                     assert is_consumer(ins), "result frame retired before its final take handoff"
                 consumed = is_consumer(ins)
                 if consumed:
-                    if mode != "take":
+                    if mode not in ("take", "owned-tuple"):
                         for value in args(ins):
                             if value not in loads or slot(loads[value]) != output:
                                 continue
@@ -425,6 +485,10 @@ def _assert_generator_function_slots(module, function, symbol, mode, mutation=No
         assert paths
 
         for path in paths:
+            if mode == "owned-tuple":
+                assert any(ins.kind == "call" and ins.data[2].endswith("_later") for ins in path), (
+                    "generator result must stay rooted across later argument evaluation"
+                )
             releases = [ins for ins in path if called(ins, "pcc_gc_foreign_lease_release")
                         and slot(args(ins)[0]) in operands]
             assert [slot(args(ins)[0]) for ins in releases[:len(operands)]] == list(reversed(operands))
@@ -459,9 +523,9 @@ def test_generator_method_owned_result_ir(tmp_path, monkeypatch, target):
     for name, symbol, mode in (
         ("compare_send", "py_gen_send", "py_obj_eq_value"),
         ("compare_throw", "py_gen_throw", "py_obj_eq_value"),
-        ("close_value", "py_gen_close", "py_list_append"),
-        ("heap_send", "py_gen_send", "py_list_append"),
-        ("heap_throw", "py_gen_throw", "py_list_append"),
+        ("close_value", "py_gen_close", "owned-tuple"),
+        ("heap_send", "py_gen_send", "owned-tuple"),
+        ("heap_throw", "py_gen_throw", "owned-tuple"),
         ("discard_send", "py_gen_send", "take"),
         ("original_exception", "py_gen_send", "take"),
     ):
@@ -472,6 +536,10 @@ def test_generator_method_owned_result_ir(tmp_path, monkeypatch, target):
                          "premature-result-retirement", "one-success-edge-clears-result"):
             with pytest.raises(AssertionError):
                 _assert_generator_function_slots(module, function, symbol, mode, mutation)
+        if mode == "owned-tuple":
+            for mutation in ("wrong-tuple-source", "raw-tuple-source", "truncated-tuple-vector"):
+                with pytest.raises(AssertionError):
+                    _assert_generator_function_slots(module, function, symbol, mode, mutation)
     for name, symbol in (("dynamic_send", "py_gen_send"), ("dynamic_throw", "py_gen_throw"),
                          ("dynamic_close", "py_gen_close")):
         assert not re.search(r"\bcall\b[^\n]*@" + symbol + r"\(", _function(text, name))

@@ -27,7 +27,8 @@ class Generator(Memory):
 
 class Runtime:
     """Execute the real port functions over a checked slot/lease model."""
-    def __init__(self):
+    def __init__(self, inline_frame=False):
+        self.inline_frame = inline_frame
         self.none = object()
         self.error = None
         self.leases = {}
@@ -40,6 +41,13 @@ class Runtime:
         header = path.parent.parent / 'include/py_runtime.h'
         tags = {name: int(value, 0) for name, value in re.findall(r'(PY_(?:TYPE|EXC)_[A-Z_]+)\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)', header.read_text())}
         self.tags = tags
+        abi = ast.parse((path.parent / 'py_abi_constants.py').read_text())
+        flags = {
+            target.id: ast.literal_eval(node.value)
+            for node in abi.body if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id.startswith('PY_FLAG_')
+        }
         exception_kinds = {tags['PY_EXC_TYPEERROR']: TypeError, tags['PY_EXC_VALUEERROR']: ValueError, tags['PY_EXC_RUNTIMEERROR']: RuntimeError}
         tree = ast.parse(path.read_text())
         selected = []
@@ -64,8 +72,8 @@ class Runtime:
             pcc_gc_store_ptr=self.store_field,
             pcc_gc_root_copy_borrowed_lease=self.borrow,
             pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
-            pcc_gc_pin=lambda v: self.flags.__setitem__(id(v),64),
-            pcc_gc_unpin=lambda v: self.flags.__setitem__(id(v),0),
+            pcc_gc_pin=lambda v: self.flags.__setitem__(id(v),self.flags.get(id(v),0)|64),
+            pcc_gc_unpin=lambda v: self.flags.__setitem__(id(v),self.flags.get(id(v),0)&~64),
             atomic_rmw_i32=lambda op,v,o,b,order: self.flags.__setitem__(id(v), self.flags.get(id(v),0)|b),
             pcc_gc_take_pinned_slot=self.take, pcc_platform_abort=lambda: pytest.fail('owner contract aborted'),
             py_tls_exc_swap_slot=self.swap, py_clear_exception=lambda: setattr(self,'error',None),
@@ -89,6 +97,7 @@ class Runtime:
             py_runtime_error_if_unset=lambda helper,msg: setattr(self,'error',self.error or RuntimeError(msg)),
         )
         self.ns.update({name:value for name,value in tags.items() if name.startswith('PY_TYPE_')})
+        self.ns.update(flags)
         exec(compile(ast.Module(selected,type_ignores=[]),str(path),'exec'),self.ns)
 
 
@@ -146,7 +155,7 @@ class Runtime:
     def take(self,ptr,prior):
         result=self.load(ptr,0)
         if result is not None:
-            self.flags[id(result)]=max(prior,0)
+            self.flags[id(result)]=(self.flags.get(id(result),0)&~64)|max(prior,0)
         self.store(ptr,0,None)
         return result
 
@@ -180,12 +189,16 @@ class Runtime:
         coro=Memory()
         def factory(captures,args):
             gen=Generator(body())
-            gen.fields.update({8:self.tags['PY_TYPE_GEN'],16:self.resume_pending,24:Memory(),32:0,48:self.none})
+            gen.fields.update({8:self.tags['PY_TYPE_GEN'],16:self.resume_pending,
+                               24:None if self.inline_frame else Memory(),32:0,48:self.none})
+            if self.inline_frame:
+                self.flags[id(gen)]=self.ns['PY_FLAG_GEN_INLINE_FRAME']
             return gen
         coro.fields.update({8:self.tags['PY_TYPE_COROUTINE'],24:factory,32:NativeTuple(),40:NativeTuple(),48:None,56:0,60:-1})
         return coro
 
     def resume_pending(self,gen,frame):
+        assert frame is (gen if self.inline_frame else gen.fields[24])
         assert self.error is None, 'throw metadata must never enter pending TLS'
         assert self.ns['py_coroutine_has_throw_arguments'](gen) == 1
         arguments=self.ns['py_coroutine_take_throw_arguments'](gen)
@@ -224,8 +237,9 @@ def test_invalid_protocol_arguments_leave_fresh_and_suspended_coroutines_usable(
         else: runtime.method(coro,'close')
 
 
-def test_throw_class_instance_and_legacy_value_normalization():
-    runtime=Runtime()
+@pytest.mark.parametrize('inline_frame', (False, True))
+def test_throw_class_instance_and_legacy_value_normalization(inline_frame):
+    runtime=Runtime(inline_frame)
     seen=[]
     def body():
         try: yield 'pause'
@@ -243,8 +257,9 @@ def test_throw_class_instance_and_legacy_value_normalization():
         if len(arguments)>1 and isinstance(arguments[1],NativeTuple): assert seen[-1].args == ('a','b')
 
 
-def test_throw_propagates_identity_and_runs_finally_before_finalizer_cleanup():
-    runtime=Runtime()
+@pytest.mark.parametrize('inline_frame', (False, True))
+def test_throw_propagates_identity_and_runs_finally_before_finalizer_cleanup(inline_frame):
+    runtime=Runtime(inline_frame)
     events=[]
     marker=ValueError('cancel')
     def body():

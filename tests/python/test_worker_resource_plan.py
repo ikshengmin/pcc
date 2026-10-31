@@ -364,27 +364,80 @@ def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path
     assert pool._HOST_WORKERS == {}
 
 
+def _progressive_retry_pressure_plan(available, leader_peak, peer_peak):
+    leader = policy.peak_reservation(leader_peak)
+    peer = policy.peak_reservation(peer_peak)
+    assert leader + peer <= available, ("initial pair must fit", leader, peer, available)
+    lower = max(leader, peer, available - peer)
+    target = lower + (available - lower) // 2
+    target_peak = (target - policy.RSS_HEADROOM_BYTES) * 4 // 5
+    target_charge = policy.peak_reservation(target_peak)
+    assert max(leader, peer) < target_charge < available
+    assert target_charge + peer > available
+    # The final real allocation may cross the target by one chunk. Keep that
+    # chunk inside half the remaining single-worker reservation headroom.
+    chunk = min(8 * MIB, (available - target_charge) * 4 // 10)
+    assert chunk >= 64 * 1024
+    return {
+        "available": available, "leader_peak": leader_peak,
+        "peer_peak": peer_peak, "target_peak": target_peak,
+        "chunk_bytes": chunk, "max_payload_bytes": target_peak,
+    }
+
+
+@pytest.mark.parametrize("parent_peak", [32 * MIB, 256 * MIB, 1024 * MIB])
+def test_progressive_retry_pressure_uses_child_reports_not_parent_history(parent_peak):
+    leader_peak, peer_peak = 24 * MIB, 20 * MIB
+    available = 2 * policy.peak_reservation(parent_peak + 32 * MIB) + 32 * MIB
+    plan = _progressive_retry_pressure_plan(available, leader_peak, peer_peak)
+    grown = policy.peak_reservation(plan["target_peak"])
+    peer = policy.peak_reservation(peer_peak)
+    assert policy.peak_reservation(leader_peak) + peer <= available
+    assert grown <= available < grown + peer
+    assert policy.peak_reservation(plan["target_peak"] + plan["chunk_bytes"]) < available
+    assert 0 < plan["chunk_bytes"] <= 8 * MIB < plan["max_payload_bytes"]
+    if parent_peak >= 256 * MIB:
+        # The old guessed allocation never forced cancellation in this shape:
+        # available grows as 2.5 * parent history, guessed growth only as 1x.
+        guessed_peak = leader_peak + parent_peak + 128 * MIB
+        assert policy.peak_reservation(guessed_peak) + peer <= available
+
+
 @pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
-def test_progressive_retry_drains_peers_then_restores_concurrency(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "parent_history", [0, 256 * MIB], ids=["fresh-parent", "retired-parent-rss"],
+)
+def test_progressive_retry_drains_peers_then_restores_concurrency(
+    tmp_path, monkeypatch, parent_history,
+):
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    # Exercise a genuine parent high-water mark, not a fabricated RSS reader.
+    # Release it before starting fresh children; no second full-sized copy.
+    history = bytearray(parent_history)
+    for offset in range(0, len(history), 4096):
+        history[offset] = 1
+    del history
     child = tmp_path / "progressive.py"
     child.write_text("""
+import json
 import os
 from pathlib import Path
 import sys
 import time
 from pcc.frontends.python.worker_resource_plan import (
-    RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, publish_worker_resource,
+    RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, peak_reservation, publish_worker_resource,
 )
 
 root = Path(sys.argv[1])
 index = int(sys.argv[2])
-growth = int(sys.argv[3])
 deadline = time.monotonic() + 6
 
-def wait_for(predicate):
+def wait_for(predicate, phase):
+    publish("waiting." + str(index) + "." + str(attempt), phase)
     while not predicate():
-        assert time.monotonic() < deadline, (index, "coordination timed out")
+        assert time.monotonic() < deadline, (
+            index, attempt, phase, "coordination timed out", rows()[-12:],
+        )
         time.sleep(0.005)
 
 def exists(name):
@@ -424,45 +477,79 @@ publish("started." + str(index) + "." + str(attempt), record)
 
 def overlap(name, peers):
     records = [root / ("started." + str(peer) + ".1") for peer in peers]
-    wait_for(lambda: all(path.exists() for path in records))
+    wait_for(lambda: all(path.exists() for path in records), name + " peer starts")
     pids = [int(path.read_text().split("\\t")[0]) for path in records]
     for pid in pids:
         os.kill(pid, 0)
     publish(name, " ".join(str(pid) for pid in pids))
 
 payloads = [bytearray(4 * 1024 ** 2)]
+
+def grow_to_accepted_pressure():
+    from pcc.frontends.python.pipeline_frontend_workers import (
+        _coordinator_rss_bytes, _worker_peak_rss_bytes,
+    )
+
+    marker = root / ("pressure." + str(os.getpid()) + "." + os.environ[RESOURCE_TOKEN_ENV])
+    wait_for(marker.exists, "accepted real-RSS pressure plan")
+    plan = json.loads(marker.read_text())
+    assert plan["pid"] == os.getpid() and plan["token"] == os.environ[RESOURCE_TOKEN_ENV]
+    allocated = 0
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    measured = max(_coordinator_rss_bytes(), _worker_peak_rss_bytes())
+    while measured < plan["target_peak"]:
+        assert time.monotonic() < deadline, (
+            index, attempt, "pressure allocation timed out", plan, measured,
+        )
+        remaining = plan["max_payload_bytes"] - allocated
+        assert remaining > 0, ("bounded real allocation did not reach target", plan, measured)
+        payload = bytearray(min(plan["chunk_bytes"], remaining))
+        for offset in range(0, len(payload), page_size):
+            payload[offset] = 1
+        payloads.append(payload)
+        allocated += len(payload)
+        measured = max(_coordinator_rss_bytes(), _worker_peak_rss_bytes())
+    assert 0 < allocated <= plan["max_payload_bytes"]
+    assert peak_reservation(measured) <= plan["available"], (
+        "grown worker must fit alone", plan, measured,
+    )
+    publish("growth." + str(index) + "." + str(attempt), json.dumps({
+        "allocated": allocated, "measured_peak": measured, "plan": plan,
+    }))
+
 if index == 0:
-    wait_for(lambda: exists("first-phase"))
+    publish_worker_resource("leader-small")
+    wait_for(lambda: exists("first-phase"), "peer first phase")
     overlap("initial-overlap0", [0, 1])
-    wait_for(lambda: exists("initial-overlap1"))
-    payloads.append(bytearray(growth))
+    wait_for(lambda: exists("initial-overlap1"), "peer initial overlap")
+    grow_to_accepted_pressure()
     publish_worker_resource("leader-grown")
-    wait_for(lambda: seen("cancel", 1))
+    wait_for(lambda: seen("cancel", 1), "real reservation cancellation")
     # Keep the leader alive until admission actually waits for it to drain.
     # A fixed sleep can expire before the coordinator runs under xdist.
-    wait_for(lambda: draining() or seen("start", 2))
+    wait_for(lambda: draining() or seen("start", 2), "retry barrier drains leader")
     assert draining() and not seen("start", 2)
 elif index == 1 and attempt == 1:
     publish_worker_resource("first-phase")
     publish("first-phase", record)
     overlap("initial-overlap1", [0, 1])
-    wait_for(lambda: False)
+    wait_for(lambda: False, "first attempt must be cancelled")
 elif index == 1:
     publish_worker_resource("retry-first-phase")
-    wait_for(lambda: seen("start", index, os.getpid()))
-    wait_for(lambda: acknowledged("retry-first-phase"))
-    payloads.append(bytearray(growth))
+    wait_for(lambda: seen("start", index, os.getpid()), "retry start")
+    wait_for(lambda: acknowledged("retry-first-phase"), "retry first-phase acceptance")
+    grow_to_accepted_pressure()
     publish_worker_resource("retry-second-phase")
     publish("second-phase", str(time.monotonic()))
-    wait_for(lambda: acknowledged("retry-second-phase"))
+    wait_for(lambda: acknowledged("retry-second-phase"), "retry second-phase acceptance")
 else:
     # Old admission starts task 2 beside the draining leader, then admits
     # the retry beside task 2. Keep task 2's report until the leader retires
     # so only the retry's later growth can cause the second cancellation.
-    wait_for(lambda: seen("retire", 0))
+    wait_for(lambda: seen("retire", 0), "leader retirement")
     publish_worker_resource("tail-small")
     overlap("restored-overlap" + str(index), [2, 3])
-    wait_for(lambda: exists("restored-overlap" + str(5 - index)))
+    wait_for(lambda: exists("restored-overlap" + str(5 - index)), "restored peer overlap")
 
 publish_worker_resource("complete")
 publish("complete." + str(index) + "." + str(attempt),
@@ -470,7 +557,6 @@ publish("complete." + str(index) + "." + str(attempt),
 """)
     owner = workers._coordinator_rss_bytes()
     startup_peak = max(owner, workers._worker_peak_rss_bytes())
-    growth = startup_peak + 128 * MIB
     available = 2 * policy.peak_reservation(startup_peak + 32 * MIB) + 32 * MIB
     budget = owner + policy.RSS_HEADROOM_BYTES + available
     (tmp_path / "configured-budget").write_text(str(budget))
@@ -478,16 +564,45 @@ publish("complete." + str(index) + "." + str(attempt),
                   inputs=(4 - index,), execution_class="host:progressive:" + str(index))
              for index in range(4)]
     commands = [shlex.join([sys.executable, "-B", str(child), str(tmp_path),
-                           str(index), str(growth)]) for index in range(4)]
+                           str(index)]) for index in range(4)]
     trace = tmp_path / "progressive.tsv"
     observations = []
     reaped = set()
     original_retire = pool._retire_resource_worker
     original_killpg = os.killpg
     original_read = policy.read_worker_resource
+    initial_reports = {}
+    pressure_plans = {}
+
+    def publish_pressure_plan(pid, token, leader_peak, peer_peak):
+        available_now = policy.available_worker_bytes(budget, workers._coordinator_rss_bytes())
+        plan = _progressive_retry_pressure_plan(available_now, leader_peak, peer_peak)
+        plan.update(pid=pid, token=token)
+        marker = tmp_path / ("pressure." + str(pid) + "." + token)
+        temporary = marker.with_suffix(".tmp")
+        temporary.write_text(json.dumps(plan))
+        temporary.replace(marker)
+        pressure_plans[pid, token] = plan
 
     def acknowledge_report(path, pid, token=""):
         report = original_read(path, pid, token)
+        if report is not None:
+            if report[0] in ("leader-small", "first-phase"):
+                initial_reports.setdefault(report[0], (pid, token, report))
+            if len(initial_reports) == 2:
+                leader_pid, leader_token, leader = initial_reports["leader-small"]
+                peer = initial_reports["first-phase"][2]
+                if (leader_pid, leader_token) not in pressure_plans:
+                    publish_pressure_plan(leader_pid, leader_token, leader[2], peer[2])
+                if report[0] == "retry-first-phase" and (pid, token) not in pressure_plans:
+                    publish_pressure_plan(pid, token, report[2], peer[2])
+            if report[0] in ("leader-grown", "retry-second-phase"):
+                available_now = policy.available_worker_bytes(budget, workers._coordinator_rss_bytes())
+                grown = policy.peak_reservation(report[2])
+                peer = policy.peak_reservation(initial_reports["first-phase"][2][2])
+                assert grown <= available_now < grown + peer, (
+                    "real pressure precondition", report, available_now, peer,
+                )
         if report is not None and report[0] in ("retry-first-phase", "retry-second-phase"):
             # Observe the real reader result without substituting its RSS or
             # changing admission. Each phase stays live until the scheduler
@@ -530,6 +645,18 @@ publish("complete." + str(index) + "." + str(attempt),
             for index in range(4)] == [1, 2, 1, 1]
     first_attempt = (tmp_path / "started.1.1").read_text().split("\t")
     retry_attempt = (tmp_path / "started.1.2").read_text().split("\t")
+    leader_attempt = (tmp_path / "started.0.1").read_text().split("\t")
+    assert set(pressure_plans) == {
+        (int(leader_attempt[0]), leader_attempt[1]),
+        (int(retry_attempt[0]), retry_attempt[1]),
+    }
+    for index, attempt, record in ((0, 1, leader_attempt), (1, 2, retry_attempt)):
+        growth = json.loads((tmp_path / f"growth.{index}.{attempt}").read_text())
+        plan = pressure_plans[int(record[0]), record[1]]
+        assert growth["plan"] == plan
+        assert 0 < growth["allocated"] <= plan["max_payload_bytes"]
+        assert growth["measured_peak"] >= plan["target_peak"]
+        assert policy.peak_reservation(growth["measured_peak"]) <= plan["available"]
     assert first_attempt[1] != retry_attempt[1]
     assert cancelled[0][2] == first_attempt[0]
     assert not (tmp_path / "complete.1.1").exists()
