@@ -1,0 +1,37 @@
+// PCC-owned C++17 integer-limit surface; N4659 [climits.syn].
+// Width and plain-char signedness follow the owned target predefines, never
+// the host Python process. Integer macros have their promoted integer types.
+#ifndef _PCC_CXX_CLIMITS
+#define _PCC_CXX_CLIMITS
+
+#define CHAR_BIT __CHAR_BIT__
+#define SCHAR_MAX __SCHAR_MAX__
+#define SCHAR_MIN (-SCHAR_MAX - 1)
+#define UCHAR_MAX (2 * SCHAR_MAX + 1)
+#ifdef __CHAR_UNSIGNED__
+#define CHAR_MIN 0
+#define CHAR_MAX UCHAR_MAX
+#else
+#define CHAR_MIN SCHAR_MIN
+#define CHAR_MAX SCHAR_MAX
+#endif
+
+// Preserve the existing C compatibility limits.h compile-time capacity
+// declaration, not a validated locale policy. No 16-byte encoding or host-libc
+// parity is claimed; multibyte/locale runtime support remains unqualified.
+#define MB_LEN_MAX 16
+
+#define SHRT_MAX __SHRT_MAX__
+#define SHRT_MIN (-SHRT_MAX - 1)
+#define USHRT_MAX (2 * SHRT_MAX + 1)
+#define INT_MAX __INT_MAX__
+#define INT_MIN (-INT_MAX - 1)
+#define UINT_MAX (2U * INT_MAX + 1U)
+#define LONG_MAX __LONG_MAX__
+#define LONG_MIN (-LONG_MAX - 1L)
+#define ULONG_MAX (2UL * LONG_MAX + 1UL)
+#define LLONG_MAX __LONG_LONG_MAX__
+#define LLONG_MIN (-LLONG_MAX - 1LL)
+#define ULLONG_MAX (2ULL * LLONG_MAX + 1ULL)
+
+#endif
