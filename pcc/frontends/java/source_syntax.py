@@ -1,6 +1,6 @@
 """Owned Java source syntax; no javac, class encoding or token rewriting.
 
-Initial grammar: one ordinary class, static int/void methods, int locals,
+Initial grammar: one ordinary class, static boolean/int/long/void methods and scalar locals,
 structured control flow and scalar expressions. Unsupported grammar is never
 discarded. Unicode-escape translation and non-ASCII identifiers are explicit
 boundaries rather than an approximation of Java's lexical translation rules.
@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import re
 
 from .diagnostics import JavaError, UnsupportedJava
+from .source_types import DECLARED, DESCRIPTORS
 
 
 KEYWORDS = frozenset((
@@ -49,6 +50,7 @@ class Node:
     symbol: object = None
     constant: int | bool | None = None
     completes: bool = True
+    operation_type: str | None = None
 
 
 @dataclass
@@ -60,10 +62,11 @@ class SourceMethod:
     locals: list = field(default_factory=list)
     owner: str = ""
     modifiers: frozenset[str] = frozenset()
+    parameter_types: tuple[str, ...] = ()
 
     @property
     def descriptor(self):
-        return "(" + "I" * len(self.parameters) + ")" + ("I" if self.result == "int" else "V")
+        return "(" + "".join(DESCRIPTORS[dtype] for dtype in self.parameter_types) + ")" + DESCRIPTORS[self.result]
 
 
 @dataclass
@@ -196,24 +199,27 @@ class SourceParser:
             if "static" not in mods or mods & {"abstract", "native", "synchronized"}:
                 self.peek().error("only ordinary static source methods are implemented", True)
             result = self.take()
-            if result.text not in ("int", "void"):
-                result.error("source method results currently require int or void", True)
+            if result.text not in DECLARED | {"void"}:
+                result.error("source method results currently require boolean, int, long or void", True)
             method_name = self.identifier()
             if self.peek().text != "(":
                 self.peek().error("fields and class initialization require the shared Java runtime", True)
             self.expect("(")
-            parameters = []
+            parameters, parameter_types = [], []
             if self.peek().text != ")":
                 while True:
-                    self.expect("int")
+                    dtype = self.take()
+                    if dtype.text not in DECLARED:
+                        dtype.error("source parameters require boolean, int or long", True)
+                    parameter_types.append(dtype.text)
                     parameters.append(self.identifier())
                     if not self.accept(","):
                         break
             self.expect(")")
-            if len(parameters) > 255:
+            if sum(2 if dtype == "long" else 1 for dtype in parameter_types) > 255:
                 method_name.error("too many static method parameters")
             methods.append(SourceMethod(method_name, result.text, tuple(parameters), self.block(),
-                                        owner=owner, modifiers=frozenset(mods)))
+                                        owner=owner, modifiers=frozenset(mods), parameter_types=tuple(parameter_types)))
         self.expect("<eof>")
         return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports))
 
@@ -268,12 +274,13 @@ class SourceParser:
 
     def simple(self, allow_declaration=False):
         token = self.peek()
-        if self.accept("int"):
+        if token.text in DECLARED:
+            self.take()
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
             name = self.identifier()
             children = [self.expression()] if self.accept("=") else []
-            return Node("var", name, children=children)
+            return Node("var", name, token.text, children)
         if self.peek(1).text in ASSIGNMENTS | {"++", "--"}:
             name = self.identifier()
             operation = self.take().text
@@ -289,7 +296,7 @@ class SourceParser:
         if token.text in ("+", "-", "~", "!"):
             node = Node("unary", token, token.text, [self.expression(11)])
         elif token.text == "(":
-            if self.peek().text in ("int", "byte", "short", "char") and self.peek(1).text == ")":
+            if self.peek().text in ("int", "long", "boolean", "byte", "short", "char") and self.peek(1).text == ")":
                 dtype = self.take().text
                 self.expect(")")
                 node = Node("cast", token, dtype, [self.expression(11)])

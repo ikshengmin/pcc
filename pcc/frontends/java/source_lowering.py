@@ -23,17 +23,32 @@ class SourceLowerer:
         self.i32 = ir.IntType(32)
         self.loops = []
 
+    @staticmethod
+    def scalar_type(dtype):
+        if dtype == "void":
+            return ir.VoidType()
+        return ir.IntType(1 if dtype == "boolean" else 64 if dtype == "long" else 32)
+
+    def coerce(self, value, dtype):
+        target = self.scalar_type(dtype)
+        if value.type == target:
+            return value
+        if value.type.width > target.width:
+            return self.builder.trunc(value, target)
+        return self.builder.sext(value, target)
+
     def lower(self, entry):
         methods = [method for program in self.programs for method in program.methods]
         for method in methods:
             key = (method.owner, method.token.text, method.descriptor)
-            signature = ir.FunctionType(self.i32 if method.result == "int" else ir.VoidType(),
-                                        [self.i32 for _ in method.parameters])
+            signature = ir.FunctionType(self.scalar_type(method.result),
+                                        [self.scalar_type(dtype) for dtype in method.parameter_types])
             self.functions[key] = ir.Function(self.module, signature, method_symbol(*key))
         for method in methods:
             self.function = self.functions[method.owner, method.token.text, method.descriptor]
+            self.result_type = method.result
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
-            self.slots = {binding: self.builder.alloca(self.i32, name="local_" + str(binding.slot))
+            self.slots = {binding: self.builder.alloca(self.scalar_type(binding.dtype), name="local_" + str(binding.slot))
                           for binding in method.locals}
             for argument, binding in zip(self.function.args, method.locals):
                 self.builder.store(argument, self.slots[binding])
@@ -49,26 +64,27 @@ class SourceLowerer:
 
     def expression(self, node):
         if node.constant is not None:
-            return ir.Constant(ir.IntType(1) if node.dtype == "boolean" else self.i32, int(node.constant))
+            return ir.Constant(self.scalar_type(node.dtype), int(node.constant))
         kind = node.kind
         if kind == "name":
             return self.builder.load(self.slots[node.symbol])
         if kind == "call":
-            arguments = [self.expression(argument) for argument in node.children]
+            arguments = [self.coerce(self.expression(argument), dtype)
+                         for argument, dtype in zip(node.children, node.symbol.parameter_types)]
             return self.builder.call(self.functions[node.symbol.owner, node.symbol.token.text, node.symbol.descriptor], arguments)
         if kind == "group":
             return self.expression(node.children[0])
         if kind == "cast":
             value = self.expression(node.children[0])
-            if node.value == "int":
-                return value
+            if node.value in ("int", "long", "boolean"):
+                return self.coerce(value, node.value)
             return emit_narrow(self.builder, {"byte": "i2b", "short": "i2s", "char": "i2c"}[node.value], value)
         if kind == "unary":
             value = self.expression(node.children[0])
             if node.value == "+":
                 return value
             if node.value == "-":
-                return self.builder.sub(ir.Constant(self.i32, 0), value)
+                return self.builder.sub(ir.Constant(value.type, 0), value)
             return self.builder.not_(value)
         if kind == "binary":
             left = self.expression(node.children[0])
@@ -88,6 +104,10 @@ class SourceLowerer:
                 result.add_incoming(right, right_end)
                 return result
             right = self.expression(node.children[1])
+            dtype = node.operation_type or "boolean"
+            left = self.coerce(left, dtype)
+            if node.value not in ("<<", ">>", ">>>"):
+                right = self.coerce(right, dtype)
             if node.value in ("==", "!=", "<", "<=", ">", ">="):
                 return self.builder.icmp_signed(node.value, left, right)
             return emit_binary(self.builder, OPERATIONS[node.value], left, right)
@@ -103,19 +123,21 @@ class SourceLowerer:
             return
         if kind == "var":
             if node.children:
-                self.builder.store(self.expression(node.children[0]), self.slots[node.symbol])
+                self.builder.store(self.coerce(self.expression(node.children[0]), node.symbol.dtype), self.slots[node.symbol])
             return
         if kind == "assign":
             slot = self.slots[node.symbol]
             if node.value == "=":
-                value = self.expression(node.children[0])
+                value = self.coerce(self.expression(node.children[0]), node.symbol.dtype)
             else:
-                left = self.builder.load(slot)
+                left = self.coerce(self.builder.load(slot), node.operation_type)
                 if node.value in ("++", "--"):
-                    right, operation = ir.Constant(self.i32, 1), "add" if node.value == "++" else "sub"
+                    right, operation = ir.Constant(left.type, 1), "add" if node.value == "++" else "sub"
                 else:
                     right, operation = self.expression(node.children[0]), OPERATIONS[node.value[:-1]]
-                value = emit_binary(self.builder, operation, left, right)
+                if operation not in ("shl", "ashr", "lshr"):
+                    right = self.coerce(right, node.operation_type)
+                value = self.coerce(emit_binary(self.builder, operation, left, right), node.symbol.dtype)
             self.builder.store(value, slot)
             return
         if kind == "expression":
@@ -123,7 +145,7 @@ class SourceLowerer:
             return
         if kind == "return":
             if node.children:
-                self.builder.ret(self.expression(node.children[0]))
+                self.builder.ret(self.coerce(self.expression(node.children[0]), self.result_type))
             else:
                 self.builder.ret_void()
             return

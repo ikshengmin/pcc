@@ -87,6 +87,7 @@ def test_source_arm64_darwin_cross_emission_is_an_owned_object_not_device_execut
     ("for(int i=0;i<2;i++){}return i;", "", "undefined local"),
     ("if(1)return 1;return 0;", "", "requires boolean"),
     ("return true;", "", "integer value required"),
+    ("return 1L;", "", "incompatible assignment conversion"),
     ("return 1<2;", "", "integer value required"),
     ("return 1 + false;", "", "integer value required"),
     ("return f();", "static void f(){return;}", "integer value required"),
@@ -118,7 +119,6 @@ def test_source_semantic_errors_are_rejected_before_ir(body, helpers, message, m
 @pytest.mark.parametrize("original,message", [
     (source("return 1/0;"), "ArithmeticException"),
     (source("int x=1;x%=2;return x;"), "ArithmeticException"),
-    (source("return 1L;"), "long literals"),
     ("import p.Library;" + source("return 1;"), "dependency resolution"),
     ("class C extends D {}", "shared Java runtime"),
     ("class C {static int value;}", "fields"),

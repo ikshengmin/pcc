@@ -6,6 +6,7 @@ static/on-demand imports remain explicit unsupported domains.
 """
 from .diagnostics import JavaError, UnsupportedJava
 from .source_sema import SourceAnalyzer
+from .source_types import select_method
 
 
 class SourceProject:
@@ -67,7 +68,7 @@ class SourceProject:
     def resolve_call(self, analyzer, node):
         pieces = node.value.split(".")
         if len(pieces) == 1:
-            return analyzer.methods.get((pieces[0], len(node.children)))
+            return select_method(analyzer.methods, node)
         caller = analyzer.program
         # JLS 6.5.2 expression-name reclassification precedes package/type
         # lookup. An int local obscures an identically named class/package.
@@ -90,13 +91,18 @@ class SourceProject:
                                  "supply a single-type import and a resolved class qualifier", True)
             node.token.error("unresolved source class qualifier " + ".".join(qualifier))
         self.require_class_access(caller, target, node.token)
-        method = self.analyzers[target.name].methods.get((pieces[-1], len(node.children)))
+        methods = self.analyzers[target.name].methods
+        # JLS 15.12.2.1 considers only accessible potentially applicable methods.
+        # An inaccessible narrower overload must not defeat a public widening
+        # overload that is otherwise applicable to this call.
+        accessible = {key: method for key, method in methods.items()
+                      if target is caller or "private" not in method.modifiers and
+                      (caller.package == target.package or "public" in method.modifiers)}
+        method = select_method(accessible, node)
         if method is None:
+            if select_method(methods, node) is not None:
+                node.token.error("source static method is not accessible: " + node.value)
             node.token.error("unresolved source static method " + node.value)
-        if target is not caller and (
-                "private" in method.modifiers or
-                caller.package != target.package and "public" not in method.modifiers):
-            node.token.error("source static method is not accessible: " + node.value)
         return method
 
     def analyze(self):

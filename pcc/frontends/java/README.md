@@ -24,10 +24,15 @@ Input ordering does not affect IR. Existing `admitted_methods` describes the
 selected entry class; `emitted_class_methods` additionally records `(class, name,
 descriptor)` for the entire source closure.
 
-The current scalar domain is one ordinary class per source unit, static int/void
-methods with int parameters/locals, lexical scopes/definite assignment,
+The current scalar domain is one ordinary class per source unit, static boolean/int/long/void
+methods with boolean/int/long parameters/locals, lexical scopes/definite assignment,
 if/while/for/break/continue/return, recursive calls, int wrap/bitwise/masked shifts,
-and byte/short/char casts. Single-type imports and resolved static
+and integral/boolean casts. Primitive overload selection uses parameter types,
+not return context or arity alone; numeric widening, int/long binary promotion,
+compound-assignment narrowing and shift masks are explicit. Boolean does not
+convert to or from an integer. byte/short/char declarations, floating point,
+boxing and varargs remain unsupported. The scalar ABI emits boolean/i32/i64
+IR lanes, and independent assembly tests observe their exact 1/4/8-byte returns. Single-type imports and resolved static
 class-qualified calls enforce class/member access and name obscuring. Unknown
 roots of package-qualified calls fail explicitly until the shared bootstrap
 public java.lang type directory can rule out implicit-type obscuring. Literal
