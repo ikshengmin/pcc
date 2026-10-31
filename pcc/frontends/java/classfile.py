@@ -8,12 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-class JavaError(ValueError):
-    """Invalid input or an explicitly unsupported Java AOT capability."""
-
-
-class UnsupportedJava(JavaError):
-    """A valid Java feature outside the current closed-world AOT slice."""
+from .diagnostics import JavaError, UnsupportedJava
 
 
 class Reader:

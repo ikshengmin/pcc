@@ -1,9 +1,24 @@
-"""Owned Java bytecode AOT: explicit, closed-world static int/void slice.
+"""Owned Java source frontend plus a separate bytecode compatibility experiment.
 
-No Java source parser, javac subprocess, JVM fallback, or independent GC.
-Future Java object/runtime support must use PCC's shared runtime contracts.
+Source parsing/analysis lowers directly to public IR, never through .class.
+No javac subprocess, JVM fallback or independent GC. Runtime-bearing Java
+features must use PCC's shared pcc-Python runtime contracts.
 """
-from .classfile import JavaError, UnsupportedJava, parse_class
-from .compiler import JavaCompilation, compile_class, method_symbol
+from .diagnostics import JavaError, UnsupportedJava
+from .artifact import JavaCompilation, method_symbol
+from .source import compile_source
 
-__all__ = ["JavaCompilation", "JavaError", "UnsupportedJava", "compile_class", "method_symbol", "parse_class"]
+
+def parse_class(data):
+    """Explicit compatibility experiment; never imported by source lowering."""
+    from .classfile import parse_class as read
+    return read(data)
+
+
+def compile_class(data, *, entry="run", descriptor="()I", target="x86_64-unknown-linux-gnu"):
+    """Explicit class compatibility route, not the Java source intermediate."""
+    from .compiler import compile_class as compile_compatibility
+    return compile_compatibility(data, entry=entry, descriptor=descriptor, target=target)
+
+
+__all__ = ["JavaCompilation", "JavaError", "UnsupportedJava", "compile_source", "compile_class", "method_symbol", "parse_class"]
