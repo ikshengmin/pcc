@@ -18,6 +18,7 @@ checked steps).
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -50,12 +51,14 @@ def test_atomics_lower_to_x86_64_tso_shapes():
         "  xchg DWORD PTR [r11], r10d",
         "  xchg QWORD PTR [r11], r10",
         "  xchg BYTE PTR [r11], r10b",
-        "  mov BYTE PTR [r11], r10b",
         "  neg r10d",
         "  sete r10b",
         "  mfence",
     ):
         assert needle in asm, f"missing {needle!r} in x86_64 asm"
+    # The release byte store is a plain mov (x86-TSO); copy forwarding may
+    # store the constant directly instead of through r10b.
+    assert re.search(r"^  mov BYTE PTR \[r11\], (?:r10b|-?\d+)$", asm, re.M), asm
     # the and/or retry loop re-enters through a local label
     assert ".Lat_main_" in asm
     assert "  jne .Lat_main_" in asm
@@ -148,9 +151,11 @@ def test_narrow_atomic_family_uses_width_correct_tso_instructions(
         }}
     ''')
     asm = emit_self_asm(ir_text)
+    # The release store is a plain mov (x86-TSO); copy forwarding may store
+    # the constant directly instead of through the value register.
+    assert re.search(rf"^  mov {memory} \[r11\], (?:{value_reg}|-?\d+)$", asm, re.M), asm
     for instruction in (
         f"mov {value_reg}, {memory} [r11]",
-        f"mov {memory} [r11], {value_reg}",
         f"xchg {memory} [r11], {value_reg}",
         f"neg {value_reg}",
         f"lock xadd {memory} [r11], {value_reg}",

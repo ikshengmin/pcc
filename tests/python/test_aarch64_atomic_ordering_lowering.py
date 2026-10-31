@@ -4,8 +4,11 @@ The mapping is the C/C++11 -> ARMv8 one LLVM's AtomicExpand uses without LSE:
 acquire-or-stronger orderings take LDAXR, release-or-stronger ones take STLXR,
 and monotonic needs only the exclusive monitor. cmpxchg uses one loop for both
 outcomes, so its load also meets the failure ordering (getMergedOrdering).
-The threaded program is emitted and linked by pcc's owned object writer and
-linker; it proves the weaker forms still update atomically under contention.
+Linux AArch64 does not guarantee LSE, so these loops are its lowering and the
+emission checks use its triple; arm64 macOS lowers to LSE instructions
+(test_aarch64_lse_atomics.py). The threaded program is emitted and linked by
+pcc's owned object writer and linker for macOS, where it proves the weaker
+orderings still update atomically under contention.
 """
 
 import platform
@@ -44,8 +47,11 @@ _CMPXCHG_MERGED = {
 }
 
 
+_LINUX = "aarch64-unknown-linux-gnu"
+
+
 def _body(text, name):
-    return text.split("_" + name + ":", 1)[1].split(".section", 1)[0]
+    return text.split("\n" + name + ":", 1)[1].split(".section", 1)[0]
 
 
 @pytest.mark.parametrize("width, register, suffix", [
@@ -53,7 +59,7 @@ def _body(text, name):
 ])
 @pytest.mark.parametrize("ordering", sorted(_RMW_PAIRS))
 def test_rmw_exclusive_pair_follows_ordering(width, register, suffix, ordering):
-    asm = emit_aarch64_darwin_asm(f'''target triple = "arm64-apple-darwin"
+    asm = emit_aarch64_darwin_asm(f'''target triple = "{_LINUX}"
 define i{width} @probe(ptr %address) {{
 entry:
   %prior = atomicrmw add ptr %address, i{width} 3 {ordering}
@@ -70,7 +76,7 @@ entry:
 
 @pytest.mark.parametrize("success, failure", sorted(_CMPXCHG_MERGED))
 def test_cmpxchg_exclusive_pair_uses_merged_ordering(success, failure):
-    asm = emit_aarch64_darwin_asm(f'''target triple = "arm64-apple-darwin"
+    asm = emit_aarch64_darwin_asm(f'''target triple = "{_LINUX}"
 define {{i64, i1}} @probe(ptr %address) {{
 entry:
   %pair = cmpxchg ptr %address, i64 5, i64 9 {success} {failure}
@@ -190,7 +196,8 @@ bad:
 
 
 def test_contended_program_emits_the_weaker_exclusive_forms():
-    body = _body(emit_aarch64_darwin_asm(_contended_program(), optimize=False), "worker")
+    linux_program = _contended_program().replace('"arm64-apple-darwin"', '"' + _LINUX + '"', 1)
+    body = _body(emit_aarch64_darwin_asm(linux_program, optimize=False), "worker")
     for needle in ("  ldxr x", "  stxr w13, x", "  ldaxr x", "  stlxr w13, x",
                    "  ldxrb w", "  stxrb w13, w", "  ldxrh w", "  stlxrh w13, w"):
         assert needle in body, needle

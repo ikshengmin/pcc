@@ -60,9 +60,10 @@ entry:
 def test_sole_cas_projection_avoids_pair_materialization(field):
     asm = emit_aarch64_darwin_asm(_cas_program(64, field, True), optimize=False)
     body = asm.split("_main:", 1)[1].split(".section", 1)[0]
-    assert "  ldaxr " in body and "  stlxr " in body and "  clrex" in body
+    # arm64 macOS lowers acq_rel/acquire cmpxchg to one CASAL (LSE).
+    assert re.search(r"^  casal x\w+, x11, \[x\w+\]$", body, re.M), body
     assert "strb w14, [x15" not in body
-    completion = body.split("_done:\n", 1)[1].split("  bl _noise", 1)[0]
+    completion = body.split("  casal ", 1)[1].split("  bl _noise", 1)[0]
     assert ("  cset " in completion) is (field == 1)
 
 
@@ -82,7 +83,8 @@ entry:
 }
 ''', optimize=False)
     body = asm.split("_unused:", 1)[1].split(".section", 1)[0]
-    assert "ldaxr x11, [x0]" in body and "stlxr w13, x12, [x0]" in body
+    # arm64 macOS lowers it to one LDADDAL (LSE); the old value is unused.
+    assert re.search(r"^  ldaddal x10, x11, \[x0\]$", body, re.M), body
     assert not re.search(r"\b(?:str|stur) x11,", body)
 
 

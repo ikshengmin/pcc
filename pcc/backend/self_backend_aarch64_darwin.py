@@ -625,7 +625,9 @@ def _emit_prepared_aarch64_darwin_lines(
     phase_timing=None,
 ) -> list[str]:
     global _AARCH64_EMISSION_ACTIVE
-    if has_source_debug(prepared.functions):
+    # A malformed module reaches the nesting and target checks below, which
+    # report it, instead of failing here on the missing attribute.
+    if has_source_debug(getattr(prepared, "functions", ())):
         optimize = False
     direct_instruction_capture = (
         encoded_line_records is not None or native_undefined is not None
