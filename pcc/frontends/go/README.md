@@ -22,7 +22,8 @@ external compiler fallback, independent collector, or scheduler.
   converting a constant instead requires exact destination representability.
 - Named functions, forward calls and recursion, `return`, `if` with
   optional initialization, `for` clauses/conditions/infinite loops, `break`,
-  `continue`, and genuinely short-circuiting logical operators.
+  `continue`, ordered expression `switch`/`fallthrough`, and genuinely
+  short-circuiting logical operators.
 - Exact untyped integer constant arithmetic up to a diagnosed 4096-bit precision
   limit. Typed runtime signed arithmetic wraps; constants must be representable.
   Integer division truncates toward zero. Constant divisors are required until
@@ -50,8 +51,10 @@ external compiler fallback, independent collector, or scheduler.
   shared-runtime bounds-panic contract; no unchecked access, abort-as-panic, or
   package-name/table-specific rule substitutes for that contract.
 
-Go predeclared-name shadowing, dynamic package initialization, floating/complex types, other aggregate/reference types,
-methods/interfaces/generics, closures, dynamically allocated strings, I/O, panic,
+Package defined/alias types, ordinary value structs and direct value-receiver
+methods are described below. Go predeclared-name shadowing, dynamic package
+initialization, floating/complex types, interfaces/generics, pointers, stored
+method values/closures, dynamically allocated strings, I/O, panic,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
 C-parity, or a shared-runtime/GC integration claim.
@@ -242,3 +245,59 @@ receivers remain explicit capability diagnostics pending their shared mechanisms
 [Method declarations](https://go.dev/ref/spec#Method_declarations),
 [method sets](https://go.dev/ref/spec#Method_sets), and
 [method expressions](https://go.dev/ref/spec#Method_expressions) define these rules.
+
+
+### Ordered expression switches
+
+Integer, boolean and string selectors (including their defined types) are
+converted to a temporary value exactly once. Case expressions may be nonconstant;
+dispatch evaluates them left-to-right, stops at the first match, and only selects
+the default after every test fails. Case bodies have independent implicit scopes.
+A direct final `fallthrough` enters the following body without testing its labels;
+it is forbidden in nested blocks or the final clause. Ordinary clause completion
+exits the switch. `break` exits the nearest loop/switch and `continue` still targets
+the nearest loop. Missing-return checks follow the switch termination rule, not
+whether the optimizer can prove one particular selector constant.
+
+Integer/string/bool duplicate constant cases are rejected as an implementation
+restriction. Labels, type switches, interface equality and aggregate comparison
+remain explicit boundaries. This uses ordinary public-IR branches and the existing
+string comparison loop, not C switch semantics or a shared-runtime substitute.
+See [expression switches](https://go.dev/ref/spec#Expression_switches),
+[termination](https://go.dev/ref/spec#Terminating_statements) and
+[fallthrough](https://go.dev/ref/spec#Fallthrough_statements).
+
+
+The complete authored `switches.go` is retained as an invalid source: its default
+`int` selector and a `uint64` case disagree even when fallthrough would bypass the
+label at run time. PCC and the official compiler must reject those original
+bytes. `switches_valid.go` is a distinct program with an explicitly typed selector,
+used for native/reference control-flow observations; it does not relabel the old
+input as successful or relax static checking of unreachable case expressions.
+
+## Fixed-array range and array length
+
+Fixed arrays (including defined array types) support zero, one or two iteration
+variables, `:=` declarations and ordinary assignment targets. Two-value range
+captures an independent array value before the loop; mutation of the original
+array or an iteration variable cannot alter that snapshot or the hidden index.
+Assignment targets are evaluated once per iteration before stores, using the
+ordinary parallel-assignment path. `break`, `continue` and nested switches use
+the existing distinct control targets.
+
+With at most one effective iteration variable (a trailing blank is omitted),
+the array expression is not evaluated when its length is constant. Runtime
+calls anywhere in its evaluated expression, including method receivers and
+initializer elements, prevent this omission. Array `len`/`cap` use the same
+rule and always have type `int`, even when constant. The array's element loads
+are reached only after the hidden induction value is proven within its static
+length; this is not a substitute for arbitrary dynamic bounds panics.
+
+Range-declared variables have per-iteration Go semantics. The current admitted
+values cannot expose stack-variable identity: pointers, captured closures and
+method values remain explicit gaps, not a claim of escaping-loop-variable
+support. Slice/pointer/string/map/channel/integer/function range remain
+unsupported; no slice backing, UTF-8 iterator, scheduler or managed allocation
+is manufactured. Relevant rules are the official Go specification's
+[range clauses](https://go.dev/ref/spec#For_range) and
+[length and capacity](https://go.dev/ref/spec#Length_and_capacity).

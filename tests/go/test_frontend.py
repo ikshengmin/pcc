@@ -104,7 +104,6 @@ def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(litera
     ("defer f()", "func f() {}", "unsupported statement"),
     ("var x string", "", "declared and not used"),
     ("var x []int", "", "slice types require"),
-    ("switch {}", "", "unsupported statement"),
     ("var true bool", "", "shadowing predeclared"),
 ])
 def test_go_rejects_invalid_or_unimplemented_semantics(body, helpers, message):

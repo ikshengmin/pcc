@@ -65,7 +65,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     target = resolve_target(target_triple)
     parser = Parser(source)
     functions = parser.parse()
-    checker = Checker(functions, parser.records, parser.enums)
+    checker = Checker(functions, parser.records, parser.enums, parser.implementations)
     checker.check()
     MoveChecker(checker).check()
     lowerer = Lowerer(functions, checker, module_name, target)

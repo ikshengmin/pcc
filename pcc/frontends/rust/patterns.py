@@ -76,7 +76,7 @@ def check_pattern(checker, pattern, ty):
         unify(ty, checker.expression(pattern.value), pattern.token)
     elif pattern.kind in {"variant", "payload"}:
         name, variant = pattern.value
-        if isinstance(name, TypeApplication) or name in checker.generics.definitions:
+        if isinstance(name, TypeApplication) or name in checker.generics.definitions or name == "Self":
             name = checker.generics.path_type(name, pattern.token, expected=ty)
             checker.valid_type(name, pattern.token)
         enum = checker.enums.get(name)

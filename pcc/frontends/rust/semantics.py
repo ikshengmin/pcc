@@ -89,7 +89,7 @@ def cast_constant(value: int, ty: str) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = ()):
+    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=()):
         self.functions = functions
         self.records: dict[str, Record] = {}
         for record in records:
@@ -115,6 +115,8 @@ class Checker:
         from .function_generics import GenericFunctions
         self.generics = GenericDeclarations(self)
         self.function_generics = GenericFunctions(self)
+        from .methods import InherentMethods
+        self.methods = InherentMethods(self, implementations)
 
     def bind(self, token: Token, ty: object, mutable: bool) -> Binding:
         self.serial += 1
@@ -217,6 +219,7 @@ class Checker:
             self.valid_type(name, enum.token)
         for name, record in list(self.records.items()):
             self.valid_type(name, record.token)
+        self.methods.prepare()
         declarations = tuple(self.functions)
         for fn in declarations:
             self.type_scope = self.function_generics.prepare(fn)
@@ -231,10 +234,10 @@ class Checker:
                     raise token.error(f"duplicate parameter {token.text!r}")
                 parameter_names.add(token.text)
                 self.valid_type(ty, token)
-            name = fn.token.text
+            name = fn.declaration_name
             if name in self.names:
                 raise fn.token.error(f"duplicate function {name!r}")
-            if name.startswith("__pcc_rust_"):
+            if fn.token.text.startswith("__pcc_rust_"):
                 raise fn.token.error("reserved PCC Rust symbol prefix")
             if fn.no_mangle and fn.abi != "C":
                 raise fn.token.error("no_mangle is supported only on extern C function definitions")
@@ -253,7 +256,7 @@ class Checker:
                 MoveChecker(self).check_function(fn)
         for fn in declarations:
             if not fn.type_parameters:
-                self.check_body(fn, {})
+                self.check_body(fn, self.function_generics.scope(fn))
         self.function_generics.materialize()
 
     def check_body(self, fn, type_scope, *, abstract=False):
@@ -287,7 +290,7 @@ class Checker:
             ty = "bool"
         elif kind == "variant":
             enum_name, variant = expr.value
-            if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions:
+            if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self":
                 enum_name = self.generics.path_type(enum_name, expr.token)
                 self.valid_type(enum_name, expr.token)
             enum = self.enums.get(enum_name)
@@ -390,9 +393,22 @@ class Checker:
             callee = children[0]
             while callee.kind == "group":
                 callee = callee.children[0]
-            if callee.kind == "variant":
+            fn = None
+            receiver_checked = False
+            if callee.kind == "field":
+                receiver = callee.children[0]
+                receiver_type = self.expression(receiver)
+                fn = self.methods.select(receiver_type, callee.value, callee.token, receiver=True)
+                # Canonical typed direct-call operands: receiver is first and
+                # appears once. Its already-checked AST must not be rechecked.
+                expr.children = children = [callee, receiver] + children[1:]
+                receiver_checked = True
+            elif callee.kind == "variant":
+                owner, associated_name = callee.value
+                fn = self.methods.select(owner, associated_name, callee.token)
+            if fn is None and callee.kind == "variant":
                 enum_name, variant = callee.value
-                if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions:
+                if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self":
                     enum_name = self.generics.path_type(enum_name, callee.token)
                     self.valid_type(enum_name, callee.token)
                 enum = self.enums.get(enum_name)
@@ -408,22 +424,24 @@ class Checker:
                 expr.kind, expr.value, expr.children = "enum_construct", variant, children[1:]
                 expr.ty = enum_name
                 return enum_name
-            path = callee.value
-            name = path.name if isinstance(path, TypeApplication) else str(path)
-            if callee.kind != "name" or self.local(name) is not None:
-                raise callee.token.error("only unshadowed direct function calls are supported")
-            fn = self.names.get(name)
             if fn is None:
-                raise callee.token.error(f"unknown function {callee.value!r}")
-            fn = self.function_generics.select(
-                fn, path.arguments if isinstance(path, TypeApplication) else None, callee.token)
+                path = callee.value
+                name = path.name if isinstance(path, TypeApplication) else str(path)
+                if callee.kind != "name" or self.local(name) is not None:
+                    raise callee.token.error("only unshadowed direct function calls are supported")
+                fn = self.names.get(name)
+                if fn is None:
+                    raise callee.token.error(f"unknown function {callee.value!r}")
+                fn = self.function_generics.select(
+                    fn, path.arguments if isinstance(path, TypeApplication) else None, callee.token)
             if fn.unsafe and not self.unsafe_depth:
                 raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
             if len(children) - 1 != len(fn.params):
                 raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
             expr.binding = fn
-            for arg, (_, param_ty, _) in zip(children[1:], fn.params):
-                unify(param_ty, self.expression(arg), arg.token)
+            for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params)):
+                arg_ty = arg.ty if receiver_checked and index == 0 else self.expression(arg)
+                unify(param_ty, arg_ty, arg.token)
             ty = fn.result
         elif kind == "unary":
             ty = self.expression(children[0])

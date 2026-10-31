@@ -90,6 +90,7 @@ class ClassDefinition:
         self.class_key = class_key
         self.access = "private" if class_key == "class" else "public"
         self.members = []
+        self.method_declarations = []
         self.complete = False
         # The enclosing declaration provides the injected name for the current
         # non-nested/non-template class boundary. A data member can hide it just
@@ -200,6 +201,7 @@ def parse_class(parser):
     type projection hook must recognize ``ClassType``; no source-to-source C
     translation or separate tokenization occurs here.
     """
+    parser.last_class_definition = None
     keyword = parser.cursor.take()
     if keyword.value not in ("class", "struct"):
         _unsupported(keyword, "union object/lifetime semantics are not implemented")
@@ -299,21 +301,34 @@ def parse_class(parser):
             if (token.value == dtype.name
                     and parser.cursor.tokens[parser.cursor.position + 1].value == "("):
                 _unsupported(token, "user-declared constructor semantics are not implemented")
+            member_start = parser.cursor.position
             mutable = parser._accept("mutable") is not None
             base = parser._type()
+            prior_data = False
             while True:
                 member, member_type = parser._declarator(base)
-                if parser._peek().value in ("(", "=", "{", ":"):
+                if parser._peek().value == "(":
+                    if prior_data:
+                        _unsupported(member, "mixed data/function declarator lists are not implemented")
+                    if mutable:
+                        raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to data members", member.coord)
+                    parser.cursor.position = member_start
+                    definition.method_declarations.append(parser._function(member_definition=definition))
+                    break
+                if parser._peek().value in ("=", "{", ":"):
                     _unsupported(parser._peek(),
                                  "member functions, bit-fields and default member initializers are not implemented")
                 definition.add_member(Symbol(member.value, "member", member.coord, dtype=member_type), mutable)
+                prior_data = True
                 if not parser._accept(","):
                     break
-            parser._expect(";")
+            if parser.cursor.tokens[parser.cursor.position - 1].value != ";":
+                parser._expect(";")
     finally:
         parser.scope = parent
     parser._expect(";")
     definition.finish()
+    parser.last_class_definition = definition
     return definition.c_declaration(parser._scalar_type)
 
 
@@ -336,6 +351,21 @@ def member_access(parser, expression, operator, member):
     symbol = definition.scope.names.get(member.value)
     if symbol is None:
         raise CppDiagnostic("cpp.no-member", "class '" + owner.name + "' has no member '" + member.value + "'", member.coord)
+    if symbol.kind == "function":
+        from pcc.frontends.cpp.members import call_member
+        if operator == ".":
+            if not expression.lvalue:
+                _unsupported(member, "class temporary materialization is not implemented")
+            # Keep the exact nominal/cv object type for overload and access
+            # checking, but do not fabricate an address through C's eager
+            # aggregate-value path. No node is emitted for this pending plan.
+            object_expression = type(expression)(None, PointerType(expression.dtype))
+        else:
+            object_expression = expression
+        if not parser._accept("("):
+            raise CppDiagnostic("cpp.unsupported.member-pointers", "a member function name requires an immediate call", member.coord)
+        return call_member(parser, symbol, object_expression, parser._call_arguments(), member.coord,
+                           address_available=operator == "->")
     parser.scope.check_member_access(symbol, member.coord)
     if symbol.kind == "enumerator":
         if operator == ".":

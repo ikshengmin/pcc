@@ -118,6 +118,13 @@ class Expr:
     binding: object = None
 
 
+@dataclass(frozen=True)
+class Implementation:
+    token: Token
+    owner: object
+    type_parameters: tuple[Token, ...] = ()
+
+
 @dataclass
 class Function:
     token: Token
@@ -131,16 +138,29 @@ class Function:
     type_parameters: tuple[Token, ...] = ()
     instance_arguments: tuple[object, ...] | None = None
     instance_name: str | None = None
+    implementation: Implementation | None = None
+    receiver: bool = False
+
+    @property
+    def declaration_name(self):
+        if self.implementation is None:
+            return self.token.text
+        owner = self.implementation.owner
+        return (owner.name if isinstance(owner, TypeApplication) else str(owner)) + "::" + self.token.text
 
     @property
     def identity(self):
-        return self.instance_name or self.token.text
+        if self.instance_name:
+            return self.instance_name
+        if self.implementation is not None:
+            return "__pcc_rust_method_" + self.declaration_name.encode('utf-8').hex()
+        return self.token.text
 
     @property
     def export_name(self):
         if self.instance_arguments is None:
-            return self.token.text
-        return self.token.text + "::<" + ", ".join(map(str, self.instance_arguments)) + ">"
+            return self.declaration_name
+        return self.declaration_name + "::<" + ", ".join(map(str, self.instance_arguments)) + ">"
 
 
 @dataclass
@@ -183,6 +203,7 @@ class Parser:
         self.pos = 0
         self.records: list[Record] = []
         self.enums: list[Enumeration] = []
+        self.implementations: list[Implementation] = []
         self.type_argument_depth = 0
 
     @property
@@ -231,7 +252,7 @@ class Parser:
                     break
                 self.expect(",")
             return TupleType(tuple(elements))
-        if text in _TYPES or (token.kind == "name" and text != "_"):
+        if text in _TYPES or text == "Self" or (token.kind == "name" and text != "_"):
             if self.token.text == "<":
                 return TypeApplication(text, self.type_arguments())
             return text
@@ -349,6 +370,23 @@ class Parser:
                     raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                 self.expect("]")
             public = self.accept("pub")
+            if self.accept("impl"):
+                if public or repr_c or enum_repr or no_mangle:
+                    raise self.token.error("visibility and attributes on impl blocks are not implemented")
+                token = self.tokens[self.pos - 1]
+                parameters = self.generic_parameters()
+                owner = self.type()
+                if self.token.text in {"for", "where"}:
+                    raise self.token.error("trait impls and impl constraints are not implemented")
+                implementation = Implementation(token, owner, parameters)
+                self.implementations.append(implementation)
+                self.expect("{")
+                while not self.accept("}"):
+                    visible = self.accept("pub")
+                    unsafe = self.accept("unsafe")
+                    functions.append(self.function("Rust", visible, False, unsafe,
+                                                   implementation=implementation))
+                continue
             if self.accept("enum"):
                 if repr_c or no_mangle:
                     raise self.token.error("enum repr(C) and no_mangle are not supported")
@@ -383,17 +421,38 @@ class Parser:
             functions.append(self.function(abi, public, no_mangle, unsafe))
         return functions
 
-    def function(self, abi, public, no_mangle, unsafe, declaration=False) -> Function:
+    def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None) -> Function:
         self.expect("fn")
         name = self.name()
         parameters = self.generic_parameters()
+        if implementation is not None:
+            if parameters:
+                raise name.error("method-local generic parameters require separate method inference and are not implemented")
+            parameters = implementation.type_parameters
         if parameters and (abi != "Rust" or no_mangle or declaration):
             raise name.error("generic function foreign/export ABI is not implemented")
         self.expect("(")
         params = []
+        receiver = False
         if not self.accept(")"):
             while True:
                 mutable = self.accept("mut")
+                if self.token.text == "&":
+                    raise self.token.error("reference receivers require borrow/alias/lifetime analysis, which is not implemented")
+                if self.token.text == "self":
+                    param = self.take()
+                    if implementation is None or params:
+                        raise param.error("self receiver must be the first parameter of an inherent method")
+                    if self.token.text == ":":
+                        raise self.token.error("explicit receiver types are not implemented; use self or mut self")
+                    params.append((param, "Self", mutable))
+                    receiver = True
+                    if self.accept(")"):
+                        break
+                    self.expect(",")
+                    if self.accept(")"):
+                        break
+                    continue
                 if declaration and mutable:
                     raise self.token.error("extern declarations cannot contain parameter patterns")
                 param = self.name()
@@ -413,7 +472,7 @@ class Parser:
         else:
             body = self.block()
         return Function(name, params, result, body, abi, public, no_mangle, unsafe,
-                        type_parameters=parameters)
+                        type_parameters=parameters, implementation=implementation, receiver=receiver)
 
     def block(self) -> Expr:
         token = self.expect("{")
@@ -509,7 +568,7 @@ class Parser:
             expr = Expr(text, token, children=children)
         elif text in {"-", "!"}:
             expr = Expr("unary", token, text, [self.expression(12, allow_struct=allow_struct)])
-        elif token.kind == "name" and text != "_":
+        elif (token.kind == "name" and text != "_") or text in {"self", "Self"}:
             owner, variant = self.expression_path(token)
             if variant is not None:
                 expr = Expr("variant", token, (owner, variant))
@@ -635,7 +694,7 @@ class Parser:
                 self.take()
                 value = Expr("bool", token, token.text == "true")
             result = Pattern("literal", token, value)
-        elif token.kind == "name" and self.token.text == "::":
+        elif (token.kind == "name" or token.text == "Self") and self.token.text == "::":
             owner, variant = self.expression_path(token)
             if variant is None:
                 raise token.error("generic type path is not a value binding pattern")

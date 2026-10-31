@@ -46,7 +46,7 @@ def compile_source(source):
     ('enum E{A(i32),B(i32)} fn f(x:E){match x{E::A(y)|E::B(y)=>()}}','bindings inside or-patterns'),
     ('fn f(x:i32){match x{ref y=>()}}','reference, range'),
     ('fn f(x:i32){match x{y=>{y=3;}}}','immutable'),
-    ('enum E{A(i32)} impl Drop for E {}','expected'),
+    ('enum E{A(i32)} impl Drop for E {}','trait impls'),
     ('enum E{A(i32)} extern "C" fn f(x:E){}','aggregate ABI'),
 ])
 def test_payload_and_binding_capability_or_type_errors(source,message):

@@ -169,7 +169,7 @@ and its allocation dependencies remain unfinished.
 
 The pinned upstream [Rust 1.90.0 core/cmp.rs](https://github.com/rust-lang/rust/blob/1.90.0/library/core/src/cmp.rs)
 contains `Reverse<T>` (line 645), requiring tuple structs, generic parameters,
-attributes/derive, `repr(transparent)`, traits, methods and references. Those
+attributes/derive, `repr(transparent)`, traits, full method resolution and references. Those
 unmodified dependencies remain unsupported; neither `core` nor `alloc` compiles
 from this batch. Named structs/tuples are only a prerequisite domain, not a
 replacement source rewritten to resemble that upstream library.
@@ -295,7 +295,7 @@ Named structs and tuple-payload enums may declare unconstrained type parameters.
 Type positions use explicit applications (`Wrap<u64>`); constructors use Rust
 turbofish syntax (`Wrap::<u64> { value: 7 }`, `Maybe::<u64>::Some(7)`). An enum
 pattern may use `Maybe::Some(value)` when the scrutinee already supplies that
-exact nominal instance. Constructor inference, `_` arguments, impl/methods,
+exact nominal instance. Constructor inference, `_` arguments, specialized impls/reference methods,
 trait bounds, defaults, where clauses, lifetimes and const generics
 remain explicit unsupported capabilities, not erased syntax.
 
@@ -332,7 +332,7 @@ checking with concrete-body acceptance.
 The full pinned Rust 1.90.0 `option.rs` / `result.rs` remain unchanged dependency
 evidence (see `tests/rust/upstream/README.md` and original dual licenses). Their
 generic enum declarations at lines 593 and 548 motivate this domain, but their
-first documentation-attribute frontier, imports, derives, impl/methods, trait and
+first documentation-attribute frontier, imports, derives, full impl/method obligations, trait and
 closure bounds, references, lang items and intrinsics are still unmet. Authored
 generic programs are specification fixtures, **not** original core/alloc success.
 Optional rustc checks remain unavailable when the tool is absent; the public flag
@@ -375,7 +375,7 @@ resource limit, not a claim that ordinary function recursion is invalid.
 
 Pinned full `core_option.rs` still contains `impl<T> Option<T>` at line 608 and
 `unwrap_or` at line 1031, whose body uses payload matching but whose complete
-source additionally needs `const`, `Self`/inherent methods, `~const Destruct`,
+source additionally needs `const`, full method/trait resolution, `~const Destruct`,
 attributes, imports and the earlier core dependencies. The authored free-function
 `unwrap_or` fixture is a semantic test, **not** an extracted/replaced upstream
 method or proof that original core/alloc now compiles. Closures and dispatch must
@@ -384,3 +384,39 @@ reuse shared scheduling while retaining their own language obligations.
 References: [generic functions](https://doc.rust-lang.org/reference/items/functions.html#generic-functions),
 [generic scope](https://doc.rust-lang.org/reference/items/generics.html),
 [moves and Copy](https://doc.rust-lang.org/error_codes/E0382.html).
+
+
+## Inherent value methods
+
+Local nominal structs/enums admit inherent `impl` blocks, associated functions,
+`self`/`mut self` methods, `Self` types/constructors/pattern paths, direct qualified
+calls, and value receiver calls. Receiver expressions evaluate once before the
+explicit arguments. The receiver is an ordinary Rust **move**, not Go's value
+receiver copy: calling a consuming method prevents reuse on live paths and loop
+backedges. `mut self` changes the owned callee binding, not the caller's object.
+
+An unconstrained `impl<T,U> Pair<U,T>` may match its full nominal owner with
+permuted parameters. Each impl parameter must appear exactly once in the owner;
+concrete specializations, repeated/unconstrained parameters and overlap/coherence
+solving remain explicit capability boundaries. All methods are type/move checked
+at declaration time, including unused generic methods; abstract `T` is non-Copy.
+Concrete receiver/qualified-owner types select complete impl arguments for the
+existing shared function registry. No second method monomorphization cache or
+runtime dispatcher is added. Method-local generic parameters and general call
+argument inference remain unsupported.
+
+Only value receivers are admitted. `&self`, `&mut self`, explicit receiver types,
+autoderef/autoborrow, reference-returning methods, traits, Drop, vtables, closures,
+const methods and C method ABI remain outside this slice. Method symbols encode
+nominal owner plus method and concrete arguments privately; they do not claim
+rustc ABI/layout. Static access with receiver-call syntax is diagnosed.
+
+Pinned Option's `impl<T> Option<T>` and consuming payload match motivate this
+boundary, but the complete original still requires its attributes/imports,
+const/trait/destruction and remaining core obligations. Authored Choice and record
+programs are distinct source fixtures, not edits/extractions of that upstream
+file or a core/alloc success claim.
+
+References: [inherent implementations](https://doc.rust-lang.org/reference/items/implementations.html#inherent-implementations),
+[associated functions/methods](https://doc.rust-lang.org/reference/items/associated-items.html#associated-functions-and-methods),
+[method calls](https://doc.rust-lang.org/reference/expressions/method-call-expr.html).

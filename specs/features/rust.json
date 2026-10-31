@@ -1,0 +1,3963 @@
+{
+  "schema_version": 1,
+  "language": "rust",
+  "specification": {
+    "title": "The Rust Reference",
+    "version": "Live official table of contents and cited chapters retrieved 2026-10-31; edition-2021 fixtures; rustc 1.91.1 oracle is a separate tool version, not a pinned Reference revision",
+    "url": "https://doc.rust-lang.org/reference/"
+  },
+  "inventory": {
+    "chapters_complete": true,
+    "features_complete": false,
+    "notes": "119 numbered TOC chapters/subchapters enumerated, including informational appendices. Per-rule decomposition and code migration remain incomplete. Unread chapter details link the official table of contents rather than asserting a reviewed rule. Existing no-code capability templates are explicit message_only entries. No pcc1, full core/alloc, Rust ABI compatibility or borrow-checker claim; experimental_rustc_checked is caller attestation only. Historical 33 absent-PATH reference inputs stay historical unrun. Current 136 metadata acceptance is not runtime differential. Followup bd7d58a4 executed72focused/669whole, adding six actual native rustc/std-observer comparisons without relabeling historical136."
+  },
+  "chapters": [
+    {
+      "id": "rust.ref.1",
+      "title": "Notation",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.2",
+      "title": "Lexical structure",
+      "url": "https://doc.rust-lang.org/reference/lexical-structure.html"
+    },
+    {
+      "id": "rust.ref.2.1",
+      "title": "Input format",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.2.2",
+      "title": "Shebang",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.2.3",
+      "title": "Keywords",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.2.4",
+      "title": "Identifiers",
+      "url": "https://doc.rust-lang.org/reference/identifiers.html"
+    },
+    {
+      "id": "rust.ref.2.5",
+      "title": "Comments",
+      "url": "https://doc.rust-lang.org/reference/comments.html"
+    },
+    {
+      "id": "rust.ref.2.6",
+      "title": "Whitespace",
+      "url": "https://doc.rust-lang.org/reference/whitespace.html"
+    },
+    {
+      "id": "rust.ref.2.7",
+      "title": "Tokens",
+      "url": "https://doc.rust-lang.org/reference/tokens.html"
+    },
+    {
+      "id": "rust.ref.3",
+      "title": "Macros",
+      "url": "https://doc.rust-lang.org/reference/macros.html"
+    },
+    {
+      "id": "rust.ref.3.1",
+      "title": "Macros by example",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.3.2",
+      "title": "Procedural macros",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.4",
+      "title": "Crates and source files",
+      "url": "https://doc.rust-lang.org/reference/crates-and-source-files.html"
+    },
+    {
+      "id": "rust.ref.5",
+      "title": "Conditional compilation",
+      "url": "https://doc.rust-lang.org/reference/conditional-compilation.html"
+    },
+    {
+      "id": "rust.ref.6",
+      "title": "Items",
+      "url": "https://doc.rust-lang.org/reference/items.html"
+    },
+    {
+      "id": "rust.ref.6.1",
+      "title": "Modules",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.2",
+      "title": "Extern crates",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.3",
+      "title": "Use declarations",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.4",
+      "title": "Functions",
+      "url": "https://doc.rust-lang.org/reference/items/functions.html"
+    },
+    {
+      "id": "rust.ref.6.5",
+      "title": "Type aliases",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.6",
+      "title": "Structs",
+      "url": "https://doc.rust-lang.org/reference/items/structs.html"
+    },
+    {
+      "id": "rust.ref.6.7",
+      "title": "Enumerations",
+      "url": "https://doc.rust-lang.org/reference/items/enumerations.html"
+    },
+    {
+      "id": "rust.ref.6.8",
+      "title": "Unions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.9",
+      "title": "Constant items",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.10",
+      "title": "Static items",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.6.11",
+      "title": "Traits",
+      "url": "https://doc.rust-lang.org/reference/items/traits.html"
+    },
+    {
+      "id": "rust.ref.6.12",
+      "title": "Implementations",
+      "url": "https://doc.rust-lang.org/reference/items/implementations.html"
+    },
+    {
+      "id": "rust.ref.6.13",
+      "title": "External blocks",
+      "url": "https://doc.rust-lang.org/reference/items/external-blocks.html"
+    },
+    {
+      "id": "rust.ref.6.14",
+      "title": "Generic parameters",
+      "url": "https://doc.rust-lang.org/reference/items/generics.html"
+    },
+    {
+      "id": "rust.ref.6.15",
+      "title": "Associated items",
+      "url": "https://doc.rust-lang.org/reference/items/associated-items.html"
+    },
+    {
+      "id": "rust.ref.7",
+      "title": "Attributes",
+      "url": "https://doc.rust-lang.org/reference/attributes.html"
+    },
+    {
+      "id": "rust.ref.7.1",
+      "title": "Testing",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.7.2",
+      "title": "Derive",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.7.3",
+      "title": "Diagnostics",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.7.4",
+      "title": "Code generation",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.7.5",
+      "title": "Limits",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.7.6",
+      "title": "Type system",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.7.7",
+      "title": "Debugger",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8",
+      "title": "Statements and expressions",
+      "url": "https://doc.rust-lang.org/reference/statements-and-expressions.html"
+    },
+    {
+      "id": "rust.ref.8.1",
+      "title": "Statements",
+      "url": "https://doc.rust-lang.org/reference/statements.html"
+    },
+    {
+      "id": "rust.ref.8.2",
+      "title": "Expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions.html"
+    },
+    {
+      "id": "rust.ref.8.2.1",
+      "title": "Literal expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.2",
+      "title": "Path expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.3",
+      "title": "Block expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.4",
+      "title": "Operator expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/operator-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.5",
+      "title": "Grouped expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/grouped-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.6",
+      "title": "Array and index expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/array-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.7",
+      "title": "Tuple and index expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.8",
+      "title": "Struct expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.9",
+      "title": "Call expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/call-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.10",
+      "title": "Method call expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/method-call-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.11",
+      "title": "Field access expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.12",
+      "title": "Closure expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.13",
+      "title": "Loop expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/loop-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.14",
+      "title": "Range expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.15",
+      "title": "If expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.16",
+      "title": "Match expressions",
+      "url": "https://doc.rust-lang.org/reference/expressions/match-expr.html"
+    },
+    {
+      "id": "rust.ref.8.2.17",
+      "title": "Return expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.18",
+      "title": "Await expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.8.2.19",
+      "title": "Underscore expressions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.9",
+      "title": "Patterns",
+      "url": "https://doc.rust-lang.org/reference/patterns.html"
+    },
+    {
+      "id": "rust.ref.10",
+      "title": "Type system",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1",
+      "title": "Types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.1",
+      "title": "Boolean type",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.2",
+      "title": "Numeric types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.3",
+      "title": "Character type",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.4",
+      "title": "String slice type",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.5",
+      "title": "Never type",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.6",
+      "title": "Tuple types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.7",
+      "title": "Array types",
+      "url": "https://doc.rust-lang.org/reference/types/array.html"
+    },
+    {
+      "id": "rust.ref.10.1.8",
+      "title": "Slice types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.9",
+      "title": "Struct types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.10",
+      "title": "Enumerated types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.11",
+      "title": "Union types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.12",
+      "title": "Function item types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.13",
+      "title": "Closure types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.14",
+      "title": "Pointer types",
+      "url": "https://doc.rust-lang.org/reference/types/pointer.html"
+    },
+    {
+      "id": "rust.ref.10.1.15",
+      "title": "Function pointer types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.16",
+      "title": "Trait object types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.17",
+      "title": "Impl trait type",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.18",
+      "title": "Type parameters",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.1.19",
+      "title": "Inferred type",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.2",
+      "title": "Dynamically sized types",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.3",
+      "title": "Type layout",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.4",
+      "title": "Interior mutability",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.5",
+      "title": "Subtyping and variance",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.6",
+      "title": "Trait and lifetime bounds",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.7",
+      "title": "Type coercions",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.8",
+      "title": "Divergence",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.10.9",
+      "title": "Destructors",
+      "url": "https://doc.rust-lang.org/reference/destructors.html"
+    },
+    {
+      "id": "rust.ref.10.10",
+      "title": "Lifetime elision",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.11",
+      "title": "Special types and traits",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12",
+      "title": "Names",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12.1",
+      "title": "Namespaces",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12.2",
+      "title": "Scopes",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12.3",
+      "title": "Preludes",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12.4",
+      "title": "Paths",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12.5",
+      "title": "Name resolution",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.12.6",
+      "title": "Visibility and privacy",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.13",
+      "title": "Memory model",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.13.1",
+      "title": "Memory allocation and lifetime",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.13.2",
+      "title": "Variables",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.14",
+      "title": "Panic",
+      "url": "https://doc.rust-lang.org/reference/panic.html"
+    },
+    {
+      "id": "rust.ref.15",
+      "title": "Linkage",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.16",
+      "title": "Inline assembly",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.17",
+      "title": "Unsafety",
+      "url": "https://doc.rust-lang.org/reference/unsafety.html"
+    },
+    {
+      "id": "rust.ref.17.1",
+      "title": "The unsafe keyword",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.17.2",
+      "title": "Behavior considered undefined",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.17.3",
+      "title": "Behavior not considered unsafe",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.18",
+      "title": "Constant evaluation",
+      "url": "https://doc.rust-lang.org/reference/const_eval.html"
+    },
+    {
+      "id": "rust.ref.19",
+      "title": "Application binary interface",
+      "url": "https://doc.rust-lang.org/reference/abi.html"
+    },
+    {
+      "id": "rust.ref.20",
+      "title": "The Rust runtime",
+      "url": "https://doc.rust-lang.org/reference/runtime.html"
+    },
+    {
+      "id": "rust.ref.21",
+      "title": "Appendices",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.21.1",
+      "title": "Grammar summary",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.21.2",
+      "title": "Syntax index",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.21.3",
+      "title": "Macro follow-set ambiguity formal specification",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.21.4",
+      "title": "Influences",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.21.5",
+      "title": "Test summary",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    },
+    {
+      "id": "rust.ref.21.6",
+      "title": "Glossary",
+      "url": "https://doc.rust-lang.org/reference/toc.html"
+    }
+  ],
+  "features": [
+    {
+      "id": "rust.chapter.1.coverage",
+      "title": "Notation — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.coverage",
+      "title": "Lexical structure — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.1.coverage",
+      "title": "Input format — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.2.coverage",
+      "title": "Shebang — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.3.coverage",
+      "title": "Keywords — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.4.coverage",
+      "title": "Identifiers — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.5.coverage",
+      "title": "Comments — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.6.coverage",
+      "title": "Whitespace — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.2.7.coverage",
+      "title": "Tokens — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.2.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.3.coverage",
+      "title": "Macros — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.3.1.coverage",
+      "title": "Macros by example — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.3.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.3.2.coverage",
+      "title": "Procedural macros — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.3.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.4.coverage",
+      "title": "Crates and source files — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.5.coverage",
+      "title": "Conditional compilation — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.coverage",
+      "title": "Items — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.1.coverage",
+      "title": "Modules — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.2.coverage",
+      "title": "Extern crates — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.3.coverage",
+      "title": "Use declarations — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.4.coverage",
+      "title": "Functions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.5.coverage",
+      "title": "Type aliases — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.6.coverage",
+      "title": "Structs — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.7.coverage",
+      "title": "Enumerations — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.8.coverage",
+      "title": "Unions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.8"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.9.coverage",
+      "title": "Constant items — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.9"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.10.coverage",
+      "title": "Static items — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.10"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.11.coverage",
+      "title": "Traits — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.11"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.12.coverage",
+      "title": "Implementations — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.13.coverage",
+      "title": "External blocks — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.13"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.14.coverage",
+      "title": "Generic parameters — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.6.15.coverage",
+      "title": "Associated items — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.6.15"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.coverage",
+      "title": "Attributes — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.1.coverage",
+      "title": "Testing — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.2.coverage",
+      "title": "Derive — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.3.coverage",
+      "title": "Diagnostics — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.4.coverage",
+      "title": "Code generation — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.5.coverage",
+      "title": "Limits — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.6.coverage",
+      "title": "Type system — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.7.7.coverage",
+      "title": "Debugger — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.7.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.coverage",
+      "title": "Statements and expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.1.coverage",
+      "title": "Statements — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.coverage",
+      "title": "Expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.1.coverage",
+      "title": "Literal expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.2.coverage",
+      "title": "Path expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.3.coverage",
+      "title": "Block expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.4.coverage",
+      "title": "Operator expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.5.coverage",
+      "title": "Grouped expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.6.coverage",
+      "title": "Array and index expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.7.coverage",
+      "title": "Tuple and index expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.8.coverage",
+      "title": "Struct expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.8"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.9.coverage",
+      "title": "Call expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.9"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.10.coverage",
+      "title": "Method call expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.10"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.11.coverage",
+      "title": "Field access expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.11"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.12.coverage",
+      "title": "Closure expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.12"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.13.coverage",
+      "title": "Loop expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.13"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.14.coverage",
+      "title": "Range expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.14"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.15.coverage",
+      "title": "If expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.15"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.16.coverage",
+      "title": "Match expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.16"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.17.coverage",
+      "title": "Return expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.17"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.18.coverage",
+      "title": "Await expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.18"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.8.2.19.coverage",
+      "title": "Underscore expressions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.8.2.19"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.9.coverage",
+      "title": "Patterns — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.9"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.coverage",
+      "title": "Type system — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.coverage",
+      "title": "Types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.1.coverage",
+      "title": "Boolean type — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.2.coverage",
+      "title": "Numeric types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.3.coverage",
+      "title": "Character type — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.4.coverage",
+      "title": "String slice type — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.5.coverage",
+      "title": "Never type — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.6.coverage",
+      "title": "Tuple types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.7.coverage",
+      "title": "Array types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.8.coverage",
+      "title": "Slice types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.8"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.9.coverage",
+      "title": "Struct types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.9"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.10.coverage",
+      "title": "Enumerated types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.10"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.11.coverage",
+      "title": "Union types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.11"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.12.coverage",
+      "title": "Function item types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.12"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.13.coverage",
+      "title": "Closure types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.13"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.14.coverage",
+      "title": "Pointer types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.15.coverage",
+      "title": "Function pointer types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.15"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.16.coverage",
+      "title": "Trait object types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.16"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.17.coverage",
+      "title": "Impl trait type — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.17"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.18.coverage",
+      "title": "Type parameters — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.18"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.1.19.coverage",
+      "title": "Inferred type — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.1.19"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.2.coverage",
+      "title": "Dynamically sized types — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.3.coverage",
+      "title": "Type layout — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.4.coverage",
+      "title": "Interior mutability — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.5.coverage",
+      "title": "Subtyping and variance — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.6.coverage",
+      "title": "Trait and lifetime bounds — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.7.coverage",
+      "title": "Type coercions — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.7"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.8.coverage",
+      "title": "Divergence — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.8"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.9.coverage",
+      "title": "Destructors — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.9"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.10.10.coverage",
+      "title": "Lifetime elision — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.10.10"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.11.coverage",
+      "title": "Special types and traits — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.11"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.coverage",
+      "title": "Names — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.1.coverage",
+      "title": "Namespaces — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.2.coverage",
+      "title": "Scopes — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.3.coverage",
+      "title": "Preludes — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.4.coverage",
+      "title": "Paths — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.5.coverage",
+      "title": "Name resolution — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.12.6.coverage",
+      "title": "Visibility and privacy — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.12.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.13.coverage",
+      "title": "Memory model — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.13"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.13.1.coverage",
+      "title": "Memory allocation and lifetime — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.13.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.13.2.coverage",
+      "title": "Variables — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.13.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.14.coverage",
+      "title": "Panic — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.14"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.15.coverage",
+      "title": "Linkage — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.15"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.16.coverage",
+      "title": "Inline assembly — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.16"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.17.coverage",
+      "title": "Unsafety — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.17"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.17.1.coverage",
+      "title": "The unsafe keyword — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.17.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.17.2.coverage",
+      "title": "Behavior considered undefined — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.17.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.17.3.coverage",
+      "title": "Behavior not considered unsafe — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.17.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.18.coverage",
+      "title": "Constant evaluation — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.18"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.19.coverage",
+      "title": "Application binary interface — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.20.coverage",
+      "title": "The Rust runtime — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.20"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.coverage",
+      "title": "Appendices — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.1.coverage",
+      "title": "Grammar summary — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21.1"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.2.coverage",
+      "title": "Syntax index — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21.2"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.3.coverage",
+      "title": "Macro follow-set ambiguity formal specification — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21.3"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.4.coverage",
+      "title": "Influences — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21.4"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.5.coverage",
+      "title": "Test summary — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21.5"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.chapter.21.6.coverage",
+      "title": "Glossary — full chapter qualification",
+      "chapter_ids": [
+        "rust.ref.21.6"
+      ],
+      "scope": "Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.ad1be8716230",
+      "title": "Rust overflow checks require owned panic support, which is not implemented; only overflow_checks=False is supported",
+      "chapter_ids": [
+        "rust.ref.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/__init__.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.102e85184e90",
+      "title": "generic parameters shadowing primitive names are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.53efaab821f9",
+      "title": "generic function requires explicit type arguments; argument inference is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.05e266c798ff",
+      "title": "generic function reference arguments require lifetime/escape analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.791904d28fad",
+      "title": "unsupported Rust type {ty}",
+      "chapter_ids": [
+        "rust.ref.10.1"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.a1a67307ea48",
+      "title": "generic type {ty} requires explicit type arguments; constructor inference is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.8b991334a1bf",
+      "title": "unsupported Rust type {ty.name}",
+      "chapter_ids": [
+        "rust.ref.10.1"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.c7ec835f4a43",
+      "title": "generic parameters shadowing primitive names are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.b108adcc58fb",
+      "title": "zero-field structs are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.635b37d0353a",
+      "title": "aggregate reference storage requires lifetime analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.ca7ab0b6c7b5",
+      "title": "unsupported place",
+      "chapter_ids": [
+        "rust.ref.8.2"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/lowering.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.b29def7fd8da",
+      "title": "unsupported lowering node {kind}",
+      "chapter_ids": [
+        "rust.ref.8.2"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/lowering.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.da3519eafd50",
+      "title": "reference receiver autoderef/autoborrow requires ownership and lifetime analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.cafda895c2ac",
+      "title": "impl parameters shadowing primitive names are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.9feb1bfbec86",
+      "title": "associated names colliding with enum variants are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.d465b452d5cd",
+      "title": "specialized, repeated or unconstrained impl parameters require coherence checking, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.8a0b20e95290",
+      "title": "match currently supports owned scalar/aggregate values, not reference matching",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.85bfd5395b7c",
+      "title": "bindings inside or-patterns require alternative binding unification, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.eafc49a3531e",
+      "title": "unsupported pattern",
+      "chapter_ids": [
+        "rust.ref.9"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.acbb112847c5",
+      "title": "default enum discriminants require unsuffixed integer constants; isize typing is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.1377c97a7cf9",
+      "title": "default enum discriminants currently require unsuffixed integer constant expressions",
+      "chapter_ids": [
+        "rust.ref.6.7"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.7c49e22edc6e",
+      "title": "invalid or unsupported integer literal (supported suffixes: i32, i64, u32, u64)",
+      "chapter_ids": [
+        "rust.ref.8.2.1"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.42c0edfbabfa",
+      "title": "unsupported Rust type {ty}",
+      "chapter_ids": [
+        "rust.ref.10.1"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.b6ad2f608ff0",
+      "title": "zero-field structs are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.d0970a5199e9",
+      "title": "reference returns and aggregate reference storage require lifetime analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.2badd3b9a25b",
+      "title": "unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.4b9c1fc377df",
+      "title": "no_mangle is supported only on extern C function definitions",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.de072a10a17d",
+      "title": "extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.8f374c0f0032",
+      "title": "supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer",
+      "chapter_ids": [
+        "rust.ref.6.7"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.c48c5f43d7bb",
+      "title": "panic-capable division/remainder is unsupported; divisor must be a nonzero constant, not signed -1",
+      "chapter_ids": [
+        "rust.ref.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.10557ba208c5",
+      "title": "diverging let initializers are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.a8fa7c5d5360",
+      "title": "diverging tuple operands require never-type layout support, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.2297a7178b8b",
+      "title": "aggregate reference storage requires lifetime analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.1fe01c85830b",
+      "title": "unknown local {expr.value}; function values are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.1337d5134703",
+      "title": "only unshadowed direct function calls are supported",
+      "chapter_ids": [
+        "rust.ref.8.2.9"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.cd0812091f1d",
+      "title": "unsupported semantic node {kind}",
+      "chapter_ids": [
+        "rust.ref.8.2"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.fe93fd5bf188",
+      "title": "unsupported Rust type {text}; references and traits are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.bd733be37d9b",
+      "title": "Rust documentation attributes are not implemented",
+      "chapter_ids": [
+        "rust.ref.2.5"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.e99bc3baff05",
+      "title": "unsupported Rust token {char}",
+      "chapter_ids": [
+        "rust.ref.8.2"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.d1d178589dd9",
+      "title": "empty/inferred generic arguments are not implemented; supply explicit types",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.bba567d753cb",
+      "title": "empty generic parameter lists are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.7acd3663c2c4",
+      "title": "generic where constraints and traits are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.e05bbaab24e2",
+      "title": "generic function foreign/export ABI is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.80a1daa28726",
+      "title": "generic where constraints require trait checking, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.c3e20b9f0176",
+      "title": "empty enums require uninhabited-type analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.1bc97855ac25",
+      "title": "mutable references and borrow checking are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.23e389b95dff",
+      "title": "const generic parameters are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.ef2051156beb",
+      "title": "generic bounds and default arguments require trait/constraint checking, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.d45b3de1ec8e",
+      "title": "method-local generic parameters require separate method inference and are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.75978ad8986b",
+      "title": "named enum payload fields are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.a8ca231e8795",
+      "title": "visibility and attributes on impl blocks are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.5b94bfcc10f1",
+      "title": "trait impls and impl constraints are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.f49193c1c2ca",
+      "title": "enum repr(C) and no_mangle are not supported",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.cb3e74dcd215",
+      "title": "no_mangle is supported only on extern C function definitions",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.c24947dcbaf6",
+      "title": "reference receivers require borrow/alias/lifetime analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.cc0819c68f78",
+      "title": "empty tuple variants are not implemented; use a unit variant",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.ef1aabaa4f26",
+      "title": "unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.76572c67a8a9",
+      "title": "C-unwind requires owned cross-language unwinding, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.9d2f182c387d",
+      "title": "only the non-unwinding extern \"C\" ABI is supported",
+      "chapter_ids": [
+        "rust.ref.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.9a13e1881e59",
+      "title": "attributes and visibility on extern blocks are not supported",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.85f51504945b",
+      "title": "explicit receiver types are not implemented; use self or mut self",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.e6d5b211f058",
+      "title": "unsupported representation; enum repr supports i32/i64/u32/u64",
+      "chapter_ids": [
+        "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.551845180510",
+      "title": "reference, range, named-field and rest patterns are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.18728c522946",
+      "title": "match guards require additional effect and binding analysis, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.1ecc344c3e40",
+      "title": "break values and loop labels are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.e43cffed9774",
+      "title": "unsupported expression {text}; borrowing, heap, macros and panic are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.impl.value-methods",
+      "title": "Local nominal inherent associated functions and by-value methods",
+      "chapter_ids": [
+        "rust.ref.6.12",
+        "rust.ref.6.15",
+        "rust.ref.8.2.10",
+        "rust.ref.8.2"
+      ],
+      "scope": "Checked nongeneric/generic local record and enum impls; self/mut self, Self names, qualified calls, explicit full impl type arguments, declaration-checked non-Copy generic bodies, source-order one-time receiver evaluation and recursion via shared instance registry. Excludes reference receivers, autoderef/autoborrow, trait impls, coherence specialization, method-local generic parameters, arbitrary self types and reference/Drop runtime. Qualified only in host pcc0/self Linux x86-64, with actual unchanged-source native rustc1.91.1 differential; Darwin remains cross-emission only.",
+      "status": "supported",
+      "tests": [
+        "tests/rust/test_rust_methods.py::test_methods_use_actual_shared_function_worklist_and_distinct_declaration_identity",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_records]",
+        "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_generic_enum]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_generic_records]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_order]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_recursion]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_self_types]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "rust.impl.bd7.unit",
+        "rust.impl.bd7.program.inherent_generic_enum",
+        "rust.impl.bd7.differential.inherent_generic_enum",
+        "rust.impl.bd7.program.inherent_generic_records",
+        "rust.impl.bd7.differential.inherent_generic_records",
+        "rust.impl.bd7.program.inherent_order",
+        "rust.impl.bd7.differential.inherent_order",
+        "rust.impl.bd7.program.inherent_records",
+        "rust.impl.bd7.differential.inherent_records",
+        "rust.impl.bd7.program.inherent_recursion",
+        "rust.impl.bd7.differential.inherent_recursion",
+        "rust.impl.bd7.program.inherent_self_types",
+        "rust.impl.bd7.differential.inherent_self_types"
+      ]
+    }
+  ],
+  "diagnostics": {
+    "inventory_complete": false,
+    "codes": [],
+    "message_only": [
+      {
+        "message": "Rust overflow checks require owned panic support, which is not implemented; only overflow_checks=False is supported",
+        "feature_id": "rust.capability.ad1be8716230",
+        "source": {
+          "path": "pcc/frontends/rust/__init__.py",
+          "sha256": "0525cf3a2631639ae0f0ac85004172e58ea6519874810888f8caf4ac06a9ec9f"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 62."
+      },
+      {
+        "message": "generic parameters shadowing primitive names are not implemented",
+        "feature_id": "rust.capability.102e85184e90",
+        "source": {
+          "path": "pcc/frontends/rust/function_generics.py",
+          "sha256": "24e03f4640ffa5c4f4b0e7b74445778854c5ebb7aa6040a6e7edf319e4179e5e"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 43."
+      },
+      {
+        "message": "generic function requires explicit type arguments; argument inference is not implemented",
+        "feature_id": "rust.capability.53efaab821f9",
+        "source": {
+          "path": "pcc/frontends/rust/function_generics.py",
+          "sha256": "24e03f4640ffa5c4f4b0e7b74445778854c5ebb7aa6040a6e7edf319e4179e5e"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 64."
+      },
+      {
+        "message": "generic function reference arguments require lifetime/escape analysis, which is not implemented",
+        "feature_id": "rust.capability.05e266c798ff",
+        "source": {
+          "path": "pcc/frontends/rust/function_generics.py",
+          "sha256": "24e03f4640ffa5c4f4b0e7b74445778854c5ebb7aa6040a6e7edf319e4179e5e"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 77."
+      },
+      {
+        "message": "unsupported Rust type {ty}",
+        "feature_id": "rust.capability.791904d28fad",
+        "source": {
+          "path": "pcc/frontends/rust/generics.py",
+          "sha256": "d11cbe56645dbf205be10d0cc26cf06ff5b36c384f5df0bf9def300386bb31ef"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 88."
+      },
+      {
+        "message": "generic type {ty} requires explicit type arguments; constructor inference is not implemented",
+        "feature_id": "rust.capability.a1a67307ea48",
+        "source": {
+          "path": "pcc/frontends/rust/generics.py",
+          "sha256": "d11cbe56645dbf205be10d0cc26cf06ff5b36c384f5df0bf9def300386bb31ef"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 90."
+      },
+      {
+        "message": "unsupported Rust type {ty.name}",
+        "feature_id": "rust.capability.8b991334a1bf",
+        "source": {
+          "path": "pcc/frontends/rust/generics.py",
+          "sha256": "d11cbe56645dbf205be10d0cc26cf06ff5b36c384f5df0bf9def300386bb31ef"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 76."
+      },
+      {
+        "message": "generic parameters shadowing primitive names are not implemented",
+        "feature_id": "rust.capability.c7ec835f4a43",
+        "source": {
+          "path": "pcc/frontends/rust/generics.py",
+          "sha256": "d11cbe56645dbf205be10d0cc26cf06ff5b36c384f5df0bf9def300386bb31ef"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 100."
+      },
+      {
+        "message": "zero-field structs are not implemented",
+        "feature_id": "rust.capability.b108adcc58fb",
+        "source": {
+          "path": "pcc/frontends/rust/generics.py",
+          "sha256": "d11cbe56645dbf205be10d0cc26cf06ff5b36c384f5df0bf9def300386bb31ef"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 116."
+      },
+      {
+        "message": "aggregate reference storage requires lifetime analysis, which is not implemented",
+        "feature_id": "rust.capability.635b37d0353a",
+        "source": {
+          "path": "pcc/frontends/rust/generics.py",
+          "sha256": "d11cbe56645dbf205be10d0cc26cf06ff5b36c384f5df0bf9def300386bb31ef"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 154."
+      },
+      {
+        "message": "unsupported place",
+        "feature_id": "rust.capability.ca7ab0b6c7b5",
+        "source": {
+          "path": "pcc/frontends/rust/lowering.py",
+          "sha256": "c69d6e35bfbe0dc5407cc29a8b3d1a40dcffc231a8e2b8b093a65eeeeccebc2c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 70."
+      },
+      {
+        "message": "unsupported lowering node {kind}",
+        "feature_id": "rust.capability.b29def7fd8da",
+        "source": {
+          "path": "pcc/frontends/rust/lowering.py",
+          "sha256": "c69d6e35bfbe0dc5407cc29a8b3d1a40dcffc231a8e2b8b093a65eeeeccebc2c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 275."
+      },
+      {
+        "message": "reference receiver autoderef/autoborrow requires ownership and lifetime analysis, which is not implemented",
+        "feature_id": "rust.capability.da3519eafd50",
+        "source": {
+          "path": "pcc/frontends/rust/methods.py",
+          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 56."
+      },
+      {
+        "message": "impl parameters shadowing primitive names are not implemented",
+        "feature_id": "rust.capability.cafda895c2ac",
+        "source": {
+          "path": "pcc/frontends/rust/methods.py",
+          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 28."
+      },
+      {
+        "message": "associated names colliding with enum variants are not implemented",
+        "feature_id": "rust.capability.9feb1bfbec86",
+        "source": {
+          "path": "pcc/frontends/rust/methods.py",
+          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 51."
+      },
+      {
+        "message": "specialized, repeated or unconstrained impl parameters require coherence checking, which is not implemented",
+        "feature_id": "rust.capability.d465b452d5cd",
+        "source": {
+          "path": "pcc/frontends/rust/methods.py",
+          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 38."
+      },
+      {
+        "message": "match currently supports owned scalar/aggregate values, not reference matching",
+        "feature_id": "rust.capability.8a0b20e95290",
+        "source": {
+          "path": "pcc/frontends/rust/patterns.py",
+          "sha256": "ced3001805eefc799604b4443a0ea150bd7ad084dde498760ddfdc8f38729606"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 129."
+      },
+      {
+        "message": "bindings inside or-patterns require alternative binding unification, which is not implemented",
+        "feature_id": "rust.capability.85bfd5395b7c",
+        "source": {
+          "path": "pcc/frontends/rust/patterns.py",
+          "sha256": "ced3001805eefc799604b4443a0ea150bd7ad084dde498760ddfdc8f38729606"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 65."
+      },
+      {
+        "message": "unsupported pattern",
+        "feature_id": "rust.capability.eafc49a3531e",
+        "source": {
+          "path": "pcc/frontends/rust/patterns.py",
+          "sha256": "ced3001805eefc799604b4443a0ea150bd7ad084dde498760ddfdc8f38729606"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 97."
+      },
+      {
+        "message": "default enum discriminants require unsuffixed integer constants; isize typing is not implemented",
+        "feature_id": "rust.capability.acbb112847c5",
+        "source": {
+          "path": "pcc/frontends/rust/patterns.py",
+          "sha256": "ced3001805eefc799604b4443a0ea150bd7ad084dde498760ddfdc8f38729606"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 30."
+      },
+      {
+        "message": "default enum discriminants currently require unsuffixed integer constant expressions",
+        "feature_id": "rust.capability.1377c97a7cf9",
+        "source": {
+          "path": "pcc/frontends/rust/patterns.py",
+          "sha256": "ced3001805eefc799604b4443a0ea150bd7ad084dde498760ddfdc8f38729606"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 32."
+      },
+      {
+        "message": "invalid or unsupported integer literal (supported suffixes: i32, i64, u32, u64)",
+        "feature_id": "rust.capability.7c49e22edc6e",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 68."
+      },
+      {
+        "message": "unsupported Rust type {ty}",
+        "feature_id": "rust.capability.42c0edfbabfa",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 181."
+      },
+      {
+        "message": "zero-field structs are not implemented",
+        "feature_id": "rust.capability.b6ad2f608ff0",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 186."
+      },
+      {
+        "message": "reference returns and aggregate reference storage require lifetime analysis, which is not implemented",
+        "feature_id": "rust.capability.d0970a5199e9",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 169."
+      },
+      {
+        "message": "unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields",
+        "feature_id": "rust.capability.2badd3b9a25b",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 174."
+      },
+      {
+        "message": "no_mangle is supported only on extern C function definitions",
+        "feature_id": "rust.capability.4b9c1fc377df",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 243."
+      },
+      {
+        "message": "extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape",
+        "feature_id": "rust.capability.de072a10a17d",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 246."
+      },
+      {
+        "message": "supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer",
+        "feature_id": "rust.capability.8f374c0f0032",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 555."
+      },
+      {
+        "message": "panic-capable division/remainder is unsupported; divisor must be a nonzero constant, not signed -1",
+        "feature_id": "rust.capability.c48c5f43d7bb",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 568."
+      },
+      {
+        "message": "diverging let initializers are not implemented",
+        "feature_id": "rust.capability.10557ba208c5",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 310."
+      },
+      {
+        "message": "diverging tuple operands require never-type layout support, which is not implemented",
+        "feature_id": "rust.capability.a8fa7c5d5360",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 326."
+      },
+      {
+        "message": "aggregate reference storage requires lifetime analysis, which is not implemented",
+        "feature_id": "rust.capability.2297a7178b8b",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 328."
+      },
+      {
+        "message": "unknown local {expr.value}; function values are not implemented",
+        "feature_id": "rust.capability.1fe01c85830b",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 374."
+      },
+      {
+        "message": "only unshadowed direct function calls are supported",
+        "feature_id": "rust.capability.1337d5134703",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 431."
+      },
+      {
+        "message": "unsupported semantic node {kind}",
+        "feature_id": "rust.capability.cd0812091f1d",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 509."
+      },
+      {
+        "message": "unsupported Rust type {text}; references and traits are not implemented",
+        "feature_id": "rust.capability.fe93fd5bf188",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 259."
+      },
+      {
+        "message": "Rust documentation attributes are not implemented",
+        "feature_id": "rust.capability.bd733be37d9b",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 56."
+      },
+      {
+        "message": "unsupported Rust token {char}",
+        "feature_id": "rust.capability.e99bc3baff05",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 104."
+      },
+      {
+        "message": "empty/inferred generic arguments are not implemented; supply explicit types",
+        "feature_id": "rust.capability.d1d178589dd9",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 280."
+      },
+      {
+        "message": "empty generic parameter lists are not implemented",
+        "feature_id": "rust.capability.bba567d753cb",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 299."
+      },
+      {
+        "message": "generic where constraints and traits are not implemented",
+        "feature_id": "rust.capability.7acd3663c2c4",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 330."
+      },
+      {
+        "message": "generic function foreign/export ABI is not implemented",
+        "feature_id": "rust.capability.e05bbaab24e2",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 433."
+      },
+      {
+        "message": "generic where constraints require trait checking, which is not implemented",
+        "feature_id": "rust.capability.80a1daa28726",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 468."
+      },
+      {
+        "message": "empty enums require uninhabited-type analysis, which is not implemented",
+        "feature_id": "rust.capability.c3e20b9f0176",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 653."
+      },
+      {
+        "message": "mutable references and borrow checking are not implemented",
+        "feature_id": "rust.capability.1bc97855ac25",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 239."
+      },
+      {
+        "message": "const generic parameters are not implemented",
+        "feature_id": "rust.capability.23e389b95dff",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 303."
+      },
+      {
+        "message": "generic bounds and default arguments require trait/constraint checking, which is not implemented",
+        "feature_id": "rust.capability.ef2051156beb",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 308."
+      },
+      {
+        "message": "method-local generic parameters require separate method inference and are not implemented",
+        "feature_id": "rust.capability.d45b3de1ec8e",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 430."
+      },
+      {
+        "message": "named enum payload fields are not implemented",
+        "feature_id": "rust.capability.75978ad8986b",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 646."
+      },
+      {
+        "message": "visibility and attributes on impl blocks are not implemented",
+        "feature_id": "rust.capability.a8ca231e8795",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 375."
+      },
+      {
+        "message": "trait impls and impl constraints are not implemented",
+        "feature_id": "rust.capability.5b94bfcc10f1",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 380."
+      },
+      {
+        "message": "enum repr(C) and no_mangle are not supported",
+        "feature_id": "rust.capability.f49193c1c2ca",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 392."
+      },
+      {
+        "message": "no_mangle is supported only on extern C function definitions",
+        "feature_id": "rust.capability.cb3e74dcd215",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 399."
+      },
+      {
+        "message": "reference receivers require borrow/alias/lifetime analysis, which is not implemented",
+        "feature_id": "rust.capability.c24947dcbaf6",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 441."
+      },
+      {
+        "message": "empty tuple variants are not implemented; use a unit variant",
+        "feature_id": "rust.capability.cc0819c68f78",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 643."
+      },
+      {
+        "message": "unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted",
+        "feature_id": "rust.capability.ef1aabaa4f26",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 370."
+      },
+      {
+        "message": "C-unwind requires owned cross-language unwinding, which is not implemented",
+        "feature_id": "rust.capability.76572c67a8a9",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 410."
+      },
+      {
+        "message": "only the non-unwinding extern \"C\" ABI is supported",
+        "feature_id": "rust.capability.9d2f182c387d",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 412."
+      },
+      {
+        "message": "attributes and visibility on extern blocks are not supported",
+        "feature_id": "rust.capability.9a13e1881e59",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 416."
+      },
+      {
+        "message": "explicit receiver types are not implemented; use self or mut self",
+        "feature_id": "rust.capability.85f51504945b",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 447."
+      },
+      {
+        "message": "unsupported representation; enum repr supports i32/i64/u32/u64",
+        "feature_id": "rust.capability.e6d5b211f058",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 365."
+      },
+      {
+        "message": "reference, range, named-field and rest patterns are not implemented",
+        "feature_id": "rust.capability.551845180510",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 715."
+      },
+      {
+        "message": "match guards require additional effect and binding analysis, which is not implemented",
+        "feature_id": "rust.capability.18728c522946",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 553."
+      },
+      {
+        "message": "break values and loop labels are not implemented",
+        "feature_id": "rust.capability.1ecc344c3e40",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 566."
+      },
+      {
+        "message": "unsupported expression {text}; borrowing, heap, macros and panic are not implemented",
+        "feature_id": "rust.capability.e43cffed9774",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 578."
+      }
+    ],
+    "notes": "No stable Rust diagnostic codes exist yet. Static extraction covers direct literal/f-string raise templates containing explicit capability wording; generic parser expectation errors, dynamic messages, propagated errors and a complete invalid-vs-unimplemented code taxonomy are not certified. Every inventoried message maps to a feature; code migration remains missing."
+  },
+  "evidence": [
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.unit",
+      "test_id": "tests/rust/test_rust_methods.py::test_methods_use_actual_shared_function_worklist_and_distinct_declaration_identity",
+      "kind": "unit",
+      "source": {
+        "path": "tests/rust/test_rust_methods.py",
+        "sha256": "4197adeef0c5817e3487cb6b53c2482429134d6b54933583cc9e1b180d677378"
+      },
+      "command": [
+        "pytest",
+        "-x",
+        "--maxfail=0",
+        "-m",
+        "",
+        "-vv",
+        "--tb=short",
+        "tests/rust",
+        "tests/test_frontend_instantiation.py"
+      ],
+      "actual": {
+        "stdout_sha256": "35c7dadf318478ce6769365b0587ea16c8aaee70e10c41cd6ac36358a1796a2e",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction",
+      "purpose": "unit"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.program.inherent_generic_enum",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "e69bd93b9337f7828e2094b965e60c11da06a38ca600c940dbd5646fc2906c83",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.differential.inherent_generic_enum",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "e69bd93b9337f7828e2094b965e60c11da06a38ca600c940dbd5646fc2906c83",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "e69bd93b9337f7828e2094b965e60c11da06a38ca600c940dbd5646fc2906c83",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.program.inherent_generic_records",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "b2f1ab83ff34891b240f6bec5fd19e95dd8ec5e6fa968be69fa1c03a247849b8",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.differential.inherent_generic_records",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "b2f1ab83ff34891b240f6bec5fd19e95dd8ec5e6fa968be69fa1c03a247849b8",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "b2f1ab83ff34891b240f6bec5fd19e95dd8ec5e6fa968be69fa1c03a247849b8",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.program.inherent_order",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "076c5d7749c718a17abbf13d4d245b399afb7bc392e15ba395e845ea26d0a503",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.differential.inherent_order",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "076c5d7749c718a17abbf13d4d245b399afb7bc392e15ba395e845ea26d0a503",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "076c5d7749c718a17abbf13d4d245b399afb7bc392e15ba395e845ea26d0a503",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.program.inherent_records",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "6d5934aec3105848dc921453d762bbaf692873463bac9f8c52acc51a744a314b",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.differential.inherent_records",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "6d5934aec3105848dc921453d762bbaf692873463bac9f8c52acc51a744a314b",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "6d5934aec3105848dc921453d762bbaf692873463bac9f8c52acc51a744a314b",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.program.inherent_recursion",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "714affefbcf5762c671e8cab0205ccc5291d6990f60cef3874ab97b78798798b",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.differential.inherent_recursion",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "714affefbcf5762c671e8cab0205ccc5291d6990f60cef3874ab97b78798798b",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "714affefbcf5762c671e8cab0205ccc5291d6990f60cef3874ab97b78798798b",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.program.inherent_self_types",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "0b3420e3bae0b021d0e40720e47ca84ee09fef48c383cf026001df31dc5a158a",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "id": "rust.impl.bd7.differential.inherent_self_types",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "0b3420e3bae0b021d0e40720e47ca84ee09fef48c383cf026001df31dc5a158a",
+      "source": {
+        "path": "tests/rust/test_rust_method_reference.py",
+        "sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "0b3420e3bae0b021d0e40720e47ca84ee09fef48c383cf026001df31dc5a158a",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "command_kind": "reproduction"
+    }
+  ]
+}

@@ -113,7 +113,12 @@ class Lowerer:
         if (expr.kind in {"tuple", "construct", "enum_construct"}
                 or expr.kind == "variant" and self.checker.enums[expr.ty].payloads):
             self.temps[id(expr)] = self.builder.alloca(self.type(expr.ty), name="aggregate")
-        for child in expr.children:
+        # Direct-call callee syntax is not a value expression. A qualified
+        # method path may share the parser's enum-path shape but has no value
+        # type/storage. Method receiver values are already the first actual
+        # operand, so visiting the callee would also traverse them twice.
+        operands = expr.children[1:] if expr.kind == "call" else expr.children
+        for child in operands:
             self.allocate_locals(child)
 
     def expression(self, expr: Expr):

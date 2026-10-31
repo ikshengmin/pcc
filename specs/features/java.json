@@ -1,0 +1,1989 @@
+{
+  "schema_version": 1,
+  "language": "java",
+  "specification": {
+    "title": "The Java Language Specification",
+    "version": "Java SE21",
+    "url": "https://docs.oracle.com/javase/specs/jls/se21/html/index.html"
+  },
+  "inventory": {
+    "chapters_complete": true,
+    "features_complete": false,
+    "notes": "Initial partial atomic-feature map, not full Java/JDK conformance. Exact historical owned native source/objects/executables and same-original JDK results support the four bounded runtime rows. Unit/program rows intentionally refer to the same real compilation/execution assertion test and raw program outputs, never pytest aggregate stdout. Reproduction commands omit sandbox paths. JDK observers normalize return values to declared primitive raw lanes. Source model native gates stay explicit; current candidate reference disagreement is retained. Frozen class/JAR experiments are excluded from source acceptance. Many already implemented scalar/source-closure features still need normalized rows, not presumed absent. Four bounded runtime rows now also have NEW actual raw-process comparisons from c5; historical normalized observations remain separate and are not relabeled. The new lane selects an explicit existing JDK executable via PCC_JAVA_RAW_REFERENCE; actual gate used JDK21 and source/target21, not Mac JDK17. One executable assertion test supplies both unit and program evidence for each unchanged original, not fabricated compile-only outputs."
+  },
+  "chapters": [
+    {
+      "id": "JLS-1",
+      "title": "Introduction",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-1.html"
+    },
+    {
+      "id": "JLS-2",
+      "title": "Grammars",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-2.html"
+    },
+    {
+      "id": "JLS-3",
+      "title": "Lexical Structure",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html"
+    },
+    {
+      "id": "JLS-4",
+      "title": "Types, Values, and Variables",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-4.html"
+    },
+    {
+      "id": "JLS-5",
+      "title": "Conversions and Contexts",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-5.html"
+    },
+    {
+      "id": "JLS-6",
+      "title": "Names",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html"
+    },
+    {
+      "id": "JLS-7",
+      "title": "Packages and Modules",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-7.html"
+    },
+    {
+      "id": "JLS-8",
+      "title": "Classes",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-8.html"
+    },
+    {
+      "id": "JLS-9",
+      "title": "Interfaces",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-9.html"
+    },
+    {
+      "id": "JLS-10",
+      "title": "Arrays",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-10.html"
+    },
+    {
+      "id": "JLS-11",
+      "title": "Exceptions",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-11.html"
+    },
+    {
+      "id": "JLS-12",
+      "title": "Execution",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-12.html"
+    },
+    {
+      "id": "JLS-13",
+      "title": "Binary Compatibility",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-13.html"
+    },
+    {
+      "id": "JLS-14",
+      "title": "Blocks, Statements, and Patterns",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-14.html"
+    },
+    {
+      "id": "JLS-15",
+      "title": "Expressions",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html"
+    },
+    {
+      "id": "JLS-16",
+      "title": "Definite Assignment",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-16.html"
+    },
+    {
+      "id": "JLS-17",
+      "title": "Threads and Locks",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html"
+    },
+    {
+      "id": "JLS-18",
+      "title": "Type Inference",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-18.html"
+    },
+    {
+      "id": "JLS-19",
+      "title": "Syntax",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-19.html"
+    }
+  ],
+  "features": [
+    {
+      "id": "java.conditional-primitive",
+      "title": "Standalone primitive conditional operator",
+      "chapter_ids": [
+        "JLS-5",
+        "JLS-15",
+        "JLS-16"
+      ],
+      "scope": "JLS 15.25: boolean/integral standalone ?: typing, narrowing, one selected arm, source DA. Excludes reference/poly/boxing operands. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "status": "supported",
+      "tests": [
+        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "java.conditional-primitive.unit",
+        "java.conditional-primitive.program",
+        "java.conditional-primitive.differential",
+        "java.conditional-primitive.raw-unit",
+        "java.conditional-primitive.raw-program",
+        "java.conditional-primitive.raw-differential"
+      ]
+    },
+    {
+      "id": "java.division-constant-integral",
+      "title": "Integral division by nonzero constant divisor",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-15"
+      ],
+      "scope": "JLS 15.17.2-3: int/long constant nonzero divisors, truncation, remainder and MIN/-1. Dynamic or zero divisors are a distinct unimplemented exception feature. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "status": "supported",
+      "tests": [
+        "tests/java/test_source_division.py::test_original_division_has_exact_native_result",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "java.division-constant-integral.unit",
+        "java.division-constant-integral.program",
+        "java.division-constant-integral.differential",
+        "java.division-constant-integral.raw-unit",
+        "java.division-constant-integral.raw-program",
+        "java.division-constant-integral.raw-differential"
+      ]
+    },
+    {
+      "id": "java.switch-primitive",
+      "title": "Primitive switch statements",
+      "chapter_ids": [
+        "JLS-14",
+        "JLS-16"
+      ],
+      "scope": "JLS 14.11,16.2.9: byte/short/char/int selector statements, constant colon/arrow labels, break/continue and DA. Excludes switch expressions, enum/reference/pattern selectors. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "status": "supported",
+      "tests": [
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "java.switch-primitive.unit",
+        "java.switch-primitive.program",
+        "java.switch-primitive.differential",
+        "java.switch-primitive.raw-unit",
+        "java.switch-primitive.raw-program",
+        "java.switch-primitive.raw-differential"
+      ]
+    },
+    {
+      "id": "java.do-while",
+      "title": "Primitive do-while statements",
+      "chapter_ids": [
+        "JLS-14",
+        "JLS-16"
+      ],
+      "scope": "JLS 14.13,16.2.11: post-test boolean control, body-once, continue-to-test, break and local DA. No exception/monitor completion edges. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "status": "supported",
+      "tests": [
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "java.do-while.unit",
+        "java.do-while.program",
+        "java.do-while.differential",
+        "java.do-while.raw-unit",
+        "java.do-while.raw-program",
+        "java.do-while.raw-differential"
+      ]
+    },
+    {
+      "id": "java.objects-native",
+      "title": "Managed objects and constructor execution",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-8",
+        "JLS-12",
+        "JLS-15"
+      ],
+      "scope": "JLS 4.3.1,8.8,12.5,15.9. Native compile_source(s) rejects explicit instance features. Class-model API is not an allocator/GC/dispatch substitute.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_class_model.py::test_model_does_not_grant_native_object_compilation"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.arrays-native",
+      "title": "Array allocation and access",
+      "chapter_ids": [
+        "JLS-10",
+        "JLS-15"
+      ],
+      "scope": "JLS 10,15.10. No Java array allocation, runtime length/bounds/store checks, roots or reference tracing. Dedicated feature-specific diagnostic mapping is also missing; generic unsupported token/expression errors are not counted as this feature diagnostic.",
+      "status": "missing",
+      "tests": [
+        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.unicode-translation",
+      "title": "Unicode escape translation",
+      "chapter_ids": [
+        "JLS-3"
+      ],
+      "scope": "JLS 3.3. Input containing Unicode-escape translation is rejected, not preprocessed by javac.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.string-runtime",
+      "title": "Strings and text blocks",
+      "chapter_ids": [
+        "JLS-3",
+        "JLS-4",
+        "JLS-15"
+      ],
+      "scope": "JLS 3.10.5-6,4.3.3. No String allocation, interning, concatenation or text-block implementation. Dedicated feature-specific diagnostic mapping is also missing; generic unsupported token/expression errors are not counted as this feature diagnostic.",
+      "status": "missing",
+      "tests": [
+        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.division-dynamic-exception",
+      "title": "Runtime ArithmeticException for integer division",
+      "chapter_ids": [
+        "JLS-11",
+        "JLS-15"
+      ],
+      "scope": "JLS 15.17.2-3. Zero or nonconstant divisor explicitly rejected before IR; no trap substituted for Java exception.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_division.py::test_zero_and_dynamic_divisors_remain_explicit_before_lowering"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.class-initialization",
+      "title": "Nonconstant static initialization",
+      "chapter_ids": [
+        "JLS-8",
+        "JLS-12"
+      ],
+      "scope": "JLS 8.7,12.4. Mutable/static initializer/cyclic constant dependencies require shared initialization state and exceptions.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_constants.py::test_runtime_or_lexical_boundaries_do_not_drop_original_declarations"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.blank-final-local",
+      "title": "Blank final local definite unassignment",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-14",
+        "JLS-16"
+      ],
+      "scope": "JLS 4.12.4,14.4,16. Initialized final locals exist; blank final local statements remain rejected.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_final_locals.py::test_blank_final_local_remains_explicit_until_definite_unassignment_is_implemented"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.imports-expanded",
+      "title": "Static and on-demand import resolution",
+      "chapter_ids": [
+        "JLS-6",
+        "JLS-7"
+      ],
+      "scope": "JLS 7.5.2-4. Single-type imports are a separate admitted slice; these forms explicitly rejected.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.implicit-type-directory",
+      "title": "Complete implicit java.lang type metadata",
+      "chapter_ids": [
+        "JLS-6",
+        "JLS-7"
+      ],
+      "scope": "JLS 7.3,6.5. Unknown package-qualified roots rejected rather than guessing that absent standard classes are packages.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_project.py::test_missing_standard_implicit_type_cannot_be_reinterpreted_as_a_supplied_package"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.inheritance-generics",
+      "title": "Inheritance and generic class declaration",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-8",
+        "JLS-18"
+      ],
+      "scope": "JLS 8.1.2,8.1.4-5. No inheritance, generic instantiation, interface implementation or Object override conformance.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_class_model.py::test_unimplemented_class_semantics_remain_explicit"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.nested-classes",
+      "title": "Nested class types",
+      "chapter_ids": [
+        "JLS-8"
+      ],
+      "scope": "JLS 8.5. Member type lookup explicitly rejected.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.conditional-reference",
+      "title": "Reference and boxed conditional operands",
+      "chapter_ids": [
+        "JLS-5",
+        "JLS-15"
+      ],
+      "scope": "JLS 15.25. Reference/poly/boxing ?: operands require separate type and runtime domains.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_conditional.py::test_conditional_does_not_hide_an_unsupported_operand"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.switch-expressions",
+      "title": "Switch expressions and reference/pattern labels",
+      "chapter_ids": [
+        "JLS-14",
+        "JLS-15"
+      ],
+      "scope": "JLS 15.28. Expression switch and null/reference/pattern selectors rejected, not rewritten to primitive statement switch. Dedicated feature-specific diagnostic mapping is also missing; generic unsupported token/expression errors are not counted as this feature diagnostic.",
+      "status": "missing",
+      "tests": [
+        "tests/java/test_source_switch_do.py::test_switch_runtime_and_expression_dependencies_are_explicit"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.source-target-startup",
+      "title": "Full Java main startup and other targets",
+      "chapter_ids": [
+        "JLS-12"
+      ],
+      "scope": "JLS 12.1. Tiny native startup requires ()I and Linux ELF; not main(String[]) or a platform Java launcher.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_frontend.py::test_source_target_admission_precedes_public_ir"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.other-declared-primitives",
+      "title": "Additional declaration types",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-8",
+        "JLS-14"
+      ],
+      "scope": "byte/short/char locals/parameters/results and float/double are outside the current boolean/int/long/void source declaration slice.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_scalars.py::test_invalid_scalar_source_never_reaches_lowering"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.class-model-semantics",
+      "title": "Class and constructor typed semantic model",
+      "chapter_ids": [
+        "JLS-8",
+        "JLS-16"
+      ],
+      "scope": "Model-only API checks fields/receiver/constructor/initializers. 971 model has actual semantic/typecheck qualification, but no native constructor execution; not runtime supported.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.blank-final-instance-model",
+      "title": "Blank final instance-field DA/DU model",
+      "chapter_ids": [
+        "JLS-8",
+        "JLS-16"
+      ],
+      "scope": "Candidate1eb has 69 focused and1111 whole PCC tests, but strict JDK21 comparison35positive/33negative/1disagreement. Unpublished; no native instance execution. JLS8.3.1.2,16.2.10-12,16.9.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.memory-model",
+      "title": "Java memory model and final-field freeze",
+      "chapter_ids": [
+        "JLS-17"
+      ],
+      "scope": "Shared-runtime prerequisite. No monitor/volatile/thread/final-field-freeze execution qualification.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.exceptions-unwind",
+      "title": "Java exception propagation and cleanup",
+      "chapter_ids": [
+        "JLS-11",
+        "JLS-14"
+      ],
+      "scope": "Shared Throwable/unwind integration absent; no broad exception conformance.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.interfaces-annotations",
+      "title": "Interfaces and annotation types",
+      "chapter_ids": [
+        "JLS-9"
+      ],
+      "scope": "Not covered by current static-method source slice or a precise full-feature diagnostic taxonomy.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.binary-compatibility",
+      "title": "Java binary compatibility contract",
+      "chapter_ids": [
+        "JLS-13"
+      ],
+      "scope": "Frozen class compatibility experiment is not source project/linker binary compatibility qualification.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "java.modules",
+      "title": "Java module graph",
+      "chapter_ids": [
+        "JLS-7"
+      ],
+      "scope": "No Java module-system source project resolution.",
+      "status": "missing",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    }
+  ],
+  "diagnostics": {
+    "inventory_complete": false,
+    "codes": [],
+    "message_only": [
+      {
+        "message": "executable entry must have descriptor ()I",
+        "source": {
+          "path": "pcc/frontends/java/artifact.py",
+          "sha256": "5c71fc4e43262e89dd0c9ee03e98b766af97acb77fbdef4ddebc8fb64c41e692"
+        },
+        "reason": "Message-only diagnostic at line 49; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.source-target-startup"
+      },
+      {
+        "message": "Java executable startup is currently limited to Linux ELF targets",
+        "source": {
+          "path": "pcc/frontends/java/artifact.py",
+          "sha256": "5c71fc4e43262e89dd0c9ee03e98b766af97acb77fbdef4ddebc8fb64c41e692"
+        },
+        "reason": "Message-only diagnostic at line 59; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.source-target-startup"
+      },
+      {
+        "message": "f'unsupported Java source target/ABI {target!r}; require an owned LP64 Linux or arm64 Darwin target'",
+        "source": {
+          "path": "pcc/frontends/java/source.py",
+          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
+        },
+        "reason": "Message-only diagnostic at line 28; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.source-target-startup"
+      },
+      {
+        "message": "Java source exceeds the bounded parser/analysis nesting limit",
+        "source": {
+          "path": "pcc/frontends/java/source.py",
+          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
+        },
+        "reason": "Message-only diagnostic at line 55; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "source project exceeds the 8 MiB aggregate input limit",
+        "source": {
+          "path": "pcc/frontends/java/source.py",
+          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
+        },
+        "reason": "Message-only diagnostic at line 77; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "Java source exceeds the bounded parser/analysis nesting limit",
+        "source": {
+          "path": "pcc/frontends/java/source.py",
+          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
+        },
+        "reason": "Message-only diagnostic at line 81; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "class source model exceeds the 8 MiB aggregate input limit",
+        "source": {
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
+        },
+        "reason": "Message-only diagnostic at line 400; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "bootstrap Object requires the shared runtime definition",
+        "source": {
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
+        },
+        "reason": "Message-only diagnostic at line 106; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.objects-native"
+      },
+      {
+        "message": "class source model exceeds the bounded parser/analysis nesting limit",
+        "source": {
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
+        },
+        "reason": "Message-only diagnostic at line 405; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "Object override/final/access semantics require the inherited-method domain",
+        "source": {
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
+        },
+        "reason": "Message-only diagnostic at line 113; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.inheritance-generics"
+      },
+      {
+        "message": "member types require the nested-class source domain",
+        "source": {
+          "path": "pcc/frontends/java/source_project.py",
+          "sha256": "4ad5da62632798b88fbdb61489e16dbdd31e39c5d18f300a3791a102bdc7d973"
+        },
+        "reason": "Message-only diagnostic at line 111; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.nested-classes"
+      },
+      {
+        "message": "package-qualified calls require complete implicit-type metadata; supply a single-type import and a resolved class qualifier",
+        "source": {
+          "path": "pcc/frontends/java/source_project.py",
+          "sha256": "4ad5da62632798b88fbdb61489e16dbdd31e39c5d18f300a3791a102bdc7d973"
+        },
+        "reason": "Message-only diagnostic at line 120; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.implicit-type-directory"
+      },
+      {
+        "message": "'source-project dependency resolution requires supplied source for ' + name.replace('/', '.')",
+        "source": {
+          "path": "pcc/frontends/java/source_project.py",
+          "sha256": "4ad5da62632798b88fbdb61489e16dbdd31e39c5d18f300a3791a102bdc7d973"
+        },
+        "reason": "Message-only diagnostic at line 35; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "bootstrap Object requires the shared runtime definition",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
+        },
+        "reason": "Message-only diagnostic at line 73; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.objects-native"
+      },
+      {
+        "message": "cyclic field initialization requires the shared Java initialization contract",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
+        },
+        "reason": "Message-only diagnostic at line 96; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.class-initialization"
+      },
+      {
+        "message": "source method exceeds the local-variable budget",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
+        },
+        "reason": "Message-only diagnostic at line 132; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "nonconstant or zero integer divisor requires shared ArithmeticException support",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
+        },
+        "reason": "Message-only diagnostic at line 150; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.division-dynamic-exception"
+      },
+      {
+        "message": "nonconstant static initialization requires the shared Java initialization contract",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
+        },
+        "reason": "Message-only diagnostic at line 104; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.class-initialization"
+      },
+      {
+        "message": "Java source exceeds the initial 1 MiB input limit",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 111; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "Java Unicode-escape translation is not implemented",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 113; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.unicode-translation"
+      },
+      {
+        "message": "unsupported top-level class modifiers",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 212; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "inheritance, generics and interfaces require the shared Java runtime",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 219; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.inheritance-generics"
+      },
+      {
+        "message": "final local declarations require boolean, int or long",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 434; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.other-declared-primitives"
+      },
+      {
+        "message": "static imports require the next source-project lookup domain",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 200; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.imports-expanded"
+      },
+      {
+        "message": "only ordinary static source methods are implemented",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 248; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.objects-native"
+      },
+      {
+        "message": "source method results currently require boolean, int, long or void",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 251; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.other-declared-primitives"
+      },
+      {
+        "message": "array fields require shared Java storage and class initialization",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 253; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.class-initialization"
+      },
+      {
+        "message": "source method results currently require boolean, int, long or void",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 280; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.other-declared-primitives"
+      },
+      {
+        "message": "blank final locals require the definite-unassignment source domain",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 431; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.blank-final-local"
+      },
+      {
+        "message": "on-demand imports require the next source-project lookup domain",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 204; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.imports-expanded"
+      },
+      {
+        "message": "static initializer execution requires shared Java class initialization",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 228; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.class-initialization"
+      },
+      {
+        "message": "mutable static fields require shared Java class initialization",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 262; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.class-initialization"
+      },
+      {
+        "message": "source parameters require boolean, int or long",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 299; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.other-declared-primitives"
+      },
+      {
+        "message": "unsupported Java source token",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 134; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "Java source exceeds the initial token budget",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 138; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "initialized final instance fields require constant-variable semantics",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 266; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.blank-final-instance-model"
+      },
+      {
+        "message": "blank final fields require shared Java class initialization",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 268; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.class-initialization"
+      },
+      {
+        "message": "unsupported Java expression or statement",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+        },
+        "reason": "Message-only diagnostic at line 488; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+      },
+      {
+        "message": "reference/boxing conditional operands require the shared Java runtime",
+        "source": {
+          "path": "pcc/frontends/java/source_types.py",
+          "sha256": "a556614202abd4176ab9d894116fd0dd47b2a1b1862fc042207fa50d1e2f6683"
+        },
+        "reason": "Message-only diagnostic at line 30; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
+        "feature_id": "java.conditional-reference"
+      }
+    ],
+    "notes": "AST inventory of direct UnsupportedJava calls and Token.error(...,True) in source/frontend artifact modules at candidate1eb6ee31. Compatibility decoders, dynamic/general parse errors and budget-vs-language taxonomy need separate completion. No stable Java diagnostic codes currently exist; this is a real code-coverage gap."
+  },
+  "evidence": [
+    {
+      "id": "java.conditional-primitive.unit",
+      "test_id": "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "61becef9fcf68ac4c5fefc97e063ec40bc163992",
+      "source": {
+        "path": "tests/java/test_source_conditional.py",
+        "sha256": "0cc77d2db844584079bf8bcd564862f9aa57eb86dc0e938bb51c8d9db60697e2"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+    },
+    {
+      "id": "java.conditional-primitive.program",
+      "test_id": "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "61becef9fcf68ac4c5fefc97e063ec40bc163992",
+      "source": {
+        "path": "tests/java/test_source_conditional.py",
+        "sha256": "0cc77d2db844584079bf8bcd564862f9aa57eb86dc0e938bb51c8d9db60697e2"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+    },
+    {
+      "id": "java.conditional-primitive.differential",
+      "test_id": "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "61becef9fcf68ac4c5fefc97e063ec40bc163992",
+      "source": {
+        "path": "tests/java/test_source_conditional.py",
+        "sha256": "0cc77d2db844584079bf8bcd564862f9aa57eb86dc0e938bb51c8d9db60697e2"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM; identical original source, separate observer return normalized to declared primitive lane",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; -source 21 -target 21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/harness-classes",
+          "PccSourceReference",
+          "reference/plan.tsv",
+          "reference/results.tsv"
+        ],
+        "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+      },
+      "comparison": {
+        "kind": "normalized_primitive_value",
+        "description": "The independent JVM observer returns a decimal primitive value to the batch harness. That per-case results.tsv value is decoded as an integer and encoded little-endian at the declared 1/4/8-byte result width. expected is that normalized semantic value, NOT literal JVM stdout/exit. actual is the owned native executable raw output. Both lanes preserve identical original source bytes."
+      },
+      "raw_reference": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one batch process containing multiple original programs; no per-case process stdout exists",
+        "results_protocol_sha256": "5be3db46710836d7e32831b8ddb95d544893795bfac7fc2b5b65e2aec453fcaa",
+        "case_name": "unchosen-false-arm-must-not-run",
+        "observed_value": "42"
+      },
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+    },
+    {
+      "id": "java.division-constant-integral.unit",
+      "test_id": "tests/java/test_source_division.py::test_original_division_has_exact_native_result",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "8502ad792ebd87bedf526d0018fd216ae841ffd0",
+      "source": {
+        "path": "tests/java/test_source_division.py",
+        "sha256": "d73f30a6532fe67c879d5a1c8d1fabca5a4a2c19085a1582c24cd6047ecba048"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_division.py::test_original_division_has_exact_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+    },
+    {
+      "id": "java.division-constant-integral.program",
+      "test_id": "tests/java/test_source_division.py::test_original_division_has_exact_native_result",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "8502ad792ebd87bedf526d0018fd216ae841ffd0",
+      "source": {
+        "path": "tests/java/test_source_division.py",
+        "sha256": "d73f30a6532fe67c879d5a1c8d1fabca5a4a2c19085a1582c24cd6047ecba048"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_division.py::test_original_division_has_exact_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+    },
+    {
+      "id": "java.division-constant-integral.differential",
+      "test_id": "tests/java/test_source_division.py::test_original_division_has_exact_native_result",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "8502ad792ebd87bedf526d0018fd216ae841ffd0",
+      "source": {
+        "path": "tests/java/test_source_division.py",
+        "sha256": "d73f30a6532fe67c879d5a1c8d1fabca5a4a2c19085a1582c24cd6047ecba048"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_division.py::test_original_division_has_exact_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM; identical original source, separate observer return normalized to declared primitive lane",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; -source 21 -target 21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/harness-classes",
+          "PccSourceReference",
+          "reference/plan.tsv",
+          "reference/results.tsv"
+        ],
+        "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+      },
+      "comparison": {
+        "kind": "normalized_primitive_value",
+        "description": "The independent JVM observer returns a decimal primitive value to the batch harness. That per-case results.tsv value is decoded as an integer and encoded little-endian at the declared 1/4/8-byte result width. expected is that normalized semantic value, NOT literal JVM stdout/exit. actual is the owned native executable raw output. Both lanes preserve identical original source bytes."
+      },
+      "raw_reference": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one batch process containing multiple original programs; no per-case process stdout exists",
+        "results_protocol_sha256": "528d0cc0bc02373ea8c78d4352d178ee72a40dbf1e2464d31f644ebd16312126",
+        "case_name": "long-no-float-rounding",
+        "observed_value": "3074457345618258602"
+      },
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+    },
+    {
+      "id": "java.switch-primitive.unit",
+      "test_id": "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "2ae814acebe8ded73995675c0e50f241dbc2e0b8",
+      "source": {
+        "path": "tests/java/test_source_switch_do.py",
+        "sha256": "5c4ae26fd9a503587a147d762e1c0108977d1663277ab0d82ed8bea8d71904df"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+    },
+    {
+      "id": "java.switch-primitive.program",
+      "test_id": "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "2ae814acebe8ded73995675c0e50f241dbc2e0b8",
+      "source": {
+        "path": "tests/java/test_source_switch_do.py",
+        "sha256": "5c4ae26fd9a503587a147d762e1c0108977d1663277ab0d82ed8bea8d71904df"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+    },
+    {
+      "id": "java.switch-primitive.differential",
+      "test_id": "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "2ae814acebe8ded73995675c0e50f241dbc2e0b8",
+      "source": {
+        "path": "tests/java/test_source_switch_do.py",
+        "sha256": "5c4ae26fd9a503587a147d762e1c0108977d1663277ab0d82ed8bea8d71904df"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM; identical original source, separate observer return normalized to declared primitive lane",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; -source 21 -target 21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/harness-classes",
+          "PccSourceReference",
+          "reference/plan.tsv",
+          "reference/results.tsv"
+        ],
+        "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+      },
+      "comparison": {
+        "kind": "normalized_primitive_value",
+        "description": "The independent JVM observer returns a decimal primitive value to the batch harness. That per-case results.tsv value is decoded as an integer and encoded little-endian at the declared 1/4/8-byte result width. expected is that normalized semantic value, NOT literal JVM stdout/exit. actual is the owned native executable raw output. Both lanes preserve identical original source bytes."
+      },
+      "raw_reference": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one batch process containing multiple original programs; no per-case process stdout exists",
+        "results_protocol_sha256": "c5f1a8f648527c3c879b0eeb663006c3633e3ecccda590584cc61be554c31183",
+        "case_name": "switch-fallthrough",
+        "observed_value": "42"
+      },
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+    },
+    {
+      "id": "java.do-while.unit",
+      "test_id": "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "2ae814acebe8ded73995675c0e50f241dbc2e0b8",
+      "source": {
+        "path": "tests/java/test_source_switch_do.py",
+        "sha256": "5c4ae26fd9a503587a147d762e1c0108977d1663277ab0d82ed8bea8d71904df"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+    },
+    {
+      "id": "java.do-while.program",
+      "test_id": "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "2ae814acebe8ded73995675c0e50f241dbc2e0b8",
+      "source": {
+        "path": "tests/java/test_source_switch_do.py",
+        "sha256": "5c4ae26fd9a503587a147d762e1c0108977d1663277ab0d82ed8bea8d71904df"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+    },
+    {
+      "id": "java.do-while.differential",
+      "test_id": "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "2ae814acebe8ded73995675c0e50f241dbc2e0b8",
+      "source": {
+        "path": "tests/java/test_source_switch_do.py",
+        "sha256": "5c4ae26fd9a503587a147d762e1c0108977d1663277ab0d82ed8bea8d71904df"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM; identical original source, separate observer return normalized to declared primitive lane",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; -source 21 -target 21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/harness-classes",
+          "PccSourceReference",
+          "reference/plan.tsv",
+          "reference/results.tsv"
+        ],
+        "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+      },
+      "comparison": {
+        "kind": "normalized_primitive_value",
+        "description": "The independent JVM observer returns a decimal primitive value to the batch harness. That per-case results.tsv value is decoded as an integer and encoded little-endian at the declared 1/4/8-byte result width. expected is that normalized semantic value, NOT literal JVM stdout/exit. actual is the owned native executable raw output. Both lanes preserve identical original source bytes."
+      },
+      "raw_reference": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one batch process containing multiple original programs; no per-case process stdout exists",
+        "results_protocol_sha256": "c5f1a8f648527c3c879b0eeb663006c3633e3ecccda590584cc61be554c31183",
+        "case_name": "do-continue-to-test",
+        "observed_value": "42"
+      },
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+    },
+    {
+      "id": "java.conditional-primitive.raw-unit",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.conditional-primitive.raw-program",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.conditional-primitive.raw-differential",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Exact stdout bytes, stderr bytes and exit status of fresh owned executable and separately executed JDK observer. Both original Java sources are unchanged; independent observers serialize the same declared primitive width. No decimal parsing or post-execution normalization."
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/classes",
+          "PccRawObserve"
+        ]
+      },
+      "raw_reference": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one actual process for this exact original program",
+        "case_name": "unchosen-false-arm-must-not-run"
+      }
+    },
+    {
+      "id": "java.division-constant-integral.raw-unit",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.division-constant-integral.raw-program",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.division-constant-integral.raw-differential",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Exact stdout bytes, stderr bytes and exit status of fresh owned executable and separately executed JDK observer. Both original Java sources are unchanged; independent observers serialize the same declared primitive width. No decimal parsing or post-execution normalization."
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/classes",
+          "PccRawObserve"
+        ]
+      },
+      "raw_reference": {
+        "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one actual process for this exact original program",
+        "case_name": "long-no-float-rounding"
+      }
+    },
+    {
+      "id": "java.switch-primitive.raw-unit",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.switch-primitive.raw-program",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.switch-primitive.raw-differential",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Exact stdout bytes, stderr bytes and exit status of fresh owned executable and separately executed JDK observer. Both original Java sources are unchanged; independent observers serialize the same declared primitive width. No decimal parsing or post-execution normalization."
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/classes",
+          "PccRawObserve"
+        ]
+      },
+      "raw_reference": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one actual process for this exact original program",
+        "case_name": "switch-fallthrough"
+      }
+    },
+    {
+      "id": "java.do-while.raw-unit",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.do-while.raw-program",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "id": "java.do-while.raw-differential",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "source": {
+        "path": "tests/java/test_source_raw_reference.py",
+        "sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      },
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Exact stdout bytes, stderr bytes and exit status of fresh owned executable and separately executed JDK observer. Both original Java sources are unchanged; independent observers serialize the same declared primitive width. No decimal parsing or post-execution normalization."
+      },
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "reference/classes",
+          "PccRawObserve"
+        ]
+      },
+      "raw_reference": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0,
+        "scope": "one actual process for this exact original program",
+        "case_name": "do-continue-to-test"
+      }
+    }
+  ]
+}

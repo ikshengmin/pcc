@@ -48,6 +48,8 @@ class Lowerer:
         self.temps = {}
         self.saved_values = {}
         self.loops = []
+        self.breaks = []
+        self.fallthrough = None
         self.builder = None
         self.function = None
         self.string_literals = {}
@@ -195,10 +197,46 @@ class Lowerer:
             self.statements(statement.body)
             return
         if kind == "break":
-            self.builder.branch(self.loops[-1][1])
+            self.builder.branch(self.breaks[-1])
             return
         if kind == "continue":
             self.builder.branch(self.loops[-1][0])
+            return
+        if kind == "fallthrough":
+            self.builder.branch(self.fallthrough)
+            return
+        if kind == "switch":
+            if statement.init is not None:
+                self.statement(statement.init)
+            selector = statement.exprs[0]
+            self.saved_values[id(selector)] = self.expression(selector)
+            bodies = [self.function.append_basic_block("switch_case") for _ in statement.cases]
+            done = self.function.append_basic_block("switch_done")
+            default = done
+            # Only dispatch evaluates case expressions. Fallthrough goes
+            # directly to the next clause body, including a middle default.
+            for clause, body in zip(statement.cases, bodies):
+                if clause.kind == "default":
+                    default = body
+                for comparison in clause.exprs:
+                    next_test = self.function.append_basic_block("switch_test")
+                    self.builder.cbranch(self.expression(comparison), body, next_test)
+                    self.builder.position_at_end(next_test)
+            self.builder.branch(default)
+            del self.saved_values[id(selector)]
+            self.breaks.append(done)
+            previous = self.fallthrough
+            for index, (clause, body) in enumerate(zip(statement.cases, bodies)):
+                self.builder.position_at_end(body)
+                self.fallthrough = bodies[index + 1] if index + 1 < len(bodies) else None
+                self.statements(clause.body)
+                if not self.builder.block.is_terminated:
+                    self.builder.branch(done)
+            self.fallthrough = previous
+            self.breaks.pop()
+            self.builder.position_at_end(done)
+            if statement.terminates:
+                self.builder.unreachable()
             return
         if kind == "if":
             if statement.init is not None:
@@ -220,6 +258,56 @@ class Lowerer:
             if statement.terminates:
                 self.builder.unreachable()
             return
+        if kind == "range":
+            ranged = statement.exprs[0]
+            dtype = underlying(ranged.type)
+            uses_element = len(statement.targets) == 2 and not (
+                statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
+            if statement.evaluate_range:
+                value = self.expression(ranged)
+                if uses_element:
+                    # An array range snapshots the entire value once, not a
+                    # pointer to the original variable or caller's storage.
+                    self.builder.store(value, self.temps[id(ranged)])
+            index_slot = self.temps[id(statement.range_index)]
+            index_type = ir.IntType(64)
+            self.builder.store(ir.Constant(index_type, 0), index_slot)
+            check = self.function.append_basic_block("range_check")
+            body = self.function.append_basic_block("range_body")
+            post = self.function.append_basic_block("range_post")
+            done = self.function.append_basic_block("range_done")
+            self.builder.branch(check)
+            self.builder.position_at_end(check)
+            index = self.builder.load(index_slot)
+            self.builder.cbranch(self.builder.icmp_unsigned("<", index, ir.Constant(index_type, dtype.count)), body, done)
+            self.builder.position_at_end(body)
+            if statement.init is not None:
+                values = [index]
+                if len(statement.targets) == 2:
+                    if uses_element:
+                        # The hidden induction value was checked above and is
+                        # never exposed for user mutation. No panic shortcut.
+                        address = self.builder.gep(self.temps[id(ranged)], [ir.Constant(ir.IntType(32), 0), index])
+                        values.append(self.builder.load(address))
+                    else:
+                        values.append(self.zero(dtype.element))
+                for expr, value in zip(statement.init.exprs, values):
+                    self.saved_values[id(expr)] = value
+                self.statement(statement.init)
+                for expr in statement.init.exprs:
+                    del self.saved_values[id(expr)]
+            self.loops.append((post, done))
+            self.breaks.append(done)
+            self.statements(statement.body)
+            self.breaks.pop()
+            self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(post)
+            self.builder.position_at_end(post)
+            self.builder.store(self.builder.add(index, ir.Constant(index_type, 1)), index_slot)
+            self.builder.branch(check)
+            self.builder.position_at_end(done)
+            return
         if kind == "for":
             if statement.init is not None:
                 self.statement(statement.init)
@@ -235,7 +323,9 @@ class Lowerer:
                 self.builder.branch(body)
             self.builder.position_at_end(body)
             self.loops.append((post, done))
+            self.breaks.append(done)
             self.statements(statement.body)
+            self.breaks.pop()
             self.loops.pop()
             if not self.builder.block.is_terminated:
                 self.builder.branch(post)
@@ -298,6 +388,9 @@ class Lowerer:
             return self.string_compare(expr)
         if expr.kind == "string_len":
             return self.builder.extract_value(self.expression(expr.args[0]), 1)
+        if expr.kind == "array_len":
+            self.expression(expr.args[0])
+            return ir.Constant(ir_type(expr.type), underlying(expr.args[0].type).count)
         if expr.kind == "index" and is_string(expr.args[0].type):
             base, index = expr.args
             value = self.expression(base)

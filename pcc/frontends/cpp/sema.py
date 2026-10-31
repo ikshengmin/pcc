@@ -219,7 +219,7 @@ class Scope:
     def check_member_access(self, symbol, coord):
         """Check the selected declaration, not a nominal type's alias history.
 
-        Bases, friends and member functions are not admitted yet. A lexically
+        Bases and friends are not admitted yet. A lexically
         enclosing class grants access while its own declarations are parsed;
         an unrelated scope may name only public declarations.
         """
@@ -227,6 +227,12 @@ class Scope:
             return
         owner = getattr(symbol, "class_owner", None)
         if owner is None:
+            return
+        deferred = getattr(self, "deferred_member_access", None)
+        if deferred is not None:
+            # The declaration parser resolves the owner after its return type.
+            # Retain symbols, not spellings: later lookup cannot change access.
+            deferred.append((symbol, coord))
             return
         context = self
         while context is not None:

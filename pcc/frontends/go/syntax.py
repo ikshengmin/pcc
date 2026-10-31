@@ -205,6 +205,10 @@ class Stmt:
     terminates: bool = False
     targets: list = field(default_factory=list)
     iota: int | None = None
+    cases: list = field(default_factory=list)
+    range_declaration: bool = False
+    range_index: object = None
+    evaluate_range: bool = True
 
 
 @dataclass
@@ -514,6 +518,43 @@ class GoParser:
             return Stmt("return", token, exprs=exprs)
         if self.accept("break") or self.accept("continue"):
             return Stmt(token.kind, token)
+        if self.accept("fallthrough"):
+            return Stmt("fallthrough", token)
+        if self.accept("switch"):
+            previous_literals, self.named_literals = self.named_literals, False
+            init, selector = None, None
+            if not self.at("{"):
+                first = None if self.at(";") else self.simple()
+                if self.accept(";"):
+                    init = first
+                    selector = None if self.at("{") else self.expression()
+                elif first is not None and first.kind == "expression":
+                    selector = first.exprs[0]
+                else:
+                    self.fail(token, "switch requires a single expression or initialization clause")
+            self.named_literals = previous_literals
+            self.take("{")
+            cases = []
+            while not self.accept("}"):
+                label = self.current
+                if self.accept("case"):
+                    expressions = self.expression_list()
+                elif self.accept("default"):
+                    expressions = []
+                else:
+                    self.fail(label, "expected case or default in expression switch")
+                self.take(":")
+                body = []
+                while not self.at("case") and not self.at("default") and not self.at("}"):
+                    if self.accept(";"):
+                        continue
+                    if self.at("const") or self.at("var"):
+                        body.extend(self.declarations())
+                    else:
+                        body.append(self.statement())
+                    self.end_statement()
+                cases.append(Stmt(label.kind, label, exprs=expressions, body=body))
+            return Stmt("switch", token, exprs=[] if selector is None else [selector], init=init, cases=cases)
         if self.accept("if"):
             previous_literals, self.named_literals = self.named_literals, False
             first = self.simple()
@@ -532,9 +573,15 @@ class GoParser:
         if self.accept("for"):
             previous_literals, self.named_literals = self.named_literals, False
             init, condition, post = None, None, None
-            if not self.at("{"):
-                first = None if self.at(";") else self.simple()
-                if self.accept(";"):
+            if self.accept("range"):
+                ranged = Stmt("range", token, exprs=[self.expression()])
+            else:
+                ranged = None
+            if ranged is None and not self.at("{"):
+                first = None if self.at(";") else self.simple(allow_range=True)
+                if first is not None and first.kind == "range":
+                    ranged = first
+                elif self.accept(";"):
                     init = first
                     condition = None if self.at(";") else self.expression()
                     self.take(";")
@@ -544,8 +591,11 @@ class GoParser:
                 elif first is not None and first.kind == "expression":
                     condition = first.exprs[0]
                 else:
-                    self.fail(token, "unsupported for clause (range is not implemented)")
+                    self.fail(token, "unsupported for clause")
             self.named_literals = previous_literals
+            if ranged is not None:
+                ranged.body = self.block()
+                return ranged
             return Stmt("for", token, exprs=[] if condition is None else [condition],
                         body=self.block(), init=init, post=post)
         if token.kind == "type":
@@ -554,7 +604,7 @@ class GoParser:
             self.fail(token, f"unsupported statement {token.text!r}")
         return self.simple()
 
-    def simple(self):
+    def simple(self, *, allow_range=False):
         first = self.expression()
         left = [first]
         while self.accept(","):
@@ -566,6 +616,9 @@ class GoParser:
                 self.fail(token, "short declaration requires identifiers")
             if token.kind == ":=" and any(expr.parenthesized for expr in left):
                 self.fail(token, "short declaration requires unparenthesized identifiers")
+            if allow_range and token.kind in ("=", ":=") and self.accept("range"):
+                return Stmt("range", token, exprs=[self.expression()], names=[expr.token for expr in left],
+                            targets=left, range_declaration=token.kind == ":=")
             return Stmt(token.kind, token, names=[expr.token for expr in left], exprs=self.expression_list(), targets=left)
         if self.accept("++") or self.accept("--"):
             if len(left) != 1:

@@ -190,7 +190,7 @@ CLASS_UNIMPLEMENTED_CASES = (
     "union S{int value;};",
     "struct S{S();};",
     "struct S{~S();};",
-    "struct S{int method();};",
+    # Original declaration is retained verbatim as a positive member-function obligation.
     "struct Base{};struct S:Base{};",
     "struct S{virtual int method();};",
     "struct S{static int value;};",

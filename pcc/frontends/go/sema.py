@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import re
 import unicodedata
 
-from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic, StructSyntax, TypeName
+from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic, Stmt, StructSyntax, TypeName
 from pcc.frontends.go.records import DefinedType, Field, StructType, underlying, is_named, same_underlying
 from pcc.frontends.go.types import (
     ArrayType, Results, TYPE_NAMES, TYPES, result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
@@ -71,6 +71,20 @@ def default_type(dtype):
     return {"untyped int": "int", "untyped bool": "bool", "untyped string": "string"}.get(dtype, dtype)
 
 
+def has_evaluated_call(expr):
+    """Typed constant builtins/conversions do not count as runtime calls.
+
+    Receive expressions are not admitted by this frontend. Do not skip calls
+    hidden in a method receiver, array initializer, conversion or index.
+    """
+    if expr.constant is not None:
+        return False
+    if expr.kind == "call" and expr.symbol is not None:
+        return True
+    return (any(has_evaluated_call(arg) for arg in expr.args) or
+            (expr.receiver is not None and has_evaluated_call(expr.receiver)))
+
+
 def check_representable(expr):
     if expr.constant is None:
         return
@@ -118,6 +132,8 @@ class Analyzer:
         self.scopes = []
         self.function = None
         self.loop_depth = 0
+        self.break_depth = 0
+        self.allowed_fallthrough = None
         self.iota = None
         self.type_depth = 0
 
@@ -361,6 +377,8 @@ class Analyzer:
         self.function = function
         self.scopes = [{}]
         self.loop_depth = 0
+        self.break_depth = 0
+        self.allowed_fallthrough = None
         for token, dtype in function.params:
             self.check_name(token)
             symbol = Symbol(token, dtype, parameter=True)
@@ -521,12 +539,89 @@ class Analyzer:
             statement.terminates = True
             return
         if kind in ("break", "continue"):
-            if not self.loop_depth:
+            if not (self.break_depth if kind == "break" else self.loop_depth):
                 raise GoDiagnostic(statement.token, kind + " outside loop")
+            return
+        if kind == "fallthrough":
+            if statement is not self.allowed_fallthrough:
+                raise GoDiagnostic(statement.token, "fallthrough must be the final non-empty statement of a non-final switch clause")
+            statement.terminates = True
+            return
+        if kind == "switch":
+            self.scopes.append({})
+            if statement.init is not None:
+                self.statement(statement.init)
+            selector = statement.exprs[0] if statement.exprs else Expr("name", statement.token, "true")
+            self.expression(selector)
+            coerce(selector, default_type(selector.type))
+            if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)):
+                raise GoDiagnostic(selector.token, "switch currently requires integer, boolean or string comparison support")
+            statement.exprs = [selector]
+            defaults, constants = 0, set()
+            self.break_depth += 1
+            for index, clause in enumerate(statement.cases):
+                defaults += clause.kind == "default"
+                if defaults > 1:
+                    raise GoDiagnostic(clause.token, "multiple default clauses in switch")
+                comparisons = []
+                for expr in clause.exprs:
+                    self.expression(expr)
+                    if expr.type in ("untyped int", "untyped bool", "untyped string"):
+                        coerce(expr, selector.type)
+                    comparison = Expr("binary", expr.token, "==", [selector, expr])
+                    self.expression(comparison)
+                    if expr.constant is not None:
+                        key = (expr.type, expr.constant)
+                        if key in constants:
+                            raise GoDiagnostic(expr.token, "duplicate constant switch case")
+                        constants.add(key)
+                    comparisons.append(comparison)
+                clause.exprs = comparisons
+                previous = self.allowed_fallthrough
+                self.allowed_fallthrough = (clause.body[-1] if clause.body and index + 1 < len(statement.cases)
+                                            and clause.body[-1].kind == "fallthrough" else None)
+                self.statements(clause.body)
+                self.allowed_fallthrough = previous
+            self.break_depth -= 1
+            statement.terminates = bool(defaults) and all(
+                self.terminates(clause.body) and not self.has_break(clause.body) for clause in statement.cases)
+            self.scopes.pop()
             return
         if kind == "block":
             self.statements(statement.body)
             statement.terminates = self.terminates(statement.body)
+            return
+        if kind == "range":
+            ranged = statement.exprs[0]
+            # Resolve the range expression before declaring the iteration
+            # variables: `for a := range a` reads the enclosing a.
+            self.expression(ranged)
+            dtype = underlying(ranged.type)
+            if not isinstance(dtype, ArrayType):
+                raise GoDiagnostic(ranged.token, "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
+            if len(statement.targets) > 2:
+                raise GoDiagnostic(statement.token, "array range permits at most two iteration variables")
+            uses_element = len(statement.targets) == 2 and not (
+                statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
+            statement.evaluate_range = uses_element or has_evaluated_call(ranged)
+            if uses_element:
+                self.function.temporaries.append(ranged)
+            statement.range_index = Expr("range_index", statement.token, type="int")
+            self.function.temporaries.append(statement.range_index)
+            values = [Expr("range_value", statement.token, type=typ) for typ in ("int", dtype.element)][:len(statement.targets)]
+            self.scopes.append({})
+            if statement.targets:
+                statement.init = Stmt(":=" if statement.range_declaration else "=", statement.token,
+                                      exprs=values, names=statement.names, targets=statement.targets)
+                self.statement(statement.init)
+            self.loop_depth += 1
+            self.break_depth += 1
+            self.statements(statement.body)
+            self.break_depth -= 1
+            self.loop_depth -= 1
+            self.scopes.pop()
+            # Even a fixed nonempty array range is not a terminating statement
+            # under Go's syntactic missing-return rule.
             return
         if kind in ("if", "for"):
             self.scopes.append({})
@@ -536,11 +631,13 @@ class Analyzer:
                 self.condition(statement.exprs[0])
             if kind == "for":
                 self.loop_depth += 1
+                self.break_depth += 1
             self.statements(statement.body)
             if statement.post is not None:
                 self.statement(statement.post)
             if kind == "for":
                 self.loop_depth -= 1
+                self.break_depth -= 1
                 statement.terminates = not statement.exprs and not self.has_break(statement.body)
             elif statement.otherwise is not None:
                 self.statements(statement.otherwise)
@@ -578,7 +675,7 @@ class Analyzer:
         for statement in statements:
             if statement.kind == "break":
                 return True
-            if statement.kind != "for" and (
+            if statement.kind not in ("for", "range", "switch") and (
                 self.has_break(statement.body) or self.has_break(statement.otherwise or [])
             ):
                 return True
@@ -784,16 +881,21 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "cannot access unexported method " + name)
                 self.call(expr, method, receiver=None if method_expression else base)
                 return
-            if name == "len":
+            if name in ("len", "cap"):
                 if len(expr.args) != 1:
-                    raise GoDiagnostic(expr.token, "len requires one argument")
+                    raise GoDiagnostic(expr.token, name + " requires one argument")
                 arg = expr.args[0]
                 self.expression(arg)
-                if not is_string(arg.type):
-                    raise GoDiagnostic(expr.token, "len currently supports strings; array/slice/map length is not implemented")
-                expr.kind = "string_len"
-                expr.type = "int"  # len is typed int even when its value is constant.
-                expr.constant = len(arg.constant) if arg.constant is not None else None
+                dtype = underlying(arg.type)
+                expr.type = "int"  # Both builtins are typed int, including constants.
+                if isinstance(dtype, ArrayType):
+                    expr.kind = "array_len"
+                    expr.constant = None if has_evaluated_call(arg) else dtype.count
+                elif name == "len" and is_string(arg.type):
+                    expr.kind = "string_len"
+                    expr.constant = len(arg.constant) if arg.constant is not None else None
+                else:
+                    raise GoDiagnostic(expr.token, name + " requires an admitted array" + (" or string" if name == "len" else ""))
                 return
             # Values in a lexical scope shadow package type/function names.
             if any(name in scope for scope in self.scopes) or name in self.globals:

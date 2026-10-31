@@ -147,6 +147,8 @@ class CppParser:
         self.scope = Scope()
         self.return_type = None
         self.template_function = None
+        self.member_function = None
+        self.this_symbol = None
         self.parsing_template = False
         self.instantiating_template = False
         self.instance_registry = InstanceRegistry()
@@ -203,7 +205,13 @@ class CppParser:
             elif value == "namespace" or value == "inline":
                 declarations.extend(self._namespace())
             elif value in ("class", "struct", "union"):
-                declarations.append(parse_class(self))
+                declaration = parse_class(self)
+                declarations.append(declaration)
+                # A class has no storage field for a method. Publish real C
+                # prototypes after its record definition, with explicit this.
+                dtype = self.last_class_definition
+                if dtype is not None:
+                    declarations.extend(dtype.method_declarations)
             elif value == "enum":
                 parse_enum(self)
             elif value in ("using", "typedef"):
@@ -465,9 +473,9 @@ class CppParser:
             dtype = self._pointer(dtype, token, parse_cv_qualifiers(self.cursor))
         return dtype
 
-    def _apply_declarator(self, declaration, dtype, function=False):
+    def _apply_declarator(self, declaration, dtype, function=False, member=False):
         name = declaration.name
-        if name.global_scope or len(name.parts) != 1:
+        if not member and (name.global_scope or len(name.parts) != 1):
             raise CppDiagnostic("cpp.unsupported.qualified-names",
                                 "out-of-namespace member declarations are not implemented", name.coord)
         chunks = list(declaration.chunks)
@@ -476,7 +484,10 @@ class CppParser:
                 feature = "references" if chunks and "reference" in chunks[0].kind else "function-pointers"
                 raise CppDiagnostic("cpp.unsupported." + feature, "only free function declarations are implemented", declaration.coord)
             clause = chunks.pop(0)
-            if clause.qualifiers or clause.ref_qualifier:
+            if member:
+                if "volatile" in clause.qualifiers or clause.ref_qualifier:
+                    raise CppDiagnostic("cpp.unsupported.member-qualifiers", "volatile/ref-qualified member functions require additional object rules", clause.coord)
+            elif clause.qualifiers or clause.ref_qualifier:
                 raise CppDiagnostic("cpp.unsupported.function-declarators", "function cv/ref qualifiers are not implemented", clause.coord)
         for chunk in reversed(chunks):
             if chunk.kind == "array":
@@ -636,7 +647,8 @@ class CppParser:
             self.scope = parent
             self.parsing_template = False
 
-    def _function(self, template_parameters=(), declaration_scope=None, implicit_extern=False):
+    def _function(self, template_parameters=(), declaration_scope=None, implicit_extern=False,
+                  member_definition=None):
         storage = None
         if self._peek().value in ("extern", "static"):
             storage = self.cursor.take()
@@ -647,7 +659,19 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.language-linkage",
                                     "language linkage specifications are not implemented", storage.coord)
         storage_specifiers = [] if storage is None else [storage]
-        result_type = self._type(storage_specifiers=storage_specifiers)
+        # [class.access]/6: a member's access context includes its return
+        # type, before the qualified declarator identifies the class. Resolve
+        # names normally now, but check those exact declaration identities only
+        # after the declarator has established its owning class. The temporary
+        # lookup scope owns this obligation list; no parser-global relaxation.
+        return_parent = self.scope
+        return_lookup = Scope(return_parent)
+        return_lookup.deferred_member_access = []
+        self.scope = return_lookup
+        try:
+            result_type = self._type(storage_specifiers=storage_specifiers)
+        finally:
+            self.scope = return_parent
         storage = storage_specifiers[0] if storage_specifiers else None
         if implicit_extern and storage is not None:
             raise CppDiagnostic("cpp.linkage-storage",
@@ -657,6 +681,30 @@ class CppParser:
         parent = self.scope
         parameter_scope = Scope(parent)
         self.scope = parameter_scope
+        member_owner = member_definition
+
+        def declarator_name(name):
+            nonlocal member_owner
+            if member_definition is not None:
+                if name.global_scope or len(name.parts) != 1:
+                    raise CppDiagnostic("cpp.invalid-member-declaration", "in-class member names must be unqualified", name.coord)
+                return
+            if len(name.parts) < 2:
+                return
+            from pcc.frontends.cpp.declarators import QualifiedName
+            qualifier = QualifiedName(name.tokens[:-1], name.global_scope, name.coord)
+            target = parent.resolve_name(qualifier)
+            if target is None or target.kind != "type" or not is_class_type(target.dtype):
+                return
+            owner = unqualified(target.dtype)
+            require_complete(owner, name.coord)
+            enclosing = owner.declaration_scope
+            while enclosing is not None and enclosing is not parent:
+                enclosing = enclosing.parent
+            if enclosing is None:
+                raise CppDiagnostic("cpp.member-definition-namespace", "member definition is not in an enclosing namespace", name.coord)
+            member_owner = owner.definition
+            parameter_scope.parent = member_owner.scope
 
         def parameter_clause():
             if self._peek().value != ")":
@@ -701,11 +749,16 @@ class CppParser:
             return tuple(params)
 
         try:
-            declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause, self._array_bound).parse()
+            declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause, self._array_bound,
+                                          on_name=declarator_name).parse()
             is_function = any(chunk.kind == "function" for chunk in declarator.chunks)
-            name, result_type = self._apply_declarator(declarator, result_type, function=is_function)
+            name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
+                                                       member=member_owner is not None and is_function)
         finally:
             self.scope = parent
+        access_scope = member_owner.scope if member_owner is not None else parent
+        for accessed, access_coord in return_lookup.deferred_member_access:
+            access_scope.check_member_access(accessed, access_coord)
         if not is_function:
             if template_parameters:
                 raise CppDiagnostic("cpp.unsupported.variable-templates",
@@ -731,22 +784,31 @@ class CppParser:
             if is_enum_type(pointee) and pointee.internal_linkage:
                 raise CppDiagnostic("cpp.unsupported.enum-linkage",
                                     "function signatures involving internal-linkage enum types are not implemented", name.coord)
-        if (name.value == "main" and self.language_linkage is not None
+        if (member_owner is None and name.value == "main" and self.language_linkage is not None
                 and (not parent.namespace_path() or self.language_linkage == "C")):
             raise CppDiagnostic("cpp.main-language-linkage",
                                 "main cannot have a language linkage specification", name.coord)
         definition = self._peek().value == "{"
-        if name.value == "main" and not parent.namespace_path() and params:
+        if member_owner is not None:
+            if template_parameters or self.parsing_template:
+                raise CppDiagnostic("cpp.unsupported.member-templates", "member templates require separate deduction/ODR semantics", name.coord)
+            if storage is not None:
+                raise CppDiagnostic("cpp.unsupported.member-storage", "static member functions require separate object rules", name.coord)
+            if member_definition is not None and definition:
+                raise CppDiagnostic("cpp.unsupported.inline-member-functions", "in-class bodies need C++ inline/ODR emission", name.coord)
+            if member_definition is None and not definition:
+                raise CppDiagnostic("cpp.member-definition-required", "an out-of-class member declaration must be a definition", name.coord)
+        if member_owner is None and name.value == "main" and not parent.namespace_path() and params:
             self._unsupported(name, "main parameters are not implemented")
-        if name.value == "main" and not parent.namespace_path() and result_type != "int":
+        if member_owner is None and name.value == "main" and not parent.namespace_path() and result_type != "int":
             raise CppDiagnostic("cpp.main-return-type", "main must return int", name.coord)
-        if name.value == "main" and not parent.namespace_path() and template_parameters:
+        if member_owner is None and name.value == "main" and not parent.namespace_path() and template_parameters:
             raise CppDiagnostic("cpp.main-template", "main cannot be a template", name.coord)
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.template_parameters = template_parameters
         new_symbol.requested_language_linkage = self.language_linkage
-        if self.language_linkage == "C":
+        if member_owner is None and self.language_linkage == "C":
             # Pointers retain their complete semantic pointee type here. The
             # declarator/type owners have already rejected unsupported function
             # pointers, references and object types. C linkage changes the
@@ -761,7 +823,13 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.c-linkage-internal",
                                     "C function type with internal name linkage is not implemented", name.coord)
         registry = self.scope if declaration_scope is None else declaration_scope
-        symbol = registry.declare_function(new_symbol, definition)
+        if member_owner is not None:
+            from pcc.frontends.cpp.members import declare_member_function
+            const = "const" in declarator.chunks[0].qualifiers
+            symbol = declare_member_function(member_owner, new_symbol, const,
+                                             outside=member_definition is None)
+        else:
+            symbol = registry.declare_function(new_symbol, definition)
         if template_parameters:
             # Sema may inspect viable signatures without registering work.
             # Only the selected call requests an entry in this shared owner.
@@ -794,6 +862,13 @@ class CppParser:
                                  ("__pcc_cpp_unnamed_" + str(index) if definition else None),
                                  dtype, p.coord if p else name.coord)
                        for index, (p, dtype) in enumerate(params)]
+        this_symbol = None
+        if member_owner is not None:
+            from pcc.frontends.cpp.members import object_pointer_type
+            this_symbol = Symbol("this", "value", name.coord,
+                                 c_name=self._local_projection_name("this"),
+                                 dtype=object_pointer_type(symbol))
+            param_decls.insert(0, self._decl(this_symbol.c_name, this_symbol.dtype, name.coord))
         declaration = self._decl(symbol.c_name, result_type, name.coord)
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(param_decls, name.coord),
                                           declaration.type, name.coord)
@@ -804,13 +879,16 @@ class CppParser:
             return declaration
         self.scope = parameter_scope
         previous_return_type = self.return_type
+        previous_member, previous_this = self.member_function, self.this_symbol
+        self.member_function, self.this_symbol = (symbol if member_owner is not None else None), this_symbol
         self.return_type = result_type
         try:
             body = self._block(new_scope=False)
         finally:
             self.scope = parent
             self.return_type = previous_return_type
-        if name.value == "main" and not parent.namespace_path():
+            self.member_function, self.this_symbol = previous_member, previous_this
+        if member_owner is None and name.value == "main" and not parent.namespace_path():
             # Reaching the end of main is a C++ return of zero, not C's general
             # fallthrough behavior. Appending after a return is harmless AST.
             body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", name.coord),
@@ -1614,8 +1692,31 @@ class CppParser:
                                           c_ast.ExprList(converted, coord), coord), dtype,
                           constant_fact=not_constant(dtype, "call to a non-constexpr function", coord))
 
+    def _call_arguments(self):
+        arguments = []
+        if not self._accept(")"):
+            while True:
+                expression = self._expression()
+                self._require_value(expression)
+                arguments.append(expression)
+                if self._accept(")"):
+                    break
+                self._expect(",")
+        return arguments
+
+    def _implicit_object(self, owner, coord):
+        if self.member_function is None or self.member_function.class_owner is not owner:
+            raise CppDiagnostic("cpp.nonstatic-member-without-object", "a non-static member requires an object", coord)
+        symbol = self.this_symbol
+        return Expression(c_ast.ID(symbol.c_name, coord), symbol.dtype,
+                          constant_fact=not_constant(symbol.dtype, "implicit object parameter", coord))
+
     def _primary(self):
         token = self.cursor.take()
+        if token.value == "this":
+            if self.member_function is None:
+                raise CppDiagnostic("cpp.this-outside-member", "this requires a non-static member function", token.coord)
+            return self._implicit_object(self.member_function.class_owner, token.coord)
         if token.value == "static_cast":
             self._expect("<")
             dtype = self._abstract_pointer_type(self._type())
@@ -1684,7 +1785,7 @@ class CppParser:
         if symbol is not None and symbol.kind in ("namespace", "namespace-alias"):
             raise CppDiagnostic("cpp.not-a-value", "namespace name does not denote a value", token.coord)
         if (symbol is not None and symbol.kind == "function" and symbol.name == "main"
-                and any(candidate.owner is not None and not candidate.owner.namespace_path()
+                and any(candidate.owner is not None and candidate.owner.kind == "namespace" and not candidate.owner.namespace_path()
                         for candidate in symbol.overloads)):
             raise CppDiagnostic("cpp.main-use", "C++ does not permit use of main", token.coord)
         if self._accept("("):
@@ -1699,6 +1800,9 @@ class CppParser:
                     if self._accept(")"):
                         break
                     self._expect(",")
+            if getattr(symbol, "class_owner", None) is not None:
+                from pcc.frontends.cpp.members import call_member
+                return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord)
             if not name.global_scope and len(name.parts) == 1:
                 symbol = argument_dependent_lookup(token.value, [arg.dtype for arg in arguments], symbol, token.coord)
             if symbol is None:
@@ -1712,8 +1816,7 @@ class CppParser:
         if symbol.kind == "enumerator":
             return self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
         if symbol.kind == "member":
-            raise CppDiagnostic("cpp.nonstatic-member-without-object",
-                                "a non-static data member value requires an object", token.coord)
+            return member_access(self, self._implicit_object(symbol.class_owner, token.coord), "->", token)
         if self.template_function is not None and getattr(symbol, "namespace_object", False):
             raise CppDiagnostic("cpp.unsupported.namespace-object-templates",
                                 "template namespace object bindings are not implemented", token.coord)

@@ -150,12 +150,13 @@ class DeclaratorParser:
     """
 
     def __init__(self, cursor, parse_identifier, parse_parameters=None,
-                 parse_array_bound=None, parse_functions=True):
+                 parse_array_bound=None, parse_functions=True, on_name=None):
         self.cursor = cursor
         self.parse_identifier = parse_identifier
         self.parse_parameters = parse_parameters
         self.parse_array_bound = parse_array_bound
         self.parse_functions = parse_functions
+        self.on_name = on_name
 
     def _expect(self, value):
         token = self.cursor.peek()
@@ -195,6 +196,8 @@ class DeclaratorParser:
             name, chunks = inner.name, list(inner.chunks)
         else:
             name = parse_qualified_name(self.cursor, self.parse_identifier)
+            if self.on_name is not None:
+                self.on_name(name)
             chunks = []
         if plain_only and (name.global_scope or len(name.parts) != 1):
             _unsupported("qualified-names", name.tokens[0])

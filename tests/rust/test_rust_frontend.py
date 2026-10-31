@@ -118,7 +118,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("trait T {}", "expected 'fn'"),
     ("struct S {}", "zero-field structs"),
     ("fn f(){ [1,2]; }", "unsupported expression"),
-    ("fn f(){ let x=Box::new(1); }", "unknown enum constructor"),
+    ("fn f(){ let x=Box::new(1); }", "unsupported Rust type 'Box'"),
     ("fn f(){ 1<<2; }", "expected ';'"),
     ("extern \"C\" fn f(x:bool){}", "extern C currently supports"),
     ("#[no_mangle] fn f(){}", "no_mangle is supported only on extern C"),

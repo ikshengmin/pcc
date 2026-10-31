@@ -41,17 +41,22 @@ class GenericFunctions:
                 raise parameter.error('duplicate generic parameter')
             if parameter.text in PRIMITIVES:
                 raise parameter.error('generic parameters shadowing primitive names are not implemented')
-            scope[parameter.text] = TypeParameter('function ' + function.token.text,
+            scope[parameter.text] = TypeParameter('function ' + function.declaration_name,
                                                   index, parameter.text)
-        self.parameters[function.token.text] = tuple(scope.values())
+        self.parameters[function.declaration_name] = tuple(scope.values())
         if function.type_parameters:
-            self.raw_bodies[function.token.text] = deepcopy(function.body)
+            self.raw_bodies[function.declaration_name] = deepcopy(function.body)
+        if function.implementation is not None:
+            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, scope)
         return scope
 
     def scope(self, function, arguments=None):
-        parameters = self.parameters[function.token.text]
-        return {parameter.name: value for parameter, value in
-                zip(parameters, parameters if arguments is None else arguments)}
+        parameters = self.parameters[function.declaration_name]
+        scope = {parameter.name: value for parameter, value in
+                 zip(parameters, parameters if arguments is None else arguments)}
+        if function.implementation is not None:
+            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, scope)
+        return scope
 
     def select(self, function, arguments, token):
         if arguments is None:
@@ -72,7 +77,7 @@ class GenericFunctions:
                     raise token.error('generic function reference arguments require lifetime/escape analysis, which is not implemented')
                 pending.extend(children(ty))
             self.checker.valid_type(argument, token, allow_reference=False)
-        bindings = dict(zip(self.parameters[function.token.text], arguments))
+        bindings = dict(zip(self.parameters[function.declaration_name], arguments))
         params = [(name, substitute(ty, bindings), mutable) for name, ty, mutable in function.params]
         result = substitute(function.result, bindings)
         if self.checker.abstract_function:
@@ -87,10 +92,10 @@ class GenericFunctions:
         if len(self.instances) >= MAX_FUNCTION_INSTANCES:
             raise token.error('generic function instances exceed implementation limit (128)')
         import json
-        encoded = json.dumps([function.token.text, [type_code(ty) for ty in arguments]],
+        encoded = json.dumps([function.declaration_name, [type_code(ty) for ty in arguments]],
                              ensure_ascii=True, separators=(',', ':')).encode('ascii').hex()
         instance = replace(function, params=params, result=result,
-                           body=deepcopy(self.raw_bodies[function.token.text]),
+                           body=deepcopy(self.raw_bodies[function.declaration_name]),
                            type_parameters=(), instance_arguments=arguments,
                            instance_name='__pcc_rust_instance_' + encoded)
         self.checker.valid_type(result, token, allow_reference=False)
