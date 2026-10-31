@@ -78,18 +78,23 @@ runtime/backend publication are serialized.
 - C++: close the original TinyXML2 owned-header/class frontier; continue
   generic lookup, construction/destruction, lifetime and template semantics.
   External G++ running TinyXML2 is not a PCC project pass.
-- Rust: land the locally validated fix for published whole-enum rematch after a partial move, then
-  extend shared instantiation into generic functions and close original
-  core/alloc dependencies without claiming a borrow checker.
+- Rust: the partial-move correction and bounded generic functions are now
+  published. Prioritize the remaining basic source forms: impl methods,
+  references, arrays, for loops and broader generics, then core/alloc dependencies.
+  Do not claim a complete borrow checker from these bounded checks.
 - Java: progress source class/object/member semantics, distinguishing
   model/typecheck evidence from actual allocated-object native execution.
-- Go: extend published value records with methods and source control flow; the unchanged original
-  math/bits closure still needs error/panic/linkname support. Its table component
+- Go: value-receiver methods are now published; continue remaining source
+  control flow and method/type forms. The unchanged original math/bits closure
+  still needs error/panic/linkname support. Its table component
   alone is not the complete package or upstream tests.
-- Common raw storage: the first experimental batch is published; production
-  archive integration, managed objects, five-GC, EH and concurrency are not
-  established. Further shared runtime/backend batches, including CFI/C-API,
-  wait for the user's Mac QPS assessment.
+- Common raw storage: the first experimental batch is published, but production
+  integration requires the user's Mac arm64 validation under all five GC modes
+  and multithreading. That validation is not established here. Next local work
+  is managed-allocation/GC design for Go slices/strings and Java objects/arrays;
+  these managed capabilities are not implemented. Production archive integration,
+  EH and concurrency remain open. Further shared runtime/backend batches,
+  including CFI/C-API, still wait for the user's Mac QPS assessment.
 
 ## NumPy chain
 
