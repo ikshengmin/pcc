@@ -2655,7 +2655,13 @@ class GeneratorLoweringMixin:
 
         frame_slots: dict[str, tuple[int, ir.Value]] = {}
         for idx, local_name in enumerate(frame_names):
-            slot = self._alloca_in_entry(_CSTR, name=f"{local_name}.addr")
+            # Root registration is hoisted ahead of the first application
+            # safepoint, while frame restores below may execute afterwards.
+            # Initialize every managed cell at allocation, before publication;
+            # the later parameter/None/restored-owner stores retain their order.
+            slot = self._alloca_in_entry(
+                _CSTR, name=f"{local_name}.addr", init_null=True,
+            )
             if first_entry_init and local_name not in argument_names:
                 # The private factory filled these slots with immortal None.
                 # Keep the same owned locals and roots without a retaining
