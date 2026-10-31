@@ -1,0 +1,2 @@
+# Preserve pinned upstream bytes (including CRLF, BOMs and binary XML inputs).
+** -text

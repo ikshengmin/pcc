@@ -18,6 +18,8 @@ commands use the normal six workers. Every invocation includes `-x`.
 | `test_cpp_host_owned_matches_explicit_cpp17_oracle` | The same input TUs agree with an explicitly invoked external C++17 compiler | External compilers being allowed in the target pipeline |
 | `test_cpp_tinyxml2_explicit_cpp17_reference_oracle` | The pinned project and PCC-authored driver build/run with the external reference | TinyXML2 working with PCC |
 | `test_cpp_tinyxml2_native_linux_windows_project_exact_outcome` | Supplied Linux/Windows native compiler actually compiles the directory through the public separate-TU route, produces an owned executable and executes the project | A new-source bootstrap fixed point or all upstream TinyXML2 tests |
+| `test_cpp_tinyxml2_upstream_tests_explicit_cpp17_reference_oracle` | Unmodified upstream `xmltest.cpp` and library build with the external reference, then the whole runner succeeds twice with its resources | Any PCC compiler capability or upstream CMake/install qualification |
+| `test_cpp_tinyxml2_upstream_tests_native_linux_windows_project` | Supplied native compiler builds the same upstream test runner through the owned project route and its own tests succeed twice | Other configurations/platforms, full C++17, or a bootstrap fixed point |
 
 ```bash
 uv run pytest -x -vv --tb=short -m 'not integration' tests/cpp
@@ -27,6 +29,11 @@ PCC_CPP_ORACLE=/path/to/g++ uv run pytest -x -vv --tb=short -m integration \
 PCC_PLATFORM_TEST_COMPILER=/path/to/pcc1 PCC_RUNTIME_ARCHIVE=/path/to/verified-runtime.a \
   uv run pytest -x -vv --tb=short -m integration \
   tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_native_linux_windows_project_exact_outcome
+PCC_CPP_ORACLE=/path/to/g++ uv run pytest -x -vv --tb=short -m integration \
+  tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_cpp17_reference_oracle
+PCC_PLATFORM_TEST_COMPILER=/path/to/pcc1 PCC_RUNTIME_ARCHIVE=/path/to/verified-runtime.a \
+  uv run pytest -x -vv --tb=short -m integration \
+  tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_native_linux_windows_project
 ```
 
 `PCC_PLATFORM_TEST_COMPILER` reuses the existing Linux/Windows platform C integration fixture;
@@ -41,26 +48,35 @@ tools and keeps compiler/runtime/artifact identities in a receipt. Header checks
 and sampled process observations have their stated scope; a static binary alone
 is not proof of the source ownership of every linked byte.
 
-**The native project gate is currently unsatisfied.** The experimental parser
-is not connected to the public native C++ project CLI and does not implement
-TinyXML2's language/header requirements. The gate deliberately fails when a
+**Both native project gates are currently unsatisfied.** Explicit-file host C++
+dispatch is not native whole-project support. At source revision `ee43d357`,
+`pcc/driver/project.py::_project_source_files` discovers only `.c` files;
+`pcc/frontends/cpp/driver.py::preprocess_cpp` intentionally does not substitute
+C compatibility headers for real C++ headers, and class/lifetime support is
+incomplete. TinyXML2 needs those capabilities before its own runner can execute.
+Fixture acquisition and ordinary harness tests do not resolve these blockers.
+The gates deliberately fail when a
 compiler/runtime/capability is missing; it has no skip, xfail, or success bucket
 for unsupported constructs. Selecting only host tests must be reported as a
 partial run, with the native gate explicitly unrun, not "integration green."
 
-Keep stdout/stderr as bytes, compare all three outcome fields, and execute the
-result twice. Negative tests assert diagnostic code and source location, and do
+Keep stdout/stderr as bytes and execute the result twice. Smoke programs compare
+all three outcome fields exactly; upstream tests retain all output and apply
+their explicit result predicate rather than comparing performance timing bytes.
+Negative tests assert diagnostic code and source location, and do
 not publish an executable. Ordinary deterministic builds compare IR, every
 separate-TU object, and the final image under identical options. Separate TUs
 are linked as separate objects, never concatenated into a different program.
 
 ## First upstream project
 
-`projects/tinyxml2-11.0.0/` contains only the unmodified upstream `.cpp`, `.h`, and
-license. `pcc-fixture.json` is executable test configuration: source/header
-selection, driver, C++ standard and expected stdout/stderr/status. It is not a
-per-file hash inventory. No network acquisition is performed by pytest. The
-fixture records
+`projects/tinyxml2-11.0.0/` contains the unmodified library, complete upstream
+`xmltest.cpp` and `resources/`, original CMake/Make recipes and CMake helpers,
+package-consumer test recipe, readme, and full license. `pcc-fixture.json` pins
+the source-archive URL/SHA256 and each retained upstream file's SHA256, and
+selects separate `smoke` and `upstream-tests` fixtures. The smoke driver's hash
+is separate from the upstream inventory. No network acquisition is performed
+by pytest. The fixture records
 [TinyXML2 11.0.0, commit 9148bdf719e997d1f474be6bcc7943881046dba1](https://github.com/leethomason/tinyxml2/commit/9148bdf719e997d1f474be6bcc7943881046dba1).
 The [upstream CMake recipe](https://github.com/leethomason/tinyxml2/blob/9148bdf719e997d1f474be6bcc7943881046dba1/CMakeLists.txt)
 builds one library translation unit. Its
@@ -70,15 +86,37 @@ still requires C/C++ headers, allocation, classes, namespaces, overloads,
 templates and object lifetime; "small dependency footprint" does not mean
 "already supported."
 
-The independently authored smoke driver exercises XML parsing, entity decoding,
-integer attribute lookup, malformed-input rejection, serialization/reparse, and
-stack-object destruction. It is **not** a substitute for upstream `xmltest.cpp`
-and `resources/` fixtures; that larger suite is a separate future integration
-gate. The preserved upstream license is Zlib. Byte-for-byte files retain their
-original CRLF spelling. Release/publication verification compares the vendored
-bytes with the named upstream revision; detailed identity receipts stay outside
-the repository. Pytest checks configuration, source copying and real behavior,
-not a checked-in per-file hash list.
+The independently authored smoke driver still exercises XML parsing, entity
+decoding, integer attribute lookup, malformed-input rejection,
+serialization/reparse, and stack-object destruction. It is **not** substituted
+for the upstream test executable. `upstream-tests` compiles `tinyxml2.cpp` and
+`xmltest.cpp` as distinct translation units without a PCC-authored main or
+source edits. It preserves upstream `_FILE_OFFSET_BITS=64`. This first adapter
+invokes the compiler directly; shipping the upstream CMake/Make files is not a
+claim that their build/install workflows have run successfully.
+
+The upstream executable runs with **no arguments**, from a fresh writable
+source/resource copy, matching upstream CTest's argv and working directory.
+An argument would select xmltest's single-file mode instead of its test suite.
+Each of two runs gets a new `resources/out/`; generated outputs never touch the
+vendor tree. Acceptance requires exit 0 and exactly one positive `Pass N, Fail 0`
+summary. Counts must agree between runs. Stderr is retained without imposing
+an empty-stream condition absent from the upstream CTest recipe. The timing
+line remains in the raw stdout artifact but is not a deterministic byte gate.
+The smoke fixture retains exact stdout/stderr/exit comparisons.
+
+The preserved upstream license is Zlib. `PCC-NOTICE.md` distinguishes PCC
+metadata and the smoke driver from upstream inputs, and identifies the separate
+public-domain/copy-distribution notice retained inside `resources/dream.xml`.
+CRLF, BOMs and binary regression resources are copied as bytes; local Git
+attributes disable newline conversion, including the separately pinned smoke
+driver. Vendor and materialized inputs and the manifest are rechecked before
+and after use. New generated files are permitted; pinned inputs (including
+`resources/out/readme.txt`) must remain unchanged. Reference/native compile
+receipts and each run's `execution.json`,
+`stdout`, and `stderr` remain under that run's output directory, not in this
+repository. A reference pass is reference-only; compilation alone is
+`compiled-not-executed`; unsupported native compilation is not a passed test.
 
 ## Coverage to grow, not to silently waive
 
@@ -94,7 +132,9 @@ diagnostics, emitted execution, native pcc1 execution, and a project use site:
 - lambdas, structured bindings, control flow, storage duration, TLS, ABI and
   separate-TU/ODR/linkage behavior;
 - complete C++17 standard-library/runtime behavior, not just one project's
-  header slice, and then the larger NumPy integration target.
+  header slice, tested independently through real libc++ and a dependency-ordered
+  unchanged-project ladder. NumPy remains one downstream consumer, not the
+  definition of the C++ goal.
 
 Do not turn these requirements into expected failures that make a whole-language
 completion claim green. Maintain exact receipts for executed scopes and leave

@@ -1,17 +1,92 @@
 {
+  "schema": "pcc.cpp-project-fixture.v1",
   "name": "tinyxml2-11.0.0",
   "upstream": "https://github.com/leethomason/tinyxml2",
   "revision": "9148bdf719e997d1f474be6bcc7943881046dba1",
   "tag": "11.0.0",
+  "source_archive": {
+    "url": "https://codeload.github.com/leethomason/tinyxml2/tar.gz/9148bdf719e997d1f474be6bcc7943881046dba1",
+    "sha256": "d0bcc7bf4e3e8ed7d83156e681ab9cb72bd636e5b2bb61d6f7199b32c007707f"
+  },
   "license": "Zlib",
   "license_file": "LICENSE.txt",
   "standard": "c++17",
-  "translation_units": ["tinyxml2.cpp"],
-  "headers": ["tinyxml2.h"],
-  "driver": "tests/cpp/fixtures/tinyxml2_smoke.cpp",
-  "expected": {
-    "returncode": 0,
-    "stdout": "tinyxml2:42:hello&world\n",
-    "stderr": ""
+  "sha256": {
+    "CMakeLists.txt": "d93bf5b349fc93a9108e243675d3aabc2af38c24382fad4365db108bb3600a75",
+    "LICENSE.txt": "9332252e9b9e46db8285d4a3f0bf25f139bf1dca6781b956d57f2302efca6432",
+    "Makefile": "877523e22440669b2ee524abad26776ce3d68eb471d1467d4bc0838278598101",
+    "cmake/tinyxml2-config.cmake": "3bce32cb8ba9927c5c2376d53addfebb3458821300ac93bfe1a32c131ed6d0db",
+    "cmake/tinyxml2.pc.in": "286d2f67789aa531a1cadad99b3863098a1563d19856698bed6bf42f297e3c07",
+    "readme.md": "ceb7febab1c54720681a55e0cff79f3e87e10e96c44bcd7fecc4a99337eae017",
+    "resources/dream.xml": "8713aead899fd314f9fc9667406a7cf87eea630ee76fa4222e42cee4420552de",
+    "resources/empty.xml": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "resources/out/readme.txt": "8d3109c3e576164fb038c24785dde730da29b88fbc362118913e3cf77c3ee769",
+    "resources/utf8test.xml": "7425037d6eba1b43bb17d86f83a0e0d2a51124aea358f50b254d10df57ece165",
+    "resources/utf8testverify.xml": "db21c12e41b234c32e4c95cbdce1250b4c265ad18f91f57a2e94305f5beb75ba",
+    "resources/xmltest-4636783552757760.xml": "88fe6101d8c26bfd27cbeeee9c2d34c390b7f5350ebc0a76952a8ec863c73aaf",
+    "resources/xmltest-5330.xml": "978a77d067495a3b2b1ce92cd33620165ee461ec4b3726a2354a301b4d40d36d",
+    "resources/xmltest-5662204197076992.xml": "ed965e0578181ba46e0c9bab8ad91efe69a8854c8dc3b132f07ab57ae302b143",
+    "resources/xmltest-5720541257269248.xml": "42a3d9c320d990c8e1a564c25a6eef9673deae1a0aad5d61825d877dd1b1fe76",
+    "test/CMakeLists.txt": "7b7c3317a9b3318b4ad3ddd0fbd6c3faee57a7487ca3bb0c9196429c63512f8d",
+    "tinyxml2.cpp": "95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554",
+    "tinyxml2.h": "0f3c6e5a91b6d65caca3cc7239926455f21e488cff80ac3d27c74f5262fd2602",
+    "xmltest.cpp": "a49d6825e4a3c06a8b4945bddcc4dd57a026a87305f63e75b71f36cf3037a848"
+  },
+  "fixtures": {
+    "smoke": {
+      "inputs": [
+        "tinyxml2.cpp",
+        "tinyxml2.h",
+        "LICENSE.txt"
+      ],
+      "translation_units": [
+        "tinyxml2.cpp"
+      ],
+      "driver": "tests/cpp/fixtures/tinyxml2_smoke.cpp",
+      "driver_sha256": "c4524ddb11488f2054a6f947c47d6a80f3e92d179484b319a059b838b8890ef2",
+      "expected": {
+        "returncode": 0,
+        "stdout": "tinyxml2:42:hello&world\n",
+        "stderr": ""
+      }
+    },
+    "upstream-tests": {
+      "inputs": [
+        "CMakeLists.txt",
+        "LICENSE.txt",
+        "Makefile",
+        "cmake/tinyxml2-config.cmake",
+        "cmake/tinyxml2.pc.in",
+        "readme.md",
+        "resources/dream.xml",
+        "resources/empty.xml",
+        "resources/out/readme.txt",
+        "resources/utf8test.xml",
+        "resources/utf8testverify.xml",
+        "resources/xmltest-4636783552757760.xml",
+        "resources/xmltest-5330.xml",
+        "resources/xmltest-5662204197076992.xml",
+        "resources/xmltest-5720541257269248.xml",
+        "test/CMakeLists.txt",
+        "tinyxml2.cpp",
+        "tinyxml2.h",
+        "xmltest.cpp"
+      ],
+      "translation_units": [
+        "tinyxml2.cpp",
+        "xmltest.cpp"
+      ],
+      "preprocessor_definitions": [
+        "_FILE_OFFSET_BITS=64"
+      ],
+      "expected": {
+        "returncode": 0,
+        "stdout_regex": "(?m)^Pass (?P<passed>[0-9]+), Fail (?P<failed>[0-9]+)\\r?$",
+        "stdout_groups": {
+          "passed": "[1-9][0-9]*",
+          "failed": "0"
+        }
+      }
+    }
   }
 }

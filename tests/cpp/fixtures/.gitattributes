@@ -1,0 +1,2 @@
+# This separately authored smoke driver is byte-pinned by the project manifest.
+tinyxml2_smoke.cpp -text
