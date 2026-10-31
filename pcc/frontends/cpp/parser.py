@@ -450,7 +450,7 @@ class CppParser:
         declaration = DeclaratorParser(self.cursor, self._identifier).parse(parse_suffixes=False)
         return self._apply_declarator(declaration, dtype)
 
-    def _is_declaration(self):
+    def _is_declaration(self, allow_range=False):
         if not self._is_type(self._peek()):
             return False
         with self.cursor.tentative():
@@ -465,7 +465,7 @@ class CppParser:
                 # A type followed by a failed declarator is not permission to
                 # reinterpret unsupported pointer/reference syntax as a value.
                 return pointer_prefix
-            return self._peek().value in (";", "=", "(", ",", "[", "{")
+            return self._peek().value in (";", "=", "(", ",", "[", "{") or (allow_range and self._peek().value == ":")
 
     @staticmethod
     def _scalar_type(name, dtype, coord):
@@ -705,7 +705,7 @@ class CppParser:
             return Pattern("block", start.coord, children=items)
         return c_ast.Compound(items, start.coord)
 
-    def _statement(self):
+    def _statement(self, for_init=False):
         token = self._peek()
         if (token.value == "extern" and
                 self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
@@ -737,6 +737,8 @@ class CppParser:
                     children.append(alternative)
                 return Pattern("if", token.coord, children=children)
             return c_ast.If(condition.node, consequent, alternative, token.coord)
+        if token.value == "for":
+            return self._for_statement()
         if token.value == "while":
             self.cursor.take()
             condition = self._condition()
@@ -761,7 +763,7 @@ class CppParser:
             expression = None if self._peek().value == ";" else self._expression()
             self._expect(";")
             return self._return_statement(expression, token.coord)
-        if self._is_declaration():
+        if self._is_declaration(allow_range=for_init):
             dtype = self._type()
             name, dtype = self._declarator(dtype)
             self._check_object_type(dtype, name.coord)
@@ -806,6 +808,12 @@ class CppParser:
                                     "enum direct-list initialization requires context-sensitive rules", self._peek().coord)
             if isinstance(dtype, ConstType) and initializer is None:
                 raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", name.coord)
+            if for_init and self._peek().value == ":":
+                raise CppDiagnostic("cpp.unsupported.range-for",
+                                    "range-for requires range binding and lifetime semantics", self._peek().coord)
+            if for_init and self._peek().value == ",":
+                raise CppDiagnostic("cpp.unsupported.for-declaration-list",
+                                    "multiple init-declarators are not implemented", self._peek().coord)
             self._expect(";")
             if self.template_function is not None:
                 return Pattern("decl", name.coord, symbol,
@@ -821,6 +829,61 @@ class CppParser:
         self._require_value(expression, allow_void=True)
         self._expect(";")
         return expression.node
+
+    def _discarded_expression_sequence(self):
+        expressions = [self._expression()]
+        self._require_value(expressions[0], allow_void=True)
+        while self._accept(","):
+            expression = self._expression()
+            self._require_value(expression, allow_void=True)
+            expressions.append(expression)
+        coord = expressions[0].node.coord
+        if self.template_function is not None:
+            return Pattern("discarded-sequence", coord, children=expressions)
+        return c_ast.ExprList([expression.node for expression in expressions], coord)
+
+    def _for_statement(self):
+        start = self._expect("for")
+        self._expect("(")
+        parent = self.scope
+        self.scope = Scope(parent)
+        try:
+            init = None
+            if self._accept(";"):
+                pass
+            elif self._is_declaration(allow_range=True):
+                init = self._statement(for_init=True)
+            elif self._peek().value == "typedef":
+                self._alias()
+            else:
+                init = self._discarded_expression_sequence()
+                self._expect(";")
+            condition = None
+            if not self._accept(";"):
+                if self._is_declaration():
+                    raise CppDiagnostic("cpp.unsupported.condition-declaration",
+                                        "for condition declarations require per-iteration lifetime", self._peek().coord)
+                condition = self._expression()
+                coord = condition.node.coord
+                condition = Expression(self._convert(condition, "bool", coord, contextual=True), "bool")
+                self._expect(";")
+            step = None
+            if not self._accept(")"):
+                step = self._discarded_expression_sequence()
+                self._expect(")")
+            self.loop_depth += 1
+            try:
+                body = self._substatement(for_scope=self.scope)
+            finally:
+                self.loop_depth -= 1
+        finally:
+            self.scope = parent
+        if self.template_function is not None:
+            return Pattern("for", start.coord, children=[init, condition, step, body])
+        # C's For owner scopes only its body, not its init-declaration. A real
+        # compound gives the header its own lowering scope without changing C.
+        return c_ast.Compound([c_ast.For(init, None if condition is None else condition.node,
+                                         step, body, start.coord)], start.coord)
 
     def _condition(self):
         self._expect("(")
@@ -856,14 +919,18 @@ class CppParser:
             return unmodeled(unqualified(symbol.dtype), "const initialization proof is unavailable", coord)
         return symbol.constant_fact
 
-    def _substatement(self):
+    def _substatement(self, for_scope=None):
         # C++ selection/iteration substatements have block scope even without
         # braces. In particular an unbraced declaration must not leak its name.
         parent = self.scope
         self.scope = Scope(parent)
+        if for_scope is not None:
+            self.scope.forbidden_redeclarations = frozenset(for_scope.names)
         coord = self._peek().coord
         try:
-            statement = self._statement()
+            statement = (self._block(new_scope=False)
+                         if for_scope is not None and self._peek().value == "{"
+                         else self._statement())
         finally:
             self.scope = parent
         if statement is None:
@@ -1042,18 +1109,65 @@ class CppParser:
 
     def _unary(self):
         token = self._peek()
+        if token.value in ("++", "--"):
+            self.cursor.take()
+            return self._increment_expression(token.value, self._unary(), token.coord)
         if token.value in ("+", "-", "~", "!", "&", "*"):
             self.cursor.take()
             expression = self._unary()
             return self._unary_expression(token.value, expression, token.coord)
         expression = self._primary()
-        while self._peek().value in (".", "->"):
+        while self._peek().value in (".", "->", "++", "--"):
             operator = self.cursor.take()
+            if operator.value in ("++", "--"):
+                expression = self._increment_expression(operator.value, expression, operator.coord, postfix=True)
+                continue
             member = self._identifier()
             if self.template_function is not None:
                 raise CppDiagnostic("cpp.unsupported.dependent-lookup", "template member lookup is not implemented", operator.coord)
             expression = member_access(self, expression, operator.value, member)
         return expression
+
+    def _increment_expression(self, operator, expression, coord, postfix=False):
+        dtype = unqualified(expression.dtype)
+        if is_class_type(dtype):
+            raise CppDiagnostic("cpp.unsupported.class-operators", "class increment/decrement requires overload lookup", coord)
+        if expression.assignment_result:
+            raise CppDiagnostic("cpp.unsupported.syntax", "assignment-result lvalue lowering", coord)
+        if not expression.lvalue:
+            raise CppDiagnostic("cpp.not-lvalue", "increment/decrement requires an lvalue", coord)
+        if isinstance(expression.dtype, ConstType):
+            raise CppDiagnostic("cpp.const-assignment", "increment/decrement requires a modifiable lvalue", coord)
+        if not dependent(dtype):
+            if dtype == "bool" or is_enum_type(dtype) or dtype in ("void", "nullptr"):
+                raise CppDiagnostic("cpp.invalid-operands", "increment/decrement requires non-bool arithmetic or object pointer", coord)
+            if isinstance(dtype, PointerType):
+                if unqualified(dtype.pointee) == "void":
+                    raise CppDiagnostic("cpp.invalid-operands", "increment/decrement requires a complete object pointer", coord)
+                require_complete(dtype.pointee, coord)
+                if is_enum_type(dtype.pointee) and not unqualified(dtype.pointee).complete:
+                    raise CppDiagnostic("cpp.incomplete-enum", "pointer increment requires a complete enum", coord)
+        if self.template_function is not None:
+            return Expression(Pattern("increment", coord, (operator, postfix), [expression]),
+                              dtype, not postfix)
+        fact = not_constant(dtype, "modification of a runtime object", coord)
+        if postfix:
+            return Expression(c_ast.UnaryOp("p" + operator, expression.node, coord), dtype,
+                              constant_fact=fact)
+        # Unlike C, builtin prefix ++/-- is an lvalue in C++. Capture its
+        # address once, perform the update, and preserve that very address.
+        # The outer dereference also composes with checked &* cancellation.
+        name = "__pcc_cpp_increment_" + str(self.assignment_index)
+        self.assignment_index += 1
+        address = (expression.node.expr
+                   if isinstance(expression.node, c_ast.UnaryOp) and expression.node.op == "*"
+                   else c_ast.UnaryOp("&", expression.node, coord))
+        temporary = self._decl(name, PointerType(dtype), coord, address)
+        pointer = c_ast.ID(name, coord)
+        update = c_ast.UnaryOp(operator, c_ast.UnaryOp("*", pointer, coord), coord)
+        address_expression = c_ast.StmtExpr(c_ast.Compound([temporary, update, pointer], coord), coord)
+        return Expression(c_ast.UnaryOp("*", address_expression, coord), dtype, True,
+                          constant_fact=fact)
 
     def _unary_expression(self, operator, expression, coord):
         self._require_value(expression, allow_class=operator == "&")
@@ -1317,6 +1431,9 @@ class CppParser:
             return self._binary_expression(pattern.value, arguments[0], arguments[1], coord)
         if kind == "unary":
             return self._unary_expression(pattern.value, arguments[0], coord)
+        if kind == "increment":
+            operator, postfix = pattern.value
+            return self._increment_expression(operator, arguments[0], coord, postfix)
         if kind == "assignment":
             return self._assignment_expression(arguments[0], arguments[1], coord)
         if kind == "call":
@@ -1336,6 +1453,17 @@ class CppParser:
             alternative = (self._instantiate_statement(pattern.children[2], bindings, environment)
                            if len(pattern.children) > 2 else None)
             return c_ast.If(condition.node, consequent, alternative, coord)
+        if kind == "for":
+            local = dict(environment)
+            init, condition, step, body = pattern.children
+            init_node = None if init is None else self._instantiate_statement(init, bindings, local)
+            condition_node = None if condition is None else self._instantiate_expression(condition, bindings, local).node
+            step_node = None if step is None else self._instantiate_statement(step, bindings, local)
+            body_node = self._instantiate_statement(body, bindings, local)
+            return c_ast.Compound([c_ast.For(init_node, condition_node, step_node, body_node, coord)], coord)
+        if kind == "discarded-sequence":
+            return c_ast.ExprList([self._instantiate_expression(child, bindings, environment).node
+                                   for child in pattern.children], coord)
         if kind == "while":
             condition = self._instantiate_expression(pattern.children[0], bindings, environment)
             body = self._instantiate_statement(pattern.children[1], bindings, environment)

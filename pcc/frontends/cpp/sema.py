@@ -59,6 +59,7 @@ class Scope:
         self.kind = kind or ("namespace" if parent is None else "block")
         self.name = name
         self.names = {}
+        self.forbidden_redeclarations = frozenset()
         self.using_directives = []
         self.inline_namespaces = []
         self.inline = inline
@@ -265,6 +266,8 @@ class Scope:
             self.using_directives.append(namespace)
 
     def add_using_declaration(self, symbol, coord):
+        if symbol.name in self.forbidden_redeclarations:
+            raise CppDiagnostic("cpp.redeclaration", "for-init name redeclared in outermost loop body", coord)
         if symbol.kind in ("namespace", "namespace-alias"):
             raise CppDiagnostic("cpp.using-namespace-name", "using-declaration cannot name a namespace", coord)
         if getattr(symbol, "class_owner", None) is not None:
@@ -303,6 +306,8 @@ class Scope:
         return None
 
     def declare(self, symbol):
+        if symbol.name in self.forbidden_redeclarations:
+            raise CppDiagnostic("cpp.redeclaration", "for-init name redeclared in outermost loop body", symbol.coord)
         hidden = self.lookup_lexical(symbol.name)
         if hidden is not None and hidden.kind == "template-type":
             raise CppDiagnostic("cpp.template-parameter-shadowing",
