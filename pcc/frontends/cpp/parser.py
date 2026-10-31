@@ -28,9 +28,13 @@ from pcc.frontends.cpp.constants import (
     binary_fact, converted_fact, known, not_constant, unary_fact, unmodeled,
 )
 from pcc.frontends.cpp.enums import parse_enum
+from pcc.frontends.cpp.arrays import (
+    const_array_elements, lower_array_initializer, make_array_type,
+    require_complete_array,
+)
 from pcc.frontends.cpp.objects import parse_namespace_object
 from pcc.frontends.cpp.types import (
-    ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
+    ArithmeticTypes, ArrayType, ConstType, PointerType, TYPE_WORDS, array_type, canonical_type, c_type_names, const_qualified, contains_array,
     is_enum_type, pointer_type, qualify_const, unqualified,
 )
 from pcc.frontends.cpp.templates import (
@@ -337,6 +341,8 @@ class CppParser:
     def _check_value_type(self, dtype, token):
         plain = unqualified(dtype)
         nominal = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
+        if self.parsing_template and contains_array(dtype):
+            raise CppDiagnostic("cpp.unsupported.array-templates", "array template typing/deduction is not implemented", token.coord)
         if self.parsing_template and is_enum_type(nominal):
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum-related template semantics are not implemented", token.coord)
@@ -427,6 +433,13 @@ class CppParser:
         self.scope.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
 
     def _pointer(self, dtype, token, qualifiers=()):
+        leaf = dtype
+        while array_type(leaf):
+            leaf = leaf.element
+        if array_type(dtype) and pointer_type(leaf):
+            raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "array-of-pointer pointee qualification requires deeper pointer rules", token.coord)
+        if array_type(dtype) and dtype.bound is None:
+            raise CppDiagnostic("cpp.unsupported.unknown-bound-array-pointers", "pointer to an unknown-bound array requires separate completeness rules", token.coord)
         if self.parsing_template:
             raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
         if pointer_type(dtype):
@@ -456,6 +469,11 @@ class CppParser:
             if clause.qualifiers or clause.ref_qualifier:
                 raise CppDiagnostic("cpp.unsupported.function-declarators", "function cv/ref qualifiers are not implemented", clause.coord)
         for chunk in reversed(chunks):
+            if chunk.kind == "array":
+                if self.parsing_template:
+                    raise CppDiagnostic("cpp.unsupported.array-templates", "dependent array bounds/types are not implemented", chunk.coord)
+                dtype = make_array_type(dtype, chunk.bound, self.types, chunk.coord)
+                continue
             if chunk.kind != "pointer":
                 feature = "references" if "reference" in chunk.kind else (
                     "arrays-or-lambdas" if chunk.kind == "array" else "function-pointers")
@@ -463,8 +481,15 @@ class CppParser:
             dtype = self._pointer(dtype, chunk.token, chunk.qualifiers)
         return name.identifier, dtype
 
-    def _declarator(self, dtype):
-        declaration = DeclaratorParser(self.cursor, self._identifier).parse(parse_suffixes=False)
+    def _array_bound(self):
+        if self.parsing_template:
+            raise CppDiagnostic("cpp.unsupported.array-templates", "dependent array bound analysis is not implemented", self._peek().coord)
+        return self._expression()
+
+    def _declarator(self, dtype, parse_arrays=True):
+        declaration = DeclaratorParser(self.cursor, self._identifier,
+                                       parse_array_bound=self._array_bound,
+                                       parse_functions=False).parse(parse_suffixes=parse_arrays)
         return self._apply_declarator(declaration, dtype)
 
     def _is_declaration(self, allow_range=False):
@@ -477,7 +502,7 @@ class CppParser:
                 return True
             pointer_prefix = self._peek().value in ("*", "&", "&&")
             try:
-                self._declarator(dtype)
+                self._declarator(dtype, parse_arrays=False)
             except CppDiagnostic:
                 # A type followed by a failed declarator is not permission to
                 # reinterpret unsupported pointer/reference syntax as a value.
@@ -486,6 +511,9 @@ class CppParser:
 
     @staticmethod
     def _scalar_type(name, dtype, coord):
+        if array_type(dtype):
+            dimension = None if dtype.bound is None else c_ast.Constant("int", str(dtype.bound), coord)
+            return c_ast.ArrayDecl(CppParser._scalar_type(name, dtype.element, coord), dimension, [], coord)
         if is_class_type(dtype):
             return c_class_type(name, dtype, coord)
         qualifiers = ["const"] if isinstance(dtype, ConstType) else []
@@ -497,8 +525,22 @@ class CppParser:
     def _decl(self, name, dtype, coord, init=None):
         return c_ast.Decl(name, [], [], [], self._scalar_type(name, dtype, coord), init, None, coord)
 
+    def _decay_array(self, expression):
+        if not array_type(expression.dtype):
+            return expression
+        if self.template_function is not None:
+            raise CppDiagnostic("cpp.unsupported.array-templates", "array decay in templates is not implemented", expression.node.coord)
+        dtype = PointerType(expression.dtype.element)
+        coord = expression.node.coord
+        target = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
+        return Expression(c_ast.Cast(target, expression.node, coord), dtype,
+                          constant_fact=unmodeled(dtype, "array address constant proof is not implemented", coord))
+
     def _convert(self, expression, dtype, coord, force=False, contextual=False):
         dtype = unqualified(dtype)
+        if array_type(dtype):
+            raise CppDiagnostic("cpp.invalid-array-conversion", "an array is not a scalar conversion destination", coord)
+        expression = self._decay_array(expression)
         if is_class_type(dtype) or is_class_type(expression.dtype):
             raise CppDiagnostic("cpp.unsupported.class-conversions",
                                 "class value conversion/copy/lifetime semantics are not implemented", coord)
@@ -605,6 +647,13 @@ class CppParser:
                         dtype = self._abstract_pointer_type(dtype)
                     else:
                         param, dtype = self._declarator(dtype)
+                    if array_type(dtype):
+                        leaf = dtype.element
+                        while array_type(leaf):
+                            leaf = leaf.element
+                        if pointer_type(leaf):
+                            raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "array-of-pointer parameter qualification is not implemented", dtype_token.coord)
+                        dtype = PointerType(dtype.element)
                     if unqualified(dtype) == "void":
                         raise CppDiagnostic("cpp.invalid-parameter",
                                             "void must be the sole unnamed parameter",
@@ -623,7 +672,7 @@ class CppParser:
             return tuple(params)
 
         try:
-            declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause).parse()
+            declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause, self._array_bound).parse()
             is_function = any(chunk.kind == "function" for chunk in declarator.chunks)
             name, result_type = self._apply_declarator(declarator, result_type, function=is_function)
         finally:
@@ -633,6 +682,8 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.variable-templates",
                                     "variable templates require instantiation and ODR semantics", name.coord)
             return parse_namespace_object(self, name, result_type, storage, implicit_extern)
+        if array_type(result_type):
+            raise CppDiagnostic("cpp.invalid-function-return", "a function cannot return an array", name.coord)
         if storage is not None and (storage.value == "static" or template_parameters):
             raise CppDiagnostic("cpp.unsupported.function-storage",
                                 "function storage specifiers require function linkage semantics", storage.coord)
@@ -693,8 +744,13 @@ class CppParser:
                 self.template_function, self.return_type = previous_template, previous_return
                 self.scope = parent
             return None
-        param_decls = [self._decl(p.value if p else None, dtype, p.coord if p else name.coord)
-                       for p, dtype in params]
+        # An unnamed definition parameter still occupies its ABI position,
+        # but introduces no C++ binding. Only the C projection needs a private
+        # name for its argument slot; never install it in the semantic scope.
+        param_decls = [self._decl(p.value if p else
+                                 ("__pcc_cpp_unnamed_" + str(index) if definition else None),
+                                 dtype, p.coord if p else name.coord)
+                       for index, (p, dtype) in enumerate(params)]
         declaration = self._decl(symbol.c_name, result_type, name.coord)
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(param_decls, name.coord),
                                           declaration.type, name.coord)
@@ -707,9 +763,6 @@ class CppParser:
         previous_return_type = self.return_type
         self.return_type = result_type
         try:
-            for param, dtype in params:
-                if param is None:
-                    self._unsupported(name, "unnamed definition parameters")
             body = self._block(new_scope=False)
         finally:
             self.scope = parent
@@ -806,6 +859,20 @@ class CppParser:
             symbol = self.scope.declare(Symbol(name.value, "value", name.coord, dtype=dtype))
             init = None
             initializer = None
+            if array_type(dtype):
+                equals = self._accept("=")
+                if self._peek().value == "{":
+                    initializer_list = parse_initializer_list(self)
+                    init = lower_array_initializer(dtype, initializer_list, self.types, self._convert)
+                elif equals is not None or self._peek().value == "(":
+                    if self._peek().kind == "STRING_LITERAL":
+                        raise CppDiagnostic("cpp.unsupported.string-array-initialization", "string encoding and terminator rules are not implemented", self._peek().coord)
+                    raise CppDiagnostic("cpp.invalid-array-initializer", "C++17 arrays require braced or string initialization", self._peek().coord)
+                elif const_array_elements(dtype):
+                    raise CppDiagnostic("cpp.const-initializer", "const array elements require initialization", name.coord)
+                self._expect(";")
+                symbol.initialization_complete = True
+                return self._decl(name.value, dtype, name.coord, init)
             if is_class_type(dtype):
                 if self.template_function is not None:
                     raise CppDiagnostic("cpp.unsupported.class-templates", "class objects in templates are not implemented", name.coord)
@@ -973,6 +1040,7 @@ class CppParser:
         return statement
 
     def _check_object_type(self, dtype, coord):
+        require_complete_array(dtype, coord)
         require_complete(dtype, coord)
         if is_enum_type(dtype) and not unqualified(dtype).complete:
             raise CppDiagnostic("cpp.incomplete-enum", "an object requires a complete enum type", coord)
@@ -1028,6 +1096,8 @@ class CppParser:
         return lhs
 
     def _assignment_expression(self, lhs, rhs, coord):
+        if array_type(lhs.dtype):
+            raise CppDiagnostic("cpp.array-not-assignable", "builtin array assignment is not permitted", coord)
         if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
             raise CppDiagnostic("cpp.unsupported.class-assignment", "class copy/move assignment is not implemented", coord)
         if lhs.assignment_result:
@@ -1068,6 +1138,7 @@ class CppParser:
         return lhs
 
     def _binary_expression(self, operator, lhs, rhs, coord):
+        lhs, rhs = self._decay_array(lhs), self._decay_array(rhs)
         if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class operator lookup/conversion is not implemented", coord)
         self._require_value(lhs)
@@ -1137,7 +1208,7 @@ class CppParser:
             a, b = unqualified(first.pointee), unqualified(second.pointee)
             if a == b or "void" in (a, b):
                 pointee = "void" if "void" in (a, b) else a
-                if isinstance(first.pointee, ConstType) or isinstance(second.pointee, ConstType):
+                if const_qualified(first.pointee) or const_qualified(second.pointee):
                     pointee = qualify_const(pointee)
                 return PointerType(pointee)
         raise CppDiagnostic("cpp.invalid-operands", "incompatible operands for pointer equality", coord)
@@ -1152,8 +1223,13 @@ class CppParser:
             expression = self._unary()
             return self._unary_expression(token.value, expression, token.coord)
         expression = self._primary()
-        while self._peek().value in (".", "->", "++", "--"):
+        while self._peek().value in (".", "->", "++", "--", "["):
             operator = self.cursor.take()
+            if operator.value == "[":
+                index = self._expression()
+                self._expect("]")
+                expression = self._subscript_expression(expression, index, operator.coord)
+                continue
             if operator.value in ("++", "--"):
                 expression = self._increment_expression(operator.value, expression, operator.coord, postfix=True)
                 continue
@@ -1163,8 +1239,44 @@ class CppParser:
             expression = member_access(self, expression, operator.value, member)
         return expression
 
+    def _subscript_expression(self, left, right, coord):
+        if self.template_function is not None or self.instantiating_template:
+            raise CppDiagnostic("cpp.unsupported.array-templates", "dependent subscript lookup is not implemented", coord)
+        left, right = self._decay_array(left), self._decay_array(right)
+        if is_class_type(left.dtype) or is_class_type(right.dtype):
+            raise CppDiagnostic("cpp.unsupported.class-operators", "subscript overload lookup is not implemented", coord)
+        first_pointer = pointer_type(left.dtype)
+        pointer, index = (left, right) if first_pointer else (right, left)
+        if not pointer_type(pointer.dtype) or not self.types.integral_operand(index.dtype):
+            raise CppDiagnostic("cpp.invalid-subscript", "builtin subscript requires one object pointer and one integral operand", coord)
+        dtype = unqualified(pointer.dtype).pointee
+        if unqualified(dtype) == "void":
+            raise CppDiagnostic("cpp.invalid-subscript", "void pointer cannot be subscripted", coord)
+        require_complete(dtype, coord)
+        require_complete_array(dtype, coord)
+        if is_enum_type(dtype) and not unqualified(dtype).complete:
+            raise CppDiagnostic("cpp.incomplete-enum", "subscript requires a complete element", coord)
+        promoted = self.types.promote(index.dtype)
+        # [expr.sub] sequences the syntactic left operand before the right,
+        # even in i[p]. Materialize both once before normalizing pointer/index.
+        serial = str(self.assignment_index)
+        self.assignment_index += 1
+        left_name, right_name = "__pcc_cpp_index_l_" + serial, "__pcc_cpp_index_r_" + serial
+        left_type = left.dtype if first_pointer else promoted
+        right_type = promoted if first_pointer else right.dtype
+        declarations = [self._decl(left_name, left_type, coord, self._convert(left, left_type, coord)),
+                        self._decl(right_name, right_type, coord, self._convert(right, right_type, coord))]
+        p_name, i_name = (left_name, right_name) if first_pointer else (right_name, left_name)
+        element = c_ast.ArrayRef(c_ast.ID(p_name, coord), c_ast.ID(i_name, coord), coord)
+        address = c_ast.UnaryOp("&", element, coord)
+        body = c_ast.StmtExpr(c_ast.Compound(declarations + [address], coord), coord)
+        return Expression(c_ast.UnaryOp("*", body, coord), dtype, True,
+                          constant_fact=unmodeled(unqualified(dtype), "array element constant proof is not implemented", coord))
+
     def _increment_expression(self, operator, expression, coord, postfix=False):
         dtype = unqualified(expression.dtype)
+        if array_type(dtype):
+            raise CppDiagnostic("cpp.invalid-operands", "an array is not a modifiable scalar lvalue", coord)
         if is_class_type(dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class increment/decrement requires overload lookup", coord)
         if expression.assignment_result:
@@ -1180,6 +1292,7 @@ class CppParser:
                 if unqualified(dtype.pointee) == "void":
                     raise CppDiagnostic("cpp.invalid-operands", "increment/decrement requires a complete object pointer", coord)
                 require_complete(dtype.pointee, coord)
+                require_complete_array(dtype.pointee, coord)
                 if is_enum_type(dtype.pointee) and not unqualified(dtype.pointee).complete:
                     raise CppDiagnostic("cpp.incomplete-enum", "pointer increment requires a complete enum", coord)
         if self.template_function is not None:
@@ -1205,6 +1318,8 @@ class CppParser:
                           constant_fact=fact)
 
     def _unary_expression(self, operator, expression, coord):
+        if operator != "&":
+            expression = self._decay_array(expression)
         self._require_value(expression, allow_class=operator == "&")
         if operator in ("&", "*"):
             if self.parsing_template:
@@ -1264,6 +1379,11 @@ class CppParser:
                           null_pointer=null_pointer, constant_fact=fact)
 
     def _call_expression(self, group, arguments, coord):
+        if any(contains_array(arg.dtype) for arg in arguments):
+            if (self.template_function is not None or self.instantiating_template
+                    or any(candidate.template_parameters for candidate in group.overloads)):
+                raise CppDiagnostic("cpp.unsupported.array-templates", "array-related template deduction is not implemented", coord)
+        arguments = [self._decay_array(argument) for argument in arguments]
         enum_arguments = []
         for argument in arguments:
             dtype = unqualified(argument.dtype)
@@ -1292,6 +1412,8 @@ class CppParser:
                 dtype = resolve_overload(snapshot, argument_types, self.types, coord, null_constants).dtype
                 result = unqualified(dtype)
                 nominal = unqualified(result.pointee) if isinstance(result, PointerType) else result
+                if contains_array(result):
+                    raise CppDiagnostic("cpp.unsupported.array-templates", "array-related template call results are not implemented", coord)
                 if is_enum_type(nominal):
                     raise CppDiagnostic("cpp.unsupported.enum-templates",
                                         "enum results in template definitions require dependent lookup", coord)
@@ -1309,6 +1431,8 @@ class CppParser:
                      for arg, dtype in zip(arguments, selected.parameters)]
         dtype = unqualified(selected.dtype)
         nominal = unqualified(dtype.pointee) if isinstance(dtype, PointerType) else dtype
+        if self.instantiating_template and contains_array(dtype):
+            raise CppDiagnostic("cpp.unsupported.array-templates", "array-related template call results are not implemented", coord)
         if self.instantiating_template and is_enum_type(nominal):
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum results in template instantiation require dependent lookup", coord)
@@ -1374,6 +1498,8 @@ class CppParser:
             self._unsupported(token)
         if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type"):
             dtype = canonical_type([token.value]) if token.value in TYPE_WORDS else symbol.dtype
+            if array_type(dtype):
+                raise CppDiagnostic("cpp.invalid-array-conversion", "functional conversion to an array is not permitted", token.coord)
             if is_class_type(dtype):
                 raise CppDiagnostic("cpp.unsupported.class-initialization", "class temporary materialization is not implemented", token.coord)
             self._expect("(")

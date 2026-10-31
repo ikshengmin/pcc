@@ -15,7 +15,7 @@ from pcc.frontends.cpp.classes import is_class_type
 from pcc.frontends.cpp.constants import KNOWN, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Symbol
-from pcc.frontends.cpp.types import ConstType, is_enum_type, pointer_type, unqualified
+from pcc.frontends.cpp.types import ConstType, array_type, is_enum_type, pointer_type, unqualified
 
 
 def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
@@ -32,6 +32,9 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
                             "C language linkage objects require cross-namespace identity", coord)
     if name.value == "main" and not parser.scope.namespace_path():
         raise CppDiagnostic("cpp.main-object", "main cannot name a global object", coord)
+    if array_type(dtype):
+        raise CppDiagnostic("cpp.unsupported.namespace-array-objects",
+                            "namespace arrays require static aggregate initialization and ODR rules", coord)
     if is_class_type(dtype):
         raise CppDiagnostic("cpp.unsupported.static-class-lifetime",
                             "namespace class objects require lifetime/static initialization semantics", coord)

@@ -19,7 +19,7 @@ from pcc.frontends.cpp.classes import (
 )
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.constants import KNOWN, NOT_CONSTANT
-from pcc.frontends.cpp.types import PointerType, is_enum_type, unqualified
+from pcc.frontends.cpp.types import PointerType, array_type, is_enum_type, unqualified
 
 
 _FLOAT_RANKS = {"float": 1, "double": 2, "long double": 3}
@@ -83,7 +83,12 @@ def check_list_conversion(expression, dtype, types, coord):
     special direct-initialization rule, but is not an implicit conversion for
     an aggregate element. Reuse the shared implicit conversion owner here.
     """
-    source, destination = unqualified(expression.dtype), unqualified(dtype)
+    # List constraints see the standard array-to-pointer transformation too;
+    # otherwise a bool element would bypass the pointer-narrowing rule below.
+    # Preserve the original array's element qualifiers before stripping cv.
+    source = (PointerType(expression.dtype.element) if array_type(expression.dtype)
+              else unqualified(expression.dtype))
+    destination = unqualified(dtype)
     if is_class_type(source) or is_class_type(destination):
         raise CppDiagnostic(
             "cpp.unsupported.class-initialization",

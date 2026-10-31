@@ -64,6 +64,29 @@ class ConstType:
         return hash(("const", self.base))
 
 
+class ArrayType:
+    """An array is not a pointer alias: retain element type and bound."""
+
+    def __init__(self, element, bound):
+        self.element = element
+        self.bound = bound
+
+    def __eq__(self, other):
+        return isinstance(other, ArrayType) and self.element == other.element and self.bound == other.bound
+
+    def __hash__(self):
+        return hash(("array", self.element, self.bound))
+
+
+def array_type(dtype):
+    return isinstance(dtype, ArrayType)
+
+
+def contains_array(dtype):
+    dtype = unqualified(dtype)
+    return array_type(dtype) or isinstance(dtype, PointerType) and contains_array(dtype.pointee)
+
+
 class PointerType:
     def __init__(self, pointee):
         self.pointee = pointee
@@ -75,11 +98,19 @@ class PointerType:
         return hash(("pointer", self.pointee))
 
 
+def const_qualified(dtype):
+    return isinstance(dtype, ConstType) or array_type(dtype) and const_qualified(dtype.element)
+
+
 def unqualified(dtype):
+    if array_type(dtype):
+        return ArrayType(unqualified(dtype.element), dtype.bound)
     return dtype.base if isinstance(dtype, ConstType) else dtype
 
 
 def qualify_const(dtype):
+    if array_type(dtype):
+        return ArrayType(qualify_const(dtype.element), dtype.bound)
     return dtype if isinstance(dtype, ConstType) else ConstType(dtype)
 
 
@@ -141,6 +172,8 @@ def _mangle_type(dtype, substitutions):
         return _substitution(substitutions.index(dtype))
     if isinstance(dtype, ConstType):
         encoded = "K" + _mangle_type(dtype.base, substitutions)
+    elif isinstance(dtype, ArrayType):
+        encoded = "A" + ("" if dtype.bound is None else str(dtype.bound)) + "_" + _mangle_type(dtype.element, substitutions)
     elif isinstance(dtype, PointerType):
         encoded = "P" + _mangle_type(dtype.pointee, substitutions)
     elif getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):
@@ -240,7 +273,11 @@ class ArithmeticTypes:
         return name
 
     def conversion_rank(self, source, destination, null_pointer=False):
+        if array_type(source):
+            source = PointerType(source.element)
         source, destination = unqualified(source), unqualified(destination)
+        if array_type(destination):
+            return None
         if source == "void" or destination == "void":
             return None
         if source == destination:
@@ -251,8 +288,8 @@ class ArithmeticTypes:
             if isinstance(source, PointerType):
                 # This boundary admits only one pointer level and const. A
                 # qualification conversion never removes pointee const.
-                if (isinstance(source.pointee, ConstType)
-                        and not isinstance(destination.pointee, ConstType)):
+                if (const_qualified(source.pointee)
+                        and not const_qualified(destination.pointee)):
                     return None
                 if unqualified(source.pointee) == unqualified(destination.pointee):
                     return 0
@@ -298,7 +335,7 @@ class ArithmeticTypes:
                 return 1 if first == "bool" else -1
             if (isinstance(first, PointerType) and isinstance(second, PointerType)
                     and unqualified(first.pointee) == unqualified(second.pointee)):
-                a, b = isinstance(first.pointee, ConstType), isinstance(second.pointee, ConstType)
+                a, b = const_qualified(first.pointee), const_qualified(second.pointee)
                 if a != b:
                     return 1 if a else -1
         return 0

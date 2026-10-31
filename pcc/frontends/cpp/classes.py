@@ -21,7 +21,7 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.constants import NOT_CONSTANT, not_constant, unmodeled
 from pcc.frontends.cpp.sema import Scope, Symbol
-from pcc.frontends.cpp.types import ConstType, PointerType, qualify_const, unqualified
+from pcc.frontends.cpp.types import ConstType, PointerType, array_type, qualify_const, unqualified
 
 
 class ClassType:
@@ -105,6 +105,9 @@ class ClassDefinition:
         if self.complete:
             raise ValueError("cannot append a member to a completed class")
         dtype = unqualified(symbol.dtype)
+        if array_type(dtype):
+            raise CppDiagnostic("cpp.unsupported.class-array-members",
+                                "array data members require special-member/lifetime integration", symbol.coord)
         if dtype == "void":
             raise CppDiagnostic(
                 "cpp.invalid-object-type", "a data member cannot have type void", symbol.coord

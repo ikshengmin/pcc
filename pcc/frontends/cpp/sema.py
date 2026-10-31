@@ -7,7 +7,7 @@ misparse C++ declaration/expression ambiguities.
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    ConstType, is_enum_type, mangle_function, mangle_object, pointer_type, unqualified,
+    ConstType, array_type, is_enum_type, mangle_function, mangle_object, pointer_type, unqualified,
 )
 from pcc.frontends.cpp.templates import (
     deduce, mangle_instance, same_type, signature_key, substitute,
@@ -444,8 +444,8 @@ def argument_dependent_lookup(name, arguments, ordinary, coord):
     namespaces = []
     for dtype in arguments:
         dtype = unqualified(dtype)
-        if pointer_type(dtype):
-            dtype = unqualified(dtype.pointee)
+        while pointer_type(dtype) or array_type(dtype):
+            dtype = unqualified(dtype.element if array_type(dtype) else dtype.pointee)
         if getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):
             namespace = dtype.declaration_scope
             if namespace is None:
