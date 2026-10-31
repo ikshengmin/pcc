@@ -25,7 +25,7 @@ PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
               "<<": 8, ">>": 8, ">>>": 8, "+": 9, "-": 9,
               "*": 10, "/": 10, "%": 10}
 ASSIGNMENTS = frozenset(("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>="))
-LEXEME = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*|[0-9][A-Za-z0-9_]*|>>>=|>>>|>>=|<<=|==|!=|<=|>=|&&|\|\||\+\+|--|[+*/%&|^\-]=|<<|>>|[{}()[\];,.+*/%&|^!~<>=\-]")
+LEXEME = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*|[0-9][A-Za-z0-9_]*|>>>=|>>>|>>=|<<=|==|!=|<=|>=|&&|\|\||\+\+|--|[+*/%&|^\-]=|<<|>>|[{}()[\];,.?:+*/%&|^!~<>=\-]")
 CHAR_LITERAL = re.compile(r"'(?:[^'\\\r\n]|\\(?:[btnfrs\"'\\]|[0-3][0-7]{2}|[0-7]{1,2}))'")
 
 
@@ -376,4 +376,9 @@ class SourceParser:
             operator = self.take()
             node = Node("binary", operator, operator.text,
                         [node, self.expression(PRECEDENCE[operator.text] + 1)])
+        if minimum == 1 and self.peek().text == "?":
+            operator = self.take()
+            yes = self.expression()
+            self.expect(":")
+            node = Node("conditional", operator, children=[node, yes, self.expression()])
         return node

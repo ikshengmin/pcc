@@ -74,6 +74,24 @@ class SourceLowerer:
             return self.builder.call(self.functions[node.symbol.owner, node.symbol.token.text, node.symbol.descriptor], arguments)
         if kind == "group":
             return self.expression(node.children[0])
+        if kind == "conditional":
+            condition, yes, no = node.children
+            value = self.expression(condition)
+            yes_block = self.function.append_basic_block("conditional_yes")
+            no_block = self.function.append_basic_block("conditional_no")
+            done = self.function.append_basic_block("conditional_done")
+            self.builder.cbranch(value, yes_block, no_block)
+            incoming = []
+            for block, arm in ((yes_block, yes), (no_block, no)):
+                self.builder.position_at_end(block)
+                result = self.coerce(self.expression(arm), node.dtype)
+                incoming.append((result, self.builder.block))
+                self.builder.branch(done)
+            self.builder.position_at_end(done)
+            result = self.builder.phi(self.scalar_type(node.dtype))
+            for value, block in incoming:
+                result.add_incoming(value, block)
+            return result
         if kind == "cast":
             value = self.expression(node.children[0])
             if node.value in ("int", "long", "boolean"):

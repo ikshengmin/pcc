@@ -55,6 +55,14 @@ expressions become constant variables; a runtime call initializer is still
 evaluated exactly once and read from its local slot. Blank final locals remain an
 explicit definite-unassignment boundary, not an assumed value or dropped declaration.
 
+The primitive conditional operator `?:` is right-associative and uses standalone
+boolean/integral typing, including byte/short/char constant narrowing before
+ordinary numeric promotion. Its condition-sensitive definite-assignment states
+are distinct from syntactic reachability. Only the selected arm executes in the
+owned CFG; both arms are semantically checked, and a constant selected value does
+not make a conditional expression constant when another operand is nonconstant.
+Reference/poly/boxing conditional expressions remain explicit runtime boundaries.
+
 Integral division/remainder and their compound assignments support nonzero
 constant-expression divisors, preserving truncation toward zero, dividend-signed
 remainders and int/long minimum divided by minus one. Neither float-based

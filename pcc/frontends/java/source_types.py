@@ -20,6 +20,24 @@ def promoted(left, right=None, *, shift=False):
     return "long" if left == "long" or not shift and right == "long" else "int"
 
 
+def conditional_type(yes, no, token):
+    """JLS 15.25 primitive standalone conditional typing, not target typing."""
+    if "void" in (yes.dtype, no.dtype):
+        token.error("conditional operands cannot have void type")
+    if yes.dtype == no.dtype:
+        return yes.dtype
+    if yes.dtype not in INTEGRAL or no.dtype not in INTEGRAL:
+        token.error("reference/boxing conditional operands require the shared Java runtime", True)
+    if {yes.dtype, no.dtype} == {"byte", "short"}:
+        return "short"
+    bounds = {"byte": (-128, 127), "short": (-32768, 32767), "char": (0, 65535)}
+    for narrow, other in ((yes, no), (no, yes)):
+        if (narrow.dtype in bounds and other.dtype == "int" and other.constant is not None
+                and bounds[narrow.dtype][0] <= other.constant <= bounds[narrow.dtype][1]):
+            return narrow.dtype
+    return promoted(yes.dtype, no.dtype)
+
+
 def select_method(methods, node):
     """JLS 15.12 strict invocation, for fixed-arity primitive-only methods."""
     name = node.value.rsplit(".", 1)[-1]

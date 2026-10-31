@@ -11,7 +11,7 @@ from .integer_semantics import evaluate_division, wrap_integer
 from .diagnostics import UnsupportedJava
 
 
-from .source_types import INTEGRAL, promoted, select_method, widening
+from .source_types import INTEGRAL, conditional_type, promoted, select_method, widening
 
 
 @dataclass(frozen=True)
@@ -191,6 +191,12 @@ class SourceAnalyzer:
             left_true, left_false = self.truth_states(node.children[0], assigned)
             right_true, right_false = self.truth_states(node.children[1], left_false)
             return left_true & right_true, right_false
+        if node.kind == "conditional":
+            condition, yes, no = node.children
+            when_true, when_false = self.truth_states(condition, assigned)
+            yes_true, yes_false = self.truth_states(yes, when_true)
+            no_true, no_false = self.truth_states(no, when_false)
+            return yes_true & no_true, yes_false & no_false
         return set(assigned), set(assigned)
 
     def expression(self, node, assigned):
@@ -231,6 +237,17 @@ class SourceAnalyzer:
             if method is None:
                 node.token.error("unresolved same-class static method " + str(op))
             node.dtype, node.symbol = method.result, method
+            return
+        if kind == "conditional":
+            condition, yes, no = node.children
+            when_true, when_false = self.condition(condition, assigned)
+            self.expression(yes, when_true)
+            self.expression(no, when_false)
+            node.dtype = conditional_type(yes, no, node.token)
+            # Both arms must be constant expressions, even when the condition
+            # happens to choose a constant arm. This is not value propagation.
+            if all(child.constant is not None for child in node.children):
+                node.constant = yes.constant if condition.constant else no.constant
             return
         # Only an immediately negated decimal minimum may exceed the positive
         # literal limit. Parentheses do not inherit this lexical exception.
