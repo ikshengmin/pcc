@@ -6,6 +6,8 @@ bindings. Runtime implementation and platform linking remain separate checks.
 """
 
 PLATFORM_MACHINE_ABIS = {
+    # Existing pcc-Python allocator export; exact signed machine lanes only.
+    "memalign": ("(c_int64,c_int64)", "c_ptr"),
     # Owned C startup/lifecycle: exact finite raw-pointer and i32 boundaries.
     "exit": ("(c_int32,)", "c_void"),
     "fflush": ("(c_ptr,)", "c_int32"),
