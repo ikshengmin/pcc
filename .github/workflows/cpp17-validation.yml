@@ -1,0 +1,181 @@
+name: Focused C++17 platform validation
+
+# One explicitly authorized round at an exact published revision. No push or
+# pull_request trigger, bootstrap build, wheel publication, or implicit pcc1.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-character commit SHA of this workflow and corpus
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp17-validation-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  cpp17:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64 owned ELF and G++ reference
+            runner: ubuntu-24.04
+            system: Linux
+            machine: x86_64
+            oracle: g++
+          - name: macOS arm64 owned Mach-O and Clang++ reference
+            runner: macos-15
+            system: Darwin
+            machine: arm64
+            oracle: clang++
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      EXPECTED_SYSTEM: ${{ matrix.system }}
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      REFERENCE_DRIVER: ${{ matrix.oracle }}
+      PCC_NO_AUTO_PCC1: "1"
+      PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+      PYTEST_ADDOPTS: ""
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Require exact dispatch revision and actual runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(uname -s)" = "$EXPECTED_SYSTEM"
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/workflows
+            pcc
+            scripts
+            tests/cpp
+            tests/c
+            utils
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v7
+      - name: Install frozen host test dependencies only
+        run: uv sync --frozen --dev --no-install-project
+      - name: Bind source, compiler identity, and unchanged pytest policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          OUT="$RUNNER_TEMP/cpp17-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$OUT"
+          echo "CPP17_OUT=$OUT" >> "$GITHUB_ENV"
+          ORACLE="$(command -v "$REFERENCE_DRIVER")"
+          test -n "$ORACLE"
+          echo "PCC_CPP_ORACLE=$ORACLE" >> "$GITHUB_ENV"
+          export ORACLE OUT
+          uv run --offline --no-sync python - <<'PY'
+          import hashlib, json, os, pathlib, platform, shlex, subprocess, tomllib
+          options = shlex.split(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['tool']['pytest']['ini_options']['addopts'])
+          assert options == ['-n', '6', '--dist=loadgroup', '-m', 'not integration'], options
+          compiler = pathlib.Path(os.environ['ORACLE'])
+          # Keep the clang++ invocation spelling; resolving it to clang changes
+          # driver/link semantics. The resolved path is identity evidence only.
+          receipt = dict(source_sha=os.environ['EXPECTED_SHA'], system=platform.system(),
+                         machine=platform.machine(), python=platform.python_version(),
+                         compiler_invocation=str(compiler), compiler_resolved=str(compiler.resolve()),
+                         compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest(),
+                         xdist_workers=6, dist='loadgroup', timeout_s=90, tree_rss_bytes=1073741824,
+                         claims=['host-ordinary', 'cross-object', 'host-owned-native-emission', 'external-reference'],
+                         native_pcc1=False)
+          for option, key in [('--version', 'version'), ('-dumpmachine', 'target')]:
+              result = subprocess.run([str(compiler), option], capture_output=True, timeout=10, check=True)
+              pathlib.Path(os.environ['OUT'], key+'.stdout.bin').write_bytes(result.stdout)
+              pathlib.Path(os.environ['OUT'], key+'.stderr.bin').write_bytes(result.stderr)
+              receipt[key] = result.stdout.decode('utf-8', 'replace')
+          expected_prefix = 'arm64-apple-' if platform.system() == 'Darwin' else 'x86_64-'
+          assert receipt['target'].strip().startswith(expected_prefix), receipt['target']
+          pathlib.Path(os.environ['OUT'], 'identity.json').write_text(json.dumps(receipt, indent=2))
+          PY
+      - name: Host ordinary contracts (not native execution)
+        shell: bash
+        run: |
+          uv run --offline --no-sync python scripts/run_process_tree_sample.py \
+            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --darwin-preflight-reserve-bytes 536870912 \
+            --result "$CPP17_OUT/ordinary.json" --samples "$CPP17_OUT/ordinary.samples.jsonl" \
+            --stdout "$CPP17_OUT/ordinary.stdout" --stderr "$CPP17_OUT/ordinary.stderr" -- \
+            uv run --offline --no-sync python -m pytest -x -vv --tb=short -m 'not integration' \
+            --basetemp "$CPP17_OUT/ordinary-tmp" --junitxml "$CPP17_OUT/ordinary.xml" \
+            tests/cpp/test_cpp_class_model.py tests/cpp/test_cpp_class_semantics.py \
+            tests/cpp/test_cpp_initializers.py tests/cpp/test_cpp_aggregate_initialization.py \
+            tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_rejects_unknown_target_before_emission \
+            tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_rejects_observer_symbol_injection \
+            tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_timeout_keeps_partial_observation
+      - name: Both-target cross objects (not loaded or executed)
+        shell: bash
+        run: |
+          uv run --offline --no-sync python scripts/run_process_tree_sample.py \
+            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --darwin-preflight-reserve-bytes 536870912 \
+            --result "$CPP17_OUT/cross.json" --samples "$CPP17_OUT/cross.samples.jsonl" \
+            --stdout "$CPP17_OUT/cross.stdout" --stderr "$CPP17_OUT/cross.stderr" -- \
+            uv run --offline --no-sync python -m pytest -x -vv --tb=short -m 'not integration' \
+            --basetemp "$CPP17_OUT/cross-tmp" --junitxml "$CPP17_OUT/cross.xml" \
+            tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_cross_objects
+      - name: Real target execution of host-PCC owned artifacts (not pcc1)
+        shell: bash
+        run: |
+          uv run --offline --no-sync python scripts/run_process_tree_sample.py \
+            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --darwin-preflight-reserve-bytes 536870912 \
+            --result "$CPP17_OUT/native.json" --samples "$CPP17_OUT/native.samples.jsonl" \
+            --stdout "$CPP17_OUT/native.stdout" --stderr "$CPP17_OUT/native.stderr" -- \
+            uv run --offline --no-sync python -m pytest -x -vv --tb=short -m integration \
+            --basetemp "$CPP17_OUT/native-tmp" --junitxml "$CPP17_OUT/native.xml" \
+            tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_owned_native_execution
+      - name: Explicit external C++17 reference (DR disagreements remain failures)
+        shell: bash
+        run: |
+          uv run --offline --no-sync python scripts/run_process_tree_sample.py \
+            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --darwin-preflight-reserve-bytes 536870912 \
+            --result "$CPP17_OUT/reference.json" --samples "$CPP17_OUT/reference.samples.jsonl" \
+            --stdout "$CPP17_OUT/reference.stdout" --stderr "$CPP17_OUT/reference.stderr" -- \
+            uv run --offline --no-sync python -m pytest -x --maxfail=0 -vv --tb=short -m integration \
+            --basetemp "$CPP17_OUT/reference-tmp" --junitxml "$CPP17_OUT/reference.xml" \
+            tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_explicit_cpp17_reference
+      - name: Recheck unchanged source after all terminal outcomes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          uv run --offline --no-sync python - <<'PY'
+          import hashlib, json, os, pathlib
+          out = pathlib.Path(os.environ['CPP17_OUT'])
+          receipt = json.loads((out / 'identity.json').read_text())
+          compiler = pathlib.Path(os.environ['PCC_CPP_ORACLE'])
+          actual = dict(compiler_invocation=str(compiler), compiler_resolved=str(compiler.resolve()),
+                        compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest())
+          (out / 'compiler-post.json').write_text(json.dumps(actual, indent=2))
+          assert all(receipt[key] == value for key, value in actual.items()), (receipt, actual)
+          PY
+      - name: Retain raw receipts and all partial outputs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp17-${{ matrix.system }}-${{ matrix.machine }}-${{ github.sha }}
+          path: ${{ runner.temp }}/cpp17-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
