@@ -7811,8 +7811,9 @@ bb0:
 
     assert "_probe:" in asm_text
     # [53 x [2 x ptr]] index (0, 1, 0) is byte offset 16 from the base; the
-    # destination register is an allocation choice.
-    assert re.search(r"add x\d+, x9, #16", asm_text)
+    # base is read in its argument register and the destination register is
+    # an allocation choice.
+    assert re.search(r"add x\d+, x\d+, #16", asm_text)
 
 
 def test_self_backend_supports_zero_length_external_array_decay_gep_in_ir():

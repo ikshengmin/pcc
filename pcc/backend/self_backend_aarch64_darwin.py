@@ -1510,37 +1510,35 @@ def _line_reg_alias_effect(line: str, reg: str) -> int:
                 return 1
         return 0
 
-    lse_kind = lse_atomic_kind(opcode)
-    if lse_kind:
-        # Exactly _line_uses_reg/_line_defines_reg for the LSE operand roles.
-        first, _sep, after = rest.partition(", ")
-        second, _sep2, address = after.partition(", ")
-        used_tokens = _tokens_for_reg_scan(first + " " + address if lse_kind == 1 else rest)
-        for alias in aliases:
-            if alias in used_tokens:
-                return 1
-        return 2 if (second if lse_kind == 1 else first) in aliases else 0
-
     defines = False
     tail = ""
-    # Exactly the definition predicate of _line_defines_reg, including its
-    # conservative treatment of branch prefixes and release stores.
-    if (
-        stripped
-        and not stripped.startswith(("b ", "b.", "bl ", "cbz ", "cbnz "))
-        and opcode not in (
-            "cmp", "cmn", "tst", "fcmp", "ret", "br", "blr", "tbz", "tbnz",
-            "stur", "str", "stlr", "sturb", "strb", "stlrb", "sturh", "strh",
-            "stlrh", "stp",
-        )
-    ):
-        dest, sep2, tail = rest.partition(", ")
-        defines = dest in aliases
-        if not sep2:
-            tail = ""
-    # A defining first operand equals exactly one alias, so removing it
-    # cannot hide the other alias. Partial writes must still read it.
-    source = tail if defines and opcode not in ("movk", "bfi", "bfxil") else rest
+    lse_kind = lse_atomic_kind(opcode)
+    if lse_kind:
+        # Exactly _line_uses_reg/_line_defines_reg for the LSE operand roles:
+        # LD<op>/SWP read Rs and the address and write Rt; CAS reads all.
+        first, _sep, after = rest.partition(", ")
+        second, _sep2, address = after.partition(", ")
+        defines = (second if lse_kind == 1 else first) in aliases
+        source = first + " " + address if lse_kind == 1 else rest
+    else:
+        # Exactly the definition predicate of _line_defines_reg, including its
+        # conservative treatment of branch prefixes and release stores.
+        if (
+            stripped
+            and not stripped.startswith(("b ", "b.", "bl ", "cbz ", "cbnz "))
+            and opcode not in (
+                "cmp", "cmn", "tst", "fcmp", "ret", "br", "blr", "tbz", "tbnz",
+                "stur", "str", "stlr", "sturb", "strb", "stlrb", "sturh", "strh",
+                "stlrh", "stp",
+            )
+        ):
+            dest, sep2, tail = rest.partition(", ")
+            defines = dest in aliases
+            if not sep2:
+                tail = ""
+        # A defining first operand equals exactly one alias, so removing it
+        # cannot hide the other alias. Partial writes must still read it.
+        source = tail if defines and opcode not in ("movk", "bfi", "bfxil") else rest
     tokens = _tokens_for_reg_scan(source)
     for alias in aliases:
         if alias in tokens:

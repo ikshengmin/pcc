@@ -25,6 +25,11 @@ _LINE_GROUPS = [
                  '  stxr w9, x10, [x11]', '  stlxr w9, x10, [x11]',
                  '  stxrb w11, w9, [x10]', '  stlxrh w11, w9, [x10]']),
     ('stores', ['  str x9, [x10]', '  sturh w9, [x10]', '  stp x9, x10, [x11]']),
+    # LD<op>/SWP read Rs and the address and write Rt; CAS reads and writes Rs.
+    ('lse', ['  ldaddal x9, x10, [x11]', '  ldaddal x10, x9, [x11]',
+             '  ldclral w10, w9, [x9]', '  swpal x9, x9, [x10]', '  ldsetb w10, w9, [x11]',
+             '  casal x9, x10, [x11]', '  casal x10, x9, [x11]', '  casalb w11, w10, [x9]',
+             '  ldadd x9, xzr, [x10]']),
     ('addresses', ['  ldr x10, [x9], #8', '  ldp x10, x11, [x9, #16]!',
                    '  str x10, [x9]']),
     ('flags', ['  cmp x9, x10', '  cmn w9, w10', '  tst x9, x10', '  fcmp d9, d10']),
