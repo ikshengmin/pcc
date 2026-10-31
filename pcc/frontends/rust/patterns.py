@@ -5,7 +5,7 @@ partitions plus an explicit other-value class. This is not match ergonomics,
 a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, bounds, resolve, unify
-from .types import TupleType, TypeApplication
+from .types import TupleType, TypeApplication, TypeParameter
 
 MAX_PATTERN_ROWS = 512
 MAX_COVERAGE_STEPS = 65536
@@ -118,6 +118,10 @@ def validate_match(checker, expr):
     from .syntax import Pattern
 
     def admitted(ty):
+        if isinstance(ty, TypeParameter):
+            # Unknown T admits only wildcard/binding patterns; type checking
+            # already rejected concrete constructors/literals against T.
+            return True
         if isinstance(ty, TupleType):
             return all(admitted(item) for item in ty.elements)
         return ty in INTEGERS | {"bool", "()"} or ty in checker.enums or ty in checker.records

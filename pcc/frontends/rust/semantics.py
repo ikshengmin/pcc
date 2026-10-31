@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 
 from .syntax import Enumeration, Expr, Function, Record, RustError, Token
-from .types import SharedReference, TupleType, TypeApplication
+from .types import SharedReference, TupleType, TypeApplication, TypeParameter
 
 INTEGERS = {"i32", "i64", "u32", "u64"}
 NEVER = "!"
@@ -25,7 +25,7 @@ class Binding:
 
 
 def resolve(ty: object) -> object:
-    if isinstance(ty, (SharedReference, TypeApplication)):
+    if isinstance(ty, (SharedReference, TypeApplication, TypeParameter)):
         return ty
     if isinstance(ty, TupleType):
         return TupleType(tuple(resolve(item) for item in ty.elements))
@@ -109,8 +109,12 @@ class Checker:
         self.result = "()"
         self.parameters: dict[str, list[Binding]] = {}
         self.unsafe_depth = 0
+        self.type_scope = {}
+        self.abstract_function = False
         from .generics import GenericDeclarations
+        from .function_generics import GenericFunctions
         self.generics = GenericDeclarations(self)
+        self.function_generics = GenericFunctions(self)
 
     def bind(self, token: Token, ty: object, mutable: bool) -> Binding:
         self.serial += 1
@@ -143,6 +147,10 @@ class Checker:
         return ty in INTEGERS | {"bool", "()"}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
+        if isinstance(ty, TypeParameter):
+            if self.abstract_function and ty in self.type_scope.values():
+                return
+            raise token.error("unbound generic type parameter")
         if isinstance(ty, TypeApplication):
             self.generics.instantiate(ty, token)
         if ty in INTEGERS | {"bool", "()"}:
@@ -209,7 +217,10 @@ class Checker:
             self.valid_type(name, enum.token)
         for name, record in list(self.records.items()):
             self.valid_type(name, record.token)
-        for fn in self.functions:
+        declarations = tuple(self.functions)
+        for fn in declarations:
+            self.type_scope = self.function_generics.prepare(fn)
+            self.abstract_function = bool(fn.type_parameters)
             fn.result = self.generics.normalize(fn.result, fn.token)
             fn.params = [(token, self.generics.normalize(ty, token), mutable)
                          for token, ty, mutable in fn.params]
@@ -230,10 +241,29 @@ class Checker:
             self.names[name] = fn
             if fn.abi == "C" and (any(ty not in INTEGERS and not isinstance(ty, SharedReference) for _, ty, _ in fn.params) or fn.result not in INTEGERS | {"()"}):
                 raise fn.token.error("extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape")
-        for fn in self.functions:
-            if fn.body is None:
-                continue
+        self.type_scope = {}
+        self.abstract_function = False
+        # Rust checks declarations, not only the bodies selected by concrete
+        # calls. Generic parameters stay non-Copy even if every current call
+        # happens to substitute a primitive Copy type.
+        from .moves import MoveChecker
+        for fn in declarations:
+            if fn.type_parameters:
+                self.check_body(fn, self.function_generics.scope(fn), abstract=True)
+                MoveChecker(self).check_function(fn)
+        for fn in declarations:
+            if not fn.type_parameters:
+                self.check_body(fn, {})
+        self.function_generics.materialize()
+
+    def check_body(self, fn, type_scope, *, abstract=False):
+        if fn.body is None:
+            return
+        previous_scope, previous_abstract = self.type_scope, self.abstract_function
+        self.type_scope, self.abstract_function = type_scope, abstract
+        try:
             self.scopes = [{}]
+            self.loops = 0
             self.result = fn.result
             self.unsafe_depth = int(fn.unsafe)
             params: list[Binding] = []
@@ -241,9 +271,11 @@ class Checker:
                 if name.text in self.scopes[0]:
                     raise name.error(f"duplicate parameter {name.text!r}")
                 params.append(self.bind(name, ty, mutable))
-            self.parameters[fn.token.text] = params
+            self.parameters[fn.identity] = params
             unify(fn.result, self.expression(fn.body), fn.body.token)
             self.validate(fn.body)
+        finally:
+            self.type_scope, self.abstract_function = previous_scope, previous_abstract
 
     def expression(self, expr: Expr) -> object:
         kind, children = expr.kind, expr.children
@@ -376,13 +408,15 @@ class Checker:
                 expr.kind, expr.value, expr.children = "enum_construct", variant, children[1:]
                 expr.ty = enum_name
                 return enum_name
-            if isinstance(callee.value, TypeApplication):
-                raise callee.token.error("generic functions require abstract body checking, which is not implemented")
-            if callee.kind != "name" or self.local(str(callee.value)) is not None:
+            path = callee.value
+            name = path.name if isinstance(path, TypeApplication) else str(path)
+            if callee.kind != "name" or self.local(name) is not None:
                 raise callee.token.error("only unshadowed direct function calls are supported")
-            fn = self.names.get(str(callee.value))
+            fn = self.names.get(name)
             if fn is None:
                 raise callee.token.error(f"unknown function {callee.value!r}")
+            fn = self.function_generics.select(
+                fn, path.arguments if isinstance(path, TypeApplication) else None, callee.token)
             if fn.unsafe and not self.unsafe_depth:
                 raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
             if len(children) - 1 != len(fn.params):
@@ -423,7 +457,7 @@ class Checker:
             ty = "()"
         elif kind == "cast":
             self.expression(children[0])
-            ty = expr.value
+            ty = self.generics.normalize(expr.value, expr.token)
         elif kind == "if":
             unify("bool", self.expression(children[0]), children[0].token)
             yes = self.expression(children[1])

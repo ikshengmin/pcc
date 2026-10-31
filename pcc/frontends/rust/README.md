@@ -14,7 +14,8 @@ call rejects compilation. Host-PCC evidence is not native pcc1/fixed-point proof
 
 ## Admitted language
 
-- A crate of monomorphic functions and named-field structs, optionally `#![no_std]`, `pub`, and
+- A crate of functions and named-field structs (including the bounded generic
+  declaration domains below), optionally `#![no_std]`, `pub`, and
   `extern "C"` definitions. Forward calls and recursion resolve before lowering.
 - `i32`, `i64`, `u32`, `u64`, `bool`, unit; named structs and nested tuples;
   typed parameters/returns; contextual
@@ -55,7 +56,7 @@ cross-compiler ABI is claimed; no native Rust standard-library objects are linke
 
 This is not C-level language/ecosystem parity. General references/lifetimes/borrowing,
 Drop analysis, user-defined Copy, zero-field structs, tuple structs, arrays, general patterns/match ergonomics, modules/imports, never-typed tuple operands,
-generics/traits/impls, closures, macros, pointer operations, heap allocation,
+full generics/traits/impls, closures, macros, pointer operations, heap allocation,
 `core`/`alloc`/`std`, panic/unwind, and the shared public driver are unfinished.
 Unsupported syntax fails closed. Accepted no_std arithmetic does **not** mean
 `core` or `alloc` have been compiled. No original input program is rewritten.
@@ -173,15 +174,17 @@ unmodified dependencies remain unsupported; neither `core` nor `alloc` compiles
 from this batch. Named structs/tuples are only a prerequisite domain, not a
 replacement source rewritten to resemble that upstream library.
 
-### Proposed generic-instantiation boundary (not implemented)
+### Shared compile-time instantiation boundary
 
-A later shared compile-time contract should identify definitions by crate/module
-and definition identity, bind semantic type/constant arguments, record a target
-and ABI/layout identity, and cache/deduplicate instantiated public IR while
-rejecting recursive instantiation cycles. Rust name resolution, trait obligations,
-coherence, associated types and lifetime constraints remain frontend-owned input
-to that contract. It must not imply a separate language runtime, allocator or GC.
-No private generic engine or runtime has been introduced here.
+The shared `pcc.support.instantiation.InstanceRegistry` now owns session-local
+identity registration, placeholders, FIFO scheduling and sticky failure states
+for both Rust and C++ consumers. Keys include declaration identity and complete
+semantic arguments, never serialized host addresses. A recursively requested
+function reuses its in-progress placeholder; this is **not** an invalid layout
+cycle. Rust checks finite value layouts separately. Trait obligations, coherence,
+associated types, target ABI admission and lifetime constraints remain language
+semantic responsibilities, not guessed by the worklist. No generic runtime,
+allocator or GC is introduced.
 
 ## First original Rust/C object boundary
 
@@ -266,9 +269,11 @@ are rejected. Enum storage/Copy behavior is not special-cased for Option/Result.
 
 Constructor arguments evaluate in source order. Match bindings have their own
 arm scope; `mut` applies to the new binding, not the scrutinee. Copy fields are
-copied, non-Copy fields are moved by variant/field path. Unmoved sibling payloads
-remain readable, whole-owner use after a partial move is rejected, and whole
-assignment restores initialization. Move joins retain early-return and loop
+copied, non-Copy fields are moved by variant/field path. Unmoved tuple/record
+fields remain readable, but an enum discriminant cannot be inspected after any
+of that enum's payloads have moved. A wildcard does not inspect or consume a
+place. Whole-owner use after a partial move is rejected, and whole assignment
+restores initialization. Move joins retain early-return and loop
 break/continue behavior. Bindings inside or-patterns remain an explicit gap;
 binding-free or-patterns retain constructor-aware coverage.
 
@@ -279,23 +284,27 @@ lifetime checking are rejected, not implemented by discarding destructor calls.
 There is no heap allocation or private drop/GC/unwind runtime. Full original
 Rust 1.90.0 Option/Result inputs still fail at documentation attributes and need
 generics, derives, impls, macros, lang items, references and owned intrinsics;
-the six original PCC payload programs are separate specification fixtures.
+the PCC payload programs are separate specification fixtures. The unchanged
+`payload_partial_moves.rs` is a retained invalid input: newly enabled rustc
+reported E0382 for rematching the partially moved enum. Both frontends must now
+reject it; `payload_tuple_partial_moves.rs` is a separate valid tuple-partial-move
+program, not a rewrite or relabel of that failed original.
 # Generic data declaration contract
 
 Named structs and tuple-payload enums may declare unconstrained type parameters.
 Type positions use explicit applications (`Wrap<u64>`); constructors use Rust
 turbofish syntax (`Wrap::<u64> { value: 7 }`, `Maybe::<u64>::Some(7)`). An enum
 pattern may use `Maybe::Some(value)` when the scrutinee already supplies that
-exact nominal instance. Constructor inference, `_` arguments, generic functions,
-impl/methods, trait bounds, defaults, where clauses, lifetimes and const generics
+exact nominal instance. Constructor inference, `_` arguments, impl/methods,
+trait bounds, defaults, where clauses, lifetimes and const generics
 remain explicit unsupported capabilities, not erased syntax.
 
 This is a declaration-checked type facility, not C++ template-body deferral:
 **every** data declaration is resolved and checked, even if unused. Duplicate or
 unused parameters, missing types, wrong arity and recursive/growing value layouts
-are rejected before lowering. Generic function declarations are rejected outright
-until abstract body checking and trait obligations exist; an invalid unused body
-cannot evade checking by never being instantiated.
+are rejected before lowering. Function declarations use the abstract checking
+contract below; an invalid unused body cannot evade checking by never being
+instantiated.
 
 The shared `pcc.support.instantiation.InstanceRegistry` owns registration,
 placeholder identity, failure state and deterministic FIFO materialization inside
@@ -316,9 +325,9 @@ calls; private aggregate values do not promise rustc or C layout.
 Implementation limits are explicit: 16 parameters/arguments, 16 nested argument
 lists, 128 logical nodes per expanded type, 128 concrete data instances, and 4096
 layout steps / 32 declaration-expansion depth. These stop growing recursive types
-without turning recursion overflow into acceptance. Bounds and generic-body
-obligations must be added to the same semantic contract before generic methods,
-functions or closure/dispatch specialization can use it.
+without turning recursion overflow into acceptance. Trait-bound, lifetime and
+method obligations must be added without replacing declaration-time abstract
+checking with concrete-body acceptance.
 
 The full pinned Rust 1.90.0 `option.rs` / `result.rs` remain unchanged dependency
 evidence (see `tests/rust/upstream/README.md` and original dual licenses). Their
@@ -332,3 +341,46 @@ is only caller attestation, never proof that PCC checked ownership or lifetimes.
 References: [generic parameters](https://doc.rust-lang.org/reference/items/generics.html),
 [expression/pattern paths](https://doc.rust-lang.org/reference/paths.html),
 [unused parameters](https://doc.rust-lang.org/error_codes/E0392.html).
+
+
+## Generic function declarations and concrete instances
+
+Unconstrained type parameters in free functions are checked **abstractly**, even
+when the function is unused. A declaration-bound `T` is not an integer, bool or
+Copy type merely because current callers pass those types. Name/type checking,
+match coverage, partial moves, branch joins and loop moves all run before any
+concrete function body is materialized. Invalid unused calls, operators and
+repeated moves are errors, not deferred until a favorable instantiation.
+Unused function type parameters themselves are legal (unlike unused data-type
+parameters). Existing valid generic functions previously rejected as a capability
+have their exact original source retained in positive tests.
+
+Calls require explicit Rust turbofish type arguments (`identity::<u64>(value)`).
+Concrete signatures/placeholders are registered through the same shared registry
+used by C++ functions and Rust data. Bodies discovered by other instances enter
+the FIFO once; direct and mutual function recursion reuse in-progress signatures.
+A concrete body is cloned from pristine parsed AST, rebound and checked with
+its concrete types, rather than replaying source tokens. Primitive, tuple and
+admitted record/enum values retain existing private aggregate/move rules.
+
+Generic instances have deterministic private symbols derived from the function
+name and complete semantic type structure. Public result metadata uses keys such
+as `identity::<u64>`; there is no single foreign export for an abstract template.
+Generic foreign/no-mangle ABI and reference type arguments are rejected. The
+compiler does not infer type arguments, prove borrow lifetimes, implement Copy
+or other trait bounds, or erase destructor obligations. Admitted values still
+exclude custom Drop and heap-owning types. Each compilation permits at most 128
+concrete function instances; recursively growing specialization is an explicit
+resource limit, not a claim that ordinary function recursion is invalid.
+
+Pinned full `core_option.rs` still contains `impl<T> Option<T>` at line 608 and
+`unwrap_or` at line 1031, whose body uses payload matching but whose complete
+source additionally needs `const`, `Self`/inherent methods, `~const Destruct`,
+attributes, imports and the earlier core dependencies. The authored free-function
+`unwrap_or` fixture is a semantic test, **not** an extracted/replaced upstream
+method or proof that original core/alloc now compiles. Closures and dispatch must
+reuse shared scheduling while retaining their own language obligations.
+
+References: [generic functions](https://doc.rust-lang.org/reference/items/functions.html#generic-functions),
+[generic scope](https://doc.rust-lang.org/reference/items/generics.html),
+[moves and Copy](https://doc.rust-lang.org/error_codes/E0382.html).

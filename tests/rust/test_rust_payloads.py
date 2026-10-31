@@ -55,6 +55,8 @@ def test_payload_and_binding_capability_or_type_errors(source,message):
 
 
 PREFIX='struct P{x:i64} enum E{None,Pair(P,P)} fn take(p:P){} fn consume(e:E){} '
+# Exact former positive retained as a negative after the rustc E0382 finding.
+RETAINED_ENUM_REMATCH = PREFIX+'fn f(e:E){match e{E::None=>(),E::Pair(p,_)=>take(p)};match e{E::None=>(),E::Pair(_,q)=>take(q)};}'
 
 
 @pytest.mark.parametrize('body',[
@@ -79,7 +81,6 @@ def test_payload_moves_fail_on_reuse_live_join_and_backedges(body):
     'enum E{A(i64)} fn f(e:E)->E{match e{E::A(x)=>{let y=x+x;}}e}',
     'fn f(x:(i64,bool))->i64{match x{(mut n,true)=>{n+=1;n},(n,false)=>n}}',
     PREFIX+'fn f(e:E){match e{E::None=>(),E::Pair(p,q)=>{take(p);take(q);}}}',
-    PREFIX+'fn f(e:E){match e{E::None=>(),E::Pair(p,_)=>take(p)};match e{E::None=>(),E::Pair(_,q)=>take(q)};}',
     PREFIX+'fn f(mut e:E){match e{E::None=>(),E::Pair(p,_)=>take(p)};e=E::None;consume(e);}',
     PREFIX+'fn f(e:E){match e{E::Pair(p,_)=>{take(p);return;},E::None=>()};consume(e);}',
     'enum E{A(bool),B} fn f(e:E){match e{E::A(true|false)|E::B=>()}}',
@@ -101,7 +102,9 @@ def test_complete_official_generic_sources_still_fail_at_real_frontier(name,sha)
     assert path.read_bytes()==original
 
 
-PROGRAMS=['enum_payload','payload_partial_moves','payload_nested','payload_bindings','payload_effects','payload_value_snapshot']
+# payload_partial_moves.rs is preserved unchanged and checked as an exact
+# negative by test_rust_enum_rematch.py, not rewritten into a successful input.
+PROGRAMS=['enum_payload','payload_tuple_partial_moves','payload_nested','payload_bindings','payload_effects','payload_value_snapshot']
 
 
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution')

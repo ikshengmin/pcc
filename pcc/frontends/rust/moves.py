@@ -48,14 +48,17 @@ class MoveChecker:
 
     def check(self) -> None:
         for function in self.checker.functions:
-            if function.body is None:
-                continue
-            state = {binding.serial: set() for binding in self.checker.parameters[function.token.text]}
-            self.expression(function.body, state)
+            self.check_function(function)
 
-    def access(self, binding, path, ty, token, state, *, consume=False, shallow=False):
+    def check_function(self, function) -> None:
+        if function.body is None:
+            return
+        state = {binding.serial: set() for binding in self.checker.parameters[function.identity]}
+        self.expression(function.body, state)
+
+    def access(self, binding, path, ty, token, state, *, consume=False):
         moved = state[binding.serial]
-        if any(prefix(item, path) or (not shallow and prefix(path, item)) for item in moved):
+        if any(prefix(item, path) or prefix(path, item) for item in moved):
             raise token.error(f"use of moved or possibly moved value {binding.name!r}")
         if consume and not self.checker.copy_type(ty):
             moved.add(path)
@@ -66,7 +69,9 @@ class MoveChecker:
 
     def pattern_access(self, pattern, state, place, *, bind=False):
         # Pattern inspection and selected-arm bindings are separate effects.
-        # Discriminant reads need the enum itself, not its moved subfields.
+        # Inspecting an enum discriminant uses its owning enum place: a prior
+        # payload move prevents rematching that enum, even for another field.
+        # Tuple wildcards below still permit independent unmoved field access.
         kind = pattern.kind
         if kind == "binding":
             if bind:
@@ -82,7 +87,7 @@ class MoveChecker:
             return
         if kind in {"variant", "payload"}:
             if not bind and place is not None:
-                self.access(*place, pattern.ty, pattern.token, state, shallow=True)
+                self.access(*place, pattern.ty, pattern.token, state)
             if kind == "variant":
                 return
             if place is not None:

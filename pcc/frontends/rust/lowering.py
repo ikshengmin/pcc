@@ -24,7 +24,7 @@ class Lowerer:
         self.module = ir.Module(name="rust_" + module_name.encode("utf-8", "surrogatepass").hex())
         self.module.triple = target.triple
         self.module.data_layout = target.data_layout
-        self.functions = functions
+        self.functions = [fn for fn in functions if not fn.type_parameters]
         self.checker = checker
         self.declarations: dict[str, object] = {}
         self.symbols: dict[str, str] = {}
@@ -71,21 +71,21 @@ class Lowerer:
 
     def lower(self):
         for fn in self.functions:
-            name = fn.token.text
+            name = fn.identity
             symbol = name if fn.body is None or fn.no_mangle else "__pcc_rust_" + name
-            self.symbols[name] = symbol
+            self.symbols[fn.export_name] = symbol
             # Unit has no payload and is erased at this private calling boundary.
             signature = ir.FunctionType(self.type(fn.result), [self.type(ty) for _, ty, _ in fn.params if ty != "()"])
             self.declarations[name] = ir.Function(self.module, signature, name=symbol)
         for fn in self.functions:
             if fn.body is None:
                 continue
-            self.function = self.declarations[fn.token.text]
+            self.function = self.declarations[fn.identity]
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.slots = {}
             self.temps = {}
             args = iter(self.function.args)
-            for binding in self.checker.parameters[fn.token.text]:
+            for binding in self.checker.parameters[fn.identity]:
                 self.allocate(binding)
                 if binding.ty != "()":
                     self.builder.store(next(args), self.slots[binding.serial])
@@ -198,7 +198,7 @@ class Lowerer:
                     args.append(value)
             if self.builder.block.is_terminated:
                 return None
-            return self.builder.call(self.declarations[expr.binding.token.text], args)
+            return self.builder.call(self.declarations[expr.binding.identity], args)
         if kind == "unary":
             value = self.expression(children[0])
             if self.builder.block.is_terminated:

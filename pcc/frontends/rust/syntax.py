@@ -128,6 +128,19 @@ class Function:
     public: bool = False
     no_mangle: bool = False
     unsafe: bool = False
+    type_parameters: tuple[Token, ...] = ()
+    instance_arguments: tuple[object, ...] | None = None
+    instance_name: str | None = None
+
+    @property
+    def identity(self):
+        return self.instance_name or self.token.text
+
+    @property
+    def export_name(self):
+        if self.instance_arguments is None:
+            return self.token.text
+        return self.token.text + "::<" + ", ".join(map(str, self.instance_arguments)) + ">"
 
 
 @dataclass
@@ -373,8 +386,9 @@ class Parser:
     def function(self, abi, public, no_mangle, unsafe, declaration=False) -> Function:
         self.expect("fn")
         name = self.name()
-        if self.token.text == "<":
-            raise self.token.error("generic functions require abstract body checking, which is not implemented")
+        parameters = self.generic_parameters()
+        if parameters and (abi != "Rust" or no_mangle or declaration):
+            raise name.error("generic function foreign/export ABI is not implemented")
         self.expect("(")
         params = []
         if not self.accept(")"):
@@ -391,12 +405,15 @@ class Parser:
                 if self.accept(")"):
                     break
         result = self.type() if self.accept("->") else "()"
+        if self.token.text == "where":
+            raise self.token.error("generic where constraints require trait checking, which is not implemented")
         if declaration:
             self.expect(";")
             body = None
         else:
             body = self.block()
-        return Function(name, params, result, body, abi, public, no_mangle, unsafe)
+        return Function(name, params, result, body, abi, public, no_mangle, unsafe,
+                        type_parameters=parameters)
 
     def block(self) -> Expr:
         token = self.expect("{")

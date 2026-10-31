@@ -62,7 +62,7 @@ class GenericDeclarations:
         self.instances = InstanceRegistry()
 
     def normalize(self, ty, token, scope=None):
-        scope = {} if scope is None else scope
+        scope = self.checker.type_scope if scope is None else scope
         bounded_type(ty, token)
         if isinstance(ty, TupleType):
             return TupleType(tuple(self.normalize(t, token, scope) for t in ty.elements))
