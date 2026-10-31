@@ -4,6 +4,10 @@
 north star. Read it before changing direction or trading away a requirement.
 Code establishes current behavior; it does not redefine the intended contract.
 
+For the active multi-language work, read [implementation status](docs/multilanguage-status.md)
+and [architecture and acceptance roadmap](docs/multilanguage-roadmap.md). These describe
+the current user-directed scope; verify their revision and evidence against source.
+
 ## Start with current code
 
 Current source, effective configuration and execution of its artifacts are
@@ -48,8 +52,13 @@ These are required outcomes, not assertions that migration is complete. See
 - `pcc`, `python -m pcc` and `pcc1` share public command semantics. Python script
   and `-m` execution must compile/run native code. CPython `import pcc` APIs
   must execute real capabilities; import-only stubs are not implementation.
-  Native self-host, five-GC and maintainer-directed CLI parity are P0;
-  embedding/ecosystem breadth must not displace them.
+  Current implementation priority is the C++, Rust, Java and Go frontends and
+  shared infrastructure needed to compile and run unmodified real projects.
+  Native self-host, all five GC backends and public CLI parity remain mandatory
+  non-regression contracts, but legacy bootstrap/CI cleanup must not displace
+  this frontend work. Each change includes focused tests and bounded local
+  validation. Shared runtime/backend/linker/GC changes require maintainer
+  validation; never weaken correctness or resource limits to obtain a pass.
 - Preserve ordinary Python/C semantics, arbitrary-precision Python integers,
   identity, exceptions, finalizers, weakrefs and resurrection. Value layouts
   and fixed-width machine types are explicit. No package-specific shortcuts.
