@@ -95,10 +95,11 @@ def test_original_standard_package_now_reaches_its_real_type_frontier():
         "main": [("main.go", 'package main; import "math/bits"; func main(){_ = bits.LeadingZeros(1)}')],
         "math/bits": [("bits.go", bits.read_text())],
     }
-    with pytest.raises(GoDiagnostic, match="named or multiple function results"):
-        # Original math/bits now parses its package-level array tables and
-        # ordinary index expressions. Its next grammar boundary is named results.
+    with pytest.raises(GoDiagnostic, match=r"expected 'name', got '\('") as failure:
+        # Original bits.go now parses named/multiple results, but its original
+        # Div64 local grouped constant declaration is the next syntax boundary.
         compile_go_packages(inputs)
+    assert failure.value.filename == "bits.go" and failure.value.line == 534
 
 
 @pytest.mark.integration

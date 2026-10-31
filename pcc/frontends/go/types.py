@@ -17,6 +17,19 @@ class ArrayType:
         return f"[{self.count}]{self.element}"
 
 
+@dataclass(frozen=True)
+class Results:
+    """A function's multiple values, never a first-class Go tuple type."""
+    elements: tuple
+
+    def __str__(self):
+        return "(" + ", ".join(str(item) for item in self.elements) + ")"
+
+
+def result_types(dtype):
+    return dtype.elements if isinstance(dtype, Results) else () if dtype == "void" else (dtype,)
+
+
 INTEGER_TYPES = {
     "int8": (8, True), "int16": (16, True), "int32": (32, True), "int64": (64, True),
     "uint8": (8, False), "uint16": (16, False), "uint32": (32, False), "uint64": (64, False),

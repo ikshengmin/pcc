@@ -8,7 +8,7 @@ used. Unsupported grammar fails with a source location, never discarded tokens.
 from dataclasses import dataclass, field
 import unicodedata
 
-from pcc.frontends.go.types import TYPE_NAMES
+from pcc.frontends.go.types import Results, TYPE_NAMES
 
 
 class GoDiagnostic(ValueError):
@@ -192,6 +192,8 @@ class Function:
     parameters: list = field(default_factory=list)
     abi_symbol: str = ""
     temporaries: list = field(default_factory=list)
+    result_names: list = field(default_factory=list)
+    result_symbols: list = field(default_factory=list)
 
 
 @dataclass
@@ -332,10 +334,33 @@ class GoParser:
             if not self.accept(","):
                 break
         self.take(")")
-        if self.at("("):
-            self.fail(self.current, "named or multiple function results are not implemented")
-        result = self.datatype() if self.at("name") or self.at("[") else "void"
-        return Function(name, params, result, self.block())
+        result, result_names = self.function_results()
+        return Function(name, params, result, self.block(), result_names=result_names)
+
+    def function_results(self):
+        if not self.accept("("):
+            if self.at("name") or self.at("["):
+                return self.datatype(), [None]
+            return "void", []
+        types, names = [], []
+        named = self.at("name") and self.current.text not in TYPE_NAMES
+        while not self.at(")"):
+            if named:
+                group = [self.take("name")]
+                while self.accept(","):
+                    group.append(self.take("name"))
+                dtype = self.datatype()
+                types.extend([dtype] * len(group))
+                names.extend(group)
+            else:
+                types.append(self.datatype())
+                names.append(None)
+            if len(types) > 256:
+                self.fail(self.current, "function exceeds implementation limit (256 results)")
+            if not self.accept(","):
+                break
+        self.take(")")
+        return (Results(tuple(types)) if len(types) > 1 else types[0] if types else "void"), names
 
     def block(self):
         self.take("{")

@@ -20,7 +20,7 @@ external compiler fallback, independent collector, or scheduler.
   lexical scopes, zero initialization, parallel assignment and short declarations.
   Runtime conversions extend according to the source signedness and then truncate;
   converting a constant instead requires exact destination representability.
-- Named functions, forward calls and recursion, one result, `return`, `if` with
+- Named functions, forward calls and recursion, `return`, `if` with
   optional initialization, `for` clauses/conditions/infinite loops, `break`,
   `continue`, and genuinely short-circuiting logical operators.
 - Exact untyped integer constant arithmetic up to a diagnosed 4096-bit precision
@@ -52,7 +52,7 @@ external compiler fallback, independent collector, or scheduler.
 
 Go predeclared-name shadowing, dynamic package initialization, grouped
 const/var declarations, floating/complex types, other aggregate/reference types,
-methods/interfaces/generics, closures, multiple results, strings, I/O, panic,
+methods/interfaces/generics, closures, strings, I/O, panic,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
 C-parity, or a shared-runtime/GC integration claim.
@@ -78,9 +78,10 @@ The unmodified Go 1.27.3 `test/ken/for.go` and `src/math/bits/bits.go`, includin
 BSD-3-Clause license and per-file hashes, are in `tests/go/upstream`. They are
 frontier tests, **not successful upstream-program qualification**: the former
 requires shared-runtime panic support; the latter now reaches its original
-named function results after its package-level array tables and index syntax.
-The remaining package closure also needs original generated tables, multiple
-results and shared panic support. This is a parser frontier, not a successful
+the original local grouped `const` declaration in `Div64` after parsing its
+named and multiple result lists.
+The remaining package closure needs original string tables and shared error/
+panic/linkname support. This is a capability frontier, not a successful
 compile/run of `math/bits`. No token removal makes these programs pass.
 
 Array and assignment semantics follow the official specification's
@@ -91,3 +92,21 @@ Array and assignment semantics follow the official specification's
 The authored `arrays.go` is an unchanged complete program, exercised through
 its own main and independent full-width native observers; the optional official
 Go oracle receives those same bytes. Darwin object emission is cross-only.
+
+## Function result lists
+
+Unnamed and named results (including blank names), grouped result declarations,
+zero-initialized result variables, explicit return lists and bare returns are
+typed before IR. Bare returns reject a shadowed named result. A sole multi-value
+call expands only in assignment/function-local declaration, return or argument-list contexts;
+Go has no first-class tuple value here. Source calls are evaluated once, and
+return expressions are all evaluated before named result stores. Multiple
+results use a private public-IR struct and the existing aggregate backend path,
+not the official Go ABI or a qualified C ABI. Deferred functions are still
+rejected rather than dropping their required pre-return behavior. The result
+count has an explicit 256-element implementation limit.
+
+The complete authored `results.go` checks these rules with its own main, a
+same-source official-Go oracle and independent full-width native observers.
+The semantic references are [return statements](https://go.dev/ref/spec#Return_statements)
+and [calls](https://go.dev/ref/spec#Calls).

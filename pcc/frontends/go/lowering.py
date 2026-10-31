@@ -7,7 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
-from pcc.frontends.go.types import ArrayType, integer_bits, integer_signed
+from pcc.frontends.go.types import ArrayType, Results, result_types, integer_bits, integer_signed
 
 
 def function_symbol(name, package_path=None):
@@ -20,6 +20,8 @@ GO_MAIN_SYMBOL = function_symbol("main")
 
 
 def ir_type(dtype):
+    if isinstance(dtype, Results):
+        return ir.LiteralStructType([ir_type(item) for item in dtype.elements])
     if isinstance(dtype, ArrayType):
         return ir.ArrayType(ir_type(dtype.element), dtype.count)
     if dtype == "void":
@@ -70,6 +72,10 @@ class Lowerer:
                 self.slots[symbol] = self.builder.alloca(ir_type(symbol.type), name="local_" + str(index))
             for symbol, argument in zip(source.parameters, self.function.args):
                 self.builder.store(argument, self.slots[symbol])
+            self.source_function = source
+            self.result_storage = self.builder.alloca(ir_type(source.result), name="multiple_results") if isinstance(source.result, Results) else None
+            for symbol in source.result_symbols:
+                self.builder.store(ir.Constant(ir_type(symbol.type), None if isinstance(symbol.type, ArrayType) else 0), self.slots[symbol])
             self.statements(source.body)
             if not self.builder.block.is_terminated:
                 if source.result == "void":
@@ -96,7 +102,7 @@ class Lowerer:
             # are value snapshots, never an implicit pointer/decay alias.
             targets = [None if target.kind == "name" and target.value == "_" else self.address(target)
                        for target in statement.targets]
-            values = [self.expression(expr) for expr in statement.exprs]
+            values = self.values(statement.exprs)
             for target, value in zip(targets, values):
                 if target is not None:
                     self.builder.store(value, target)
@@ -110,7 +116,7 @@ class Lowerer:
             self.builder.store(value, address)
             return
         if kind in ("var", ":="):
-            values = [self.expression(expr) for expr in statement.exprs]
+            values = self.values(statement.exprs)
             for index, symbol in enumerate(statement.symbols):
                 if symbol is not None and symbol.token.text != "_":
                     value = values[index] if values else ir.Constant(ir_type(symbol.type), None if isinstance(symbol.type, ArrayType) else 0)
@@ -120,10 +126,22 @@ class Lowerer:
             self.expression(statement.exprs[0])
             return
         if kind == "return":
+            source = self.source_function
             if statement.exprs:
-                self.builder.ret(self.expression(statement.exprs[0]))
+                values = self.values(statement.exprs)
+                for symbol, value in zip(source.result_symbols, values):
+                    self.builder.store(value, self.slots[symbol])
             else:
+                values = [self.builder.load(self.slots[symbol]) for symbol in source.result_symbols]
+            if not values:
                 self.builder.ret_void()
+            elif len(values) == 1:
+                self.builder.ret(values[0])
+            else:
+                for index, value in enumerate(values):
+                    field = self.builder.gep(self.result_storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), index)])
+                    self.builder.store(value, field)
+                self.builder.ret(self.builder.load(self.result_storage))
             return
         if kind == "block":
             self.statements(statement.body)
@@ -184,6 +202,13 @@ class Lowerer:
             return
         raise AssertionError("unlowered typed statement: " + kind)
 
+    def values(self, expressions):
+        if len(expressions) == 1 and isinstance(expressions[0].type, Results):
+            call = expressions[0]
+            result = self.expression(call)
+            return [self.builder.extract_value(result, index) for index in range(len(call.type.elements))]
+        return [self.expression(expr) for expr in expressions]
+
     def address(self, expr):
         if expr.kind in ("name", "selector"):
             return self.slots[expr.symbol]
@@ -220,7 +245,7 @@ class Lowerer:
         if expr.kind in ("name", "selector", "index"):
             return self.builder.load(self.address(expr))
         if expr.kind == "call":
-            arguments = [self.expression(arg) for arg in expr.args]
+            arguments = self.values(expr.args)
             if expr.symbol is None:
                 value = arguments[0]
                 target = ir_type(expr.type)

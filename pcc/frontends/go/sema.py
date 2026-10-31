@@ -11,7 +11,7 @@ import unicodedata
 
 from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic
 from pcc.frontends.go.types import (
-    ArrayType, TYPE_NAMES, TYPES, integer_bits, integer_bounds, integer_signed, is_integer,
+    ArrayType, Results, TYPE_NAMES, TYPES, result_types, integer_bits, integer_bounds, integer_signed, is_integer,
 )
 
 
@@ -189,6 +189,8 @@ class Analyzer:
             raise GoDiagnostic(token, "shadowing predeclared names is not implemented: " + token.text)
 
     def resolve_type(self, dtype):
+        if isinstance(dtype, Results):
+            return Results(tuple(self.resolve_type(item) for item in dtype.elements))
         if not isinstance(dtype, ArraySyntax):
             return dtype
         if isinstance(dtype.element, ArraySyntax):
@@ -261,6 +263,17 @@ class Analyzer:
                 self.scopes[-1][token.text] = symbol
             function.parameters.append(symbol)
             function.locals.append(symbol)
+        for token, dtype in zip(function.result_names, result_types(function.result)):
+            if token is None:
+                continue
+            self.check_name(token)
+            if token.text != "_" and token.text in self.scopes[-1]:
+                raise GoDiagnostic(token, "duplicate parameter or result " + token.text)
+            symbol = Symbol(token, dtype, parameter=True)
+            if token.text != "_":
+                self.scopes[-1][token.text] = symbol
+            function.result_symbols.append(symbol)
+            function.locals.append(symbol)
         self.statements(function.body, new_scope=False)
         if function.result != "void" and not self.terminates(function.body):
             raise GoDiagnostic(function.token, "missing return at end of function")
@@ -293,25 +306,39 @@ class Analyzer:
             raise GoDiagnostic(expr.token, "condition must be bool (Go has no integer truth conversion)")
         coerce(expr, "bool")
 
+    def values(self, expressions):
+        for expr in expressions:
+            self.expression(expr)
+        if len(expressions) == 1 and isinstance(expressions[0].type, Results):
+            call = expressions[0]
+            if call.kind != "call":
+                raise GoDiagnostic(call.token, "multiple values require a function call")
+            return [Expr("result", call.token, index, [call], type=dtype)
+                    for index, dtype in enumerate(call.type.elements)]
+        for expr in expressions:
+            if isinstance(expr.type, Results):
+                raise GoDiagnostic(expr.token, "multiple-value call in single-value context")
+        return expressions
+
     def statement(self, statement):
         kind = statement.kind
         if kind == "=":
-            if len(statement.targets) != len(statement.exprs):
-                raise GoDiagnostic(statement.token, "assignment count mismatch")
             for target in statement.targets:
                 self.assignment_target(target, read=False)
-            for target, expr in zip(statement.targets, statement.exprs):
-                self.expression(expr)
+            values = self.values(statement.exprs)
+            if len(statement.targets) != len(values):
+                raise GoDiagnostic(statement.token, "assignment count mismatch")
+            for target, expr in zip(statement.targets, values):
                 if expr.type == "void":
                     raise GoDiagnostic(expr.token, "void function call used as a value")
                 coerce(expr, default_type(expr.type) if target.value == "_" else target.type)
             return
         if kind in ("var", "const", ":="):
             statement.type = self.resolve_type(statement.type)
-            if statement.exprs and len(statement.names) != len(statement.exprs):
+            values = self.values(statement.exprs)
+            if values and len(statement.names) != len(values):
                 raise GoDiagnostic(statement.token, "assignment count mismatch")
-            for expr in statement.exprs:
-                self.expression(expr)
+            for expr in values:
                 if expr.type == "void":
                     raise GoDiagnostic(expr.token, "void function call used as a value")
             if kind in ("var", "const", ":="):
@@ -320,7 +347,7 @@ class Analyzer:
                     raise GoDiagnostic(statement.token, "duplicate declaration name")
             new_count = 0
             for index, token in enumerate(statement.names):
-                expr = statement.exprs[index] if statement.exprs else None
+                expr = values[index] if values else None
                 if kind == ":=" and token.text in self.scopes[-1]:
                     symbol = self.lookup(token)
                     if symbol.constant is not None:
@@ -364,14 +391,20 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "only function calls may be expression statements")
             return
         if kind == "return":
-            if self.function.result == "void":
-                if statement.exprs:
-                    raise GoDiagnostic(statement.token, "void function cannot return a value")
+            expected = result_types(self.function.result)
+            if not statement.exprs and expected:
+                if len(self.function.result_symbols) != len(expected):
+                    raise GoDiagnostic(statement.token, "return requires explicit result values")
+                for symbol in self.function.result_symbols:
+                    if symbol.token.text != "_" and self.lookup(symbol.token) is not symbol:
+                        raise GoDiagnostic(statement.token, "named result is shadowed at bare return: " + symbol.token.text)
             else:
-                if len(statement.exprs) != 1:
-                    raise GoDiagnostic(statement.token, "return requires one result")
-                self.expression(statement.exprs[0])
-                coerce(statement.exprs[0], self.function.result)
+                values = self.values(statement.exprs)
+                if len(values) != len(expected):
+                    message = "void function cannot return a value" if not expected else "return requires " + str(len(expected)) + " result value(s)"
+                    raise GoDiagnostic(statement.token, message)
+                for value, dtype in zip(values, expected):
+                    coerce(value, dtype)
             statement.terminates = True
             return
         if kind in ("break", "continue"):
@@ -569,10 +602,10 @@ class Analyzer:
         raise GoDiagnostic(expr.token, "unsupported expression " + kind)
 
     def call(self, expr, function):
-        if len(expr.args) != len(function.params):
+        values = self.values(expr.args)
+        if len(values) != len(function.params):
             raise GoDiagnostic(expr.token, "argument count mismatch for " + expr.value)
-        for arg, (_, dtype) in zip(expr.args, function.params):
-            self.expression(arg)
+        for arg, (_, dtype) in zip(values, function.params):
             coerce(arg, dtype)
         expr.type, expr.symbol = function.result, function
 
