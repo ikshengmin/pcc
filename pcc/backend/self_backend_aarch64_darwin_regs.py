@@ -159,22 +159,36 @@ def append_const_to_reg_bits(
     value: int,
 ) -> None:
     """Publish immediate chunks directly without an intermediate sequence."""
-    chunks: list[int] = []
-    chunk_shift = 0
-    while chunk_shift < bits:
-        chunks.append((value >> chunk_shift) & 0xFFFF)
-        chunk_shift += 16
-    inverted = _movn_chunk_indexes(bits, reg, chunks)
-    if inverted is not None:
-        if not inverted:
-            owner.append_movewide(fragment, "movn", reg, 0)
+    # The same MOVN choice as _movn_chunk_indexes, counted in place: the
+    # register is exactly the constant's width and fewer chunks differ from
+    # 0xFFFF than from zero.
+    if (bits == 64 and reg.startswith("x")) or (bits == 32 and reg.startswith("w")):
+        nonzero = 0
+        inverted = 0
+        shift = 0
+        while shift < bits:
+            chunk = (value >> shift) & 0xFFFF
+            if chunk != 0:
+                nonzero += 1
+            if chunk != 0xFFFF:
+                inverted += 1
+            shift += 16
+        if inverted < max(nonzero, 1):
+            if inverted == 0:
+                owner.append_movewide(fragment, "movn", reg, 0)
+                return
+            emitted_first = False
+            shift = 0
+            while shift < bits:
+                chunk = (value >> shift) & 0xFFFF
+                if chunk != 0xFFFF:
+                    if emitted_first:
+                        owner.append_movewide(fragment, "movk", reg, chunk, shift)
+                    else:
+                        owner.append_movewide(fragment, "movn", reg, ~chunk & 0xFFFF, shift)
+                        emitted_first = True
+                shift += 16
             return
-        owner.append_movewide(
-            fragment, "movn", reg, ~chunks[inverted[0]] & 0xFFFF, inverted[0] * 16,
-        )
-        for index in inverted[1:]:
-            owner.append_movewide(fragment, "movk", reg, chunks[index], index * 16)
-        return
     shift = 0
     emitted_first = False
     while shift < bits:
