@@ -21,6 +21,19 @@ class Binding:
     dtype: str = "int"
 
 
+def character_literal(node):
+    text = node.value[1:-1]
+    if text.startswith("\\"):
+        escapes = {"b": 8, "t": 9, "n": 10, "f": 12, "r": 13, "s": 32,
+                   '"': 34, "'": 39, "\\": 92}
+        value = int(text[1:], 8) if text[1] in "01234567" else escapes[text[1]]
+    else:
+        value = ord(text)
+    if value > 0xffff:
+        node.token.error("character literal must represent one UTF-16 code unit")
+    return value
+
+
 def integer_literal(node, allow_min=False):
     text = node.value
     dtype = "long" if text[-1:] in ("l", "L") else "int"
@@ -47,6 +60,10 @@ class SourceAnalyzer:
         self.program = program
         self.project = project
         self.methods = {}
+        self.fields = {}
+        self.field_states = {}
+        self.current_field = None
+        self.method = None
         self.scopes = []
         self.loops = []
 
@@ -63,6 +80,32 @@ class SourceAnalyzer:
             if key in self.methods:
                 method.token.error("duplicate method signature (return type does not overload)")
             self.methods[key] = method
+
+    def declare_fields(self):
+        for field in self.program.fields:
+            if field.token.text in self.fields:
+                field.token.error("duplicate field name " + field.token.text)
+            self.fields[field.token.text] = field
+
+    def evaluate_field(self, field):
+        state = self.field_states.get(field.token.text)
+        if state == "complete":
+            return field.constant
+        if state == "evaluating":
+            field.token.error("cyclic field initialization requires the shared Java initialization contract", True)
+        self.field_states[field.token.text] = "evaluating"
+        previous = self.current_field
+        self.current_field = field
+        try:
+            self.expression(field.initializer, set())
+            self.assignment_value(field.initializer, field.dtype)
+            if field.initializer.constant is None:
+                field.token.error("nonconstant static initialization requires the shared Java initialization contract", True)
+            field.constant = field.initializer.constant
+            self.field_states[field.token.text] = "complete"
+            return field.constant
+        finally:
+            self.current_field = previous
 
     def analyze(self):
         if not self.methods:
@@ -92,6 +135,8 @@ class SourceAnalyzer:
         for scope in reversed(self.scopes):
             if token.text in scope:
                 return scope[token.text]
+        if token.text in self.fields:
+            token.error("cannot assign a final constant field " + token.text)
         token.error("undefined local variable " + token.text)
 
     def require_int(self, node):
@@ -104,7 +149,10 @@ class SourceAnalyzer:
                 node.token.error("boolean value required")
         else:
             self.require_int(node)
-        if not widening(node.dtype, target):
+        bounds = {"byte": (-128, 127), "short": (-32768, 32767), "char": (0, 65535)}
+        narrow_constant = (target in bounds and node.dtype in {"byte", "short", "char", "int"}
+                           and node.constant is not None and bounds[target][0] <= node.constant <= bounds[target][1])
+        if not widening(node.dtype, target) and not narrow_constant:
             node.token.error("incompatible assignment conversion from " + node.dtype + " to " + target)
 
     def condition(self, node, assigned):
@@ -121,9 +169,9 @@ class SourceAnalyzer:
         already declared at this point; later block declarations stay unassigned.
         """
         if node.constant is True:
-            return set(assigned), set(self.method.locals)
+            return set(assigned), set(self.method.locals if self.method else ())
         if node.constant is False:
-            return set(self.method.locals), set(assigned)
+            return set(self.method.locals if self.method else ()), set(assigned)
         if node.kind == "group":
             return self.truth_states(node.children[0], assigned)
         if node.kind == "unary" and node.value == "!":
@@ -147,11 +195,24 @@ class SourceAnalyzer:
         if kind == "bool":
             node.dtype, node.constant = "boolean", op
             return
+        if kind == "char":
+            node.dtype, node.constant = "char", character_literal(node)
+            return
         if kind == "name":
-            node.symbol = self.lookup(node.token)
-            if node.symbol not in assigned:
-                node.token.error("local variable is not definitely assigned: " + node.symbol.name)
-            node.dtype = node.symbol.dtype
+            if "." not in op:
+                for scope in reversed(self.scopes):
+                    if op in scope:
+                        node.symbol = scope[op]
+                        if node.symbol not in assigned:
+                            node.token.error("local variable is not definitely assigned: " + node.symbol.name)
+                        node.dtype = node.symbol.dtype
+                        return
+            field = self.project.resolve_field(self, node)
+            if (self.current_field is not None and "." not in op and field.owner == self.program.name
+                    and field.ordinal >= self.current_field.ordinal):
+                node.token.error("illegal forward or self reference in a static field initializer")
+            node.symbol, node.dtype = field, field.dtype
+            node.constant = self.project.analyzers[field.owner].evaluate_field(field)
             return
         if kind == "call":
             for argument in node.children:

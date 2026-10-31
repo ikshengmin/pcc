@@ -30,7 +30,7 @@ if/while/for/break/continue/return, recursive calls, int wrap/bitwise/masked shi
 and integral/boolean casts. Primitive overload selection uses parameter types,
 not return context or arity alone; numeric widening, int/long binary promotion,
 compound-assignment narrowing and shift masks are explicit. Boolean does not
-convert to or from an integer. byte/short/char declarations, floating point,
+convert to or from an integer. byte/short/char method/local declarations, floating point,
 boxing and varargs remain unsupported. The scalar ABI emits boolean/i32/i64
 IR lanes, and independent assembly tests observe their exact 1/4/8-byte returns. Single-type imports and resolved static
 class-qualified calls enforce class/member access and name obscuring. Unknown
@@ -40,7 +40,16 @@ fully qualified source fixtures are retained as capability rejections, not
 rewritten to imports and counted as successful originals. Static imports, on-demand
 imports, nested classes, generics and inheritance are not yet implemented.
 
-Heap objects/arrays, fields and class initialization, exceptions including int
+Primitive `static final` constant-variable fields are checked and inlined, including
+byte/short/char assignment-constant narrowing, field access, simple-name forward
+reference restrictions and cross-class dependencies. Every initializer is checked:
+`final` alone does not establish a constant variable. Nonconstant or cyclic static
+initialization, mutable fields and blank finals require the shared initialization
+contract and are rejected, even when unused. No Java storage or initialization
+substitute is synthesized. Character literals represent one unsigned UTF-16 code
+unit, with ordinary/octal Java escapes; Unicode-escape translation remains gated.
+
+Heap objects/arrays, runtime fields and class initialization, exceptions including int
 division/remainder, monitors, strings and library/runtime APIs remain explicit
 capability errors. They must use the shared pcc-Python GC/scheduler/exception
 contracts, not an independent Java runtime or a host-JDK fallback. A class's

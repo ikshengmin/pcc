@@ -26,6 +26,7 @@ PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
               "*": 10, "/": 10, "%": 10}
 ASSIGNMENTS = frozenset(("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>="))
 LEXEME = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*|[0-9][A-Za-z0-9_]*|>>>=|>>>|>>=|<<=|==|!=|<=|>=|&&|\|\||\+\+|--|[+*/%&|^\-]=|<<|>>|[{}()[\];,.+*/%&|^!~<>=\-]")
+CHAR_LITERAL = re.compile(r"'(?:[^'\\\r\n]|\\(?:[btnfrs\"'\\]|[0-3][0-7]{2}|[0-7]{1,2}))'")
 
 
 @dataclass(frozen=True)
@@ -70,11 +71,23 @@ class SourceMethod:
 
 
 @dataclass
+class SourceField:
+    token: Token
+    dtype: str
+    initializer: Node
+    modifiers: frozenset[str]
+    owner: str
+    ordinal: int
+    constant: int | bool | None = None
+
+
+@dataclass
 class SourceClass:
     name: str
     methods: tuple[SourceMethod, ...]
     modifiers: frozenset[str] = frozenset()
     imports: tuple[tuple[Token, ...], ...] = ()
+    fields: tuple[SourceField, ...] = ()
 
     @property
     def package(self):
@@ -104,8 +117,10 @@ def tokenize(source, filename):
                 Token("/*", filename, line, column).error("unterminated comment")
             pos = end + 2
         else:
-            match = LEXEME.match(source, pos)
+            match = (CHAR_LITERAL if source[pos] == "'" else LEXEME).match(source, pos)
             if not match:
+                if source[pos] == "'":
+                    Token("'", filename, line, column).error("invalid Java character literal")
                 Token(source[pos], filename, line, column).error("unsupported Java source token", True)
             pos = match.end()
             tokens.append(Token(match.group(), filename, line, column))
@@ -191,7 +206,7 @@ class SourceParser:
         if self.peek().text != "{":
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime", True)
         self.expect("{")
-        methods = []
+        methods, fields = [], []
         while not self.accept("}"):
             if self.accept(";"):
                 continue
@@ -199,11 +214,29 @@ class SourceParser:
             if "static" not in mods or mods & {"abstract", "native", "synchronized"}:
                 self.peek().error("only ordinary static source methods are implemented", True)
             result = self.take()
-            if result.text not in DECLARED | {"void"}:
+            if result.text not in DECLARED | {"void", "byte", "short", "char"}:
                 result.error("source method results currently require boolean, int, long or void", True)
+            if self.peek().text == "[":
+                self.peek().error("array fields require shared Java storage and class initialization", True)
             method_name = self.identifier()
             if self.peek().text != "(":
-                self.peek().error("fields and class initialization require the shared Java runtime", True)
+                if result.text == "void":
+                    result.error("a field cannot have void type")
+                if mods - {"public", "private", "protected", "static", "final"}:
+                    result.error("invalid constant-field modifier")
+                if "final" not in mods:
+                    result.error("mutable static fields require shared Java class initialization", True)
+                while True:
+                    if not self.accept("="):
+                        method_name.error("blank final fields require shared Java class initialization", True)
+                    fields.append(SourceField(method_name, result.text, self.expression(), frozenset(mods), owner, len(fields)))
+                    if not self.accept(","):
+                        break
+                    method_name = self.identifier()
+                self.expect(";")
+                continue
+            if result.text not in DECLARED | {"void"}:
+                result.error("source method results currently require boolean, int, long or void", True)
             self.expect("(")
             parameters, parameter_types = [], []
             if self.peek().text != ")":
@@ -221,7 +254,7 @@ class SourceParser:
             methods.append(SourceMethod(method_name, result.text, tuple(parameters), self.block(),
                                         owner=owner, modifiers=frozenset(mods), parameter_types=tuple(parameter_types)))
         self.expect("<eof>")
-        return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports))
+        return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields))
 
     def block(self):
         token = self.expect("{")
@@ -305,6 +338,8 @@ class SourceParser:
                 self.expect(")")
         elif token.text in ("true", "false"):
             node = Node("bool", token, token.text == "true")
+        elif token.text.startswith("'"):
+            node = Node("char", token, token.text)
         elif token.text[0:1].isdigit():
             node = Node("integer", token, token.text)
         elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:
@@ -321,9 +356,7 @@ class SourceParser:
                 self.expect(")")
                 node = Node("call", token, ".".join(parts), arguments)
             else:
-                if len(parts) != 1:
-                    token.error("field values require shared Java class/object storage", True)
-                node = Node("name", token, token.text)
+                node = Node("name", token, ".".join(parts))
         else:
             token.error("unsupported Java expression or statement", True)
         while PRECEDENCE.get(self.peek().text, 0) >= minimum:

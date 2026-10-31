@@ -12,7 +12,8 @@ DESCRIPTORS = {"boolean": "Z", "int": "I", "long": "J", "void": "V"}
 def widening(source, target):
     if source == target:
         return True
-    return source in INTEGRAL and (target == "long" or target == "int" and source != "long")
+    return source in INTEGRAL and (target == "long" or target == "int" and source != "long"
+                                   or source == "byte" and target == "short")
 
 
 def promoted(left, right=None, *, shift=False):

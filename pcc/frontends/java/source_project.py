@@ -43,6 +43,7 @@ class SourceProject:
             self.imports[program.name] = imported
             analyzer = SourceAnalyzer(program, self)
             analyzer.declare_methods()
+            analyzer.declare_fields()
             self.analyzers[program.name] = analyzer
 
     @staticmethod
@@ -69,11 +70,40 @@ class SourceProject:
         pieces = node.value.split(".")
         if len(pieces) == 1:
             return select_method(analyzer.methods, node)
+        target = self.resolve_qualified_owner(analyzer, node)
+        caller = analyzer.program
+        methods = self.analyzers[target.name].methods
+        # JLS 15.12.2.1 considers only accessible potentially applicable methods.
+        # An inaccessible narrower overload must not defeat a public widening
+        # overload that is otherwise applicable to this call.
+        accessible = {key: method for key, method in methods.items()
+                      if target is caller or "private" not in method.modifiers and
+                      (caller.package == target.package or "public" in method.modifiers)}
+        method = select_method(accessible, node)
+        if method is None:
+            if select_method(methods, node) is not None:
+                node.token.error("source static method is not accessible: " + node.value)
+            node.token.error("unresolved source static method " + node.value)
+        return method
+
+    def resolve_field(self, analyzer, node):
+        caller = analyzer.program
+        target = self.resolve_qualified_owner(analyzer, node) if "." in node.value else caller
+        field = self.analyzers[target.name].fields.get(node.value.rsplit(".", 1)[-1])
+        if field is None:
+            node.token.error("undefined local variable or constant field " + node.value)
+        if target is not caller and ("private" in field.modifiers or
+                                    caller.package != target.package and "public" not in field.modifiers):
+            node.token.error("source constant field is not accessible: " + node.value)
+        return field
+
+    def resolve_qualified_owner(self, analyzer, node):
+        pieces = node.value.split(".")
         caller = analyzer.program
         # JLS 6.5.2 expression-name reclassification precedes package/type
         # lookup. An int local obscures an identically named class/package.
-        if any(pieces[0] in scope for scope in analyzer.scopes):
-            node.token.error("int local/parameter cannot be dereferenced as a source class")
+        if any(pieces[0] in scope for scope in analyzer.scopes) or pieces[0] in analyzer.fields:
+            node.token.error("primitive local/parameter/field cannot be dereferenced as a source class")
         first = self.visible_simple_type(caller, pieces[0])
         qualifier = pieces[:-1]
         if first is not None:
@@ -91,21 +121,12 @@ class SourceProject:
                                  "supply a single-type import and a resolved class qualifier", True)
             node.token.error("unresolved source class qualifier " + ".".join(qualifier))
         self.require_class_access(caller, target, node.token)
-        methods = self.analyzers[target.name].methods
-        # JLS 15.12.2.1 considers only accessible potentially applicable methods.
-        # An inaccessible narrower overload must not defeat a public widening
-        # overload that is otherwise applicable to this call.
-        accessible = {key: method for key, method in methods.items()
-                      if target is caller or "private" not in method.modifiers and
-                      (caller.package == target.package or "public" in method.modifiers)}
-        method = select_method(accessible, node)
-        if method is None:
-            if select_method(methods, node) is not None:
-                node.token.error("source static method is not accessible: " + node.value)
-            node.token.error("unresolved source static method " + node.value)
-        return method
+        return target
 
     def analyze(self):
+        for analyzer in self.analyzers.values():
+            for field in analyzer.program.fields:
+                analyzer.evaluate_field(field)
         for analyzer in self.analyzers.values():
             analyzer.analyze()
         return self
