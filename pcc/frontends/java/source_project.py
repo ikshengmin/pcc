@@ -10,7 +10,7 @@ from .source_types import select_method
 
 
 class SourceProject:
-    def __init__(self, programs):
+    def __init__(self, programs, *, analyzer_type=SourceAnalyzer):
         self.programs = tuple(sorted(programs, key=lambda item: item.name))
         self.classes = {}
         self.imports = {}
@@ -41,7 +41,7 @@ class SourceProject:
                     tokens[-1].error("conflicting single-type import " + simple)
                 imported[simple] = target
             self.imports[program.name] = imported
-            analyzer = SourceAnalyzer(program, self)
+            analyzer = analyzer_type(program, self)
             analyzer.declare_methods()
             analyzer.declare_fields()
             self.analyzers[program.name] = analyzer

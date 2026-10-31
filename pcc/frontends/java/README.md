@@ -79,6 +79,29 @@ constant evaluation nor overflowing signed IR division is used. Zero or dynamic
 divisors remain unsupported until the shared ArithmeticException path exists;
 an initialized non-final variable is not assumed constant.
 
+`analyze_class_sources(mapping)` is a separate **semantic-model stage**, not a
+native object capability: it reuses the source parser and scalar/control-flow
+checker for primitive instance fields, ordinary receiver methods, explicit or
+default constructors, same-class constructor delegation and `this` bindings.
+Instance-initializer blocks are checked for receiver access, source-order field
+references, local definite assignment and normal completion. Their typed local
+frames and field initializers remain in one source-ordered construction plan;
+only a constructor that invokes `super`, not one delegating with `this`, owns
+that initialization sequence. This is plan metadata, not executed construction.
+The simple-name forward-write exception is limited to `=`; compound assignment
+and increment read the old value and are checked as forward reads.
+Primary-qualified constant fields (`this.K`) retain receiver-access identity
+and are not constant expressions for narrowing, case labels or reachability;
+simple `K` and type-qualified `Record.K` constant names remain distinct.
+It retains every body and initializer and rejects invalid receiver contexts,
+constructor cycles and unassigned locals. Primitive payload slots have a
+header-free layout plan; no object, tracing descriptor or vtable is registered.
+Native `compile_source(s)` still rejects explicit instance features before IR
+until shared managed allocation, roots, construction/publication and dispatch
+are implemented. Final-instance-field DU, inherited Object overrides, references,
+arrays and inheritance remain explicit model boundaries. This API is not a
+separate runtime or evidence that a Java application can allocate objects.
+
 Heap objects/arrays, runtime fields and class initialization, exceptions,
 monitors, strings and library/runtime APIs remain explicit
 capability errors. They must use the shared pcc-Python GC/scheduler/exception

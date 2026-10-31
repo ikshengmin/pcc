@@ -66,6 +66,10 @@ class SourceMethod:
     modifiers: frozenset[str] = frozenset()
     parameter_types: tuple[str, ...] = ()
     parameter_final: tuple[bool, ...] = ()
+    is_constructor: bool = False
+    implicit: bool = False
+    constructor_target: object = None
+    initialization_steps: tuple = ()
 
     @property
     def descriptor(self):
@@ -76,7 +80,7 @@ class SourceMethod:
 class SourceField:
     token: Token
     dtype: str
-    initializer: Node
+    initializer: Node | None
     modifiers: frozenset[str]
     owner: str
     ordinal: int
@@ -90,6 +94,10 @@ class SourceClass:
     modifiers: frozenset[str] = frozenset()
     imports: tuple[tuple[Token, ...], ...] = ()
     fields: tuple[SourceField, ...] = ()
+    constructors: tuple[SourceMethod, ...] = ()
+    token: Token | None = None
+    instance_initializers: tuple[Node, ...] = ()
+    initialization_steps: tuple = ()
 
     @property
     def package(self):
@@ -139,9 +147,10 @@ def tokenize(source, filename):
 
 
 class SourceParser:
-    def __init__(self, source, filename):
+    def __init__(self, source, filename, *, class_model=False):
         self.tokens = tokenize(source, filename)
         self.position = 0
+        self.class_model = class_model
 
     def peek(self, distance=0):
         return self.tokens[min(self.position + distance, len(self.tokens) - 1)]
@@ -202,18 +211,40 @@ class SourceParser:
         if mods - {"public", "final", "strictfp"}:
             self.peek().error("unsupported top-level class modifiers", True)
         self.expect("class")
-        name = self.identifier().text
+        class_token = self.identifier()
+        name = class_token.text
         class_modifiers = frozenset(mods)
         owner = "/".join(package + [name])
         if self.peek().text != "{":
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime", True)
         self.expect("{")
-        methods, fields = [], []
+        methods, fields, constructors, initializers, initialization_steps = [], [], [], [], []
         while not self.accept("}"):
             if self.accept(";"):
                 continue
             mods = self.modifiers()
-            if "static" not in mods or mods & {"abstract", "native", "synchronized"}:
+            if self.class_model and self.peek().text == "{":
+                if mods == {"static"}:
+                    self.peek().error("static initializer execution requires shared Java class initialization", True)
+                if mods:
+                    self.peek().error("invalid instance initializer modifier")
+                initializer = self.block()
+                # All fields from this ordinal onward occur after this block.
+                initializer.value = len(fields)
+                initializers.append(initializer)
+                initialization_steps.append(initializer)
+                continue
+            if self.class_model and self.peek().text == name and self.peek(1).text == "(":
+                constructor = self.take()
+                if mods - {"public", "private", "protected"}:
+                    constructor.error("invalid constructor modifier")
+                parameters, parameter_types, parameter_final = self.parameters(constructor, receiver=True)
+                constructors.append(SourceMethod(constructor, "void", parameters, self.block(),
+                                                 owner=owner, modifiers=frozenset(mods),
+                                                 parameter_types=parameter_types, parameter_final=parameter_final,
+                                                 is_constructor=True))
+                continue
+            if (not self.class_model and "static" not in mods) or mods & {"abstract", "native", "synchronized"}:
                 self.peek().error("only ordinary static source methods are implemented", True)
             result = self.take()
             if result.text not in DECLARED | {"void", "byte", "short", "char"}:
@@ -226,12 +257,20 @@ class SourceParser:
                     result.error("a field cannot have void type")
                 if mods - {"public", "private", "protected", "static", "final"}:
                     result.error("invalid constant-field modifier")
-                if "final" not in mods:
+                instance = self.class_model and "static" not in mods
+                if instance and "final" in mods:
+                    result.error("final instance fields require constructor definite-unassignment semantics", True)
+                if not instance and "final" not in mods:
                     result.error("mutable static fields require shared Java class initialization", True)
                 while True:
-                    if not self.accept("="):
+                    initialized = bool(self.accept("="))
+                    if not initialized and not instance:
                         method_name.error("blank final fields require shared Java class initialization", True)
-                    fields.append(SourceField(method_name, result.text, self.expression(), frozenset(mods), owner, len(fields)))
+                    initializer = self.expression() if initialized else None
+                    field = SourceField(method_name, result.text, initializer, frozenset(mods), owner, len(fields))
+                    fields.append(field)
+                    if instance and initialized:
+                        initialization_steps.append(field)
                     if not self.accept(","):
                         break
                     method_name = self.identifier()
@@ -239,28 +278,33 @@ class SourceParser:
                 continue
             if result.text not in DECLARED | {"void"}:
                 result.error("source method results currently require boolean, int, long or void", True)
-            self.expect("(")
-            parameters, parameter_types, parameter_final = [], [], []
-            if self.peek().text != ")":
-                while True:
-                    parameter_final.append(bool(self.accept("final")))
-                    if self.peek().text == "final":
-                        self.peek().error("duplicate final parameter modifier")
-                    dtype = self.take()
-                    if dtype.text not in DECLARED:
-                        dtype.error("source parameters require boolean, int or long", True)
-                    parameter_types.append(dtype.text)
-                    parameters.append(self.identifier())
-                    if not self.accept(","):
-                        break
-            self.expect(")")
-            if sum(2 if dtype == "long" else 1 for dtype in parameter_types) > 255:
-                method_name.error("too many static method parameters")
-            methods.append(SourceMethod(method_name, result.text, tuple(parameters), self.block(),
-                                        owner=owner, modifiers=frozenset(mods), parameter_types=tuple(parameter_types),
-                                        parameter_final=tuple(parameter_final)))
+            parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
+            methods.append(SourceMethod(method_name, result.text, parameters, self.block(),
+                                        owner=owner, modifiers=frozenset(mods), parameter_types=parameter_types,
+                                        parameter_final=parameter_final))
         self.expect("<eof>")
-        return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields))
+        return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields), tuple(constructors),
+                           class_token, tuple(initializers), tuple(initialization_steps))
+
+    def parameters(self, token, *, receiver=False):
+        self.expect("(")
+        parameters, types, finals = [], [], []
+        if self.peek().text != ")":
+            while True:
+                finals.append(bool(self.accept("final")))
+                if self.peek().text == "final":
+                    self.peek().error("duplicate final parameter modifier")
+                dtype = self.take()
+                if dtype.text not in DECLARED:
+                    dtype.error("source parameters require boolean, int or long", True)
+                types.append(dtype.text)
+                parameters.append(self.identifier())
+                if not self.accept(","):
+                    break
+        self.expect(")")
+        if sum(2 if dtype == "long" else 1 for dtype in types) + int(receiver) > 255:
+            token.error("too many method parameters including receiver" if receiver else "too many static method parameters")
+        return tuple(parameters), tuple(types), tuple(finals)
 
     def block(self):
         token = self.expect("{")
@@ -273,6 +317,12 @@ class SourceParser:
 
     def statement(self, in_block=False):
         token = self.peek()
+        if self.class_model and token.text in ("this", "super") and self.peek(1).text == "(":
+            self.take()
+            self.expect("(")
+            arguments = self.arguments()
+            self.expect(";")
+            return Node("constructor_call", token, token.text, arguments)
         if token.text == "{":
             return self.block()
         if self.accept(";"):
@@ -361,6 +411,13 @@ class SourceParser:
 
     def simple(self, allow_declaration=False):
         token = self.peek()
+        if self.class_model and token.text == "this" and self.peek(1).text == "." and self.peek(3).text in ASSIGNMENTS | {"++", "--"}:
+            self.take()
+            self.expect(".")
+            member = self.identifier()
+            operation = self.take().text
+            children = [] if operation in ("++", "--") else [self.expression()]
+            return Node("field_assign", member, operation, children)
         is_final = bool(self.accept("final"))
         if is_final and self.peek().text == "final":
             self.peek().error("duplicate final local modifier")
@@ -381,7 +438,7 @@ class SourceParser:
             children = [] if operation in ("++", "--") else [self.expression()]
             return Node("assign", name, operation, children)
         expression = self.expression()
-        if expression.kind != "call":
+        if expression.kind != "call" and not (self.class_model and expression.kind == "receiver_call"):
             expression.token.error("only assignment, increment or method invocation is an expression statement")
         return Node("expression", token, children=[expression])
 
@@ -397,6 +454,15 @@ class SourceParser:
             else:
                 node = Node("group", token, children=[self.expression()])
                 self.expect(")")
+        elif self.class_model and token.text == "this":
+            if not self.accept("."):
+                node = Node("this", token)
+            else:
+                member = self.identifier()
+                if self.accept("("):
+                    node = Node("receiver_call", member, member.text, self.arguments())
+                else:
+                    node = Node("receiver_field", member, member.text)
         elif token.text in ("true", "false"):
             node = Node("bool", token, token.text == "true")
         elif token.text.startswith("'"):
@@ -430,3 +496,13 @@ class SourceParser:
             self.expect(":")
             node = Node("conditional", operator, children=[node, yes, self.expression()])
         return node
+
+    def arguments(self):
+        arguments = []
+        if self.peek().text != ")":
+            while True:
+                arguments.append(self.expression())
+                if not self.accept(","):
+                    break
+        self.expect(")")
+        return arguments
