@@ -50,11 +50,13 @@ Accept against official go/test, standard-package tests and a pinned project lad
 
 ### Java
 
-Start with class-file/bytecode AOT and closed-world class dependency analysis, then add an owned Java source frontend. javac/JVM are development references only. Validate bytecode control flow, stack maps, constant pools and descriptors; a bounded decoder is not a complete JVM verifier.
+Compile Java **source** through an owned parser, name/type analysis and direct lowering to public PCC IR. Libraries are built from verified sources; inspect source archives and licenses rather than assuming every artifact has a usable sources JAR. Do not introduce JVM bytecode, javac or another compiler's IR as a required production stage.
 
-Implement class initialization, object/array operations, monitors, platform/virtual thread distinctions, configured reflection, invokedynamic and native interfaces through the shared runtime. Own runtime-bound Object/Thread/Class/reflection/native operations. Audit licenses before using any class-library implementation; translating GPL code to Python does not remove its obligations.
+The existing class-file/JAR reader and static-bytecode AOT work is retained as an independent compatibility experiment, not the implementation mainline. Stop extending that track for its own sake. Reuse its verified integer wrap, shift and narrowing semantics in source-independent IR emission helpers; do not force Java source through a JVM operand-stack representation.
 
-Accept with relevant jtreg subsets and complete applications using original class/JAR inputs. Running one extracted static method from a library does not qualify that library or application. Retain a clear class/JAR/source capability distinction.
+Implement source classes, objects, strings and arrays, then the runtime contracts they require: class initialization, monitors, platform/virtual thread distinctions, configured reflection and native interfaces. Runtime-bound Object/Class/Thread/String internals and native operations are owned pcc-Python implementations over the shared allocator/GC/scheduler. Other class-library functionality must come from suitable original sources or independent implementations. OpenJDK behavior/specifications may be studied, but GPL implementation code is not translated into PCC.
+
+Accept with source-level conformance inputs, relevant licensed tests and unmodified real applications with their own tests. Bytecode-reader tests or one method selected from a library do not qualify Java source compilation or that library. No source availability gap may silently select an external-bytecode fallback.
 
 ### Rust
 

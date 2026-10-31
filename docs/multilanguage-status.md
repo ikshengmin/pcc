@@ -1,6 +1,6 @@
 # Multi-language implementation status
 
-Status boundary: 2026-10-31, published source through `c37e7a6a3636357d8808a308e8c1fe7f484c1787`. Candidate evidence below is explicitly separate from master.
+Status boundary: 2026-10-31, published source through `ac5a9136d5a7bebe5ec6ef1105de8dea0893afa7`. Candidate evidence below is explicitly separate from master.
 
 Maintained entrypoint for a new contributor or AI. Read [the roadmap](multilanguage-roadmap.md), then the current implementation and tests. This is a source-oriented status page, not a running log or evidence archive. Update the relevant section when publishing a capability or changing its acceptance status.
 
@@ -52,13 +52,15 @@ Next: finish package graph/export rules, integer families, aggregate/string/slic
 
 ## Java
 
-Published in `00529a78` from reviewed candidate `1c73666f`. The frontend owns `pcc/frontends/java/` and `tests/java/`. First candidate decodes bounded class files and lowers verified selected same-class static integer/void method closures through public IR to owned Linux ELF. It is not a Java source compiler, full JVM verifier or Java runtime. Fields/class initialization, objects, monitors, exceptions and external dependencies are explicit capability boundaries.
+**Current mainline is Java source -> owned parsing/Sema -> PCC IR.** That source frontend is in development; no Java-source or complete Java-project qualification is claimed at this source boundary. It must reuse source-independent verified integer semantics, not javac, generated JVM bytecode or a mandatory JVM stack IR. Libraries must be built from verified source inputs.
 
-Observed candidate: 99 tests passed, including independent raw four-byte return observations. A separate actual JVM reference verified/executed the same original class used by the owned path. Initial low-eight-bit process-exit observations alone were not accepted as proof of full integer semantics.
+Historical compatibility work was published in `00529a7873bbd72c124fe2b0486635d32eb09bc6` from candidate `1c73666f`: bounded class-file decoding and selected same-class static integer/void bytecode AOT through the self backend/owned ELF linker. The final gate passed 107 cases, including independent full-width native observations and one actual JVM reference of the same original class. Review-found disconnected-code/method-flag gaps and a diagnostic-order regression were fixed without weakening the old assertion; the initial failure remains historical evidence.
 
-Source review found admission gaps involving disconnected code after a return and mutually exclusive method flags. Candidate `2fc28f36` fixed those gaps but its gate observed 106 passes and one diagnostic-order regression: malformed input was rejected with stack underflow instead of the required incompatible StackMapTable diagnostic. The old assertion was preserved. Final candidate `1c73666fcd0be9af84a138bf29364dc1cf9023c4` corrected traversal order and passed all 107 cases, including the independent full-width observations and actual JVM reference. Subsequent JAR and internal module-label escaping work is a separate candidate. The published integer slice does not yet include that label hardening; preserve legitimate class identity while encoding its internal IR module name safely. Selecting one method from an existing library does not establish whole-library success.
+`ac5a9136d5a7bebe5ec6ef1105de8dea0893afa7` subsequently encoded internal module labels while preserving original class identity. Its exact prior-source-plus-two-path view passed five independent copied-source label/object tests. This corrects the previously listed label-escaping gap.
 
-Next: complete bytecode admission, class/JAR graph and initialization/object runtime, then real applications. Do not strip fields or rewrite upstream bytecode to make it fit the current slice.
+The validated but unpublished JAR follow-up is retained, not promoted into the mainline. A synthetic original JAR reached native execution in that experiment; an existing PDFBox JAR was only structurally read and rejected at missing runtime support. Neither result establishes a real Java source project. Do not continue class/JAR expansion merely because the importer already exists.
+
+Next: source classes and method semantics, objects, strings/arrays and shared runtime contracts. Runtime-bound JDK operations are owned implementations; OpenJDK is behavioral/specification reference, not code to translate into PCC. Preserve the bytecode compatibility code/tests as historical work without using them as source-frontend evidence.
 
 ## Rust
 
@@ -92,7 +94,7 @@ Use the repository's declared Python/tool environment and original watchdog/reso
 
 The C++ upstream-conformance adapter is a pending bounded selection, not the full requested suite. Its adapter contracts passed 2 real object cases and 64 fixture cases; all 11 original upstream translation units failed with explicit unsupported diagnostics. Eleven Clang references were not selected because the prerequisite was absent. These are visible capability gaps, not a passing conformance suite. Original Clang compile-only/diagnostic translation units must remain separate from LLVM SingleSource runtime tests, GCC execution tests, standard-library suites and real projects. A reference rejection is not automatically a matching PCC diagnostic.
 
-Manual CI entry: `.github/workflows/cpp17-validation.yml`; it accepts an exact published `expected_sha` and verifies actual Linux x86-64/macOS arm64 identity. It does not run on every push. Its ordinary gate is a named subset, not all C++ tests. Platform CI results must be read for the exact run/SHA; at this status boundary macOS native execution remains unrun.
+Historical manual CI entry: `.github/workflows/cpp17-validation.yml`; it accepts an exact published `expected_sha` and verifies actual Linux x86-64/macOS arm64 identity. It does not run on every push. Its ordinary gate is a named subset, not all C++ tests. Platform CI results must be read for the exact run/SHA; at this status boundary macOS native execution remains unrun.
 
 ## Known open boundaries and takeover checklist
 
