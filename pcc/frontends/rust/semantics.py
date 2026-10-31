@@ -141,7 +141,14 @@ class Checker:
         return ty in INTEGERS | {"bool", "()"}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
-        if ty in INTEGERS | {"bool", "()"} or ty in self.enums:
+        if ty in INTEGERS | {"bool", "()"}:
+            return
+        if ty in self.enums:
+            if ty in stack:
+                raise token.error("recursive aggregate has infinite size")
+            for fields in self.enums[ty].payloads.values():
+                for field_ty in fields:
+                    self.valid_type(field_ty, token, stack + (ty,), allow_reference=False)
             return
         if isinstance(ty, SharedReference):
             if not allow_reference:
@@ -190,6 +197,8 @@ class Checker:
         from .patterns import check_enums
 
         check_enums(self)
+        for name, enum in self.enums.items():
+            self.valid_type(name, enum.token)
         for name, record in self.records.items():
             self.valid_type(name, record.token)
         for fn in self.functions:
@@ -238,7 +247,10 @@ class Checker:
             enum = self.enums.get(enum_name)
             if enum is None or variant not in enum.discriminants:
                 raise expr.token.error("unknown enum variant")
+            if variant in enum.payloads:
+                raise expr.token.error("payload variant requires constructor arguments")
             expr.value = enum.discriminants[variant]
+            expr.binding = variant
             ty = enum_name
         elif kind in {"unit", "let", "discard", "statement"}:
             ty = "()"
@@ -329,6 +341,21 @@ class Checker:
             callee = children[0]
             while callee.kind == "group":
                 callee = callee.children[0]
+            if callee.kind == "variant":
+                enum_name, variant = callee.value
+                enum = self.enums.get(enum_name)
+                if enum is None or variant not in enum.discriminants:
+                    raise callee.token.error("unknown enum constructor")
+                fields = enum.payloads.get(variant)
+                if fields is None:
+                    raise callee.token.error("unit variant does not take constructor arguments")
+                if len(children) - 1 != len(fields):
+                    raise expr.token.error("enum constructor argument count mismatch")
+                for arg, field_ty in zip(children[1:], fields):
+                    unify(field_ty, self.expression(arg), arg.token)
+                expr.kind, expr.value, expr.children = "enum_construct", variant, children[1:]
+                expr.ty = enum_name
+                return enum_name
             if callee.kind != "name" or self.local(str(callee.value)) is not None:
                 raise callee.token.error("only unshadowed direct function calls are supported")
             fn = self.names.get(str(callee.value))
@@ -386,10 +413,10 @@ class Checker:
             scrutinee_ty = self.expression(children[0])
             ty = NEVER
             for pattern, arm in zip(expr.value, children[1:]):
+                self.scopes.append({})
                 check_pattern(self, pattern, scrutinee_ty)
-                # Each arm expression owns its lexical block scopes normally;
-                # patterns in this slice bind no locals.
                 ty = unify(ty, self.expression(arm), arm.token)
+                self.scopes.pop()
         elif kind == "while":
             unify("bool", self.expression(children[0]), children[0].token)
             self.loops += 1
@@ -452,6 +479,8 @@ class Checker:
         if kind == "cast":
             if expr.ty not in INTEGERS or (expr.children[0].ty not in INTEGERS | {"bool"} and expr.children[0].ty not in self.enums):
                 raise expr.token.error("supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer")
+            if expr.children[0].ty in self.enums and self.enums[expr.children[0].ty].payloads:
+                raise expr.token.error("an enum with payload fields cannot be cast to an integer")
             if values[0] is not None:
                 return cast_constant(int(values[0]), expr.ty)
         if kind == "binary":

@@ -143,6 +143,7 @@ class Enumeration:
     variants: list[tuple[Token, Expr | None]]
     representation: str | None = None
     discriminants: dict[str, int] = field(default_factory=dict)
+    payloads: dict[str, tuple[object, ...]] = field(default_factory=dict)
 
 
 @dataclass
@@ -152,6 +153,8 @@ class Pattern:
     value: object = None
     children: list[Pattern] = field(default_factory=list)
     ty: object = None
+    binding: object = None
+    variant: str | None = None
 
 
 _TYPES = {"i32", "i64", "u32", "u64", "bool", "()"}
@@ -471,11 +474,21 @@ class Parser:
     def enumeration(self, representation) -> None:
         name = self.name()
         self.expect("{")
-        variants = []
+        variants, payloads = [], {}
         while not self.accept("}"):
             variant = self.name()
-            if self.token.text in {"(", "{"}:
-                raise self.token.error("enum payload variants require tagged aggregate layout and pattern bindings, which are not implemented")
+            if self.accept("("):
+                fields = []
+                while not self.accept(")"):
+                    fields.append(self.type())
+                    if self.accept(")"):
+                        break
+                    self.expect(",")
+                if not fields:
+                    raise variant.error("empty tuple variants are not implemented; use a unit variant")
+                payloads[variant.text] = tuple(fields)
+            if self.token.text == "{":
+                raise self.token.error("named enum payload fields are not implemented")
             value = self.expression() if self.accept("=") else None
             variants.append((variant, value))
             if self.accept("}"):
@@ -483,7 +496,9 @@ class Parser:
             self.expect(",")
         if not variants:
             raise name.error("empty enums require uninhabited-type analysis, which is not implemented")
-        self.enums.append(Enumeration(name, variants, representation))
+        if payloads and representation is None and any(value is not None for _, value in variants):
+            raise name.error("explicit discriminants on an enum with payloads require an integer repr")
+        self.enums.append(Enumeration(name, variants, representation, payloads=payloads))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:
@@ -525,8 +540,20 @@ class Parser:
             result = Pattern("literal", token, value)
         elif token.kind == "name" and self.accept("::"):
             result = Pattern("variant", token, (token.text, self.name().text))
+            if self.accept("("):
+                result.kind = "payload"
+                while not self.accept(")"):
+                    result.children.append(self.pattern())
+                    if self.accept(")"):
+                        break
+                    self.expect(",")
+        elif token.kind == "name" or token.text == "mut":
+            name = self.name() if token.text == "mut" else token
+            if name.text == "_":
+                raise name.error("mut wildcard is not a binding")
+            result = Pattern("binding", name, token.text == "mut")
         else:
-            raise token.error("pattern bindings, references, ranges and payload patterns are not implemented")
+            raise token.error("reference, range, named-field and rest patterns are not implemented")
         if alternatives and self.accept("|"):
             options = [result, self.pattern(alternatives=False)]
             while self.accept("|"):

@@ -19,8 +19,7 @@ def compile_source(source, **options):
 
 @pytest.mark.parametrize("source,message", [
     ("enum E{}", "empty enums"),
-    ("enum E{A(i32)}", "payload variants"),
-    ("enum E{A{x:i32}}", "payload variants"),
+    ("enum E{A{x:i32}}", "named enum payload fields"),
     ("enum E{A,A}", "duplicate enum variant"),
     ("enum E{A=3,B=3}", "duplicate enum discriminant"),
     ("enum E{A=3,B,C=4}", "duplicate enum discriminant"),
@@ -51,12 +50,10 @@ def compile_source(source, **options):
     ("fn f(x:(bool,bool)){match x{(true,)=>(),_=>()}}", "tuple pattern shape"),
     ("fn f(x:bool)->i32{match x{true=>1,false=>false}}", "type mismatch"),
     ("fn f(x:bool){match x{true if true=>(),_=>()}}", "match guards"),
-    ("fn f(x:i32){match x{y=>()}}", "pattern bindings"),
     ("fn f(x:i32){match x{1+2=>(),_=>()}}", "expected '=>'"),
     ("fn f(x:i32){match x{0..=2=>(),_=>()}}", "expected '=>'"),
     ("fn f(x:bool){match x{true=>1 false=>2}}", "expected ','"),
     ("fn f(){(match true{_=>()}) let x=1;}", "expected ';'"),
-    ("struct P{x:i32} fn f(p:P){match p{_=>()}}", "match currently supports"),
 ])
 def test_enum_and_match_diagnostics(source,message):
     with pytest.raises(RustError, match=message):

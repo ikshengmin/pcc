@@ -54,8 +54,7 @@ cross-compiler ABI is claimed; no native Rust standard-library objects are linke
 ## Boundaries and next owners
 
 This is not C-level language/ecosystem parity. General references/lifetimes/borrowing,
-Drop analysis, user-defined Copy, zero-field structs, tuple structs, enums/arrays,
-patterns/match, modules/imports, never-typed tuple operands,
+Drop analysis, user-defined Copy, zero-field structs, tuple structs, arrays, general patterns/match ergonomics, modules/imports, never-typed tuple operands,
 generics/traits/impls, closures, macros, pointer operations, heap allocation,
 `core`/`alloc`/`std`, panic/unwind, and the shared public driver are unfinished.
 Unsupported syntax fails closed. Accepted no_std arithmetic does **not** mean
@@ -222,7 +221,7 @@ Darwin is cross-object/relocation evidence only. This does not compile the whole
 Meson shared-library/malloc/free project, or core/alloc. See the upstream test
 provenance rather than treating a library-shaped fixture as project completion.
 
-### Unit-only enums and binding-free match
+### Enums and match
 
 Unit-only nominal enums admit qualified `Type::Variant` constructors, checked
 explicit/incrementing discriminants, and integer casts. Explicit integer repr
@@ -240,10 +239,10 @@ have explicit implementation limits. The scrutinee is evaluated once and arms
 are selected in source order. Binding-free place inspection does not move the
 place; value expressions still consume their non-Copy operands. Live arm exits
 join move states, including loop backedges, break/continue and early returns.
-The conservative initialized-place rule can reject a match whose wildcard never
-inspects an already partially moved place; it does not silently read such data.
+Tag inspection checks only the owning enum place, while literal patterns and
+value bindings check their exact subplaces. Wildcards do not consume fields.
 
-Payload/empty enums, pattern bindings/ref/match ergonomics, guards/ranges,
+Empty enums, named-field payload variants, ref/match ergonomics, guards/ranges,
 trait-derived Copy, macros and general const evaluation remain explicit gaps.
 No enum code imports a runtime, allocator or unwinder. The unchanged official
 Rust sources in `tests/rust/upstream/` remain frontier inputs, not core/alloc or
@@ -253,3 +252,31 @@ limitations are unchanged. Darwin is still cross-object emission only.
 Specification references: [enums](https://doc.rust-lang.org/reference/items/enumerations.html),
 [match](https://doc.rust-lang.org/reference/expressions/match-expr.html),
 [patterns](https://doc.rust-lang.org/reference/patterns.html).
+
+
+Tuple payload variants and by-value match bindings extend that domain. The
+private representation is a public-IR struct containing the typed tag followed
+by a distinct typed struct slot for each payload variant, not a union or a C
+layout promise. Every size, offset and alignment is owned by the existing
+selected-target layout/backend path; no host-size arithmetic is used. Inactive
+storage is defined zero bits solely for IR storage hygiene, **not initialized
+Rust values**. Pattern predicates branch on the tag before inspecting a payload,
+including nested enum tags. Foreign enum ABI and integer casts of payload enums
+are rejected. Enum storage/Copy behavior is not special-cased for Option/Result.
+
+Constructor arguments evaluate in source order. Match bindings have their own
+arm scope; `mut` applies to the new binding, not the scrutinee. Copy fields are
+copied, non-Copy fields are moved by variant/field path. Unmoved sibling payloads
+remain readable, whole-owner use after a partial move is rejected, and whole
+assignment restores initialization. Move joins retain early-return and loop
+break/continue behavior. Bindings inside or-patterns remain an explicit gap;
+binding-free or-patterns retain constructor-aware coverage.
+
+Only types without a supported destructor enter this slice: primitive values,
+unit, recursively admitted tuples/records/enums. References stored in payloads,
+Drop implementations, user-defined Copy/traits, borrowing patterns and general
+lifetime checking are rejected, not implemented by discarding destructor calls.
+There is no heap allocation or private drop/GC/unwind runtime. Full original
+Rust 1.90.0 Option/Result inputs still fail at documentation attributes and need
+generics, derives, impls, macros, lang items, references and owned intrinsics;
+the six original PCC payload programs are separate specification fixtures.

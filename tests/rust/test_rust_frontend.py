@@ -119,7 +119,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("struct S {}", "zero-field structs"),
     ("fn f<T>(x:T){}", "expected '('"),
     ("fn f(){ [1,2]; }", "unsupported expression"),
-    ("fn f(){ let x=Box::new(1); }", "only unshadowed direct function calls"),
+    ("fn f(){ let x=Box::new(1); }", "unknown enum constructor"),
     ("fn f(){ 1<<2; }", "expected ';'"),
     ("extern \"C\" fn f(x:bool){}", "extern C currently supports"),
     ("#[no_mangle] fn f(){}", "no_mangle is supported only on extern C"),

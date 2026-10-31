@@ -6,7 +6,7 @@ from pcc.ir.compat import ir
 from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
 from .targets import RustTarget
-from .types import SharedReference
+from .types import SharedReference, TupleType
 
 
 def ir_type(ty: str):
@@ -46,7 +46,14 @@ class Lowerer:
                 for item in self.checker.fields(ty)
             ])
         if ty in self.checker.enums:
-            return ir_type(self.checker.enums[ty].representation or "i64")
+            enum = self.checker.enums[ty]
+            tag = ir_type(enum.representation or "i64")
+            if enum.payloads:
+                # Private tagged storage, not a C/rustc enum layout. Every
+                # field offset and alignment comes from the shared target IR
+                # data layout. No host sizeof, union punning or pointer casts.
+                return ir.LiteralStructType([tag] + [self.type(TupleType(fields)) for fields in enum.payloads.values()])
+            return tag
         return ir_type(ty)
 
     def place_pointer(self, expr):
@@ -98,7 +105,13 @@ class Lowerer:
     def allocate_locals(self, expr: Expr) -> None:
         if expr.kind == "let":
             self.allocate(expr.binding)
-        if expr.kind in {"tuple", "construct"}:
+        if expr.kind == "match":
+            from .patterns import pattern_bindings
+            for pattern in expr.value:
+                for binding in pattern_bindings(pattern):
+                    self.allocate(binding)
+        if (expr.kind in {"tuple", "construct", "enum_construct"}
+                or expr.kind == "variant" and self.checker.enums[expr.ty].payloads):
             self.temps[id(expr)] = self.builder.alloca(self.type(expr.ty), name="aggregate")
         for child in expr.children:
             self.allocate_locals(child)
@@ -109,6 +122,26 @@ class Lowerer:
         kind, children = expr.kind, expr.children
         if kind in {"group", "unsafe"}:
             return self.expression(children[0])
+        if kind == "enum_construct" or kind == "variant" and self.checker.enums[expr.ty].payloads:
+            enum = self.checker.enums[expr.ty]
+            variant = expr.value if kind == "enum_construct" else expr.binding
+            values = [self.expression(child) for child in children]
+            if self.builder.block.is_terminated:
+                return None
+            storage = self.temps[id(expr)]
+            # Unused physical storage is defined zero bits, not initialized
+            # Rust values. Only the tagged active payload may be inspected.
+            self.builder.store(ir.Constant(self.type(expr.ty), None), storage)
+            tag = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+            self.builder.store(ir.Constant(ir_type(enum.representation or "i64"), enum.discriminants[variant]), tag)
+            if kind == "enum_construct":
+                index = list(enum.payloads).index(variant) + 1
+                payload = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), index)])
+                for i, (value, child) in enumerate(zip(values, children)):
+                    if child.ty != "()":
+                        field = self.builder.gep(payload, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), i)])
+                        self.builder.store(value, field)
+            return self.builder.load(storage)
         if kind in {"integer", "variant"}:
             return ir.Constant(self.type(expr.ty), expr.value)
         if kind == "bool":
@@ -297,29 +330,74 @@ class Lowerer:
             result.add_incoming(value, block)
         return result
 
+    def payload_value(self, pattern, value):
+        enum = self.checker.enums[pattern.ty]
+        index = list(enum.payloads).index(pattern.variant) + 1
+        return self.builder.extract_value(value, index)
+
     def pattern_test(self, pattern, value):
         true = ir.Constant(ir.IntType(1), 1)
-        if pattern.kind in {"wildcard", "unit"}:
+        if pattern.kind in {"wildcard", "unit", "binding"}:
             return true
-        if pattern.kind in {"literal", "variant"}:
+        if pattern.kind == "literal":
             return self.builder.icmp_unsigned("==", value, ir.Constant(self.type(pattern.ty), int(pattern.value)))
+        if pattern.kind in {"variant", "payload"}:
+            enum = self.checker.enums[pattern.ty]
+            tag = self.builder.extract_value(value, 0) if enum.payloads else value
+            test = self.builder.icmp_unsigned("==", tag, ir.Constant(tag.type, pattern.value))
+            if pattern.kind == "variant":
+                return test
+            # Do not inspect any inactive payload, including a nested enum's
+            # tag. Branch before extraction, then merge a plain bool predicate.
+            origin = self.builder.block
+            active = self.function.append_basic_block("pattern.payload")
+            done = self.function.append_basic_block("pattern.end")
+            self.builder.cbranch(test, active, done)
+            self.builder.position_at_end(active)
+            result = self.pattern_fields_test(pattern.children, self.payload_value(pattern, value))
+            end = self.builder.block
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            predicate = self.builder.phi(ir.IntType(1))
+            predicate.add_incoming(ir.Constant(ir.IntType(1), 0), origin)
+            predicate.add_incoming(result, end)
+            return predicate
         if pattern.kind == "or":
             result = ir.Constant(ir.IntType(1), 0)
             for option in pattern.children:
                 result = self.builder.or_(result, self.pattern_test(option, value))
             return result
-        result = true
-        for index, child in enumerate(pattern.children):
-            if child.kind in {"wildcard", "unit"}:
+        return self.pattern_fields_test(pattern.children, value)
+
+    def pattern_fields_test(self, children, value):
+        result = ir.Constant(ir.IntType(1), 1)
+        for index, child in enumerate(children):
+            if child.kind in {"wildcard", "unit", "binding"}:
                 continue
             field = self.builder.extract_value(value, index)
             result = self.builder.and_(result, self.pattern_test(child, field))
         return result
 
+    def bind_pattern(self, pattern, value):
+        from .patterns import contains_binding
+
+        if not contains_binding(pattern):
+            return
+        if pattern.kind == "binding":
+            if pattern.ty != "()":
+                self.builder.store(value, self.slots[pattern.binding.serial])
+        elif pattern.kind in {"tuple", "payload"}:
+            if pattern.kind == "payload":
+                value = self.payload_value(pattern, value)
+            for index, child in enumerate(pattern.children):
+                if contains_binding(child):
+                    field = None if child.ty == "()" else self.builder.extract_value(value, index)
+                    self.bind_pattern(child, field)
+
     def match(self, expr):
         # Exactly one scrutinee evaluation; test arms in source order. Patterns
-        # in this slice never bind/move a place. Value-expression operands still
-        # have their ordinary Rust move semantics, checked before lowering.
+        # consume only the bound active payload fields. Value-expression
+        # operands retain ordinary Rust moves, checked before lowering.
         value = self.expression(expr.children[0])
         if self.builder.block.is_terminated:
             return None
@@ -330,6 +408,7 @@ class Lowerer:
             following = self.function.append_basic_block("match.next")
             self.builder.cbranch(self.pattern_test(pattern, value), selected, following)
             self.builder.position_at_end(selected)
+            self.bind_pattern(pattern, value)
             result = self.expression(arm)
             if not self.builder.block.is_terminated:
                 incoming.append((result, self.builder.block))

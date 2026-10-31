@@ -56,3 +56,23 @@ match and still fails at original `assert_eq!` macro calls. Its own `main` has
 not run. Expected capability-diagnostic tests are **not upstream execution
 success**. PCC's separately authored enum/match programs are specification
 fixtures, not these upstream programs or an implementation of core/alloc.
+
+## Original payload dependencies, not replacement implementations
+
+`rust-1.90.0/core_option.rs` and `core_result.rs` are the full official
+`library/core/src/option.rs` and `library/core/src/result.rs`, read at immutable
+release commit `1159e78c4747b02ef996e55082b704c09b970588` before implementing
+payload variants. They use the same dual-license originals retained above.
+
+- Option: blob `ed070fbd227464718f1668e1a16cf7ce2c176d48`, SHA-256
+  `53b549b18552144e911416aa2773e8b726da88c190d5cb27007c3c08740894a5`, 90,809 bytes.
+- Result: blob `f65257ff59b923bb2d83c7bd7371a730990769da`, SHA-256
+  `768b0584d514fce9255a762e76bb51eb1646b7bcabd6db660752960321bfc51f`, 69,766 bytes.
+
+`Option` at line 593 and `Result` at line 548 require generic tuple-payload enum
+constructors. Their original methods need match bindings plus references,
+trait/closure bounds, impl/method syntax, macros and owned lang items/intrinsics.
+Both complete files still fail at their initial documentation attributes. No
+methods are extracted, renamed or rewritten to claim original core success.
+See [Option original](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/option.rs)
+and [Result original](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/result.rs).

@@ -1,11 +1,9 @@
-"""Unit-only enums and binding-free pattern coverage, without trait shortcuts.
+"""Enums and typed pattern coverage, without trait or borrowing shortcuts.
 
 A bounded constructor matrix covers bool/enum/tuple cases and integer literal
-partitions plus an explicit other-value class. This is not payload matching,
-match ergonomics, a borrow checker, or a replacement for Rust's trait solver.
+partitions plus an explicit other-value class. This is not match ergonomics,
+a borrow checker, or a replacement for Rust's trait solver.
 """
-from itertools import product
-
 from .semantics import INTEGERS, bounds, resolve, unify
 from .types import TupleType
 
@@ -50,11 +48,21 @@ def check_enums(checker):
             previous = value
 
 
+def contains_binding(pattern):
+    return pattern.kind == "binding" or any(contains_binding(child) for child in pattern.children)
+
+
 def check_pattern(checker, pattern, ty):
     pattern.ty = ty
     if pattern.kind == "wildcard":
         return
-    if pattern.kind == "or":
+    if pattern.kind == "binding":
+        if pattern.token.text in checker.scopes[-1]:
+            raise pattern.token.error("duplicate binding in pattern")
+        pattern.binding = checker.bind(pattern.token, ty, pattern.value)
+    elif pattern.kind == "or":
+        if contains_binding(pattern):
+            raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")
         for child in pattern.children:
             check_pattern(checker, child, ty)
     elif pattern.kind == "tuple":
@@ -66,61 +74,58 @@ def check_pattern(checker, pattern, ty):
         unify("()", ty, pattern.token)
     elif pattern.kind == "literal":
         unify(ty, checker.expression(pattern.value), pattern.token)
-    elif pattern.kind == "variant":
+    elif pattern.kind in {"variant", "payload"}:
         name, variant = pattern.value
         enum = checker.enums.get(name)
         if enum is None or variant not in enum.discriminants:
             raise pattern.token.error("unknown enum variant pattern")
         unify(name, ty, pattern.token)
+        fields = enum.payloads.get(variant)
+        if pattern.kind == "payload":
+            if fields is None or len(fields) != len(pattern.children):
+                raise pattern.token.error("enum payload pattern shape does not match variant")
+            for child, field_ty in zip(pattern.children, fields):
+                check_pattern(checker, child, field_ty)
+        elif fields is not None:
+            raise pattern.token.error("payload variant pattern requires fields")
+        pattern.variant = variant
         pattern.value = enum.discriminants[variant]
     else:
         raise pattern.token.error("unsupported pattern")
 
 
-def leaf_types(checker, ty, token):
-    if isinstance(ty, TupleType):
-        return [item for child in ty.elements for item in leaf_types(checker, child, token)]
-    if ty == "()":
-        return []
-    if ty in INTEGERS | {"bool"} or ty in checker.enums:
-        return [ty]
-    raise token.error("match currently supports bool/integer/unit-only-enum and tuples of those types")
+def pattern_bindings(pattern):
+    if pattern.kind == "binding":
+        yield pattern.binding
+    for child in pattern.children:
+        yield from pattern_bindings(child)
 
 
-def pattern_rows(checker, pattern):
+def validate_pattern(checker, pattern):
     pattern.ty = resolve(pattern.ty)
     if pattern.kind == "literal":
         pattern.value = checker.validate(pattern.value)
-    if pattern.kind in {"literal", "variant"}:
-        return [(pattern.value,)]
-    if pattern.kind == "unit":
-        return [()]
-    if pattern.kind == "wildcard":
-        return [(None,) * len(leaf_types(checker, pattern.ty, pattern.token))]
-    rows = []
-    if pattern.kind == "or":
-        for child in pattern.children:
-            rows.extend(pattern_rows(checker, child))
-            if len(rows) > MAX_PATTERN_ROWS:
-                raise pattern.token.error("pattern matrix exceeds implementation limit")
-    else:
-        rows = [()]
-        for child in pattern.children:
-            child_rows = pattern_rows(checker, child)
-            if len(rows) * len(child_rows) > MAX_PATTERN_ROWS:
-                raise pattern.token.error("pattern matrix exceeds implementation limit")
-            rows = [left + right for left, right in product(rows, child_rows)]
-    return rows
+    if pattern.kind == "binding":
+        pattern.binding.ty = resolve(pattern.binding.ty)
+    for child in pattern.children:
+        validate_pattern(checker, child)
 
 
 def validate_match(checker, expr):
-    columns = leaf_types(checker, expr.children[0].ty, expr.token)
-    rows = []
+    from .syntax import Pattern
+
+    def admitted(ty):
+        if isinstance(ty, TupleType):
+            return all(admitted(item) for item in ty.elements)
+        return ty in INTEGERS | {"bool", "()"} or ty in checker.enums or ty in checker.records
+    if not admitted(expr.children[0].ty):
+        raise expr.token.error("match currently supports owned scalar/aggregate values, not reference matching")
     for pattern in expr.value:
-        rows.extend(pattern_rows(checker, pattern))
-        if len(rows) > MAX_PATTERN_ROWS:
-            raise expr.token.error("pattern matrix exceeds implementation limit")
+        validate_pattern(checker, pattern)
     budget = MAX_COVERAGE_STEPS
+
+    def wildcards(types):
+        return tuple(Pattern("wildcard", expr.token, ty=ty) for ty in types)
 
     def covered(matrix, types):
         nonlocal budget
@@ -129,18 +134,52 @@ def validate_match(checker, expr):
             raise expr.token.error("match exhaustiveness exceeds implementation limit")
         if not matrix:
             return False
-        if not types or any(all(value is None for value in row) for row in matrix):
+        if not types:
+            return True
+        # Expand alternatives only at the selected column. Nested tuple/sum
+        # constructors are specialized structurally, never flattened into an
+        # invalid product of all enum payloads.
+        expanded = []
+        pending = list(matrix)
+        while pending:
+            row = pending.pop()
+            if row[0].kind == "or":
+                pending.extend((option,) + row[1:] for option in row[0].children)
+            else:
+                expanded.append(row)
+            if len(expanded) + len(pending) > MAX_PATTERN_ROWS:
+                raise expr.token.error("pattern matrix exceeds implementation limit")
+        matrix = expanded
+        if any(all(p.kind in {"wildcard", "binding"} for p in row) for row in matrix):
             return True
         ty = types[0]
-        if ty == "bool":
-            constructors = (False, True)
+        if isinstance(ty, TupleType):
+            constructors = [("tuple", None, ty.elements)]
         elif ty in checker.enums:
-            constructors = tuple(checker.enums[ty].discriminants.values())
+            enum = checker.enums[ty]
+            constructors = [("enum", name, enum.payloads.get(name, ())) for name in enum.discriminants]
+        elif ty == "bool":
+            constructors = [("literal", value, ()) for value in (False, True)]
+        elif ty in INTEGERS:
+            values = {row[0].value for row in matrix if row[0].kind == "literal"}
+            constructors = [("literal", value, ()) for value in values] + [("literal", object(), ())]
         else:
-            # Every unmentioned integer behaves identically for these patterns.
-            constructors = tuple({row[0] for row in matrix if row[0] is not None}) + (object(),)
-        return all(covered([row[1:] for row in matrix if row[0] is None or row[0] == tag], types[1:])
-                   for tag in constructors)
+            constructors = [("unit", None, ())]
+        for kind, tag, fields in constructors:
+            specialized = []
+            for row in matrix:
+                head, tail = row[0], row[1:]
+                if head.kind in {"wildcard", "binding"}:
+                    specialized.append(wildcards(fields) + tail)
+                elif kind == "tuple" and head.kind == "tuple":
+                    specialized.append(tuple(head.children) + tail)
+                elif kind == "enum" and head.kind in {"variant", "payload"} and head.variant == tag:
+                    specialized.append(tuple(head.children) + tail)
+                elif kind == head.kind and (kind == "unit" or head.value == tag):
+                    specialized.append(tail)
+            if not covered(specialized, tuple(fields) + types[1:]):
+                return False
+        return True
 
-    if not covered(rows, columns):
+    if not covered([(pattern,) for pattern in expr.value], (expr.children[0].ty,)):
         raise expr.token.error("non-exhaustive match patterns")
