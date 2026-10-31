@@ -7,7 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
-from pcc.frontends.go.types import ArrayType, Results, result_types, integer_bits, integer_signed
+from pcc.frontends.go.types import ArrayType, Results, result_types, integer_bits, integer_signed, is_string
 
 
 def function_symbol(name, package_path=None):
@@ -24,6 +24,8 @@ def ir_type(dtype):
         return ir.LiteralStructType([ir_type(item) for item in dtype.elements])
     if isinstance(dtype, ArrayType):
         return ir.ArrayType(ir_type(dtype.element), dtype.count)
+    if is_string(dtype):
+        return ir.LiteralStructType([ir.IntType(8).as_pointer(), ir.IntType(64)])
     if dtype == "void":
         return ir.VoidType()
     if dtype in ("bool", "untyped bool"):
@@ -44,12 +46,49 @@ class Lowerer:
         self.loops = []
         self.builder = None
         self.function = None
+        self.string_literals = {}
+        self.string_descriptors = {}
+
+    def string_constant(self, data):
+        if not data:
+            pointer = ir.Constant(ir.IntType(8).as_pointer(), None)
+        else:
+            if data not in self.string_literals:
+                storage = ir.GlobalVariable(self.module, ir.ArrayType(ir.IntType(8), len(data)),
+                                            "__pcc_go_string_" + str(len(self.string_literals)))
+                storage.linkage = "private"
+                storage.global_constant = True
+                storage.initializer = ir.Constant(storage.value_type, bytearray(data))
+                self.string_literals[data] = storage
+            pointer = self.string_literals[data].gep([ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+        return ir.Constant(ir_type("string"), [pointer, ir.Constant(ir.IntType(64), len(data))])
+
+    def string_value(self, data):
+        # The shared backend supports pointer relocations in static aggregate
+        # initializers, but not inline aggregate literals in instructions.
+        # Load the immutable descriptor as a value; its pointer still denotes
+        # the same private readonly backing, with no runtime allocation/init.
+        if data not in self.string_descriptors:
+            descriptor = ir.GlobalVariable(self.module, ir_type("string"),
+                                           "__pcc_go_string_value_" + str(len(self.string_descriptors)))
+            descriptor.linkage = "private"
+            descriptor.global_constant = True
+            descriptor.initializer = self.string_constant(data)
+            self.string_descriptors[data] = descriptor
+        return self.builder.load(self.string_descriptors[data])
+
+    def zero(self, dtype):
+        return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if isinstance(dtype, ArrayType) else 0)
 
     def lower(self):
         for declaration in self.program.variables:
             for symbol in declaration.symbols:
                 storage = ir.GlobalVariable(self.module, ir_type(symbol.type), symbol.abi_symbol)
                 value = symbol.initializer
+                if is_string(symbol.type):
+                    storage.initializer = self.string_constant(value or b"")
+                    self.globals[symbol] = storage
+                    continue
                 if value is None and not isinstance(symbol.type, ArrayType):
                     value = 0
                 if isinstance(symbol.type, ArrayType) and value is not None:
@@ -75,7 +114,7 @@ class Lowerer:
             self.source_function = source
             self.result_storage = self.builder.alloca(ir_type(source.result), name="multiple_results") if isinstance(source.result, Results) else None
             for symbol in source.result_symbols:
-                self.builder.store(ir.Constant(ir_type(symbol.type), None if isinstance(symbol.type, ArrayType) else 0), self.slots[symbol])
+                self.builder.store(self.zero(symbol.type), self.slots[symbol])
             self.statements(source.body)
             if not self.builder.block.is_terminated:
                 if source.result == "void":
@@ -119,7 +158,7 @@ class Lowerer:
             values = self.values(statement.exprs)
             for index, symbol in enumerate(statement.symbols):
                 if symbol is not None and symbol.token.text != "_":
-                    value = values[index] if values else ir.Constant(ir_type(symbol.type), None if isinstance(symbol.type, ArrayType) else 0)
+                    value = values[index] if values else self.zero(symbol.type)
                     self.builder.store(value, self.slots[symbol])
             return
         if kind == "expression":
@@ -241,7 +280,20 @@ class Lowerer:
                 self.builder.store(value, element)
             return self.builder.load(storage)
         if expr.constant is not None:
-            return ir.Constant(ir_type(expr.type), int(expr.constant))
+            return self.string_value(expr.constant) if is_string(expr.type) else ir.Constant(ir_type(expr.type), int(expr.constant))
+        if expr.kind == "string_compare":
+            return self.string_compare(expr)
+        if expr.kind == "string_len":
+            return self.builder.extract_value(self.expression(expr.args[0]), 1)
+        if expr.kind == "index" and is_string(expr.args[0].type):
+            base, index = expr.args
+            value = self.expression(base)
+            pointer = self.builder.extract_value(value, 0)
+            offset = self.expression(index)
+            if offset.type.width < 64:
+                extend = self.builder.sext if integer_signed(index.type) else self.builder.zext
+                offset = extend(offset, ir.IntType(64))
+            return self.builder.load(self.builder.gep(pointer, [offset]))
         if expr.kind in ("name", "selector", "index"):
             return self.builder.load(self.address(expr))
         if expr.kind == "call":
@@ -249,6 +301,8 @@ class Lowerer:
             if expr.symbol is None:
                 value = arguments[0]
                 target = ir_type(expr.type)
+                if is_string(expr.type):
+                    return value
                 if value.type.width > target.width:
                     return self.builder.trunc(value, target)
                 if value.type.width < target.width:
@@ -334,4 +388,50 @@ class Lowerer:
         result = self.builder.phi(ir.IntType(1))
         result.add_incoming(ir.Constant(ir.IntType(1), 0 if is_and else 1), left_block)
         result.add_incoming(right, right_end)
+        return result
+
+
+    def string_compare(self, expr):
+        """Lexicographic unsigned bytes, bounded by both live descriptor lengths.
+
+        This ordinary public-IR loop needs no allocator, runtime call, or panic:
+        every byte load is dominated by the two explicit length comparisons.
+        """
+        left, right = [self.expression(item) for item in expr.args]
+        left_pointer = self.builder.extract_value(left, 0)
+        right_pointer = self.builder.extract_value(right, 0)
+        left_length = self.builder.extract_value(left, 1)
+        right_length = self.builder.extract_value(right, 1)
+        origin = self.builder.block
+        check = self.function.append_basic_block("string.check")
+        body = self.function.append_basic_block("string.byte")
+        advance = self.function.append_basic_block("string.advance")
+        difference = self.function.append_basic_block("string.difference")
+        length = self.function.append_basic_block("string.length")
+        done = self.function.append_basic_block("string.done")
+        self.builder.branch(check)
+        self.builder.position_at_end(check)
+        index = self.builder.phi(ir.IntType(64))
+        index.add_incoming(ir.Constant(ir.IntType(64), 0), origin)
+        available = self.builder.and_(self.builder.icmp_unsigned("<", index, left_length),
+                                      self.builder.icmp_unsigned("<", index, right_length))
+        self.builder.cbranch(available, body, length)
+        self.builder.position_at_end(body)
+        a = self.builder.load(self.builder.gep(left_pointer, [index]))
+        b = self.builder.load(self.builder.gep(right_pointer, [index]))
+        self.builder.cbranch(self.builder.icmp_unsigned("!=", a, b), difference, advance)
+        self.builder.position_at_end(advance)
+        following = self.builder.add(index, ir.Constant(ir.IntType(64), 1))
+        index.add_incoming(following, advance)
+        self.builder.branch(check)
+        self.builder.position_at_end(difference)
+        byte_result = self.builder.icmp_unsigned(expr.value, a, b)
+        self.builder.branch(done)
+        self.builder.position_at_end(length)
+        length_result = self.builder.icmp_unsigned(expr.value, left_length, right_length)
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        result = self.builder.phi(ir.IntType(1))
+        result.add_incoming(byte_result, difference)
+        result.add_incoming(length_result, length)
         return result

@@ -95,11 +95,11 @@ def test_original_standard_package_now_reaches_its_real_type_frontier():
         "main": [("main.go", 'package main; import "math/bits"; func main(){_ = bits.LeadingZeros(1)}')],
         "math/bits": [("bits.go", bits.read_text())],
     }
-    with pytest.raises(GoDiagnostic, match=r"expected 'name', got '\('") as failure:
-        # Original bits.go now parses named/multiple results, but its original
-        # Div64 local grouped constant declaration is the next syntax boundary.
+    with pytest.raises(GoDiagnostic, match="undefined name ntz8tab") as failure:
+        # The unchanged complete file now parses its local grouped constants.
+        # Its original string-table dependency is a separate source unit.
         compile_go_packages(inputs)
-    assert failure.value.filename == "bits.go" and failure.value.line == 534
+    assert failure.value.filename == "bits.go" and failure.value.line == 68
 
 
 @pytest.mark.integration

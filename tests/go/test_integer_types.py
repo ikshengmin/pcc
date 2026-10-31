@@ -9,7 +9,7 @@ from pcc.frontends.go.types import INTEGER_TYPES, integer_bounds
 
 
 def program(body, helpers=""):
-    return "package main; " + helpers + "; func main(){" + body + "}"
+    return "package main; " + (helpers + "; " if helpers else "") + "func main(){" + body + "}"
 
 
 @pytest.mark.parametrize("dtype", INTEGER_TYPES)

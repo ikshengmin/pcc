@@ -12,7 +12,7 @@ from tests.go.test_execution import forbid_external_compiler, units
 
 
 def source(declarations, body=""):
-    return "package main; " + declarations + ";func main(){" + body + "}"
+    return "package main; " + (declarations + ";" if declarations else "") + "func main(){" + body + "}"
 
 
 PAIR = "func pair()(int64,int64){return 3,4}"

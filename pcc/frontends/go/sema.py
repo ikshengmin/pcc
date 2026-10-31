@@ -11,7 +11,7 @@ import unicodedata
 
 from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic
 from pcc.frontends.go.types import (
-    ArrayType, Results, TYPE_NAMES, TYPES, result_types, integer_bits, integer_bounds, integer_signed, is_integer,
+    ArrayType, Results, TYPE_NAMES, TYPES, result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
 )
 
 
@@ -36,6 +36,7 @@ class Symbol:
     package_variable: bool = False
     initializer: object = None
     abi_symbol: str = ""
+    iota: int | None = None
 
 
 def integer_literal(expr):
@@ -66,7 +67,7 @@ def is_boolean(dtype):
 
 
 def default_type(dtype):
-    return {"untyped int": "int", "untyped bool": "bool"}.get(dtype, dtype)
+    return {"untyped int": "int", "untyped bool": "bool", "untyped string": "string"}.get(dtype, dtype)
 
 
 def check_representable(expr):
@@ -86,7 +87,8 @@ def coerce(expr, dtype):
         check_representable(expr)
         return
     if ((expr.type == "untyped int" and is_integer(dtype)) or
-            (expr.type == "untyped bool" and is_boolean(dtype))):
+            (expr.type == "untyped bool" and is_boolean(dtype)) or
+            (expr.type == "untyped string" and is_string(dtype))):
         expr.type = dtype
         # Nonconstant shifts with an untyped left operand acquire their type
         # from the surrounding assignment/conversion/expression, before shift.
@@ -111,6 +113,7 @@ class Analyzer:
         self.scopes = []
         self.function = None
         self.loop_depth = 0
+        self.iota = None
 
     def analyze(self):
         from pcc.frontends.go.lowering import function_symbol
@@ -132,16 +135,17 @@ class Analyzer:
             for index, token in enumerate(declaration.names):
                 expr = declaration.exprs[index] if declaration.exprs else None
                 self.check_name(token)
-                if token.text == "_":
-                    raise GoDiagnostic(token, "blank package declarations are not supported")
+                if token.text == "_" and declaration.kind != "const":
+                    raise GoDiagnostic(token, "blank package variables are not supported")
                 if token.text == "init":
                     raise GoDiagnostic(token, "package name init is reserved for init function declarations")
                 if token.text in self.globals or token.text in self.functions:
                     raise GoDiagnostic(token, "duplicate package declaration " + token.text)
                 symbol = Symbol(token, declaration.type, declaration=expr, resolved=False,
                                 package_variable=declaration.kind == "var",
-                                abi_symbol=function_symbol(token.text, self.package_path))
-                self.globals[token.text] = symbol
+                                abi_symbol=function_symbol(token.text, self.package_path), iota=declaration.iota)
+                if token.text != "_":
+                    self.globals[token.text] = symbol
                 declaration.symbols.append(symbol)
         # The package block spans every source file. An import's file-block
         # name may not collide with any package declaration, including one in
@@ -151,8 +155,8 @@ class Analyzer:
             for alias, binding in file_imports.items():
                 if alias in package_names:
                     raise GoDiagnostic(binding.token, "import name conflicts with package declaration: " + alias)
-        for symbol in self.globals.values():
-            if not symbol.package_variable:
+        for declaration in self.program.constants:
+            for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
         for function in self.program.functions:
             function.params = [(token, self.resolve_type(dtype)) for token, dtype in function.params]
@@ -193,8 +197,8 @@ class Analyzer:
             return Results(tuple(self.resolve_type(item) for item in dtype.elements))
         if not isinstance(dtype, ArraySyntax):
             return dtype
-        if isinstance(dtype.element, ArraySyntax):
-            raise GoDiagnostic(dtype.token, "nested arrays are not implemented")
+        if isinstance(dtype.element, ArraySyntax) or is_string(dtype.element):
+            raise GoDiagnostic(dtype.token, "nested arrays and string-element arrays are not implemented")
         if dtype.length is None:
             raise GoDiagnostic(dtype.token, "array length inference requires a composite literal")
         count = self.array_index_constant(dtype.length, "array length")
@@ -211,6 +215,14 @@ class Analyzer:
         return expr.constant
 
     def resolve_constant(self, symbol):
+        previous = self.iota
+        self.iota = symbol.iota
+        try:
+            self._resolve_constant(symbol)
+        finally:
+            self.iota = previous
+
+    def _resolve_constant(self, symbol):
         if symbol.resolved:
             return
         if symbol.resolving:
@@ -334,8 +346,13 @@ class Analyzer:
                 coerce(expr, default_type(expr.type) if target.value == "_" else target.type)
             return
         if kind in ("var", "const", ":="):
-            statement.type = self.resolve_type(statement.type)
-            values = self.values(statement.exprs)
+            previous = self.iota
+            self.iota = statement.iota if kind == "const" else None
+            try:
+                statement.type = self.resolve_type(statement.type)
+                values = self.values(statement.exprs)
+            finally:
+                self.iota = previous
             if values and len(statement.names) != len(values):
                 raise GoDiagnostic(statement.token, "assignment count mismatch")
             for expr in values:
@@ -489,8 +506,8 @@ class Analyzer:
                 next_index = index + 1
             syntax = expr.value
             if syntax.length is None:
-                if isinstance(syntax.element, ArraySyntax):
-                    raise GoDiagnostic(syntax.token, "nested arrays are not implemented")
+                if isinstance(syntax.element, ArraySyntax) or is_string(syntax.element):
+                    raise GoDiagnostic(syntax.token, "nested arrays and string-element arrays are not implemented")
                 count = max(indices, default=-1) + 1
                 if count > 4096:
                     raise GoDiagnostic(syntax.token, "array exceeds implementation limit (4096 elements)")
@@ -510,8 +527,28 @@ class Analyzer:
             base, index = expr.args
             self.expression(base)
             self.expression(index)
+            if is_string(base.type):
+                if not is_integer(index.type):
+                    raise GoDiagnostic(index.token, "string index must be an integer")
+                if index.constant is not None and index.constant < 0:
+                    raise GoDiagnostic(index.token, "string index must be nonnegative")
+                if base.constant is None:
+                    raise GoDiagnostic(index.token, "unproven string bounds require shared-runtime bounds-panic support")
+                if index.constant is not None:
+                    value = self.array_index_constant(index, "string index")
+                    if value >= len(base.constant):
+                        raise GoDiagnostic(index.token, "string index out of bounds")
+                else:
+                    upper = self.index_upper_bound(index)
+                    if upper is None or upper >= len(base.constant):
+                        raise GoDiagnostic(index.token, "unproven string bounds require shared-runtime bounds-panic support")
+                coerce(index, default_type(index.type))
+                # A string index is a byte value, but is not a Go constant
+                # expression even when both operands happen to be constant.
+                expr.type = "uint8"
+                return
             if not isinstance(base.type, ArrayType):
-                raise GoDiagnostic(expr.token, "indexing requires an array (slices/maps/strings are not implemented)")
+                raise GoDiagnostic(expr.token, "indexing requires an array or string (slices/maps are not implemented)")
             if not is_integer(index.type):
                 raise GoDiagnostic(index.token, "array index must be an integer")
             if index.constant is not None:
@@ -527,11 +564,19 @@ class Analyzer:
             if not base.addressable and self.function is not None:
                 self.function.temporaries.append(base)
             return
+        if kind == "string":
+            from pcc.frontends.go.strings import literal_bytes
+            expr.type, expr.constant = "untyped string", literal_bytes(expr.token)
+            return
         if kind == "integer":
             expr.type, expr.constant = "untyped int", integer_literal(expr)
             return
         if kind == "name":
-            if expr.value in ("true", "false"):
+            if expr.value == "iota":
+                if self.iota is None:
+                    raise GoDiagnostic(expr.token, "iota is only defined within a constant declaration")
+                expr.type, expr.constant = "untyped int", self.iota
+            elif expr.value in ("true", "false"):
                 expr.type, expr.constant = "untyped bool", expr.value == "true"
             else:
                 symbol = self.lookup(expr.token)
@@ -555,14 +600,34 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "undefined imported function " + name)
                 self.call(expr, function)
                 return
+            if name == "len":
+                if len(expr.args) != 1:
+                    raise GoDiagnostic(expr.token, "len requires one argument")
+                arg = expr.args[0]
+                self.expression(arg)
+                if not is_string(arg.type):
+                    raise GoDiagnostic(expr.token, "len currently supports strings; array/slice/map length is not implemented")
+                expr.kind = "string_len"
+                expr.type = "int"  # len is typed int even when its value is constant.
+                expr.constant = len(arg.constant) if arg.constant is not None else None
+                return
             if name in TYPE_NAMES:
                 name = TYPE_NAMES[name]
                 if len(expr.args) != 1:
                     raise GoDiagnostic(expr.token, "conversion requires one argument")
                 arg = expr.args[0]
                 self.expression(arg)
+                if name == "string" and is_integer(arg.type):
+                    if arg.constant is None:
+                        raise GoDiagnostic(expr.token, "integer-to-string conversion requires shared-runtime allocation support")
+                    codepoint = arg.constant
+                    if codepoint < 0 or codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
+                        codepoint = 0xfffd
+                    expr.type, expr.constant = "string", chr(codepoint).encode("utf-8")
+                    return
                 if not ((is_integer(name) and is_integer(arg.type)) or
-                        (is_boolean(name) and is_boolean(arg.type))):
+                        (is_boolean(name) and is_boolean(arg.type)) or
+                        (is_string(name) and is_string(arg.type))):
                     raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {name}")
                 if arg.constant is None and arg.type == "untyped int":
                     coerce(arg, name)
@@ -612,6 +677,29 @@ class Analyzer:
     def binary(self, expr):
         left, right = expr.args
         op = expr.value
+        if is_string(left.type) or is_string(right.type):
+            if not (is_string(left.type) and is_string(right.type)):
+                raise GoDiagnostic(expr.token, "mismatched string operand types")
+            if left.type != right.type:
+                coerce(left if left.type == "untyped string" else right, "string")
+            if op not in ("+", "==", "!=", "<", "<=", ">", ">="):
+                raise GoDiagnostic(expr.token, "unsupported string operator " + op)
+            if left.constant is None or right.constant is None:
+                if op == "+":
+                    raise GoDiagnostic(expr.token, "dynamic string concatenation requires shared-runtime allocation support")
+                expr.kind, expr.type = "string_compare", "untyped bool"
+                return
+            a, b = left.constant, right.constant
+            if op == "+":
+                from pcc.frontends.go.strings import MAX_STRING_BYTES
+                if len(a) + len(b) > MAX_STRING_BYTES:
+                    raise GoDiagnostic(expr.token, "string exceeds implementation limit (1 MiB)")
+                expr.type, expr.constant = left.type, a + b
+            else:
+                expr.type = "untyped bool"
+                expr.constant = {"==": a == b, "!=": a != b, "<": a < b,
+                                 "<=": a <= b, ">": a > b, ">=": a >= b}[op]
+            return
         if op in ("<<", ">>"):
             if not is_integer(left.type) or not is_integer(right.type):
                 raise GoDiagnostic(expr.token, "shifts require integer operands")

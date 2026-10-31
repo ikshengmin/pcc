@@ -50,9 +50,8 @@ external compiler fallback, independent collector, or scheduler.
   shared-runtime bounds-panic contract; no unchecked access, abort-as-panic, or
   package-name/table-specific rule substitutes for that contract.
 
-Go predeclared-name shadowing, dynamic package initialization, grouped
-const/var declarations, floating/complex types, other aggregate/reference types,
-methods/interfaces/generics, closures, strings, I/O, panic,
+Go predeclared-name shadowing, dynamic package initialization, floating/complex types, other aggregate/reference types,
+methods/interfaces/generics, closures, dynamically allocated strings, I/O, panic,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
 C-parity, or a shared-runtime/GC integration claim.
@@ -77,11 +76,12 @@ is a compiler dependency. Resource limits and shared performance locks apply.
 The unmodified Go 1.27.3 `test/ken/for.go` and `src/math/bits/bits.go`, including
 BSD-3-Clause license and per-file hashes, are in `tests/go/upstream`. They are
 frontier tests, **not successful upstream-program qualification**: the former
-requires shared-runtime panic support; the latter now reaches its original
-the original local grouped `const` declaration in `Div64` after parsing its
-named and multiple result lists.
-The remaining package closure needs original string tables and shared error/
-panic/linkname support. This is a capability frontier, not a successful
+requires shared-runtime panic support; the latter parses its named/multiple result lists and local grouped constants,
+then requires the original `ntz8tab` string-table dependency.
+The normal package closure now includes the original string tables and
+non-bootstrap error declarations; shared error/panic/linkname support is still
+required. The unchanged table file is also tested independently with authored
+component observers, not as a substitute for the complete package. This is a capability frontier, not a successful
 compile/run of `math/bits`. No token removal makes these programs pass.
 
 Array and assignment semantics follow the official specification's
@@ -110,3 +110,77 @@ The complete authored `results.go` checks these rules with its own main, a
 same-source official-Go oracle and independent full-width native observers.
 The semantic references are [return statements](https://go.dev/ref/spec#Return_statements)
 and [calls](https://go.dev/ref/spec#Calls).
+
+
+### Declaration groups and iota
+
+Package and function-local `const (...)` and `var (...)` groups preserve their
+surrounding scope; a group does not introduce a block. Empty groups are valid.
+Each ConstSpec has an independent untyped `iota` value, incremented once per
+specification (including blank names), reset by each new const declaration.
+Omitted constant expression lists repeat the prior source expressions and type,
+not previously computed values. Fresh AST copies retain separate typing and
+reevaluate lexical references in the new declaration scope. Package dependencies
+save/restore their own iota contexts during recursive constant resolution.
+
+Blank package constants are typechecked without creating a named object or
+runtime storage. Typed repetitions keep representability checks; local var
+groups execute initializers in specification order. Blank package variables,
+predeclared-name shadowing, dynamic package initialization and runtime allocation
+remain unsupported. See [constant declarations](https://go.dev/ref/spec#Constant_declarations)
+and [iota](https://go.dev/ref/spec#Iota). The complete `declarations.go` fixture
+includes separate high-bit observations, nested-scope repetition, typed/blank
+constants, independent resets and ordered runtime local initializers.
+
+
+## Strings and the original table component
+
+String literals preserve Go byte semantics: raw-literal carriage returns are
+removed, interpreted carriage returns are retained, byte escapes need not form
+valid UTF-8, and Unicode escapes must denote scalar values. Typed and untyped
+string constants, constant concatenation, integer-constant conversion (including
+U+FFFD replacement), byte length and all six comparisons are admitted. A string
+constant has an explicit 1 MiB implementation limit.
+
+Runtime string values are private PCC Go `{pointer, i64 length}` descriptors.
+Immutable literal backing and literal descriptors are private constant storage.
+Runtime literal uses load descriptor values through the existing static relocation
+path, rather than inline pointer-bearing aggregate literals. Copying or assigning a
+string copies the descriptor, including parameters and named/multiple results.
+Static package string variables and zero/empty strings require no allocation or
+package-init runtime. This is not the official Go ABI, a C string ABI, or a GC
+qualification. Dynamic comparisons use an owned public-IR loop with unsigned
+byte comparisons and both lengths guarding every byte load. `len` evaluates a
+nonconstant string operand once; constant-string length is a typed `int` constant.
+
+Indexing a constant-backed string produces a nonconstant `byte` value. Constant
+bounds are checked, and dynamic indices require the same generic unsigned/mask/
+shift proof as arrays. Other string indexing fails with the missing shared
+bounds-panic contract. Dynamic concatenation, nonconstant integer conversion,
+slices, string-element arrays, range iteration and dynamic package initializers
+remain explicit gaps; no allocator, panic substitute or package-specific rule
+is introduced.
+
+The complete original Go 1.27.3 `bits_tables.go` is preserved with its pinned
+commit/blob/SHA and BSD license. An independently authored component reader and
+main exercise all four 256-entry tables without changing that file. Independent
+native observations capture all 1024 result bytes; the optional official Go
+reference receives the same complete table and authored sources. This component
+is not the full `math/bits` package or its upstream test suite. The normal full
+file selection retains `bits_errors.go` and its build tag, rather than selecting
+a bootstrap replacement. Its error type and shared runtime dependencies remain
+capability frontiers.
+
+References: [string literals](https://go.dev/ref/spec#String_literals),
+[string types](https://go.dev/ref/spec#String_types),
+[string conversions](https://go.dev/ref/spec#Conversions_to_and_from_a_string_type),
+[comparisons](https://go.dev/ref/spec#Comparison_operators), and
+[length](https://go.dev/ref/spec#Length_and_capacity).
+
+
+Source-file declaration separators are not empty statements: an extra top-level
+semicolon or empty ImportSpec is rejected, while block EmptyStmt and empty
+`import ()`/`const ()`/`var ()` groups remain distinct valid grammar. Authored
+unit-source constructors omit a separator only when their optional declaration
+list is absent; the previously invalid double-semicolon input is retained as a
+negative test and is not relabeled as a successful source program.

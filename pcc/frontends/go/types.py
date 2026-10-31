@@ -36,8 +36,12 @@ INTEGER_TYPES = {
     "int": (64, True), "uint": (64, False), "uintptr": (64, False),
 }
 TYPE_NAMES = {name: name for name in INTEGER_TYPES}
-TYPE_NAMES.update({"bool": "bool", "byte": "uint8", "rune": "int32"})
+TYPE_NAMES.update({"bool": "bool", "byte": "uint8", "rune": "int32", "string": "string"})
 TYPES = frozenset(TYPE_NAMES.values())
+
+
+def is_string(dtype):
+    return dtype in ("string", "untyped string")
 
 
 def integer_bits(dtype):

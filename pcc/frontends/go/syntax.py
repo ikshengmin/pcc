@@ -5,6 +5,7 @@ comments containing newlines. No source rewriting or other-language parser is
 used. Unsupported grammar fails with a source location, never discarded tokens.
 """
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 import unicodedata
 
@@ -180,6 +181,7 @@ class Stmt:
     symbols: list = field(default_factory=list)
     terminates: bool = False
     targets: list = field(default_factory=list)
+    iota: int | None = None
 
 
 @dataclass
@@ -233,8 +235,8 @@ class GoParser:
             self.fail(package, "package name cannot be blank")
         functions, constants, imports, variables = [], [], [], []
         while not self.at("eof"):
-            if self.accept(";"):
-                continue
+            if self.at(";"):
+                self.fail(self.current, "empty package declarations are not permitted")
             if self.at("import"):
                 if functions or constants or variables:
                     self.fail(self.current, "imports must precede package declarations")
@@ -242,9 +244,9 @@ class GoParser:
             elif self.at("func"):
                 functions.append(self.function())
             elif self.at("const"):
-                constants.append(self.declaration())
+                constants.extend(self.declarations())
             elif self.at("var"):
-                variables.append(self.declaration())
+                variables.extend(self.declarations())
             else:
                 self.fail(self.current, "unsupported package declaration; expected func, const or var")
             self.end_statement()
@@ -284,8 +286,8 @@ class GoParser:
         while True:
             if grouped and self.accept(")"):
                 break
-            if grouped and self.accept(";"):
-                continue
+            if grouped and self.at(";"):
+                self.fail(self.current, "empty import specifications are not permitted")
             alias = self.take("name").text if self.at("name") else None
             if self.at("."):
                 self.fail(self.current, "dot imports are not implemented")
@@ -317,7 +319,7 @@ class GoParser:
             return ArraySyntax(token, length, element)
         token = self.take("name")
         if token.text not in TYPE_NAMES:
-            self.fail(token, f"unsupported type {token.text!r}; available: fixed-width integers, int, uint, uintptr, bool")
+            self.fail(token, f"unsupported type {token.text!r}; available: fixed-width integers, int, uint, uintptr, bool, string")
         return TYPE_NAMES[token.text]
 
     def function(self):
@@ -370,27 +372,51 @@ class GoParser:
                 self.fail(self.current, "unterminated block")
             if self.accept(";"):
                 continue
-            statements.append(self.statement())
+            if self.at("const") or self.at("var"):
+                statements.extend(self.declarations())
+            else:
+                statements.append(self.statement())
             self.end_statement()
         self.take("}")
         return statements
 
-    def declaration(self):
+    def declarations(self):
         token = self.current
         self.index += 1
-        names = [self.take("name")]
-        while self.accept(","):
-            names.append(self.take("name"))
-        dtype = self.datatype() if self.at("name") or self.at("[") else None
-        exprs = self.expression_list() if self.accept("=") else []
-        if not exprs and (token.kind == "const" or dtype is None):
-            self.fail(token, "declaration requires a type or initializer (const requires initializer)")
-        return Stmt(token.kind, token, names=names, type=dtype, exprs=exprs)
+        grouped = bool(self.accept("("))
+        declarations, previous = [], None
+        while not grouped or not self.accept(")"):
+            # An empty declaration group is valid, but empty ConstSpecs are
+            # not: separators do not advance iota independently of a spec.
+            names = [self.take("name")]
+            while self.accept(","):
+                names.append(self.take("name"))
+            dtype = self.datatype() if self.at("name") or self.at("[") else None
+            exprs = self.expression_list() if self.accept("=") else []
+            if token.kind == "const" and not exprs:
+                if not grouped or previous is None or dtype is not None:
+                    self.fail(names[0], "const declaration requires an initializer or a preceding ConstSpec")
+                # Omission repeats source expressions and their type, not the
+                # previous computed values or mutable typed AST. In particular
+                # iota and lexical references are evaluated at this new spec.
+                dtype, exprs = deepcopy(previous)
+            if not exprs and dtype is None:
+                self.fail(names[0], "declaration requires a type or initializer")
+            if token.kind == "const":
+                previous = deepcopy((dtype, exprs))
+            declarations.append(Stmt(token.kind, token, names=names, type=dtype,
+                                     exprs=exprs, iota=len(declarations) if token.kind == "const" else None))
+            if not grouped:
+                break
+            if not self.accept(";") and not self.at(")"):
+                self.fail(self.current, "expected declaration separator")
+        # Even an empty group is a declaration statement, not EmptyStmt.
+        # Retain it so a preceding return cannot satisfy the final-statement
+        # termination rule through an erased const()/var() declaration.
+        return declarations or [Stmt(token.kind, token)]
 
     def statement(self):
         token = self.current
-        if self.at("var") or self.at("const"):
-            return self.declaration()
         if self.at("{"):
             return Stmt("block", token, body=self.block())
         if self.accept("return"):
@@ -485,6 +511,8 @@ class GoParser:
             left = Expr("array", token, dtype, args, keys=keys)
         elif self.accept("integer"):
             left = Expr("integer", token, token.text)
+        elif self.accept("string"):
+            left = Expr("string", token, token.text)
         elif self.accept("name"):
             left = Expr("name", token, token.text)
         else:

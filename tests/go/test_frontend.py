@@ -102,7 +102,7 @@ def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(litera
     ("panic(1)", "", "unsupported builtin panic"),
     ("go f()", "func f() {}", "unsupported statement"),
     ("defer f()", "func f() {}", "unsupported statement"),
-    ("var x string", "", "unsupported type"),
+    ("var x string", "", "declared and not used"),
     ("var x []int", "", "slice types require"),
     ("switch {}", "", "unsupported statement"),
     ("var true bool", "", "shadowing predeclared"),
