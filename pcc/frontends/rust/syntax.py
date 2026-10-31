@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .types import TupleType
+
 
 class RustError(ValueError):
     """A located syntax, type, or unsupported-capability diagnostic."""
@@ -96,7 +98,7 @@ def lex(source: str) -> list[Token]:
             advance(end + 1)
             continue
         op = next((op for op in _OPERATORS if source.startswith(op, i)), None)
-        if op is None and char in "{}()[];,:+-*/%!=<>&|^#":
+        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#":
             op = char
         if op is None:
             raise Token(char, "", ln, column).error(f"unsupported Rust token {char!r}")
@@ -126,6 +128,13 @@ class Function:
     public: bool = False
 
 
+@dataclass
+class Record:
+    token: Token
+    fields: list[tuple[Token, object]]
+    repr_c: bool = False
+
+
 _TYPES = {"i32", "i64", "u32", "u64", "bool", "()"}
 _PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "||": 2, "&&": 3, "|": 4, "^": 5, "&": 6, "==": 7, "!=": 7, "<": 7, "<=": 7, ">": 7, ">=": 7, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
@@ -135,6 +144,7 @@ class Parser:
     def __init__(self, source: str):
         self.tokens = lex(source)
         self.pos = 0
+        self.records: list[Record] = []
 
     @property
     def token(self) -> Token:
@@ -161,32 +171,75 @@ class Parser:
             raise self.token.error("expected an identifier")
         return self.take()
 
-    def type(self) -> str:
+    def type(self) -> object:
         token = self.take()
         text = token.text
         if text == "(":
-            self.expect(")")
-            return "()"
-        if text not in _TYPES:
-            raise token.error(f"unsupported Rust type {text!r}; references, aggregates and traits are not implemented")
-        return text
+            if self.accept(")"):
+                return "()"
+            first = self.type()
+            if self.accept(")"):
+                return first
+            self.expect(",")
+            elements = [first]
+            while not self.accept(")"):
+                elements.append(self.type())
+                if self.accept(")"):
+                    break
+                self.expect(",")
+            return TupleType(tuple(elements))
+        if text in _TYPES or (token.kind == "name" and text != "_"):
+            return text
+        raise token.error(f"unsupported Rust type {text!r}; references and traits are not implemented")
+
+    def record(self, repr_c: bool) -> None:
+        name = self.name()
+        self.expect("{")
+        fields = []
+        while not self.accept("}"):
+            self.accept("pub")
+            field = self.name()
+            self.expect(":")
+            fields.append((field, self.type()))
+            if self.accept("}"):
+                break
+            self.expect(",")
+        self.records.append(Record(name, fields, repr_c))
 
     def parse(self) -> list[Function]:
         functions: list[Function] = []
-        while self.token.text == "#":
+        while self.token.text == "#" and self.tokens[self.pos + 1].text == "!":
             self.take()
             self.expect("!")
             self.expect("[")
             self.expect("no_std")
             self.expect("]")
         while self.token.kind != "eof":
+            repr_c = False
+            if self.accept("#"):
+                self.expect("[")
+                attribute = self.take()
+                if attribute.text != "repr":
+                    raise attribute.error("unsupported Rust attribute; only repr(C) records are admitted")
+                self.expect("(")
+                self.expect("C")
+                self.expect(")")
+                self.expect("]")
+                repr_c = True
             public = self.accept("pub")
+            if self.accept("struct"):
+                self.record(repr_c)
+                continue
+            if repr_c:
+                raise self.token.error("repr(C) applies only to a struct")
             abi = "Rust"
             if self.accept("extern"):
                 token = self.take()
                 if token.kind != "string" or token.text != "C":
                     raise token.error('only extern "C" function definitions are supported')
                 abi = "C"
+                if self.token.text == "{":
+                    raise self.token.error("external function declarations are not implemented")
             self.expect("fn")
             name = self.name()
             self.expect("(")
@@ -237,7 +290,7 @@ class Parser:
         self.expect("}")
         return Expr("block", token, len(statements), statements + ([tail] if tail else []))
 
-    def expression(self, minimum: int = 1) -> Expr:
+    def expression(self, minimum: int = 1, allow_struct: bool = True) -> Expr:
         token = self.take()
         text = token.text
         if token.kind == "integer":
@@ -248,20 +301,30 @@ class Parser:
             if self.accept(")"):
                 expr = Expr("unit", token)
             else:
-                expr = Expr("group", token, children=[self.expression()])
-                self.expect(")")
+                first = self.expression()
+                if self.accept(","):
+                    elements = [first]
+                    while not self.accept(")"):
+                        elements.append(self.expression())
+                        if self.accept(")"):
+                            break
+                        self.expect(",")
+                    expr = Expr("tuple", token, children=elements)
+                else:
+                    self.expect(")")
+                    expr = Expr("group", token, children=[first])
         elif text == "{":
             self.pos -= 1
             expr = self.block()
         elif text == "if":
-            condition = self.expression()
+            condition = self.expression(allow_struct=False)
             yes = self.block()
             children = [condition, yes]
             if self.accept("else"):
                 children.append(self.expression(12) if self.token.text == "if" else self.block())
             expr = Expr("if", token, children=children)
         elif text == "while":
-            condition = self.expression()
+            condition = self.expression(allow_struct=False)
             expr = Expr("while", token, children=[condition, self.block()])
         elif text in {"return", "break", "continue"}:
             children = []
@@ -271,12 +334,31 @@ class Parser:
                 children.append(self.expression())
             expr = Expr(text, token, children=children)
         elif text in {"-", "!"}:
-            expr = Expr("unary", token, text, [self.expression(12)])
+            expr = Expr("unary", token, text, [self.expression(12, allow_struct=allow_struct)])
         elif token.kind == "name" and text != "_":
             expr = Expr("name", token, text)
         else:
             raise token.error(f"unsupported expression {text!r}; borrowing, heap, macros and panic are not implemented")
         while True:
+            if self.token.text == "{" and expr.kind == "name" and allow_struct:
+                self.take()
+                fields, values = [], []
+                while not self.accept("}"):
+                    field = self.name()
+                    fields.append(field)
+                    values.append(self.expression() if self.accept(":") else Expr("name", field, field.text))
+                    if self.accept("}"):
+                        break
+                    self.expect(",")
+                expr = Expr("construct", expr.token, fields, values)
+                continue
+            if self.token.text == ".":
+                self.take()
+                field = self.take()
+                if field.kind != "name" and not (field.kind == "integer" and field.text.isdecimal() and field.text == str(int(field.text))):
+                    raise field.error("expected a named field or unsuffixed decimal tuple index")
+                expr = Expr("field", field, field.text, [expr])
+                continue
             if self.token.text == "(" and minimum <= 13:
                 self.take()
                 args: list[Expr] = []
@@ -300,6 +382,6 @@ class Parser:
                 continue
             if op in _COMPARISONS and expr.kind == "binary" and expr.value in _COMPARISONS:
                 raise operator.error("comparison operators cannot be chained")
-            right = self.expression(level if level == 1 else level + 1)
+            right = self.expression(level if level == 1 else level + 1, allow_struct=allow_struct)
             expr = Expr("assign" if level == 1 else "binary", operator, op, [expr, right])
         return expr

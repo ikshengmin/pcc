@@ -1,4 +1,4 @@
-"""Experimental Rust scalar frontend; not a safe primary Rust compiler.
+"""Experimental Rust scalar/aggregate frontend; not a safe primary compiler.
 
 No borrow checker is implemented. Callers must explicitly attest that rustc
 already checked the unchanged source. PCC never invokes rustc to compile it.
@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .lowering import Lowerer
+from .moves import MoveChecker
 from .semantics import Checker
 from .syntax import Parser, RustError
 from .targets import DEFAULT_TARGET, LINUX_LAYOUT, resolve_target
@@ -48,7 +49,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                  overflow_checks: bool = False,
                  module_name: str = "rust",
                  target_triple: str = DEFAULT_TARGET) -> RustCompilation:
-    """Lower a rustc-checked, nonheap scalar crate into PCC's public IR.
+    """Lower a rustc-checked, nonheap scalar/aggregate crate into PCC's public IR.
 
     The opt-in is a caller attestation, not a claim that PCC verified a rustc
     receipt. Arithmetic uses Rust's overflow-checks-off wrapping semantics;
@@ -59,10 +60,14 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         raise RustError("experimental Rust frontend has no borrow checker; only rustc-checked source is accepted with experimental_rustc_checked=True")
     if overflow_checks is not False:
         raise RustError("Rust overflow checks require owned panic support, which is not implemented; only overflow_checks=False is supported")
+    if type(module_name) is not str:
+        raise RustError("invalid Rust module_name: expected a string label")
     target = resolve_target(target_triple)
-    functions = Parser(source).parse()
-    checker = Checker(functions)
+    parser = Parser(source)
+    functions = parser.parse()
+    checker = Checker(functions, parser.records)
     checker.check()
+    MoveChecker(checker).check()
     lowerer = Lowerer(functions, checker, module_name, target)
     module = lowerer.lower()
     return RustCompilation(module, dict(lowerer.symbols),

@@ -1,4 +1,4 @@
-# Experimental Rust frontend: first owned scalar slice
+# Experimental Rust frontend: owned scalar and aggregate slices
 
 `compile_rust(source, experimental_rustc_checked=True, overflow_checks=False)`
 returns a `RustCompilation` containing the public PCC IR module, IR text and
@@ -14,15 +14,23 @@ call rejects compilation. Host-PCC evidence is not native pcc1/fixed-point proof
 
 ## Admitted language
 
-- A scalar crate of monomorphic functions, optionally `#![no_std]`, `pub`, and
+- A crate of monomorphic functions and named-field structs, optionally `#![no_std]`, `pub`, and
   `extern "C"` definitions. Forward calls and recursion resolve before lowering.
-- `i32`, `i64`, `u32`, `u64`, `bool`, unit; typed parameters/returns; contextual
+- `i32`, `i64`, `u32`, `u64`, `bool`, unit; named structs and nested tuples;
+  typed parameters/returns; contextual
   inference of unsuffixed integers (default i32 after function constraints).
 - Initialized `let`, `let mut`, shadowing and lexical scopes; assignments and
   `+=`, `-=`, `*=`. Unit arguments have no payload at the private Rust boundary.
 - Block/tail expressions, `if`/`else`, `while`, `break`, `continue`, `return`;
   short-circuit `&&`/`||`; integer arithmetic/bitwise/comparison operators,
   boolean bitwise/comparison operators; integer casts and bool-to-integer casts.
+- Named-field construction (including shorthand), source-order initializer
+  effects, field mutation, tuple indexing, and private by-value aggregate
+  parameters/returns. Aggregate temporaries are allocated once in function entry.
+- Place-sensitive move validation: whole/partial moves, field reinitialization,
+  branch/short-circuit joins and loop-backedge fixed points. Scalars/unit are Copy;
+  tuples are Copy exactly when all their elements are. Named structs are NOT
+  implicitly Copy. User-defined Copy, derive and Drop remain unsupported.
 - Nested ordinary comments and located syntax/type errors, including unreachable
   code. Documentation comments are attributes and are explicitly unsupported,
   never discarded as ordinary whitespace.
@@ -38,13 +46,16 @@ Shifts are currently rejected instead of silently using a target's shift mask.
 
 Symbols are `__pcc_rust_<name>` and returned in `symbols`; this is **not rustc's
 Rust ABI or symbol mangling**. The finite `extern "C"` scalar boundary uses
-32/64-bit integer parameters and integer/unit return values. No stable Rust
+32/64-bit integer parameters and integer/unit return values. All aggregate
+foreign arguments/returns remain rejected, including repr(C), pending a separate
+cross-language aggregate ABI qualification. No stable Rust
 cross-compiler ABI is claimed; no native Rust standard-library objects are linked.
 
 ## Boundaries and next owners
 
 This is not C-level language/ecosystem parity. References/lifetimes/borrowing,
-move/drop analysis, structs/enums/arrays, patterns/match, modules/imports,
+Drop analysis, user-defined Copy, zero-field structs, tuple structs, enums/arrays,
+patterns/match, modules/imports, never-typed tuple operands,
 generics/traits/impls, closures, macros, pointer operations, heap allocation,
 `core`/`alloc`/`std`, panic/unwind, and the shared public driver are unfinished.
 Unsupported syntax fails closed. Accepted no_std arithmetic does **not** mean
@@ -112,8 +123,62 @@ assembled; no rustc, LLVM, C compiler or system assembler is invoked. i32/i64 an
 u32/u64 remain explicitly 32/64 bits on both targets; neither usize nor a default
 Rust aggregate layout is inferred from the Python host. `symbols` contains IR
 names; the Darwin object boundary adds the standard leading underscore.
+User-supplied `module_name` is a label, hex-encoded before entering textual IR;
+it cannot add IR lines and does not change exported function symbols.
 
 Linux tests execute the owned ELF result and compare every return byte. Darwin
 checks run cross-emission on Linux, inspecting Mach-O CPU/filetype, symbols and
 branch relocations for unchanged Rust sources. **They do not execute on a Mac**,
 certify a Darwin runtime/link path, or replace target-device qualification.
+
+## Aggregate layout and original-source frontier
+
+Named structs retain nominal type identity; tuples have structural type identity.
+The current default Rust storage is a PCC-private declaration-order structural
+IR layout. This is a permitted implementation choice, **not** a guarantee that
+Rust defaults to C layout, not rustc's layout, and not a stable cross-compiler
+Rust ABI. `#[repr(C)]` is parsed and retained, but does not by itself authorize an
+aggregate foreign signature. No pointer/address/layout reflection is admitted.
+Reference types, packed/aligned/transparent representations and arbitrary field
+projections through pointers remain unsupported.
+
+Aggregate tests include 16-byte and 24-byte values, nested Copy tuples, unit
+fields and zero-sized values, aggregate-valued branches, source-order
+construction and partial moves.
+The Linux path observes the full scalar result of each unchanged program;
+Darwin uses the same sources for cross-Mach-O emission and header/symbol checks.
+Cross-emission is not Darwin aggregate execution or external ABI qualification.
+
+Move states belong to resolved bindings plus field paths, not Python references.
+A Copy field can be read without consuming its struct; moving a non-Copy field
+invalidates only that subtree, while moving the parent invalidates every field.
+Replacing the exact moved field restores it; assigning below a moved ancestor
+is conservatively rejected until that owning place is replaced. Joins include
+all reachable branches; no constant-condition reasoning is claimed. Unreachable
+code still receives name/type checks, but does not create live ownership edges.
+This borrow-free move analysis is not a borrow checker or a Drop implementation.
+
+The unchanged existing Meson `rust/15 polyglot sharedlib/adder.rs` is retained as
+`tests/rust/upstream/meson_adder.rs` with its original blob and SHA-256 recorded
+in the adjacent provenance file. It needs `#[repr(C)]`, a named `Adder` field,
+then extern declarations, `&Adder`, `unsafe`, `no_mangle`, and external `zero`
+symbols. The new parser crosses the struct boundary and explicitly stops at the
+still-unsupported extern block. This is a measured **blocked** upstream input,
+not a successful real-crate integration claim.
+
+The pinned upstream [Rust 1.90.0 core/cmp.rs](https://github.com/rust-lang/rust/blob/1.90.0/library/core/src/cmp.rs)
+contains `Reverse<T>` (line 645), requiring tuple structs, generic parameters,
+attributes/derive, `repr(transparent)`, traits, methods and references. Those
+unmodified dependencies remain unsupported; neither `core` nor `alloc` compiles
+from this batch. Named structs/tuples are only a prerequisite domain, not a
+replacement source rewritten to resemble that upstream library.
+
+### Proposed generic-instantiation boundary (not implemented)
+
+A later shared compile-time contract should identify definitions by crate/module
+and definition identity, bind semantic type/constant arguments, record a target
+and ABI/layout identity, and cache/deduplicate instantiated public IR while
+rejecting recursive instantiation cycles. Rust name resolution, trait obligations,
+coherence, associated types and lifetime constraints remain frontend-owned input
+to that contract. It must not imply a separate language runtime, allocator or GC.
+No private generic engine or runtime has been introduced here.

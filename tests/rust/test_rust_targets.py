@@ -165,3 +165,22 @@ def test_explicit_lp64_linux_environment_and_compact_aliases(triple):
     result = compile_source(target_triple=triple)
     assert result.data_layout == LINUX_LAYOUT
     assert parse_relocatable(result.emit_object()).machine == EM_X86_64
+
+
+@pytest.mark.parametrize("triple", [DEFAULT_TARGET, "arm64-apple-darwin"])
+@pytest.mark.parametrize("label", ["", "normal", '"\n@injected = global i64 1\n;', "\r\n\x00", "程序", "\ud800"])
+def test_module_label_cannot_inject_textual_ir(label, triple, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("owned object emission invoked an external tool")
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "Popen", forbidden)
+        result = compile_source(module_name=label, target_triple=triple)
+        assert result.module.name == "rust_" + label.encode("utf-8", "surrogatepass").hex()
+        assert "@injected =" not in result.ir_text
+        assert result.emit_object()[:4] == (b"\x7fELF" if triple == DEFAULT_TARGET else b"\xcf\xfa\xed\xfe")
+
+
+@pytest.mark.parametrize("label", [None, 1, b"rust"])
+def test_nonstring_module_label_has_explicit_diagnostic(label):
+    with pytest.raises(RustError, match="module_name"):
+        compile_source(module_name=label)

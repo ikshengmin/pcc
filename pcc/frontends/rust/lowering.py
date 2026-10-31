@@ -18,7 +18,9 @@ def ir_type(ty: str):
 
 class Lowerer:
     def __init__(self, functions: list[Function], checker: Checker, module_name: str, target: RustTarget):
-        self.module = ir.Module(name=module_name)
+        # ModuleID is textual IR, not an arbitrary-string transport. Encoding
+        # labels prevents quotes/newlines from adding IR directives or globals.
+        self.module = ir.Module(name="rust_" + module_name.encode("utf-8", "surrogatepass").hex())
         self.module.triple = target.triple
         self.module.data_layout = target.data_layout
         self.functions = functions
@@ -26,9 +28,32 @@ class Lowerer:
         self.declarations: dict[str, object] = {}
         self.symbols: dict[str, str] = {}
         self.slots: dict[int, object] = {}
+        self.temps: dict[int, object] = {}
         self.loops: list[tuple[object, object]] = []
         self.builder = None
         self.function = None
+
+    def type(self, ty):
+        if self.checker.aggregate(ty):
+            # An implementation-private Rust storage choice, not rustc layout
+            # or a promise that repr(Rust) has the C ABI. Foreign aggregates
+            # remain rejected by the semantic boundary until qualified.
+            return ir.LiteralStructType([
+                ir.LiteralStructType([]) if item == "()" else self.type(item)
+                for item in self.checker.fields(ty)
+            ])
+        return ir_type(ty)
+
+    def place_pointer(self, expr):
+        if expr.kind == "group":
+            return self.place_pointer(expr.children[0])
+        if expr.kind == "name":
+            return self.slots.get(expr.binding.serial)
+        if expr.kind == "field":
+            return self.builder.gep(self.place_pointer(expr.children[0]), [
+                ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), expr.value)
+            ])
+        raise expr.token.error("unsupported place")
 
     def lower(self):
         for fn in self.functions:
@@ -36,12 +61,13 @@ class Lowerer:
             symbol = "__pcc_rust_" + name
             self.symbols[name] = symbol
             # Unit has no payload and is erased at this private calling boundary.
-            signature = ir.FunctionType(ir_type(fn.result), [ir_type(ty) for _, ty, _ in fn.params if ty != "()"])
+            signature = ir.FunctionType(self.type(fn.result), [self.type(ty) for _, ty, _ in fn.params if ty != "()"])
             self.declarations[name] = ir.Function(self.module, signature, name=symbol)
         for fn in self.functions:
             self.function = self.declarations[fn.token.text]
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.slots = {}
+            self.temps = {}
             args = iter(self.function.args)
             for binding in self.checker.parameters[fn.token.text]:
                 self.allocate(binding)
@@ -58,11 +84,13 @@ class Lowerer:
 
     def allocate(self, binding: Binding) -> None:
         if binding.ty != "()":
-            self.slots[binding.serial] = self.builder.alloca(ir_type(binding.ty), name=binding.name)
+            self.slots[binding.serial] = self.builder.alloca(self.type(binding.ty), name=binding.name)
 
     def allocate_locals(self, expr: Expr) -> None:
         if expr.kind == "let":
             self.allocate(expr.binding)
+        if expr.kind in {"tuple", "construct"}:
+            self.temps[id(expr)] = self.builder.alloca(self.type(expr.ty), name="aggregate")
         for child in expr.children:
             self.allocate_locals(child)
 
@@ -73,7 +101,7 @@ class Lowerer:
         if kind == "group":
             return self.expression(children[0])
         if kind == "integer":
-            return ir.Constant(ir_type(expr.ty), expr.value)
+            return ir.Constant(self.type(expr.ty), expr.value)
         if kind == "bool":
             return ir.Constant(ir.IntType(1), int(expr.value))
         if kind == "unit":
@@ -82,6 +110,26 @@ class Lowerer:
             if expr.ty == "()":
                 return None
             return self.builder.load(self.slots[expr.binding.serial])
+        if kind in {"tuple", "construct"}:
+            # Evaluate in SOURCE order, then place values at declaration-order
+            # offsets. Reordered named initializers must not reorder effects.
+            values = [self.expression(child) for child in children]
+            if self.builder.block.is_terminated:
+                return None
+            pointer = self.temps[id(expr)]
+            indices = expr.value if kind == "construct" else range(len(children))
+            for index, value, child in zip(indices, values, children):
+                if child.ty != "()":
+                    field = self.builder.gep(pointer, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), index)])
+                    self.builder.store(value, field)
+            return self.builder.load(pointer)
+        if kind == "field":
+            if self.checker.place(expr) is not None:
+                return None if expr.ty == "()" else self.builder.load(self.place_pointer(expr))
+            aggregate = self.expression(children[0])
+            if expr.ty == "()" or self.builder.block.is_terminated:
+                return None
+            return self.builder.extract_value(aggregate, expr.value)
         if kind == "block":
             result = None
             for child in children:
@@ -118,12 +166,12 @@ class Lowerer:
                 return None
             return self.binary(expr.value, left, right, children[0].ty)
         if kind == "assign":
-            # Rust assignment evaluates RHS before the assignee; only scalar
-            # names are admitted, so compound place evaluation has no side effects.
+            # Rust assignment evaluates RHS before the assignee. Supported
+            # field paths contain no effectful index/dereference operations.
             right = self.expression(children[1])
             if self.builder.block.is_terminated:
                 return None
-            slot = self.slots.get(children[0].binding.serial)
+            slot = None if children[0].ty == "()" else self.place_pointer(children[0])
             if slot is not None:
                 if expr.value != "=":
                     right = self.binary(expr.value[0], self.builder.load(slot), right, children[0].ty)
@@ -131,12 +179,12 @@ class Lowerer:
             return None
         if kind == "cast":
             value = self.expression(children[0])
-            before, after = value.type.width, ir_type(expr.ty).width
+            before, after = value.type.width, self.type(expr.ty).width
             if before == after:
                 return value
             if before > after:
-                return self.builder.trunc(value, ir_type(expr.ty))
-            return (self.builder.sext if children[0].ty.startswith("i") else self.builder.zext)(value, ir_type(expr.ty))
+                return self.builder.trunc(value, self.type(expr.ty))
+            return (self.builder.sext if children[0].ty.startswith("i") else self.builder.zext)(value, self.type(expr.ty))
         if kind == "if":
             return self.conditional(expr)
         if kind == "while":
@@ -225,7 +273,7 @@ class Lowerer:
             return None
         if expr.ty in {"()", NEVER}:
             return None
-        result = self.builder.phi(ir_type(expr.ty))
+        result = self.builder.phi(self.type(expr.ty))
         for value, block in incoming:
             result.add_incoming(value, block)
         return result

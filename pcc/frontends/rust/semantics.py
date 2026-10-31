@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .syntax import Expr, Function, RustError, Token
+from .syntax import Expr, Function, Record, RustError, Token
+from .types import TupleType
 
 INTEGERS = {"i32", "i64", "u32", "u64"}
 NEVER = "!"
@@ -23,7 +24,9 @@ class Binding:
     serial: int
 
 
-def resolve(ty: object) -> str:
+def resolve(ty: object) -> object:
+    if isinstance(ty, TupleType):
+        return TupleType(tuple(resolve(item) for item in ty.elements))
     if isinstance(ty, InferredInteger):
         if ty.bound is None:
             ty.bound = "i32"
@@ -46,6 +49,8 @@ def unify(left: object, right: object, token: Token) -> object:
         return left
     if left is right or left == right:
         return left
+    if isinstance(left, TupleType) and isinstance(right, TupleType) and len(left.elements) == len(right.elements):
+        return TupleType(tuple(unify(a, b, token) for a, b in zip(left.elements, right.elements)))
     if isinstance(left, InferredInteger):
         if isinstance(right, InferredInteger) or right in INTEGERS:
             left.bound = right
@@ -82,8 +87,13 @@ def cast_constant(value: int, ty: str) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function]):
+    def __init__(self, functions: list[Function], records: list[Record] = ()):
         self.functions = functions
+        self.records: dict[str, Record] = {}
+        for record in records:
+            if record.token.text in self.records or record.token.text in INTEGERS | {"bool"}:
+                raise record.token.error("duplicate or reserved struct type")
+            self.records[record.token.text] = record
         self.names: dict[str, Function] = {}
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
@@ -103,8 +113,61 @@ class Checker:
                 return scope[name]
         return None
 
+    def fields(self, ty: object) -> tuple[object, ...]:
+        if isinstance(ty, TupleType):
+            return ty.elements
+        if ty in self.records:
+            return tuple(field_ty for _, field_ty in self.records[ty].fields)
+        return ()
+
+    def aggregate(self, ty: object) -> bool:
+        return isinstance(ty, TupleType) or ty in self.records
+
+    def copy_type(self, ty: object) -> bool:
+        if isinstance(ty, TupleType):
+            return all(self.copy_type(item) for item in ty.elements)
+        # Named Rust structs do NOT become Copy just because their fields are.
+        return ty in INTEGERS | {"bool", "()"}
+
+    def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = ()) -> None:
+        if ty in INTEGERS | {"bool", "()"}:
+            return
+        if isinstance(ty, TupleType):
+            for item in ty.elements:
+                self.valid_type(item, token, stack)
+            return
+        if ty not in self.records:
+            raise token.error(f"unsupported Rust type {ty!r}")
+        if ty in stack:
+            raise token.error("recursive aggregate has infinite size")
+        record = self.records[ty]
+        if not record.fields:
+            raise record.token.error("zero-field structs are not implemented")
+        names = set()
+        for field, field_ty in record.fields:
+            if field.text in names:
+                raise field.error("duplicate struct field")
+            names.add(field.text)
+            self.valid_type(field_ty, field, stack + (ty,))
+
+    def place(self, expr: Expr):
+        if expr.kind == "group":
+            return self.place(expr.children[0])
+        if expr.kind == "name":
+            return expr.binding, ()
+        if expr.kind == "field":
+            base = self.place(expr.children[0])
+            if base is not None:
+                return base[0], base[1] + (expr.value,)
+        return None
+
     def check(self) -> None:
+        for name, record in self.records.items():
+            self.valid_type(name, record.token)
         for fn in self.functions:
+            self.valid_type(fn.result, fn.token)
+            for token, ty, _ in fn.params:
+                self.valid_type(ty, token)
             name = fn.token.text
             if name in self.names:
                 raise fn.token.error(f"duplicate function {name!r}")
@@ -112,7 +175,7 @@ class Checker:
                 raise fn.token.error("reserved PCC Rust symbol prefix")
             self.names[name] = fn
             if fn.abi == "C" and (any(ty not in INTEGERS for _, ty, _ in fn.params) or fn.result not in INTEGERS | {"()"}):
-                raise fn.token.error("extern C currently supports only i32/i64/u32/u64 parameters and integer/unit returns")
+                raise fn.token.error("extern C currently supports only i32/i64/u32/u64 parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape")
         for fn in self.functions:
             self.scopes = [{}]
             self.result = fn.result
@@ -141,6 +204,7 @@ class Checker:
                 if init_ty == NEVER:
                     raise expr.token.error("diverging let initializers are not implemented")
                 if annotation is not None:
+                    self.valid_type(annotation, expr.token)
                     unify(annotation, init_ty, expr.token)
                     init_ty = annotation
                 expr.binding = self.bind(expr.token, init_ty, mutable)
@@ -150,6 +214,48 @@ class Checker:
                     unify("()", child_ty, expr.token)
                 if child_ty == NEVER:
                     ty = NEVER
+        elif kind == "tuple":
+            elements = tuple(self.expression(child) for child in children)
+            if NEVER in elements:
+                raise expr.token.error("diverging tuple operands require never-type layout support, which is not implemented")
+            ty = TupleType(elements)
+        elif kind == "construct":
+            record = self.records.get(expr.token.text)
+            if record is None:
+                raise expr.token.error(f"unknown struct {expr.token.text!r}")
+            provided = set()
+            indices = []
+            names = [field.text for field, _ in record.fields]
+            for field, child in zip(expr.value, children):
+                if field.text not in names:
+                    raise field.error("unknown struct field")
+                if field.text in provided:
+                    raise field.error("duplicate field initializer")
+                provided.add(field.text)
+                index = names.index(field.text)
+                indices.append(index)
+                unify(record.fields[index][1], self.expression(child), field)
+            if provided != set(names):
+                raise expr.token.error("missing struct field initializer")
+            expr.value = indices
+            ty = record.token.text
+        elif kind == "field":
+            base_ty = self.expression(children[0])
+            if isinstance(base_ty, TupleType):
+                if not str(expr.value).isdecimal() or int(expr.value) >= len(base_ty.elements):
+                    raise expr.token.error("unknown tuple field")
+                index = int(expr.value)
+                ty = base_ty.elements[index]
+            elif base_ty in self.records:
+                fields = self.records[base_ty].fields
+                names = [field.text for field, _ in fields]
+                if expr.value not in names:
+                    raise expr.token.error("unknown struct field")
+                index = names.index(expr.value)
+                ty = fields[index][1]
+            else:
+                raise expr.token.error("field access requires a struct or tuple")
+            expr.value = index
         elif kind == "name":
             binding = self.local(str(expr.value))
             if binding is None:
@@ -202,11 +308,12 @@ class Checker:
                 ty = common
         elif kind == "assign":
             lhs = children[0]
-            if lhs.kind != "name":
-                raise lhs.token.error("assignment target must be a local binding")
             target = self.expression(lhs)
-            if not lhs.binding.mutable:
-                raise lhs.token.error(f"cannot assign to immutable binding {lhs.value!r}")
+            place = self.place(lhs)
+            if place is None:
+                raise lhs.token.error("assignment target must be a local binding or field")
+            if not place[0].mutable:
+                raise lhs.token.error(f"cannot assign to immutable binding {place[0].name!r}")
             unify(target, self.expression(children[1]), expr.token)
             ty = "()"
         elif kind == "cast":
