@@ -207,7 +207,7 @@ CLASS_UNIMPLEMENTED_CASES = (
     "struct S{};int f(){S a;+a;return 0;}",
     "struct S{};int f(){S a;bool b=a;return 0;}",
     "struct S{};template<class T>T id(T p){return p;}int f(){S a;id(a);return 0;}",
-    "struct S{int value;};int f(){S a{1};return 0;}",
+    # Nonempty aggregate case moved unchanged to test_cpp_aggregate_initialization.
     "struct S{};int f(){S a=S();return 0;}",
 )
 

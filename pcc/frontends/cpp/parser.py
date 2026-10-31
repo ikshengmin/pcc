@@ -18,8 +18,11 @@ from pcc.frontends.cpp.sema import (
     Scope, Symbol, argument_dependent_lookup, resolve_overload,
 )
 from pcc.frontends.cpp.classes import (
-    ClassType, c_class_type, default_initialize, empty_list_initialize,
+    ClassType, c_class_type, default_initialize,
     is_class_type, member_access, parse_class, require_complete,
+)
+from pcc.frontends.cpp.initializers import (
+    lower_aggregate_initializer, parse_initializer_list,
 )
 from pcc.frontends.cpp.types import (
     ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
@@ -676,13 +679,15 @@ class CppParser:
             if is_class_type(dtype):
                 if self.template_function is not None:
                     raise CppDiagnostic("cpp.unsupported.class-templates", "class objects in templates are not implemented", name.coord)
-                if self._accept("{"):
-                    if self._peek().value != "}":
-                        raise CppDiagnostic("cpp.unsupported.class-initialization", "nonempty aggregate initialization is not implemented", self._peek().coord)
-                    self._expect("}")
-                    init = empty_list_initialize(dtype, name.coord)
-                elif self._peek().value in ("=", "("):
-                    raise CppDiagnostic("cpp.unsupported.class-initialization", "class copy/direct initialization is not implemented", self._peek().coord)
+                equals = self._accept("=")
+                if self._peek().value == "{":
+                    initializer_list = parse_initializer_list(self)
+                    init = lower_aggregate_initializer(
+                        dtype, initializer_list, self.types, self._convert,
+                    )
+                elif equals is not None or self._peek().value == "(":
+                    coord = equals.coord if equals is not None else self._peek().coord
+                    raise CppDiagnostic("cpp.unsupported.class-initialization", "class copy/direct initialization is not implemented", coord)
                 else:
                     init = default_initialize(dtype, name.coord)
                 self._expect(";")
