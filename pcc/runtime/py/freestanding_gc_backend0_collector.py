@@ -84,6 +84,8 @@ pcc_gc_default_drain_deferred_nodes = extern(
     "pcc_gc_default_drain_deferred_nodes", (), c_void
 )
 pcc_gc_default_table_lock = extern("pcc_gc_default_table_lock", (), c_void)
+pcc_gc_tracked_materialize = extern("pcc_gc_tracked_materialize", (), c_int64)
+pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (), c_void)
 pcc_gc_default_table_unlock = extern(
     "pcc_gc_default_table_unlock", (), c_void
 )
@@ -471,13 +473,22 @@ def _collect(pairs, candidate_count: i64) -> i64:
         return 0
     store_i32(collecting_slot, 0, 1)
 
+    # Flag-only tracking keeps no nodes between collections: a full
+    # collection first builds them from the live objects carrying the
+    # tracked flag (a no-op returning 0 outside flag mode).
+    materialized: i64 = 0
+    if ptr_is_null(pairs) != 0:
+        materialized = pcc_gc_tracked_materialize()
     tracked: i64 = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
+    if materialized > tracked:
+        tracked = materialized
     if ptr_is_null(pairs) == 0:
         tracked = _prepare_subset(pairs, candidate_count)
-    if tracked <= 0:
+    if materialized < 0 or tracked <= 0:
         _finish_subset()
         pcc_gc_default_drain_deferred_nodes()
         store_i32(collecting_slot, 0, 0)
+        pcc_gc_tracked_dematerialize()
         pcc_gc_default_table_unlock()
         pcc_resume_world()
         return 0
@@ -487,6 +498,7 @@ def _collect(pairs, candidate_count: i64) -> i64:
         _finish_subset()
         pcc_gc_default_drain_deferred_nodes()
         store_i32(collecting_slot, 0, 0)
+        pcc_gc_tracked_dematerialize()
         pcc_gc_default_table_unlock()
         pcc_resume_world()
         return 0
@@ -564,6 +576,7 @@ def _collect(pairs, candidate_count: i64) -> i64:
     _finish_subset()
     pcc_gc_default_drain_deferred_nodes()
     store_i32(collecting_slot, 0, 0)
+    pcc_gc_tracked_dematerialize()
     pcc_gc_default_table_unlock()
     pcc_resume_world()
     return collected

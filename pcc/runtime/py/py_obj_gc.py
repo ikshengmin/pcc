@@ -53,6 +53,8 @@ pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_in
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_gc_default_table_lock = extern("pcc_gc_default_table_lock", (), c_void)
 pcc_gc_default_table_unlock = extern("pcc_gc_default_table_unlock", (), c_void)
+pcc_gc_tracked_materialize = extern("pcc_gc_tracked_materialize", (), c_int64)
+pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (), c_void)
 
 
 def _tracked_snapshot_enter() -> int:
@@ -64,10 +66,13 @@ def _tracked_snapshot_enter() -> int:
             stopped = pcc_stop_the_world()
         owns_world = 1
     pcc_gc_default_table_lock()
+    # Flag-only tracking (GC0) builds the tracked list for the snapshot.
+    pcc_gc_tracked_materialize()
     return owns_world
 
 
 def _tracked_snapshot_leave(owns_world: int) -> None:
+    pcc_gc_tracked_dematerialize()
     pcc_gc_default_table_unlock()
     if owns_world != 0:
         pcc_resume_world()

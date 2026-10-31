@@ -43,7 +43,7 @@ class TrackingState:
     """
 
     def __init__(self, initial, update, *, inserted=1, owner=False, present=True,
-                 allocation=True, backend=1):
+                 allocation=True, backend=1, flag_mode=0):
         self.memory = HeaderMemory(initial)
         self.namespace = self.memory.namespace()
         self.layout = _layout_constants()
@@ -77,6 +77,8 @@ class TrackingState:
             "py_gc_head": head if owner else None,
             "py_gc_tracked_count": {0: 1 if initial & TRACKED else 0},
             "pcc_gc_deferred_node_free_head": None,
+            "pcc_gc_tracking_flag_mode": {0: flag_mode},
+            "pcc_gc_tracking_materialized": {0: 0},
         }
         self.events = []
         self.expected_nontracked = initial & ~TRACKED
@@ -109,7 +111,8 @@ class TrackingState:
             "py_gc_index_insert": self.insert,
             "py_gc_index_remove": self.remove,
         })
-        for name in ("_tracked_table_owned_by_current", "_tracked_node_pool_take",
+        for name in ("_tracked_table_owned_by_current", "_flag_only_tracking",
+                     "_tracked_growth", "_tracked_node_pool_take",
                      "_tracked_node_recycle", "pcc_gc_default_unlink_tracked_node",
                      "py_gc_track", "py_gc_untrack"):
             _load(TRACKING, name, self.namespace)
@@ -237,6 +240,33 @@ def test_track_only_sets_membership_bit(update, inserted, owner):
 
 
 @pytest.mark.parametrize("update", UPDATES)
+def test_flag_mode_track_is_one_header_bit_counted_once(update):
+    # GC0 tracking keeps no nodes between collections: no lock, pool, index
+    # or list operation, and a second track neither re-counts nor re-flags.
+    initial = GRAY if update == "pin" else GRAY | PINNED
+    state = TrackingState(initial, update, flag_mode=1)
+    state.namespace["py_gc_track"](state.memory.obj)
+    assert state.memory.obj[12] == _i32(state.expected_nontracked | TRACKED)
+    assert state.globals["py_gc_tracked_count"][0] == 1
+    state.namespace["py_gc_track"](state.memory.obj)
+    assert state.globals["py_gc_tracked_count"][0] == 1
+    assert state.events == []
+    assert state.head() is None and state.pool() is None
+
+
+@pytest.mark.parametrize("update", UPDATES)
+def test_flag_mode_untrack_clears_the_bit_counted_once(update):
+    initial = (GRAY if update == "pin" else GRAY | PINNED) | TRACKED
+    state = TrackingState(initial, update, flag_mode=1)
+    state.namespace["py_gc_untrack"](state.memory.obj)
+    assert state.memory.obj[12] == _i32(state.expected_nontracked)
+    assert state.globals["py_gc_tracked_count"][0] == 0
+    state.namespace["py_gc_untrack"](state.memory.obj)
+    assert state.globals["py_gc_tracked_count"][0] == 0
+    assert state.events == []
+
+
+@pytest.mark.parametrize("update", UPDATES)
 @pytest.mark.parametrize("present", [False, True])
 @pytest.mark.parametrize("owner", [False, True])
 def test_untrack_only_clears_membership_bit(update, present, owner):
@@ -317,4 +347,7 @@ def test_tracking_header_writes_are_exact_masked_atomic_operations():
                 assert ast.literal_eval(node.args[4]) == "acq_rel"
         elif node.func.id == "store_i32":
             assert ast.unparse(node.args[0]) != "obj"
-    assert sorted(writes) == [("and", ~TRACKED), ("or", TRACKED), ("or", TRACKED)]
+    # Node-path untrack/track (two ors: tracked and already-indexed), plus the
+    # flag-mode track and untrack.
+    assert sorted(writes) == [("and", ~TRACKED), ("and", ~TRACKED),
+                              ("or", TRACKED), ("or", TRACKED), ("or", TRACKED)]

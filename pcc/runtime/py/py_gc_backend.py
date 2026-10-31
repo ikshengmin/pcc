@@ -68,6 +68,7 @@ from pcc.unsafe import (
 # Shared ABI entry points used by backend-level finalization.
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_gc_tracking_enter_flag_mode = extern("pcc_gc_tracking_enter_flag_mode", (), c_void)
 pcc_py_gc_defer_tripwire = extern(
     "pcc_py_gc_defer_tripwire", (c_ptr, c_ptr, c_int32), c_void
 )
@@ -2652,6 +2653,11 @@ def pcc_gc_fix_backend() -> None:
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
         store_i32(global_addr("pcc_gc_list_container_mode"), 0, 1)
+    # GC0's stop-the-world collector finds its candidates from the live
+    # objects that carry the tracked flag (pcc_gc_tracked_materialize), so
+    # tracking keeps no nodes between collections.
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0:
+        pcc_gc_tracking_enter_flag_mode()
     atomic_store_i32(global_addr("pcc_gc_backend_frozen"), 0, 1, "release")
 
 

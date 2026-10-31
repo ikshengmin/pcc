@@ -182,7 +182,7 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # Sharded tracked lists added their table lock depth (503d32958).
     # The first managed allocation fixes the collector (pcc_gc_backend_frozen)
     # and with it the list lock discipline (pcc_gc_list_container_mode).
-    assert len(expected) == 229
+    assert len(expected) == 231
     assert expected["pcc_gc_backend3_oldify_suspended"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend0_subset_active"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend0_subset_pairs"] == ("define_global_ptr_null", None)

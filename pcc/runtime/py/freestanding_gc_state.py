@@ -30,6 +30,13 @@ define_global_i32("pcc_gc_backend_frozen", 0)
 # without the refcount provenance probe. Set with pcc_gc_backend_frozen,
 # before the first object exists, and never changed afterwards.
 define_global_i32("pcc_gc_list_container_mode", 0)
+# 1 when tracking is a header flag only (GC0): no tracked nodes exist between
+# collections; a stopped-world collection builds them from the live objects
+# that carry the flag. Set with pcc_gc_backend_frozen and never changed.
+define_global_i32("pcc_gc_tracking_flag_mode", 0)
+# 1 while pcc_gc_tracked_materialize's nodes exist (stopped world, whole
+# table held); track and untrack then keep the nodes exact.
+define_global_i32("pcc_gc_tracking_materialized", 0)
 define_global_ptr_null("py_gc_head")
 define_global_ptr_null("pcc_gc_deferred_node_free_head")
 # Recycled 40-byte tracking nodes (freestanding_gc_tracking.py). Mutators

@@ -1765,6 +1765,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_config_initialized',
         'pcc_gc_backend_frozen',
         'pcc_gc_list_container_mode',
+        'pcc_gc_tracking_flag_mode',
+        'pcc_gc_tracking_materialized',
         'pcc_gc_cycle_requested',
         'pcc_gc_explicit_collect_active',
         'pcc_gc_forwarding_population',
@@ -2925,6 +2927,11 @@ def _cross_object_signatures_part_11():
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
     "pcc_gc_note_frame_enter_checked": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_allocator_object_cells_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
+    "pcc_gc_managed_pointer_index_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
+    "pcc_gc_tracked_materialize": ((), "c_int64"),
+    "pcc_gc_tracked_dematerialize": ((), "c_void"),
+    "pcc_gc_tracking_enter_flag_mode": ((), "c_void"),
     }
 
 

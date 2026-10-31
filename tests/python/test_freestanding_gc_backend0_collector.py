@@ -33,6 +33,8 @@ OWNED_SYMBOLS = {
     "py_gc_collect",
 }
 RAW_IMPORTS = {
+    "pcc_gc_tracked_materialize",
+    "pcc_gc_tracked_dematerialize",
     "pcc_gc_backend0_subset_active",
     "pcc_gc_backend0_subset_pairs",
     "pcc_gc_backend0_subset_count",
