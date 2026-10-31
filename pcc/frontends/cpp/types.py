@@ -107,11 +107,25 @@ def _mangle_type(dtype, substitutions):
     return encoded
 
 
-def mangle_function(name, parameters):
-    if name == "main":
+def mangle_function(name, parameters, namespace_path=()):
+    if name == "main" and not namespace_path:
         return name
-    substitutions = []
-    return "_Z" + str(len(name)) + name + (
+    # Namespace prefixes participate in the ABI substitution table before
+    # repeated pointer/cv types. Keep semantic path components, not "A::f".
+    substitutions = [("namespace-prefix", namespace_path[:i + 1])
+                     for i in range(len(namespace_path))]
+    encoded_name = str(len(name)) + name
+    if namespace_path == ("std",):
+        encoded_name = "St" + encoded_name
+        substitutions = []
+    elif namespace_path:
+        prefix = ""
+        parts = namespace_path
+        if parts[0] == "std":
+            prefix, parts = "St", parts[1:]
+            substitutions = substitutions[1:]
+        encoded_name = "N" + prefix + "".join(str(len(part)) + part for part in parts) + encoded_name + "E"
+    return "_Z" + encoded_name + (
         "".join(_mangle_type(unqualified(p), substitutions) for p in parameters) or "v")
 
 

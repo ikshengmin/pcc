@@ -1044,10 +1044,13 @@ def _has_main(source, path=None, include_dirs=None, cpp_args=None, target_triple
                                    target_triple=target_triple)
         parser = CppParser(target_triple=target_triple)
         parser.parse(processed, path)
-        symbol = parser.scope.lookup("main")
+        # Visibility through using-declarations/directives does not make a
+        # namespace member the program's global entry point.
+        symbol = parser.scope.names.get("main")
         if symbol is None:
             return False
-        return any(item.defined for item in getattr(symbol, "overloads", (symbol,)))
+        return any(item.defined and item.owner is parser.scope
+                   for item in getattr(symbol, "overloads", (symbol,)))
     main_pattern = re.compile(
         r"\b(?:int|void)\s+main\s*\([^;{}]*\)\s*\{",
         re.MULTILINE | re.DOTALL,

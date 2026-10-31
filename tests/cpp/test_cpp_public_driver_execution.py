@@ -72,7 +72,7 @@ def test_public_cli_emits_stable_owned_cpp_object_and_executes(tmp_path, monkeyp
 def test_public_cli_diagnostic_keeps_unsupported_cpp_unpublished(tmp_path, capsys):
     from pcc.driver.cli_core import cli_main
     unit = tmp_path / "unsupported.cpp"
-    unit.write_text("namespace detail { int f(){return 1;} } int main(){return detail::f();}")
+    unit.write_text("namespace detail { struct Guard { ~Guard(); }; } int main(){return 0;}")
     output = tmp_path / "unsupported.o"
     assert cli_main([str(unit), "--emit-obj", str(output), "--no-cache", "-O0"]) == 1
     assert not output.exists()

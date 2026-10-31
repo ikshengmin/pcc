@@ -30,28 +30,229 @@ class Symbol:
         self.pattern = None
         self.parameter_symbols = []
         self.instances = {}
+        self.owner = None
+        self.namespace_scope = None
+        self.internal_linkage = False
 
 
 class Scope:
-    def __init__(self, parent=None):
-        self.parent = parent
-        self.names = {}
+    """Lexical scopes plus a namespace graph; directives do not copy names.
 
-    def lookup(self, name):
+    Qualified lookup follows [namespace.qual], stopping at direct/inline
+    members. Unqualified lookup instead places each active transitive directive
+    at its nearest common namespace ancestor ([namespace.udir]).
+    """
+
+    def __init__(self, parent=None, kind=None, name=None, inline=False, anonymous=False):
+        self.parent = parent
+        self.kind = kind or ("namespace" if parent is None else "block")
+        self.name = name
+        self.names = {}
+        self.using_directives = []
+        self.inline_namespaces = []
+        self.inline = inline
+        self.anonymous = anonymous
+        self.unnamed_namespace = None
+        self.internal_linkage = anonymous or (parent is not None and parent.internal_linkage)
+
+    def namespace(self):
         scope = self
+        while scope.kind != "namespace":
+            scope = scope.parent
+        return scope
+
+    def global_scope(self):
+        scope = self
+        while scope.parent is not None:
+            scope = scope.parent
+        return scope
+
+    def namespace_path(self):
+        scope = self.namespace()
+        if scope.parent is None:
+            return ()
+        return scope.parent.namespace_path() + (scope.name,)
+
+    @staticmethod
+    def _accepted(symbol, kinds):
+        return symbol is not None and (kinds is None or symbol.kind in kinds)
+
+    @staticmethod
+    def _merge(symbols, name, coord=None):
+        unique = []
+        for symbol in symbols:
+            if symbol not in unique:
+                unique.append(symbol)
+        if not unique:
+            return None
+        if len(unique) == 1:
+            return unique[0]
+        if all(symbol.kind == "function" for symbol in unique):
+            group = Symbol(name, "function", coord or unique[0].coord)
+            for symbol in unique:
+                for candidate in symbol.overloads:
+                    if candidate not in group.overloads:
+                        group.overloads.append(candidate)
+            return group
+        if all(symbol.kind == "type" and same_type(symbol.dtype, unique[0].dtype)
+               for symbol in unique):
+            return unique[0]
+        if all(symbol.kind in ("namespace", "namespace-alias")
+               and symbol.namespace_scope is unique[0].namespace_scope for symbol in unique):
+            return unique[0]
+        raise CppDiagnostic("cpp.ambiguous-name", "ambiguous name '" + name + "'",
+                            coord or unique[-1].coord)
+
+    def _inline_set(self):
+        result = [self]
+        for child in self.inline_namespaces:
+            result.extend(child._inline_set())
+        return result
+
+    def _qualified_symbols(self, name, kinds, visited):
+        if self in visited:
+            return []
+        visited.add(self)
+        scopes = self._inline_set()
+        direct = [scope.names[name] for scope in scopes
+                  if self._accepted(scope.names.get(name), kinds)]
+        if direct:
+            return direct
+        found = []
+        for scope in scopes:
+            for nominated in scope.using_directives:
+                found.extend(nominated._qualified_symbols(name, kinds, visited))
+        return found
+
+    def lookup_qualified(self, name, coord=None, kinds=None):
+        return self._merge(self._qualified_symbols(name, kinds, set()), name, coord)
+
+    @staticmethod
+    def _common_namespace(first, second):
+        ancestors = []
+        while first is not None:
+            ancestors.append(first)
+            first = first.parent
+        while second not in ancestors:
+            second = second.parent
+        return second
+
+    def lookup(self, name, coord=None, kinds=None):
+        scope = self
+        injected = {}
         while scope is not None:
-            symbol = scope.names.get(name)
-            if symbol is not None:
-                return symbol
+            # Transitive directives act as if written at the original active
+            # directive, not as ordinary parent lookup in the nominated scope.
+            pending = list(scope.using_directives)
+            visited = set()
+            while pending:
+                nominated = pending.pop()
+                if nominated in visited:
+                    continue
+                visited.add(nominated)
+                common = self._common_namespace(scope.namespace(), nominated)
+                symbol = nominated.names.get(name)
+                if self._accepted(symbol, kinds):
+                    injected.setdefault(common, []).append(symbol)
+                pending.extend(nominated.using_directives)
+            found = list(injected.get(scope, ()))
+            direct = scope.names.get(name)
+            if self._accepted(direct, kinds):
+                found.append(direct)
+            if found:
+                return self._merge(found, name, coord)
             scope = scope.parent
         return None
+
+    def resolve_name(self, name, namespace_only=False):
+        """Resolve a parsed path without replacing it by a flattened spelling."""
+        qualifier_kinds = ("namespace", "namespace-alias", "type", "template-type")
+        final_kinds = ("namespace", "namespace-alias") if namespace_only else None
+        scope = self.global_scope() if name.global_scope else self
+        symbol = None
+        for index, part in enumerate(name.parts):
+            kinds = final_kinds if index == len(name.parts) - 1 else qualifier_kinds
+            symbol = (scope.lookup(part, name.coord, kinds) if index == 0 and not name.global_scope
+                      else scope.lookup_qualified(part, name.coord, kinds))
+            if index != len(name.parts) - 1:
+                if symbol is not None and symbol.kind == "template-type":
+                    raise CppDiagnostic("cpp.unsupported.dependent-lookup",
+                                        "dependent qualified lookup requires template/class semantics", name.coord)
+                if symbol is None or symbol.namespace_scope is None:
+                    raise CppDiagnostic("cpp.not-a-namespace", "'" + part + "' does not name a namespace", name.coord)
+                scope = symbol.namespace_scope
+        return symbol
 
     def is_type_name(self, name):
         symbol = self.lookup(name)
         return symbol is not None and symbol.kind in ("type", "template-type")
 
+    def open_namespace(self, name, coord, inline=False):
+        if self.kind != "namespace":
+            raise CppDiagnostic("cpp.namespace-scope", "namespace definition requires namespace scope", coord)
+        if name is None:
+            previous = self.unnamed_namespace
+        else:
+            candidates = [scope.names[name] for scope in self._inline_set() if name in scope.names]
+            existing = self._merge(candidates, name, coord)
+            if existing is not None and existing.kind != "namespace":
+                raise CppDiagnostic("cpp.namespace-conflict", "namespace name conflicts with a declaration", coord)
+            previous = existing.namespace_scope if existing is not None else None
+        if previous is not None:
+            if inline and not previous.inline:
+                raise CppDiagnostic("cpp.namespace-inline-mismatch", "non-inline namespace cannot become inline", coord)
+            return previous
+        child = Scope(self, "namespace", name or "_GLOBAL__N_1", inline, name is None)
+        if name is None:
+            self.unnamed_namespace = child
+        else:
+            symbol = Symbol(name, "namespace", coord)
+            symbol.owner, symbol.namespace_scope = self, child
+            self.names[name] = symbol
+        if inline:
+            self.inline_namespaces.append(child)
+        if inline or name is None:
+            self.add_using_directive(child)
+        return child
+
+    def add_using_directive(self, namespace):
+        if namespace not in self.using_directives:
+            self.using_directives.append(namespace)
+
+    def add_using_declaration(self, symbol, coord):
+        if symbol.kind in ("namespace", "namespace-alias"):
+            raise CppDiagnostic("cpp.using-namespace-name", "using-declaration cannot name a namespace", coord)
+        hidden = self.lookup_lexical(symbol.name)
+        if hidden is not None and hidden.kind == "template-type":
+            raise CppDiagnostic("cpp.template-parameter-shadowing",
+                                "using-declaration shadows a template parameter", coord)
+        previous = self.names.get(symbol.name)
+        if previous is not None and previous.kind == symbol.kind == "function":
+            for own in previous.overloads:
+                for imported in symbol.overloads:
+                    if (own is not imported and own.owner is self
+                            and not own.template_parameters and not imported.template_parameters
+                            and own.parameters == imported.parameters):
+                        raise CppDiagnostic("cpp.using-declaration-conflict",
+                                            "imported function conflicts with a local declaration", coord)
+        merged = self._merge([s for s in (previous, symbol) if s is not None], symbol.name, coord)
+        if merged.kind == "function":
+            snapshot = Symbol(symbol.name, "function", coord)
+            snapshot.overloads = list(merged.overloads)
+            merged = snapshot
+        self.names[symbol.name] = merged
+
+    def lookup_lexical(self, name):
+        """Check declaration conflicts without consulting using-directives."""
+        scope = self
+        while scope is not None:
+            if name in scope.names:
+                return scope.names[name]
+            scope = scope.parent
+        return None
+
     def declare(self, symbol):
-        hidden = self.lookup(symbol.name)
+        hidden = self.lookup_lexical(symbol.name)
         if hidden is not None and hidden.kind == "template-type":
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 f"declaration shadows template parameter '{symbol.name}'", symbol.coord)
@@ -62,6 +263,7 @@ class Scope:
             raise CppDiagnostic(
                 "cpp.redeclaration", f"redeclaration of '{symbol.name}'", symbol.coord
             )
+        symbol.owner = self
         self.names[symbol.name] = symbol
         return symbol
 
@@ -80,6 +282,9 @@ class Scope:
                         continue
                 elif candidate.parameters != symbol.parameters:
                     continue
+                if candidate.owner is not self:
+                    raise CppDiagnostic("cpp.using-declaration-conflict",
+                                        "declaration conflicts with an imported function", symbol.coord)
                 if not symbol.template_parameters and candidate.dtype != symbol.dtype:
                     raise CppDiagnostic("cpp.return-type-overload",
                                         "functions cannot differ only in return type", symbol.coord)
@@ -94,8 +299,10 @@ class Scope:
             group = Symbol(symbol.name, "function", symbol.coord)
             group.overloads.append(symbol)
             self.names[symbol.name] = group
+        symbol.owner = self
+        symbol.internal_linkage = self.namespace().internal_linkage
         if not symbol.template_parameters:
-            symbol.c_name = mangle_function(symbol.name, symbol.parameters)
+            symbol.c_name = mangle_function(symbol.name, symbol.parameters, self.namespace_path())
         if definition:
             symbol.defined = True
         return symbol

@@ -11,7 +11,9 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
-from pcc.frontends.cpp.declarators import DeclaratorParser, parse_cv_qualifiers
+from pcc.frontends.cpp.declarators import (
+    DeclaratorParser, parse_cv_qualifiers, parse_qualified_name,
+)
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
 from pcc.frontends.cpp.types import (
     ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
@@ -120,17 +122,7 @@ class CppParser:
         self.loop_depth = 0
         self.assignment_index = 0
         self.cursor = TokenCursor(self._tokenize(text, filename))
-        declarations = []
-        while self._peek().kind != "EOF":
-            if self._accept(";"):
-                continue
-            if self._peek().value in ("using", "typedef"):
-                self._alias()
-                continue
-            if self._peek().value == "template":
-                self._template()
-                continue
-            declarations.append(self._function())
+        declarations = self._declarations()
         instances = []
         index = 0
         while index < len(self.pending_instances):
@@ -150,6 +142,66 @@ class CppParser:
                     names.add(decl.name)
             return c_ast.FileAST(prototypes + declarations + instances)
         return c_ast.FileAST(declarations)
+
+    def _declarations(self, namespace_body=False):
+        declarations = []
+        while self._peek().kind != "EOF" and not (namespace_body and self._peek().value == "}"):
+            if self._accept(";"):
+                continue
+            value = self._peek().value
+            if value == "namespace" or value == "inline":
+                declarations.extend(self._namespace())
+            elif value in ("using", "typedef"):
+                self._alias()
+            elif value == "template":
+                self._template()
+            else:
+                declarations.append(self._function())
+        return declarations
+
+    def _namespace(self):
+        inline = self._accept("inline") is not None
+        keyword = self._expect("namespace")
+        parent = self.scope
+        name = None if self._peek().value == "{" else parse_qualified_name(self.cursor, self._identifier)
+        if self._accept("="):
+            if inline or name is None or name.global_scope or len(name.parts) != 1:
+                raise CppDiagnostic("cpp.invalid-namespace-alias", "invalid namespace alias declaration", keyword.coord)
+            target_name = parse_qualified_name(self.cursor, self._identifier)
+            target = self.scope.resolve_name(target_name, namespace_only=True)
+            if target is None:
+                raise CppDiagnostic("cpp.not-a-namespace", "namespace alias target not found", target_name.coord)
+            self._expect(";")
+            symbol = Symbol(name.parts[0], "namespace-alias", name.coord)
+            symbol.namespace_scope = target.namespace_scope
+            previous = self.scope.names.get(symbol.name)
+            if previous is not None and previous.kind == "namespace-alias" and previous.namespace_scope is symbol.namespace_scope:
+                return []
+            self.scope.declare(symbol)
+            return []
+        if parent.kind != "namespace":
+            raise CppDiagnostic("cpp.namespace-scope", "namespace definition requires namespace scope", keyword.coord)
+        if name is not None and (name.global_scope or inline and len(name.parts) != 1):
+            raise CppDiagnostic("cpp.invalid-namespace-definition", "invalid C++17 namespace definition", name.coord)
+        self._expect("{")
+        try:
+            if name is None:
+                self.scope = self.scope.open_namespace(None, keyword.coord, inline)
+            else:
+                for token in name.tokens:
+                    self.scope = self.scope.open_namespace(token.value, token.coord, inline)
+            declarations = self._declarations(namespace_body=True)
+            self._expect("}")
+            return declarations
+        finally:
+            self.scope = parent
+
+    def _name(self):
+        return parse_qualified_name(self.cursor, self._identifier, reject_template_ids=False)
+
+    def _type_symbol(self):
+        with self.cursor.tentative():
+            return self.scope.resolve_name(self._name())
 
     def _tokenize(self, text, filename):
         def error(message, line, column):
@@ -202,8 +254,12 @@ class CppParser:
         return self.cursor.take()
 
     def _is_type(self, token):
-        return (token.value in TYPE_WORDS or token.value in ("const", "volatile")
-                or self.scope.is_type_name(token.value))
+        if token.value in TYPE_WORDS or token.value in ("const", "volatile"):
+            return True
+        if token.kind == "ID" and token.value not in _KEYWORDS or token.value in (":", "::"):
+            symbol = self._type_symbol()
+            return symbol is not None and symbol.kind in ("type", "template-type")
+        return False
 
     def _check_value_type(self, dtype, token):
         if self.parsing_template and (pointer_type(dtype) or isinstance(dtype, ConstType)):
@@ -238,8 +294,8 @@ class CppParser:
                 qualifiers.append(value)
             elif value in TYPE_WORDS and dtype is None:
                 words.append(self.cursor.take().value)
-            elif not words and dtype is None and self.scope.is_type_name(value):
-                dtype = self.scope.lookup(self.cursor.take().value).dtype
+            elif not words and dtype is None and self._is_type(self._peek()):
+                dtype = self.scope.resolve_name(self._name()).dtype
             else:
                 break
         if dtype is None:
@@ -254,9 +310,33 @@ class CppParser:
     def _alias(self):
         keyword = self.cursor.take()
         if keyword.value == "using":
-            name = self._identifier()
-            self._expect("=")
-            dtype = self._abstract_pointer_type(self._type())
+            if self._accept("namespace"):
+                name = parse_qualified_name(self.cursor, self._identifier)
+                target = self.scope.resolve_name(name, namespace_only=True)
+                if target is None:
+                    raise CppDiagnostic("cpp.not-a-namespace", "using-directive target not found", name.coord)
+                self._expect(";")
+                self.scope.add_using_directive(target.namespace_scope)
+                return
+            name_path = parse_qualified_name(self.cursor, self._identifier)
+            if self._accept("="):
+                if name_path.global_scope or len(name_path.parts) != 1:
+                    raise CppDiagnostic("cpp.invalid-alias", "alias name must be unqualified", name_path.coord)
+                name = name_path.identifier
+                dtype = self._abstract_pointer_type(self._type())
+            else:
+                while True:
+                    if not name_path.global_scope and len(name_path.parts) == 1:
+                        raise CppDiagnostic("cpp.invalid-using-declaration", "using-declaration requires a qualified name", name_path.coord)
+                    symbol = self.scope.resolve_name(name_path)
+                    if symbol is None:
+                        raise CppDiagnostic("cpp.undeclared", "using-declaration target not found", name_path.coord)
+                    self.scope.add_using_declaration(symbol, name_path.coord)
+                    if not self._accept(","):
+                        break
+                    name_path = parse_qualified_name(self.cursor, self._identifier)
+                self._expect(";")
+                return
         else:
             dtype = self._type()
             name, dtype = self._declarator(dtype)
@@ -282,7 +362,8 @@ class CppParser:
     def _apply_declarator(self, declaration, dtype, function=False):
         name = declaration.name
         if name.global_scope or len(name.parts) != 1:
-            raise CppDiagnostic("cpp.unsupported.qualified-names", "qualified name lookup is not implemented", name.coord)
+            raise CppDiagnostic("cpp.unsupported.qualified-names",
+                                "out-of-namespace member declarations are not implemented", name.coord)
         chunks = list(declaration.chunks)
         if function:
             if not chunks or chunks[0].kind != "function":
@@ -359,6 +440,9 @@ class CppParser:
 
     def _template(self):
         keyword = self._expect("template")
+        if self.scope.namespace_path():
+            raise CppDiagnostic("cpp.unsupported.namespace-templates",
+                                "namespace templates require qualified template ABI and lookup", keyword.coord)
         self._expect("<")
         parent = self.scope
         self.scope = Scope(parent)
@@ -431,15 +515,15 @@ class CppParser:
             name, result_type = self._apply_declarator(declarator, result_type, function=True)
         finally:
             self.scope = parent
-        if self.scope.lookup(name.value) is not None and self.scope.lookup(name.value).kind == "template-type":
+        if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind == "template-type":
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 "function name shadows a template parameter", name.coord)
         definition = self._peek().value == "{"
-        if name.value == "main" and params:
+        if name.value == "main" and not parent.namespace_path() and params:
             self._unsupported(name, "main parameters are not implemented")
-        if name.value == "main" and result_type != "int":
+        if name.value == "main" and not parent.namespace_path() and result_type != "int":
             raise CppDiagnostic("cpp.main-return-type", "main must return int", name.coord)
-        if name.value == "main" and template_parameters:
+        if name.value == "main" and not parent.namespace_path() and template_parameters:
             raise CppDiagnostic("cpp.main-template", "main cannot be a template", name.coord)
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
@@ -468,6 +552,8 @@ class CppParser:
         declaration = self._decl(symbol.c_name, result_type, name.coord)
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(param_decls, name.coord),
                                           declaration.type, name.coord)
+        if symbol.internal_linkage:
+            declaration.storage = ["static"]
         if not definition:
             self._expect(";")
             return declaration
@@ -482,7 +568,7 @@ class CppParser:
         finally:
             self.scope = parent
             self.return_type = previous_return_type
-        if name.value == "main":
+        if name.value == "main" and not parent.namespace_path():
             # Reaching the end of main is a C++ return of zero, not C's general
             # fallthrough behavior. Appending after a return is harmless AST.
             body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", name.coord),
@@ -510,6 +596,9 @@ class CppParser:
 
     def _statement(self):
         token = self._peek()
+        if token.value == "namespace" or token.value == "inline":
+            self._namespace()
+            return None
         if token.value == "{":
             return self._block()
         if self._accept(";"):
@@ -860,11 +949,16 @@ class CppParser:
             node = self._convert(self._literal("int", value, "int", token.coord),
                                  "bool", token.coord)
             return Expression(node, "bool")
-        if self._is_type(token):
-            if token.value in ("const", "volatile"):
-                self._unsupported(token, "qualified functional cast type")
-            dtype = (canonical_type([token.value]) if token.value in TYPE_WORDS
-                     else self.scope.lookup(token.value).dtype)
+        symbol = None
+        if token.kind == "ID" and token.value not in _KEYWORDS or token.value in (":", "::"):
+            self.cursor.position -= 1
+            name = self._name()
+            token = name.identifier
+            symbol = self.scope.resolve_name(name)
+        elif token.value not in TYPE_WORDS:
+            self._unsupported(token)
+        if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type"):
+            dtype = canonical_type([token.value]) if token.value in TYPE_WORDS else symbol.dtype
             self._expect("(")
             if self._accept(")"):
                 zero = self._literal("int", "0", "int", token.coord)
@@ -872,10 +966,11 @@ class CppParser:
             expression = self._expression()
             self._expect(")")
             return Expression(self._convert(expression, dtype, token.coord, force=True), dtype)
-        if token.kind != "ID" or token.value in _KEYWORDS:
-            self._unsupported(token)
-        symbol = self.scope.lookup(token.value)
-        if token.value == "main":
+        if symbol is not None and symbol.kind in ("namespace", "namespace-alias"):
+            raise CppDiagnostic("cpp.not-a-value", "namespace name does not denote a value", token.coord)
+        if (symbol is not None and symbol.kind == "function" and symbol.name == "main"
+                and any(candidate.owner is not None and not candidate.owner.namespace_path()
+                        for candidate in symbol.overloads)):
             raise CppDiagnostic("cpp.main-use", "C++ does not permit use of main", token.coord)
         if self._accept("("):
             if symbol is not None and symbol.kind != "function":

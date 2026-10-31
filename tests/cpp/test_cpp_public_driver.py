@@ -131,6 +131,11 @@ def test_cpp_assignment_operator_is_not_valid_in_if_expression(operator):
     ('#if false\nint main(){return 0;}\n#endif', False),
     ('#define ENTRY main\nint ENTRY(){return 0;}', True),
     ('int helper(){return 2;}', False),
+    ('namespace N{int main(){return 1;}}', False),
+    ('namespace N{int main(){return 1;}} using namespace N;', False),
+    ('namespace N{int main(){return 1;}} using N::main;', False),
+    ('namespace {int main(){return 1;}}', False),
+    ('namespace N{} int main(){return 0;}', True),
 ])
 def test_cpp_main_discovery_is_owned_and_semantic(source, expected, monkeypatch):
     from pcc.driver.project import _has_main
@@ -144,7 +149,7 @@ def test_cpp_discovery_rejects_unsupported_semantics_without_regex_fallback(monk
     from pcc.driver.project import _has_main
     monkeypatch.setattr(c_evaluator.CEvaluator, '_system_cpp', lambda *a, **k: pytest.fail('external tool'))
     with pytest.raises(CppDiagnostic):
-        _has_main('namespace N{} int main(){return 0;}', '/tmp/unit.cpp')
+        _has_main('namespace N{struct Guard{};} int main(){return 0;}', '/tmp/unit.cpp')
 
 
 @pytest.mark.parametrize('expression,expected', [

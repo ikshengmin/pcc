@@ -70,7 +70,7 @@ class QualifiedName:
         self.coord = coord if coord is not None else tokens[0].coord
 
 
-def parse_qualified_name(cursor, parse_identifier):
+def parse_qualified_name(cursor, parse_identifier, reject_template_ids=True):
     """Read an identifier path, leaving all lookup and dependent typing to Sema.
 
     ``parse_identifier`` consumes one ordinary identifier on the same cursor
@@ -81,7 +81,7 @@ def parse_qualified_name(cursor, parse_identifier):
     global_scope = _scope_separator(cursor) is not None
     tokens = [parse_identifier()]
     while True:
-        if cursor.peek().value == "<":
+        if reject_template_ids and cursor.peek().value == "<":
             _unsupported("template-id-declarators", cursor.peek())
         if _scope_separator(cursor) is None:
             break
