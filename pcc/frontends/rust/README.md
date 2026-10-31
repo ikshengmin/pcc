@@ -82,3 +82,38 @@ borrows is a Rust capability the paper's calculus cannot express. Page 22–23
 §6.6 supplies higher-ranked-lifetime tests for future trait/closure support.
 These examples must remain original Rust tests when the relevant features land;
 we must not reject valid Rust merely to fit the paper's different calculus.
+
+## Explicit target selection and owned object output
+
+```python
+from pathlib import Path
+from pcc.frontends.rust import compile_rust
+
+result = compile_rust(
+    source,
+    experimental_rustc_checked=True,
+    target_triple="arm64-apple-darwin",
+)
+Path("program.o").write_bytes(result.emit_object())
+```
+
+`target_triple` defaults to `x86_64-unknown-linux-gnu`, preserving the existing
+Linux path. The admitted target families are x86-64 Linux and arm64 Apple Darwin
+(including the owned backend's aarch64/macOS aliases). Linux is explicitly LP64
+with gnu/musl or no-environment aliases; x32/other environments and Darwin
+environment suffixes are not admitted. Other targets, malformed
+triples, and post-compilation manual target/layout changes fail explicitly.
+Select Darwin at the entrypoint rather than editing the returned module header.
+
+Target selection sets both the IR triple and a little-endian, 64-bit-pointer
+data layout before lowering, then `emit_object()` dispatches through the shared
+owned IR/object boundary. ELF and standard arm64 Mach-O bytes are actually
+assembled; no rustc, LLVM, C compiler or system assembler is invoked. i32/i64 and
+u32/u64 remain explicitly 32/64 bits on both targets; neither usize nor a default
+Rust aggregate layout is inferred from the Python host. `symbols` contains IR
+names; the Darwin object boundary adds the standard leading underscore.
+
+Linux tests execute the owned ELF result and compare every return byte. Darwin
+checks run cross-emission on Linux, inspecting Mach-O CPU/filetype, symbols and
+branch relocations for unchanged Rust sources. **They do not execute on a Mac**,
+certify a Darwin runtime/link path, or replace target-device qualification.

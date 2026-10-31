@@ -5,6 +5,7 @@ from pcc.ir.compat import ir
 
 from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
+from .targets import RustTarget
 
 
 def ir_type(ty: str):
@@ -16,8 +17,10 @@ def ir_type(ty: str):
 
 
 class Lowerer:
-    def __init__(self, functions: list[Function], checker: Checker, module_name: str):
+    def __init__(self, functions: list[Function], checker: Checker, module_name: str, target: RustTarget):
         self.module = ir.Module(name=module_name)
+        self.module.triple = target.triple
+        self.module.data_layout = target.data_layout
         self.functions = functions
         self.checker = checker
         self.declarations: dict[str, object] = {}
