@@ -1,7 +1,7 @@
 """Source-relative compile observer for the ordinary-constructor native test.
 
 No provisioning, source copying, alternative import roots or IR rewriting.
-The caller audit function below is the unchanged reviewed guard.
+Both ordinary and static-definition constructors retain their real slot guards.
 """
 from __future__ import annotations
 
@@ -20,15 +20,134 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def _static_constructor_contract(module, function, status, output_slot):
+    """Prove the static descriptor and this result's exact rooted handoff."""
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    from tests.python.root_slot_contract import RootSlotContract
+
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    roots = RootSlotContract(blocks, module.globals_)
+    matches = [(block, index, ins) for block, index, ins in roots.rows
+               if roots.called(ins, "py_func_new_static_def")
+               and ins.data[0] == status.lstrip("%")]
+    require(len(matches) == 1, "Static constructor status lacks its exact parsed call")
+    producer, position, invoke = matches[0]
+    arguments = roots.args(invoke)
+    require(len(arguments) == 9, "Static constructor ABI changed")
+    output = roots.slot(arguments[-1])
+    require(output == roots.slot(output_slot.lstrip("%")), "Static constructor output identity changed")
+    frame = roots.require_owning(output, allow_lifo=True)[:2]
+    descriptor, offset = roots.slot(arguments[2])
+    global_ = roots.globals.get(descriptor.lstrip("@"))
+    require(global_ is not None and global_.is_constant and offset == 0
+            and global_.type.is_array and global_.type.elem is not None
+            and global_.type.elem.is_ptr and global_.type.count > 0,
+            "Static signature must be an immutable pointer descriptor")
+    by_name = {block.name: block for block in blocks}
+    successors = {}
+    for block in blocks:
+        term = block.terminator
+        successors[block.name] = (
+            tuple(term.data[:1]) if term.kind == "br" else
+            tuple(term.data[1:]) if term.kind == "br_cond" else
+            (term.data[2],) + tuple(target for _, target in term.data[3])
+            if term.kind == "switch" else ()
+        )
+
+    def frame_event(ins, entering):
+        names = (("pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo") if entering
+                 else ("pcc_gc_frame_leave", "pcc_gc_frame_leave_lifo"))
+        return (any(roots.called(ins, name) for name in names)
+                and roots.slot(roots.args(ins)[1 if entering else 0]) == frame)
+
+    registrations = [ins for _, _, ins in roots.rows if frame_event(ins, True)]
+    require(len(registrations) == 1, "Static output needs one frame registration")
+    lifo = roots.called(registrations[0], "pcc_gc_frame_enter_lifo")
+    leave_protocol = "pcc_gc_frame_leave_lifo" if lifo else "pcc_gc_frame_leave"
+
+    # Module initializers also register process-lifetime GLOBAL roots. Audit
+    # this constructor's local output frame, not those unrelated registrations.
+    # Indexed instruction arenas project fresh objects: identify the producer
+    # by its exact block/position, never Python object identity.
+    pending, visited, joins, reached = [(blocks[0].name, False)], set(), {}, False
+    while pending:
+        name, active = pending.pop()
+        if (name, active) in visited:
+            continue
+        visited.add((name, active))
+        require(joins.get(name, active) == active, "Static output lifetime disagrees at CFG join")
+        joins[name] = active
+        for index, ins in enumerate(by_name[name].instructions):
+            if frame_event(ins, True):
+                require(not active, "Static output frame entered twice")
+                active = True
+            elif frame_event(ins, False):
+                require(roots.called(ins, leave_protocol), "Static output frame retirement uses the wrong protocol")
+                require(active, "Static output frame retired without registration")
+                active = False
+            if name == producer.name and index == position:
+                require(active, "Static output must be registered before construction")
+                reached = True
+        if by_name[name].terminator.kind in ("ret", "ret_void"):
+            require(not active, "Static output frame remains active at return")
+        pending.extend((target, active) for target in successors[name])
+    require(reached, "Static constructor is unreachable")
+
+    def consumes(ins):
+        return (roots.called(ins, "pcc_gc_take_pinned_slot")
+                and roots.slot(roots.args(ins)[0]) == output)
+
+    reaching = {block.name for block in blocks if any(consumes(ins) for ins in block.instructions)}
+    require(reaching, "Static output has no exact take handoff")
+    changed = True
+    while changed:
+        changed = False
+        for name, targets in successors.items():
+            if name != producer.name and name not in reaching and any(target in reaching for target in targets):
+                reaching.add(name)
+                changed = True
+    pending = [(producer.name, position + 1, frozenset(), False)]
+    paths = 0
+    while pending:
+        name, offset, seen, retired = pending.pop()
+        require(name not in seen, "Static output handoff path loops before consumption")
+        seen = seen | {name}
+        for ins in by_name[name].instructions[offset:]:
+            if (roots.called(ins, "pcc_gc_store_root") and roots.args(ins)[1] == "null"
+                    and roots.slot(roots.args(ins)[0]) == output):
+                require(False, "Static output cleared before its handoff")
+            if ins.kind == "store" and ins.data[1] == "null" and roots.slot(ins.data[3]) == output:
+                require(False, "Static output cleared before its handoff")
+            if frame_event(ins, False):
+                require(not retired, "Static output frame retired twice")
+                retired = True
+                continue
+            if retired and ins.kind == "call":
+                require(consumes(ins), "Static output frame retired before its final take")
+            if consumes(ins):
+                paths += 1
+                break
+        else:
+            targets = [target for target in successors[name]
+                       if target in reaching and target != producer.name]
+            require(targets, "Static output never reaches its exact take")
+            pending.extend((target, 0, seen, retired) for target in targets)
+    require(paths > 0, "Static output has no successful handoff path")
+    return {"descriptor": descriptor, "descriptor_words": global_.type.count,
+            "output_frame": frame, "success_handoff_paths": paths}
+
+
 def audit_caller_ir(text, path, require_persistent):
-    """Apply the frozen test_callable_construction_codegen contracts to real link input.
+    """Apply test_callable_construction_codegen contracts to real link input.
 
     No _emit/probe/test compiler invocation occurs. The additional per-call flag
     check ties persistent ownership to the helper's actual output slot.
     """
     from pcc.backend.self_backend_parse import parse_self_backend_module
     from pcc.backend.self_backend_verify import verify_parsed_module
-    verify_parsed_module(parse_self_backend_module(text))
+    module = parse_self_backend_module(text)
+    verify_parsed_module(module)
+    functions = {function.name: function for function in module.functions}
     require(not re.search(r"call [^\n]*@py_func_new_named\(", text), "Caller bypassed the slot constructor")
     rows = []
     for definition in re.finditer(r"^define[^\n]*\{\n.*?^}", text, re.M | re.S):
@@ -84,7 +203,7 @@ def audit_caller_ir(text, path, require_persistent):
             })
 
         calls = list(re.finditer(
-            r"(?m)^\s*(%\S+) = call i64[^\n]*@py_func_new_signature_slots\(([^\n]+)\)\n", body))
+            r"(?m)^\s*(%\S+) = call i64[^\n]*@(py_func_new_signature_slots|py_func_new_static_def)\(([^\n]+)\)\n", body))
         for call in calls:
             tail = body[call.end():]
             first = tail.splitlines()[0].strip()
@@ -96,10 +215,12 @@ def audit_caller_ir(text, path, require_persistent):
             branch = re.match(r"\s*br i1 " + re.escape(check.group(1))
                               + r", label (%[^,\s]+), label (%[^\s]+)", tail[check.end():])
             require(branch is not None, "Constructor status does not directly select its failure edge")
-            arguments = call.group(2)
-            inputs = re.match(r"ptr (%[^ ,]+), ptr (%[^ ,]+),", arguments)
+            helper = call.group(2)
+            arguments = call.group(3)
+            inputs = re.match(r"ptr (%[^ ,]+), ptr (%[^ ,]+),", arguments) if helper == "py_func_new_signature_slots" else None
             output = re.search(r", ptr (%[^ ,]+)$", arguments)
-            require(inputs is not None and output is not None, "Unexpected constructor slot ABI")
+            require(output is not None and (helper == "py_func_new_static_def" or inputs is not None),
+                    "Unexpected constructor slot ABI")
             output_slot = resolve(output.group(1))
             flag_evidence = owned_slot_flags.get(output_slot, [])
             matching_flags = {row["flag"] for row in flag_evidence}
@@ -115,15 +236,21 @@ def audit_caller_ir(text, path, require_persistent):
                         "Persistent output's matching owned flag is not set immediately after the helper")
             if "__gen_resume" in symbol:
                 require(persistent, "Generator constructor output lacks its persistent owned flag")
-            metadata = re.search(r"call i64[^\n]*@py_func_init_metadata_slots\(ptr (%[^ ,]+),", tail)
-            require(metadata is not None and resolve(metadata.group(1)) == output_slot,
-                    "Constructor output did not reach slot metadata initialization")
-            retired = {
-                resolve(value) for value in re.findall(
-                    r"call void[^\n]*@pcc_gc_store_root\(ptr (%[^ ,]+), ptr null\)", tail[:metadata.start()])
-            }
-            require({resolve(inputs.group(1)), resolve(inputs.group(2))} <= retired,
-                    "Constructor inputs not retired before metadata initialization")
+            static_contract = None
+            if helper == "py_func_new_static_def":
+                static_contract = _static_constructor_contract(
+                    module, functions[symbol], call.group(1), output_slot,
+                )
+            else:
+                metadata = re.search(r"call i64[^\n]*@py_func_init_metadata_slots\(ptr (%[^ ,]+),", tail)
+                require(metadata is not None and resolve(metadata.group(1)) == output_slot,
+                        "Constructor output did not reach slot metadata initialization")
+                retired = {
+                    resolve(value) for value in re.findall(
+                        r"call void[^\n]*@pcc_gc_store_root\(ptr (%[^ ,]+), ptr null\)", tail[:metadata.start()])
+                }
+                require({resolve(inputs.group(1)), resolve(inputs.group(2))} <= retired,
+                        "Constructor inputs not retired before metadata initialization")
             rows.append({
                 "function": symbol, "actual_linker_input": str(path),
                 "definition_sha256": hashlib.sha256(body.encode()).hexdigest(),
@@ -131,7 +258,10 @@ def audit_caller_ir(text, path, require_persistent):
                 "persistent": persistent, "owned_flag": owned_flag if persistent else None,
                 "owned_flag_association": flag_evidence,
                 "first_successor": first, "negative_status_failure_label": branch.group(1),
-                "status_ready_label": branch.group(2), "inputs_retired_before_metadata": True,
+                "status_ready_label": branch.group(2),
+                "constructor_helper": helper, "static_contract": static_contract,
+                "metadata_initialization": "runtime_static_constructor" if static_contract else "caller_slot_helper",
+                "inputs_retired_before_metadata": True if inputs is not None else None,
                 "no_callback_or_branch_before_status_check": True,
             })
     if require_persistent:
@@ -261,7 +391,7 @@ def main():
                 path.write_bytes(text.encode("utf-8"))
                 receipt["link_inputs"].append({"path": str(path), "sha256": _sha(path)})
                 _save(receipt_path, receipt)
-                # The unchanged guard validates the real IR and every generator
+                # The shared guard validates the real IR and every generator
                 # output's own persistent-flag association. Aggregate nonvacuity
                 # is checked below because dependency modules may have no calls.
                 rows.extend(audit_caller_ir(text, path, False))
