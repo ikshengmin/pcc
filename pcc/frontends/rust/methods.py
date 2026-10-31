@@ -52,8 +52,9 @@ class InherentMethods:
             self.declarations[key] = function
 
     def select(self, owner, name, token, *, receiver=False):
+        through_reference = isinstance(owner, SharedReference)
         if isinstance(owner, SharedReference):
-            raise token.error('reference receiver autoderef/autoborrow requires ownership and lifetime analysis, which is not implemented')
+            owner = owner.referent
         owner = self.checker.generics.normalize(owner, token)
         self.checker.valid_type(owner, token)
         base = owner.name if isinstance(owner, TypeApplication) else owner
@@ -64,6 +65,8 @@ class InherentMethods:
             return None
         if receiver and not function.receiver:
             raise token.error('associated function has no self receiver; use its qualified type path')
+        if through_reference and not isinstance(function.params[0][1], SharedReference):
+            raise token.error('cannot move a value receiver out of a shared reference; general autoderef is not implemented')
         arguments = None
         if function.type_parameters:
             pattern = function.implementation.owner

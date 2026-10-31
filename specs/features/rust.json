@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": true,
     "features_complete": false,
-    "notes": "119 numbered TOC chapters/subchapters enumerated, including informational appendices. Per-rule decomposition and code migration remain incomplete. Unread chapter details link the official table of contents rather than asserting a reviewed rule. Existing no-code capability templates are explicit message_only entries. No pcc1, full core/alloc, Rust ABI compatibility or borrow-checker claim; experimental_rustc_checked is caller attestation only. Historical 33 absent-PATH reference inputs stay historical unrun. Current 136 metadata acceptance is not runtime differential. Followup bd7d58a4 executed72focused/669whole, adding six actual native rustc/std-observer comparisons without relabeling historical136."
+    "notes": "119 numbered TOC chapters/subchapters enumerated, including informational appendices. Per-rule decomposition and code migration remain incomplete. Unread chapter details link the official table of contents rather than asserting a reviewed rule. Existing no-code capability templates are explicit message_only entries. No pcc1, full core/alloc, Rust ABI compatibility or borrow-checker claim; experimental_rustc_checked is caller attestation only. Historical 33 absent-PATH reference inputs stay historical unrun. Current 136 metadata acceptance is not runtime differential. Followup bd7d58a4 executed72focused/669whole, adding six actual native rustc/std-observer comparisons without relabeling historical136. Readonly-loan48d340a4 qualified79focused/732whole with eight new unchanged-input actual native rustc comparisons. c41672/2 actual lifetime failure is retained; the invalid parameter-rebinding original is now a negative and a separate local-rebinding input supplies positive evidence."
   },
   "chapters": [
     {
@@ -2038,6 +2038,44 @@
       "evidence": []
     },
     {
+      "id": "rust.impl.value-methods",
+      "title": "Local nominal inherent associated functions and by-value methods",
+      "chapter_ids": [
+        "rust.ref.6.12",
+        "rust.ref.6.15",
+        "rust.ref.8.2.10",
+        "rust.ref.8.2"
+      ],
+      "scope": "Checked nongeneric/generic local record and enum impls; self/mut self, Self names, qualified calls, explicit full impl type arguments, declaration-checked non-Copy generic bodies, source-order one-time receiver evaluation and recursion via shared instance registry. Excludes reference receivers, autoderef/autoborrow, trait impls, coherence specialization, method-local generic parameters, arbitrary self types and reference/Drop runtime. Qualified only in host pcc0/self Linux x86-64, with actual unchanged-source native rustc1.91.1 differential; Darwin remains cross-emission only.",
+      "status": "supported",
+      "tests": [
+        "tests/rust/test_rust_methods.py::test_methods_use_actual_shared_function_worklist_and_distinct_declaration_identity",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_records]",
+        "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_generic_enum]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_generic_records]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_order]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_recursion]",
+        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_self_types]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "rust.impl.bd7.unit",
+        "rust.impl.bd7.program.inherent_generic_enum",
+        "rust.impl.bd7.differential.inherent_generic_enum",
+        "rust.impl.bd7.program.inherent_generic_records",
+        "rust.impl.bd7.differential.inherent_generic_records",
+        "rust.impl.bd7.program.inherent_order",
+        "rust.impl.bd7.differential.inherent_order",
+        "rust.impl.bd7.program.inherent_records",
+        "rust.impl.bd7.differential.inherent_records",
+        "rust.impl.bd7.program.inherent_recursion",
+        "rust.impl.bd7.differential.inherent_recursion",
+        "rust.impl.bd7.program.inherent_self_types",
+        "rust.impl.bd7.differential.inherent_self_types"
+      ]
+    },
+    {
       "id": "rust.capability.ad1be8716230",
       "title": "Rust overflow checks require owned panic support, which is not implemented; only overflow_checks=False is supported",
       "chapter_ids": [
@@ -2182,8 +2220,8 @@
       "evidence": []
     },
     {
-      "id": "rust.capability.da3519eafd50",
-      "title": "reference receiver autoderef/autoborrow requires ownership and lifetime analysis, which is not implemented",
+      "id": "rust.capability.1f486aaf9ee4",
+      "title": "cannot move a value receiver out of a shared reference; general autoderef is not implemented",
       "chapter_ids": [
         "rust.ref.10.1.14"
       ],
@@ -2338,18 +2376,6 @@
       "evidence": []
     },
     {
-      "id": "rust.capability.2badd3b9a25b",
-      "title": "unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields",
-      "chapter_ids": [
-        "rust.ref.10.1.14"
-      ],
-      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
-      "status": "explicitly_unimplemented",
-      "tests": [],
-      "diagnostics": [],
-      "evidence": []
-    },
-    {
       "id": "rust.capability.4b9c1fc377df",
       "title": "no_mangle is supported only on extern C function definitions",
       "chapter_ids": [
@@ -2390,6 +2416,42 @@
       "title": "panic-capable division/remainder is unsupported; divisor must be a nonzero constant, not signed -1",
       "chapter_ids": [
         "rust.ref.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.1a8776e6058b",
+      "title": "local borrowing is supported only as a direct shared-reference call argument; reference storage/escape lifetime analysis is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.ad0a8e2940d2",
+      "title": "shared borrowing of temporaries requires lifetime extension, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.d0b554a3b673",
+      "title": "dereference requires an admitted shared reference; raw pointers are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
       ],
       "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
       "status": "explicitly_unimplemented",
@@ -2450,6 +2512,30 @@
       "title": "only unshadowed direct function calls are supported",
       "chapter_ids": [
         "rust.ref.8.2.9"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.4ee292f5718c",
+      "title": "shared receiver borrowing of temporaries requires lifetime extension, which is not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.bdcf31e67972",
+      "title": "reference parameter reassignment requires lifetime constraints, which are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
       ],
       "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
       "status": "explicitly_unimplemented",
@@ -2686,18 +2772,6 @@
       "evidence": []
     },
     {
-      "id": "rust.capability.c24947dcbaf6",
-      "title": "reference receivers require borrow/alias/lifetime analysis, which is not implemented",
-      "chapter_ids": [
-        "rust.ref.10.1.14"
-      ],
-      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
-      "status": "explicitly_unimplemented",
-      "tests": [],
-      "diagnostics": [],
-      "evidence": []
-    },
-    {
       "id": "rust.capability.cc0819c68f78",
       "title": "empty tuple variants are not implemented; use a unit variant",
       "chapter_ids": [
@@ -2750,6 +2824,30 @@
       "title": "attributes and visibility on extern blocks are not supported",
       "chapter_ids": [
         "rust.ref.19"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.ae2bca662d2d",
+      "title": "mutable reference receivers and exclusive borrow checking are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.capability.9c7be91de66a",
+      "title": "explicit receiver types are not implemented",
+      "chapter_ids": [
+        "rust.ref.6.12"
       ],
       "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
       "status": "explicitly_unimplemented",
@@ -2818,6 +2916,18 @@
       "evidence": []
     },
     {
+      "id": "rust.capability.3407e7c104ae",
+      "title": "mutable borrowing and exclusive loan checking are not implemented",
+      "chapter_ids": [
+        "rust.ref.10.1.14"
+      ],
+      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. This is not a stable diagnostic code; valid unsupported constructs and some malformed constructs share broad fallback diagnostics. No blanket chapter support is implied.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.capability.e43cffed9774",
       "title": "unsupported expression {text}; borrowing, heap, macros and panic are not implemented",
       "chapter_ids": [
@@ -2830,41 +2940,39 @@
       "evidence": []
     },
     {
-      "id": "rust.impl.value-methods",
-      "title": "Local nominal inherent associated functions and by-value methods",
+      "id": "rust.references.direct-shared-call-loans",
+      "title": "Bounded direct-call readonly references and shared receiver loans",
       "chapter_ids": [
-        "rust.ref.6.12",
-        "rust.ref.6.15",
+        "rust.ref.10.1.14",
+        "rust.ref.8.2.4",
         "rust.ref.8.2.10",
         "rust.ref.8.2"
       ],
-      "scope": "Checked nongeneric/generic local record and enum impls; self/mut self, Self names, qualified calls, explicit full impl type arguments, declaration-checked non-Copy generic bodies, source-order one-time receiver evaluation and recursion via shared instance registry. Excludes reference receivers, autoderef/autoborrow, trait impls, coherence specialization, method-local generic parameters, arbitrary self types and reference/Drop runtime. Qualified only in host pcc0/self Linux x86-64, with actual unchanged-source native rustc1.91.1 differential; Darwin remains cross-emission only.",
+      "scope": "Readonly references to existing admitted places only as direct call operands, including &self method receivers and explicit (*p).field projections. Owning-local loans remain live across all later/nested arguments and forbid overlapping mutation or non-Copy movement. Incoming reference reborrows preserve captured pointer values while distinct inferred local reference slots may be rebound. No mutable references, stored local borrows, temporary lifetime extension, reference returns/aggregate storage, general region constraints or general borrow checker; reference formal reassignment is conservatively unimplemented. Extern-C references retain only separately qualified non-generic repr(C) integer-record shapes. Experimental rustc-checked flag remains caller attestation. Qualified pcc0/self Linux x86-64 runtime only; Darwin is cross-emission only.",
       "status": "supported",
       "tests": [
-        "tests/rust/test_rust_methods.py::test_methods_use_actual_shared_function_worklist_and_distinct_declaration_identity",
-        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_records]",
-        "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
-        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_generic_enum]",
-        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_generic_records]",
-        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_order]",
-        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_recursion]",
-        "tests/rust/test_rust_methods.py::test_original_inherent_program_has_full_width_owned_native_result[inherent_self_types]"
+        "tests/rust/test_rust_shared_loans.py::test_exact_original_parameter_rebinding_requires_lifetime_constraints",
+        "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc"
       ],
       "diagnostics": [],
       "evidence": [
-        "rust.impl.bd7.unit",
-        "rust.impl.bd7.program.inherent_generic_enum",
-        "rust.impl.bd7.differential.inherent_generic_enum",
-        "rust.impl.bd7.program.inherent_generic_records",
-        "rust.impl.bd7.differential.inherent_generic_records",
-        "rust.impl.bd7.program.inherent_order",
-        "rust.impl.bd7.differential.inherent_order",
-        "rust.impl.bd7.program.inherent_records",
-        "rust.impl.bd7.differential.inherent_records",
-        "rust.impl.bd7.program.inherent_recursion",
-        "rust.impl.bd7.differential.inherent_recursion",
-        "rust.impl.bd7.program.inherent_self_types",
-        "rust.impl.bd7.differential.inherent_self_types"
+        "rust.shared-loans.48d.unit",
+        "rust.shared-loans.48d.program.shared_explicit",
+        "rust.shared-loans.48d.differential.shared_explicit",
+        "rust.shared-loans.48d.program.shared_generic",
+        "rust.shared-loans.48d.differential.shared_generic",
+        "rust.shared-loans.48d.program.shared_local_rebinding",
+        "rust.shared-loans.48d.differential.shared_local_rebinding",
+        "rust.shared-loans.48d.program.shared_methods",
+        "rust.shared-loans.48d.differential.shared_methods",
+        "rust.shared-loans.48d.program.shared_order",
+        "rust.shared-loans.48d.differential.shared_order",
+        "rust.shared-loans.48d.program.shared_partial",
+        "rust.shared-loans.48d.differential.shared_partial",
+        "rust.shared-loans.48d.program.shared_reborrow",
+        "rust.shared-loans.48d.differential.shared_reborrow",
+        "rust.shared-loans.48d.program.shared_scalar",
+        "rust.shared-loans.48d.differential.shared_scalar"
       ]
     }
   ],
@@ -2967,34 +3075,34 @@
         "feature_id": "rust.capability.ca7ab0b6c7b5",
         "source": {
           "path": "pcc/frontends/rust/lowering.py",
-          "sha256": "c69d6e35bfbe0dc5407cc29a8b3d1a40dcffc231a8e2b8b093a65eeeeccebc2c"
+          "sha256": "909ee4f1a6747482e1012552980b950f8ebbbc290bf5cc20f525285b57dc1357"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 70."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 72."
       },
       {
         "message": "unsupported lowering node {kind}",
         "feature_id": "rust.capability.b29def7fd8da",
         "source": {
           "path": "pcc/frontends/rust/lowering.py",
-          "sha256": "c69d6e35bfbe0dc5407cc29a8b3d1a40dcffc231a8e2b8b093a65eeeeccebc2c"
+          "sha256": "909ee4f1a6747482e1012552980b950f8ebbbc290bf5cc20f525285b57dc1357"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 275."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 285."
       },
       {
-        "message": "reference receiver autoderef/autoborrow requires ownership and lifetime analysis, which is not implemented",
-        "feature_id": "rust.capability.da3519eafd50",
+        "message": "cannot move a value receiver out of a shared reference; general autoderef is not implemented",
+        "feature_id": "rust.capability.1f486aaf9ee4",
         "source": {
           "path": "pcc/frontends/rust/methods.py",
-          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+          "sha256": "5d15493a93285ab8e564c0717d807bae1d2cfbeaa62721bee05982d1abc200fc"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 56."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 69."
       },
       {
         "message": "impl parameters shadowing primitive names are not implemented",
         "feature_id": "rust.capability.cafda895c2ac",
         "source": {
           "path": "pcc/frontends/rust/methods.py",
-          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+          "sha256": "5d15493a93285ab8e564c0717d807bae1d2cfbeaa62721bee05982d1abc200fc"
         },
         "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 28."
       },
@@ -3003,7 +3111,7 @@
         "feature_id": "rust.capability.9feb1bfbec86",
         "source": {
           "path": "pcc/frontends/rust/methods.py",
-          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+          "sha256": "5d15493a93285ab8e564c0717d807bae1d2cfbeaa62721bee05982d1abc200fc"
         },
         "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 51."
       },
@@ -3012,7 +3120,7 @@
         "feature_id": "rust.capability.d465b452d5cd",
         "source": {
           "path": "pcc/frontends/rust/methods.py",
-          "sha256": "ac2f591d82121780e27d6868a5ec474255e5ca607427ca4a52e93f7d60a0b031"
+          "sha256": "5d15493a93285ab8e564c0717d807bae1d2cfbeaa62721bee05982d1abc200fc"
         },
         "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 38."
       },
@@ -3066,151 +3174,187 @@
         "feature_id": "rust.capability.7c49e22edc6e",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 68."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 73."
       },
       {
         "message": "unsupported Rust type {ty}",
         "feature_id": "rust.capability.42c0edfbabfa",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 181."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 186."
       },
       {
         "message": "zero-field structs are not implemented",
         "feature_id": "rust.capability.b6ad2f608ff0",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 186."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 191."
       },
       {
         "message": "reference returns and aggregate reference storage require lifetime analysis, which is not implemented",
         "feature_id": "rust.capability.d0970a5199e9",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 169."
-      },
-      {
-        "message": "unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields",
-        "feature_id": "rust.capability.2badd3b9a25b",
-        "source": {
-          "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
-        },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 174."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 167."
       },
       {
         "message": "no_mangle is supported only on extern C function definitions",
         "feature_id": "rust.capability.4b9c1fc377df",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 243."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 252."
       },
       {
         "message": "extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape",
         "feature_id": "rust.capability.de072a10a17d",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 246."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 255."
       },
       {
         "message": "supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer",
         "feature_id": "rust.capability.8f374c0f0032",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 555."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 596."
       },
       {
         "message": "panic-capable division/remainder is unsupported; divisor must be a nonzero constant, not signed -1",
         "feature_id": "rust.capability.c48c5f43d7bb",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 568."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 609."
+      },
+      {
+        "message": "local borrowing is supported only as a direct shared-reference call argument; reference storage/escape lifetime analysis is not implemented",
+        "feature_id": "rust.capability.1a8776e6058b",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 307."
+      },
+      {
+        "message": "shared borrowing of temporaries requires lifetime extension, which is not implemented",
+        "feature_id": "rust.capability.ad0a8e2940d2",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 310."
+      },
+      {
+        "message": "dereference requires an admitted shared reference; raw pointers are not implemented",
+        "feature_id": "rust.capability.d0b554a3b673",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 316."
       },
       {
         "message": "diverging let initializers are not implemented",
         "feature_id": "rust.capability.10557ba208c5",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 310."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 341."
       },
       {
         "message": "diverging tuple operands require never-type layout support, which is not implemented",
         "feature_id": "rust.capability.a8fa7c5d5360",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 326."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 357."
       },
       {
         "message": "aggregate reference storage requires lifetime analysis, which is not implemented",
         "feature_id": "rust.capability.2297a7178b8b",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 328."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 359."
       },
       {
         "message": "unknown local {expr.value}; function values are not implemented",
         "feature_id": "rust.capability.1fe01c85830b",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 374."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 407."
       },
       {
         "message": "only unshadowed direct function calls are supported",
         "feature_id": "rust.capability.1337d5134703",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 431."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 470."
+      },
+      {
+        "message": "shared receiver borrowing of temporaries requires lifetime extension, which is not implemented",
+        "feature_id": "rust.capability.4ee292f5718c",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 437."
+      },
+      {
+        "message": "reference parameter reassignment requires lifetime constraints, which are not implemented",
+        "feature_id": "rust.capability.bdcf31e67972",
+        "source": {
+          "path": "pcc/frontends/rust/semantics.py",
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 514."
       },
       {
         "message": "unsupported semantic node {kind}",
         "feature_id": "rust.capability.cd0812091f1d",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "df578e0f7305ce859aa4253a68074bc6c06d8fb187f992c1cdb26370151fb3d3"
+          "sha256": "df1296d932994ba79b4a4b0ee18d1c71403048080bd97817c5b74dc04c8b392c"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 509."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 550."
       },
       {
         "message": "unsupported Rust type {text}; references and traits are not implemented",
         "feature_id": "rust.capability.fe93fd5bf188",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 259."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 261."
       },
       {
         "message": "Rust documentation attributes are not implemented",
         "feature_id": "rust.capability.bd733be37d9b",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
         "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 56."
       },
@@ -3219,7 +3363,7 @@
         "feature_id": "rust.capability.e99bc3baff05",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
         "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 104."
       },
@@ -3228,243 +3372,261 @@
         "feature_id": "rust.capability.d1d178589dd9",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 280."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 282."
       },
       {
         "message": "empty generic parameter lists are not implemented",
         "feature_id": "rust.capability.bba567d753cb",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 299."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 301."
       },
       {
         "message": "generic where constraints and traits are not implemented",
         "feature_id": "rust.capability.7acd3663c2c4",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 330."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 332."
       },
       {
         "message": "generic function foreign/export ABI is not implemented",
         "feature_id": "rust.capability.e05bbaab24e2",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 433."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 435."
       },
       {
         "message": "generic where constraints require trait checking, which is not implemented",
         "feature_id": "rust.capability.80a1daa28726",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 468."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 485."
       },
       {
         "message": "empty enums require uninhabited-type analysis, which is not implemented",
         "feature_id": "rust.capability.c3e20b9f0176",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 653."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 675."
       },
       {
         "message": "mutable references and borrow checking are not implemented",
         "feature_id": "rust.capability.1bc97855ac25",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 239."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 241."
       },
       {
         "message": "const generic parameters are not implemented",
         "feature_id": "rust.capability.23e389b95dff",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 303."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 305."
       },
       {
         "message": "generic bounds and default arguments require trait/constraint checking, which is not implemented",
         "feature_id": "rust.capability.ef2051156beb",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 308."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 310."
       },
       {
         "message": "method-local generic parameters require separate method inference and are not implemented",
         "feature_id": "rust.capability.d45b3de1ec8e",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 430."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 432."
       },
       {
         "message": "named enum payload fields are not implemented",
         "feature_id": "rust.capability.75978ad8986b",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 646."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 668."
       },
       {
         "message": "visibility and attributes on impl blocks are not implemented",
         "feature_id": "rust.capability.a8ca231e8795",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 375."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 377."
       },
       {
         "message": "trait impls and impl constraints are not implemented",
         "feature_id": "rust.capability.5b94bfcc10f1",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 380."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 382."
       },
       {
         "message": "enum repr(C) and no_mangle are not supported",
         "feature_id": "rust.capability.f49193c1c2ca",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 392."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 394."
       },
       {
         "message": "no_mangle is supported only on extern C function definitions",
         "feature_id": "rust.capability.cb3e74dcd215",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 399."
-      },
-      {
-        "message": "reference receivers require borrow/alias/lifetime analysis, which is not implemented",
-        "feature_id": "rust.capability.c24947dcbaf6",
-        "source": {
-          "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
-        },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 441."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 401."
       },
       {
         "message": "empty tuple variants are not implemented; use a unit variant",
         "feature_id": "rust.capability.cc0819c68f78",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 643."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 665."
       },
       {
         "message": "unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted",
         "feature_id": "rust.capability.ef1aabaa4f26",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 370."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 372."
       },
       {
         "message": "C-unwind requires owned cross-language unwinding, which is not implemented",
         "feature_id": "rust.capability.76572c67a8a9",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 410."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 412."
       },
       {
         "message": "only the non-unwinding extern \"C\" ABI is supported",
         "feature_id": "rust.capability.9d2f182c387d",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 412."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 414."
       },
       {
         "message": "attributes and visibility on extern blocks are not supported",
         "feature_id": "rust.capability.9a13e1881e59",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 416."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 418."
+      },
+      {
+        "message": "mutable reference receivers and exclusive borrow checking are not implemented",
+        "feature_id": "rust.capability.ae2bca662d2d",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 445."
+      },
+      {
+        "message": "explicit receiver types are not implemented",
+        "feature_id": "rust.capability.9c7be91de66a",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 450."
       },
       {
         "message": "explicit receiver types are not implemented; use self or mut self",
         "feature_id": "rust.capability.85f51504945b",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 447."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 464."
       },
       {
         "message": "unsupported representation; enum repr supports i32/i64/u32/u64",
         "feature_id": "rust.capability.e6d5b211f058",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 365."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 367."
       },
       {
         "message": "reference, range, named-field and rest patterns are not implemented",
         "feature_id": "rust.capability.551845180510",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 715."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 737."
       },
       {
         "message": "match guards require additional effect and binding analysis, which is not implemented",
         "feature_id": "rust.capability.18728c522946",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 553."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 570."
       },
       {
         "message": "break values and loop labels are not implemented",
         "feature_id": "rust.capability.1ecc344c3e40",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 566."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 583."
+      },
+      {
+        "message": "mutable borrowing and exclusive loan checking are not implemented",
+        "feature_id": "rust.capability.3407e7c104ae",
+        "source": {
+          "path": "pcc/frontends/rust/syntax.py",
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
+        },
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 590."
       },
       {
         "message": "unsupported expression {text}; borrowing, heap, macros and panic are not implemented",
         "feature_id": "rust.capability.e43cffed9774",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4379e0804612fe71e73a800ef6aac58d234882b6158aae2eff84df9c8514e7fc"
+          "sha256": "17d565733d12ec13200bbee5277b96a83c3d478229289c9c914074f829257b4a"
         },
-        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 578."
+        "reason": "RustError currently emits located text only; this exact literal/f-string template has no stable capability code. Located raise at line 600."
       }
     ],
     "notes": "No stable Rust diagnostic codes exist yet. Static extraction covers direct literal/f-string raise templates containing explicit capability wording; generic parser expectation errors, dynamic messages, propagated errors and a complete invalid-vs-unimplemented code taxonomy are not certified. Every inventoried message maps to a feature; code migration remains missing."
@@ -3958,6 +4120,647 @@
         "kind": "raw_process_streams"
       },
       "command_kind": "reproduction"
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.unit",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_exact_original_parameter_rebinding_requires_lifetime_constraints",
+      "kind": "unit",
+      "purpose": "unit",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "pytest",
+        "-x",
+        "--maxfail=0",
+        "-m",
+        "",
+        "-vv",
+        "--tb=short",
+        "tests/rust",
+        "tests/test_frontend_instantiation.py"
+      ],
+      "actual": {
+        "stdout_sha256": "b902af6b5daa5165fc754a9a8c04ac9dc0fc206689607f5040f7f7a76a329503",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_explicit",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "ed3f18917a79828b89fa351b4c886e2ad165a168dd9598faf57ef909b19eff8f",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_explicit",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "ed3f18917a79828b89fa351b4c886e2ad165a168dd9598faf57ef909b19eff8f",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "ed3f18917a79828b89fa351b4c886e2ad165a168dd9598faf57ef909b19eff8f",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_generic",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "a206e7b47c5258b54c48eed1a0ca6ab9b2d17bb99b7c7a4001e9c248bf33775d",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_generic",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "a206e7b47c5258b54c48eed1a0ca6ab9b2d17bb99b7c7a4001e9c248bf33775d",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "a206e7b47c5258b54c48eed1a0ca6ab9b2d17bb99b7c7a4001e9c248bf33775d",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_local_rebinding",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "cb5c1d1557330991f67b8da159ad01e28c70d3474a6ddfe16fd1733f5cc96281",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_local_rebinding",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "cb5c1d1557330991f67b8da159ad01e28c70d3474a6ddfe16fd1733f5cc96281",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "cb5c1d1557330991f67b8da159ad01e28c70d3474a6ddfe16fd1733f5cc96281",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_methods",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "73169c9f710c1047fd8face7d8508bcd530d8a578e36b5c2e4b63c1611fb309a",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_methods",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "73169c9f710c1047fd8face7d8508bcd530d8a578e36b5c2e4b63c1611fb309a",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "73169c9f710c1047fd8face7d8508bcd530d8a578e36b5c2e4b63c1611fb309a",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_order",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "2fd987593b9377f7c50cdea51a841ecbedb7c62a61f897569bcfaf7e90a6ca90",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_order",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "2fd987593b9377f7c50cdea51a841ecbedb7c62a61f897569bcfaf7e90a6ca90",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "2fd987593b9377f7c50cdea51a841ecbedb7c62a61f897569bcfaf7e90a6ca90",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_partial",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "8307f17bf24f8fc1a47a220af98c9870e50592a818937a499bc88c2b6dba7e24",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_partial",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "8307f17bf24f8fc1a47a220af98c9870e50592a818937a499bc88c2b6dba7e24",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "8307f17bf24f8fc1a47a220af98c9870e50592a818937a499bc88c2b6dba7e24",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_reborrow",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "e5787994b3b16e8341a9db9f962bd88df9848aa3a4548f4bcc6b9c18c7fc752f",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_reborrow",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "e5787994b3b16e8341a9db9f962bd88df9848aa3a4548f4bcc6b9c18c7fc752f",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "e5787994b3b16e8341a9db9f962bd88df9848aa3a4548f4bcc6b9c18c7fc752f",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.program.shared_scalar",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "493db013ce08442d45486d77fecee14c6ed6e90c92aaf9b869f6dea5e71832e8",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "48d340a45783411b8bcad5304ba966aafc95d2bc",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.shared-loans.48d.differential.shared_scalar",
+      "test_id": "tests/rust/test_rust_shared_loans.py::test_original_shared_loan_programs_match_native_rustc",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "493db013ce08442d45486d77fecee14c6ed6e90c92aaf9b869f6dea5e71832e8",
+      "source": {
+        "path": "tests/rust/test_rust_shared_loans.py",
+        "sha256": "660e86a095ee8b06d3c2e39d58dab960702db3a28e114dc7c4ec249461cfd76d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "493db013ce08442d45486d77fecee14c6ed6e90c92aaf9b869f6dea5e71832e8",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
     }
   ]
 }

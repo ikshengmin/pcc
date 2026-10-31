@@ -7,10 +7,50 @@ resolver, integer inference, type checker and control-flow lowering. It does not
 strip Rust syntax, translate into Python/C, invoke rustc, or substitute a Python
 interpreter. The shared PCC self backend emits and links the native program.
 
-**Not a safe primary Rust compiler:** no borrow checker exists. The mandatory
+**Not a safe primary Rust compiler:** no general Rust borrow checker exists. The mandatory
 experimental flag is a caller attestation that rustc checked the *unchanged*
 source; it is not proof or an automatically verified receipt. The normal/default
 call rejects compilation. Host-PCC evidence is not native pcc1/fixed-point proof.
+
+## Bounded read-only direct-call loans (experimental)
+
+Private Rust parameters may carry shared references to admitted value types.
+`&self` methods, incoming shared-reference forwarding, Copy-value dereference,
+and field projections use the existing target pointer/data layout. A local
+`&place` is admitted only as a direct shared-reference call argument (parentheses
+are allowed). A method may borrow an existing receiver place automatically;
+borrowing arbitrary temporaries is explicitly unimplemented. Non-Copy values
+cannot be moved out through a shared reference, including generic `T` even if a
+particular call would instantiate a scalar.
+
+The frontend tracks each local loan's binding identity and field path through
+**all** subsequent argument evaluation and the call. It rejects overlapping
+moves or mutations while that loan is active, permits independent sibling
+places, and ends the loan after the call. Nested calls retain outer loans.
+This small conservative conflict check is not non-lexical lifetime analysis or
+general borrow checking: creating stored local references, escaping reference
+returns/aggregate fields, mutable loans, raw pointers, Drop, interior mutability
+and arbitrary receiver adjustment remain gated. Existing unsafe external calls
+still require the caller to uphold the foreign lifetime/alias contract; the
+frontend does not prove an external callee's body or certify unsafe source.
+The public `experimental_rustc_checked` flag remains caller attestation, and
+`borrow_checked_by_pcc` remains false.
+
+The foreign boundary is **not** widened: `extern "C"` shared parameters still
+require the separately qualified non-generic `repr(C)` integer record shape.
+Other reference shapes use PCC's private ABI only. No allocator, external
+unwinder, new GC or independent runtime is introduced.
+
+Dependency evidence remains the unchanged pinned Rust 1.90.0 `core_option.rs`
+(commit `1159e78c4747b02ef996e55082b704c09b970588`, SHA-256
+`53b549b18552144e911416aa2773e8b726da88c190d5cb27007c3c08740894a5`,
+MIT/Apache-2.0 pins in `tests/rust/upstream/README.md`). Its original `as_ref`
+method at line 737 also needs const functions, dereference/pattern borrowing and
+a returned `Option<&T>` with real lifetimes; this bounded slice does not compile
+that method or the full crate. The eight `shared_*.rs` programs are clearly
+authored tests, not extracted upstream successes. Their spec-linked unit,
+owned-native, Darwin cross-only and actual rustc runtime/rejection checks live
+in `test_rust_shared_loans.py`; unrun tests are not evidence of support.
 
 ## Admitted language
 
@@ -420,3 +460,11 @@ file or a core/alloc success claim.
 References: [inherent implementations](https://doc.rust-lang.org/reference/items/implementations.html#inherent-implementations),
 [associated functions/methods](https://doc.rust-lang.org/reference/items/associated-items.html#associated-functions-and-methods),
 [method calls](https://doc.rust-lang.org/reference/expressions/method-call-expr.html).
+
+Reference parameter reassignment is explicitly unsupported until lifetime
+constraints are represented; each elided input reference has its own lifetime.
+This includes conservatively rejecting valid self-assignment. A local Copy
+reference binding initialized from incoming references can still be rebound.
+The original `shared_rebinding.rs` is retained as a PCC-before-IR / actual-rustc
+negative after the first reference gate rejected its parameter assignment;
+`shared_local_rebinding.rs` is a distinct positive input, not an edited original.

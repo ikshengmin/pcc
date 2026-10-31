@@ -52,7 +52,7 @@ def compile_source(source, **options):
     ('enum E<T>{Value(T)} fn f(x:E<i64>){match x{E::<u64>::Value(n)=>()}}', 'type mismatch'),
     ('enum E<T>{Empty,Value(T)} fn f(x:E<i64>){match x{E::Empty=>()}}', 'non-exhaustive'),
     ('struct S<T>{x:T} extern "C" fn f(x:S<i64>){}', 'aggregate ABI'),
-    ('#[repr(C)] struct S<T>{x:T} extern "C" fn f(x:&S<i64>){}', 'per-instance qualification'),
+    ('#[repr(C)] struct S<T>{x:T} extern "C" fn f(x:&S<i64>){}', 'foreign shared references'),
     ('struct S<T:Copy>{x:T}', 'bounds and default'),
     ('struct S<T=i32>{x:T}', 'bounds and default'),
     ('struct S<T> where T:Copy {x:T}', 'where constraints'),

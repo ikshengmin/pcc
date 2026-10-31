@@ -59,6 +59,8 @@ class Lowerer:
     def place_pointer(self, expr):
         if expr.kind == "group":
             return self.place_pointer(expr.children[0])
+        if expr.kind == "deref":
+            return self.expression(expr.children[0])
         if expr.kind == "name":
             return self.slots.get(expr.binding.serial)
         if expr.kind == "field":
@@ -127,6 +129,10 @@ class Lowerer:
         kind, children = expr.kind, expr.children
         if kind in {"group", "unsafe"}:
             return self.expression(children[0])
+        if kind == "borrow":
+            return self.place_pointer(children[0])
+        if kind == "deref":
+            return self.builder.load(self.expression(children[0]))
         if kind == "enum_construct" or kind == "variant" and self.checker.enums[expr.ty].payloads:
             enum = self.checker.enums[expr.ty]
             variant = expr.value if kind == "enum_construct" else expr.binding
@@ -171,6 +177,10 @@ class Lowerer:
                     self.builder.store(value, field)
             return self.builder.load(pointer)
         if kind == "field":
+            if expr.ty == "()":
+                if self.checker.place(expr) is None or isinstance(children[0].ty, SharedReference):
+                    self.expression(children[0])
+                return None
             if isinstance(children[0].ty, SharedReference):
                 pointer = self.builder.gep(self.expression(children[0]), [
                     ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), expr.value)

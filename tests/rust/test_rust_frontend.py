@@ -112,7 +112,6 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("/* never closed", "unterminated block comment"),
     ("fn f(){ 0b102; }", "invalid or unsupported integer"),
     ("fn f(){ 12i8; }", "invalid or unsupported integer"),
-    ("fn f(x:&i32){}", "unsupported Rust type"),
     ("fn f(){ let x=1; let y=&x; }", "borrowing"),
     ("fn f(){ panic!(); }", "expected ';'"),
     ("trait T {}", "expected 'fn'"),

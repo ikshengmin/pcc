@@ -48,7 +48,6 @@ INVALID = [
     ('fn bad<const N:u64>(){}', 'const generic'),
     ('extern "C" fn bad<T>(x:T){}', 'foreign/export ABI'),
     ('#[no_mangle] fn bad<T>(x:T){}', 'foreign/export ABI'),
-    ('fn bad<T>(x:&T){}', 'shared references currently require'),
     ('#[repr(C)] struct R{x:i64} fn id<T>(x:T)->T{x} fn f(x:&R){id::<&R>(x);}', 'reference arguments'),
 ]
 

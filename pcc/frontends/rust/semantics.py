@@ -22,10 +22,13 @@ class Binding:
     ty: object
     mutable: bool
     serial: int
+    parameter: bool = False
 
 
 def resolve(ty: object) -> object:
-    if isinstance(ty, (SharedReference, TypeApplication, TypeParameter)):
+    if isinstance(ty, SharedReference):
+        return SharedReference(resolve(ty.referent))
+    if isinstance(ty, (TypeApplication, TypeParameter)):
         return ty
     if isinstance(ty, TupleType):
         return TupleType(tuple(resolve(item) for item in ty.elements))
@@ -53,6 +56,8 @@ def unify(left: object, right: object, token: Token) -> object:
         return left
     if isinstance(left, TupleType) and isinstance(right, TupleType) and len(left.elements) == len(right.elements):
         return TupleType(tuple(unify(a, b, token) for a, b in zip(left.elements, right.elements)))
+    if isinstance(left, SharedReference) and isinstance(right, SharedReference):
+        return SharedReference(unify(left.referent, right.referent, token))
     if isinstance(left, InferredInteger):
         if isinstance(right, InferredInteger) or right in INTEGERS:
             left.bound = right
@@ -118,9 +123,9 @@ class Checker:
         from .methods import InherentMethods
         self.methods = InherentMethods(self, implementations)
 
-    def bind(self, token: Token, ty: object, mutable: bool) -> Binding:
+    def bind(self, token: Token, ty: object, mutable: bool, *, parameter=False) -> Binding:
         self.serial += 1
-        binding = Binding(token.text, ty, mutable, self.serial)
+        binding = Binding(token.text, ty, mutable, self.serial, parameter)
         self.scopes[-1][token.text] = binding
         return binding
 
@@ -149,12 +154,25 @@ class Checker:
         return ty in INTEGERS | {"bool", "()"}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
+        if isinstance(ty, InferredInteger):
+            return  # Local borrow inference resolves after all call constraints.
         if isinstance(ty, TypeParameter):
             if self.abstract_function and ty in self.type_scope.values():
                 return
             raise token.error("unbound generic type parameter")
         if isinstance(ty, TypeApplication):
             self.generics.instantiate(ty, token)
+        if isinstance(ty, SharedReference):
+            if not allow_reference:
+                raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
+            if ty.referent == "()" or isinstance(ty.referent, SharedReference):
+                raise token.error("unit and nested references require additional reference layout/lifetime support")
+            self.valid_type(ty.referent, token, stack, allow_reference=False)
+            return
+        if isinstance(ty, TupleType):
+            for item in ty.elements:
+                self.valid_type(item, token, stack, allow_reference=False)
+            return
         if ty in INTEGERS | {"bool", "()"}:
             return
         if ty in self.enums:
@@ -163,19 +181,6 @@ class Checker:
             for fields in self.enums[ty].payloads.values():
                 for field_ty in fields:
                     self.valid_type(field_ty, token, stack + (ty,), allow_reference=False)
-            return
-        if isinstance(ty, SharedReference):
-            if not allow_reference:
-                raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
-            if isinstance(ty.referent, TypeApplication):
-                raise token.error("generic shared-reference ABI requires separate per-instance qualification")
-            record = self.records.get(ty.referent)
-            if record is None or not record.repr_c or not record.fields or any(field_ty not in INTEGERS for _, field_ty in record.fields):
-                raise token.error("unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields")
-            return
-        if isinstance(ty, TupleType):
-            for item in ty.elements:
-                self.valid_type(item, token, stack, allow_reference=False)
             return
         if ty not in self.records:
             raise token.error(f"unsupported Rust type {ty!r}")
@@ -194,6 +199,8 @@ class Checker:
     def place(self, expr: Expr):
         if expr.kind == "group":
             return self.place(expr.children[0])
+        if expr.kind == "deref":
+            return self.place(expr.children[0])
         if expr.kind == "name":
             return expr.binding, ()
         if expr.kind == "field":
@@ -203,6 +210,8 @@ class Checker:
         return None
 
     def through_reference(self, expr: Expr) -> bool:
+        if expr.kind == "deref":
+            return True
         if expr.kind == "group":
             return self.through_reference(expr.children[0])
         if expr.kind == "field":
@@ -244,6 +253,13 @@ class Checker:
             self.names[name] = fn
             if fn.abi == "C" and (any(ty not in INTEGERS and not isinstance(ty, SharedReference) for _, ty, _ in fn.params) or fn.result not in INTEGERS | {"()"}):
                 raise fn.token.error("extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape")
+            if fn.abi == "C":
+                for token, ty, _ in fn.params:
+                    if isinstance(ty, SharedReference):
+                        record = self.records.get(ty.referent)
+                        if (isinstance(ty.referent, TypeApplication) or record is None or not record.repr_c
+                                or not record.fields or any(t not in INTEGERS for _, t in record.fields)):
+                            raise token.error("foreign shared references require the separately qualified non-generic repr(C) integer record shape")
         self.type_scope = {}
         self.abstract_function = False
         # Rust checks declarations, not only the bodies selected by concrete
@@ -273,19 +289,34 @@ class Checker:
             for name, ty, mutable in fn.params:
                 if name.text in self.scopes[0]:
                     raise name.error(f"duplicate parameter {name.text!r}")
-                params.append(self.bind(name, ty, mutable))
+                params.append(self.bind(name, ty, mutable, parameter=True))
             self.parameters[fn.identity] = params
             unify(fn.result, self.expression(fn.body), fn.body.token)
             self.validate(fn.body)
         finally:
             self.type_scope, self.abstract_function = previous_scope, previous_abstract
 
-    def expression(self, expr: Expr) -> object:
+    def expression(self, expr: Expr, *, allow_borrow=False, place_context=False) -> object:
         kind, children = expr.kind, expr.children
         if kind == "integer":
             expr.value, ty = integer_literal(expr)
         elif kind == "group":
-            ty = self.expression(children[0])
+            ty = self.expression(children[0], allow_borrow=allow_borrow, place_context=place_context)
+        elif kind == "borrow":
+            if not allow_borrow:
+                raise expr.token.error("local borrowing is supported only as a direct shared-reference call argument; reference storage/escape lifetime analysis is not implemented")
+            referent = self.expression(children[0], place_context=True)
+            if self.place(children[0]) is None:
+                raise expr.token.error("shared borrowing of temporaries requires lifetime extension, which is not implemented")
+            ty = SharedReference(referent)
+            self.valid_type(ty, expr.token)
+        elif kind == "deref":
+            pointer = self.expression(children[0])
+            if not isinstance(pointer, SharedReference):
+                raise expr.token.error("dereference requires an admitted shared reference; raw pointers are not implemented")
+            ty = pointer.referent
+            if not place_context and not self.copy_type(ty):
+                raise expr.token.error("cannot move a non-Copy value out of a shared reference")
         elif kind == "bool":
             ty = "bool"
         elif kind == "variant":
@@ -350,7 +381,7 @@ class Checker:
             expr.value = indices
             ty = record_name
         elif kind == "field":
-            base_ty = self.expression(children[0])
+            base_ty = self.expression(children[0], place_context=True)
             if isinstance(base_ty, SharedReference):
                 base_ty = base_ty.referent
             if isinstance(base_ty, TupleType):
@@ -368,6 +399,8 @@ class Checker:
             else:
                 raise expr.token.error("field access requires a struct or tuple")
             expr.value = index
+            if self.through_reference(expr) and not place_context and not self.copy_type(ty):
+                raise expr.token.error("cannot move a non-Copy field out of a shared reference")
         elif kind == "name":
             binding = self.local(str(expr.value))
             if binding is None:
@@ -397,8 +430,14 @@ class Checker:
             receiver_checked = False
             if callee.kind == "field":
                 receiver = callee.children[0]
-                receiver_type = self.expression(receiver)
+                receiver_type = self.expression(receiver, place_context=True)
                 fn = self.methods.select(receiver_type, callee.value, callee.token, receiver=True)
+                if isinstance(fn.params[0][1], SharedReference) and not isinstance(receiver_type, SharedReference):
+                    if self.place(receiver) is None:
+                        raise receiver.token.error("shared receiver borrowing of temporaries requires lifetime extension, which is not implemented")
+                    receiver = Expr("borrow", receiver.token, children=[receiver], ty=SharedReference(receiver_type))
+                elif self.through_reference(receiver) and not self.copy_type(receiver_type):
+                    raise receiver.token.error("cannot move a value receiver out of a shared reference")
                 # Canonical typed direct-call operands: receiver is first and
                 # appears once. Its already-checked AST must not be rechecked.
                 expr.children = children = [callee, receiver] + children[1:]
@@ -440,7 +479,7 @@ class Checker:
                 raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
             expr.binding = fn
             for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params)):
-                arg_ty = arg.ty if receiver_checked and index == 0 else self.expression(arg)
+                arg_ty = arg.ty if receiver_checked and index == 0 else self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
                 unify(param_ty, arg_ty, arg.token)
             ty = fn.result
         elif kind == "unary":
@@ -471,6 +510,8 @@ class Checker:
                 raise lhs.token.error("cannot assign through a shared reference")
             if not place[0].mutable:
                 raise lhs.token.error(f"cannot assign to immutable binding {place[0].name!r}")
+            if place[0].parameter and isinstance(target, SharedReference):
+                raise lhs.token.error("reference parameter reassignment requires lifetime constraints, which are not implemented")
             unify(target, self.expression(children[1]), expr.token)
             ty = "()"
         elif kind == "cast":

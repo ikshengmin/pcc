@@ -45,7 +45,6 @@ def compile_source(source):
     ('struct R{x:i64} impl R{fn f(x:i64,self){}}', 'first parameter'),
     ('fn f(self){}', 'inherent method'),
     ('struct R{x:i64} impl R{fn f(self:Self){}}', 'explicit receiver'),
-    ('struct R{x:i64} impl R{fn f(&self){}}', 'reference receivers'),
     ('struct R{x:i64} impl R{fn f(&mut self){}}', 'reference receivers'),
     ('struct R{x:i64} impl R{fn f<T>(self,x:T){}}', 'method-local generic'),
     ('struct R{x:i64} impl Trait for R{}', 'trait impls'),

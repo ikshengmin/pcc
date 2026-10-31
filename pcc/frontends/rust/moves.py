@@ -1,6 +1,6 @@
-"""Place-sensitive moves for the borrow-free aggregate slice.
+"""Place-sensitive moves and bounded direct-call shared loans.
 
-This is NOT borrow checking. Borrow patterns, Drop and user-defined Copy are
+This is NOT general borrow checking. Borrow patterns, Drop and user-defined Copy are
 still rejected. A state records paths which may have moved on any reachable incoming
 edge; loop backedges reach a finite fixed point rather than assuming one pass.
 """
@@ -45,6 +45,15 @@ class MoveChecker:
     def __init__(self, checker):
         self.checker = checker
         self.loops: list[LoopEdges] = []
+        # Ephemeral shared loans exist only while evaluating one direct call.
+        # No local reference creation/escape or mutable/interior aliasing is
+        # admitted. This is a bounded conflict check, NOT general borrowck.
+        self.loans = []
+
+    def conflict(self, binding, path, token):
+        if any(owner.serial == binding.serial and (prefix(loan, path) or prefix(path, loan))
+               for owner, loan in self.loans):
+            raise token.error("cannot move or mutate a place while borrowed by a shared call argument")
 
     def check(self) -> None:
         for function in self.checker.functions:
@@ -61,6 +70,7 @@ class MoveChecker:
         if any(prefix(item, path) or prefix(path, item) for item in moved):
             raise token.error(f"use of moved or possibly moved value {binding.name!r}")
         if consume and not self.checker.copy_type(ty):
+            self.conflict(binding, path, token)
             moved.add(path)
 
     def read_place(self, expr: Expr, state: State, *, consume: bool = True) -> None:
@@ -103,6 +113,16 @@ class MoveChecker:
         kind, children = expr.kind, expr.children
         if kind in {"integer", "bool", "unit", "variant"}:
             return state
+        if kind == "borrow":
+            self.read_place(children[0], state, consume=False)
+            # Reborrowing an incoming shared referent does not borrow the local
+            # variable which stores that pointer. Rebinding that Copy variable
+            # is legal; writing the pointee is separately forbidden by sema.
+            if not self.checker.through_reference(children[0]):
+                self.loans.append(self.checker.place(children[0]))
+            return state
+        if kind == "deref":
+            return self.expression(children[0], state)
         if kind in {"name", "field", "group"}:
             if self.checker.place(expr) is not None:
                 self.read_place(expr, state)
@@ -131,6 +151,7 @@ class MoveChecker:
             if result is None:
                 return None
             binding, path = self.checker.place(children[0])
+            self.conflict(binding, path, expr.token)
             moved = result[binding.serial]
             if expr.value != "=":
                 self.read_place(children[0], result, consume=False)
@@ -198,8 +219,13 @@ class MoveChecker:
         # Rust evaluates constructor fields and call arguments in source order,
         # not declaration order. The function-name child is not a local use.
         operands = children[1:] if kind == "call" else children
-        current = state
-        for child in operands:
-            if current is not None:
-                current = self.expression(child, current)
-        return current
+        active_loans = len(self.loans)
+        try:
+            current = state
+            for child in operands:
+                if current is not None:
+                    current = self.expression(child, current)
+            return current
+        finally:
+            if kind == "call":
+                del self.loans[active_loans:]

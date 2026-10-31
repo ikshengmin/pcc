@@ -234,6 +234,8 @@ class Parser:
     def type(self) -> object:
         token = self.take()
         text = token.text
+        if text == "&&":
+            raise token.error("unit and nested references require additional reference layout/lifetime support")
         if text == "&":
             if self.token.text == "mut":
                 raise self.token.error("mutable references and borrow checking are not implemented")
@@ -438,7 +440,22 @@ class Parser:
             while True:
                 mutable = self.accept("mut")
                 if self.token.text == "&":
-                    raise self.token.error("reference receivers require borrow/alias/lifetime analysis, which is not implemented")
+                    ampersand = self.take()
+                    if mutable or self.accept("mut"):
+                        raise ampersand.error("mutable reference receivers and exclusive borrow checking are not implemented")
+                    param = self.expect("self")
+                    if implementation is None or params:
+                        raise param.error("self receiver must be the first parameter of an inherent method")
+                    if self.token.text == ":":
+                        raise self.token.error("explicit receiver types are not implemented")
+                    params.append((param, SharedReference("Self"), False))
+                    receiver = True
+                    if self.accept(")"):
+                        break
+                    self.expect(",")
+                    if self.accept(")"):
+                        break
+                    continue
                 if self.token.text == "self":
                     param = self.take()
                     if implementation is None or params:
@@ -568,6 +585,11 @@ class Parser:
             expr = Expr(text, token, children=children)
         elif text in {"-", "!"}:
             expr = Expr("unary", token, text, [self.expression(12, allow_struct=allow_struct)])
+        elif text in {"&", "*"}:
+            if text == "&" and self.accept("mut"):
+                raise token.error("mutable borrowing and exclusive loan checking are not implemented")
+            expr = Expr("borrow" if text == "&" else "deref", token,
+                        children=[self.expression(12, allow_struct=allow_struct)])
         elif (token.kind == "name" and text != "_") or text in {"self", "Self"}:
             owner, variant = self.expression_path(token)
             if variant is not None:
