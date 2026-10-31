@@ -38,6 +38,7 @@ from pcc.unsafe import (
     global_store_ptr,
     int_to_ptr,
     is_tagged_int,
+    load_i32,
     load_i64,
     load_ptr,
     logical_shift_right_i64,
@@ -856,6 +857,35 @@ def pcc_gc_managed_pointer_index_remove(obj) -> i64:
     count: i64 = load_i64(global_addr("pcc_py_gc_managed_pointer_count"), 0)
     store_i64(global_addr("pcc_py_gc_managed_pointer_count"), 0, count - 1)
     return 1
+
+
+@c_abi_export("pcc_gc_managed_pointer_index_enumerate")
+def pcc_gc_managed_pointer_index_enumerate(out, capacity: i64, required_flags: i64) -> i64:
+    """Collect the registered objects outside object slabs (large objects and
+    other per-object registrations) whose header flags hold every bit of
+    ``required_flags``. GC0 registers its large objects here; the tracing
+    collectors index every object in their own object index instead.
+
+    Same contract as pcc_allocator_object_cells_enumerate: at most
+    ``capacity`` pointers go to ``out``, the return value counts every match,
+    and the caller has stopped the world. Removal back-shifts entries rather
+    than leaving tombstones, so every non-null slot is a registered object.
+    """
+    slots = global_load_ptr("pcc_py_gc_managed_pointer_slots")
+    if ptr_is_null(slots) != 0:
+        return 0
+    cap: i64 = load_i64(global_addr("pcc_py_gc_managed_pointer_cap"), 0)
+    total: i64 = 0
+    index: i64 = 0
+    while index < cap:
+        obj = load_ptr(slots, index * 8)
+        if ptr_is_null(obj) == 0:
+            if (load_i32(obj, 12) & required_flags) == required_flags:
+                if total < capacity:
+                    store_ptr(out, total * 8, obj)
+                total = total + 1
+        index = index + 1
+    return total
 
 
 @c_abi_export("py_gc_index_find")

@@ -2273,6 +2273,51 @@ def _granule_object_start_uncached(ptr, object_bits: i64, object_slot: i64) -> i
     return 1
 
 
+@c_abi_export("pcc_allocator_object_cells_enumerate")
+def pcc_allocator_object_cells_enumerate(out, capacity: i64, required_flags: i64) -> i64:
+    """Collect the LIVE object-family cells whose header flags hold every bit
+    of ``required_flags``.
+
+    Writes at most ``capacity`` object pointers to ``out`` and returns the
+    number of matches, which may exceed ``capacity``: callers count with a
+    zero capacity, allocate, then fill. The caller has stopped the world, so
+    no allocation, free or slab registration changes the granule table, a
+    lifecycle word or a header flag during the walk. Every 64 KiB slab binds
+    sixteen granule keys to one span; only the key of the slab's first page
+    walks it, so each cell is visited once. Large objects are not in slabs
+    (see pcc_gc_managed_pointer_index_enumerate).
+    """
+    table = global_load_ptr("pcc_allocator_granule_table")
+    if ptr_is_null(table) != 0:
+        return 0
+    cap: i64 = load_i64(table, 0)
+    keys = ptr_add(table, 64)
+    spans = ptr_add(table, 64 + cap * 8)
+    total: i64 = 0
+    index: i64 = 0
+    while index < cap:
+        # 0 is an empty slot and -1 a retired raw slab's tombstone.
+        key: i64 = atomic_load_i64(keys, index * 8, "acquire")
+        if key > 0:
+            span = int_to_ptr(load_i64(spans, index * 8))
+            if load_i64(span, 0) == 1:
+                base = load_ptr(span, 16)
+                if logical_shift_right_i64(ptr_diff(base, null()), 12) == key:
+                    stride: i64 = load_i64(span, 8)
+                    count: i64 = load_i64(span, 24)
+                    cell: i64 = 0
+                    while cell < count:
+                        obj = ptr_add(base, 48 + cell * stride)
+                        if atomic_load_i64(obj, GRANULE_STATE_OFFSET, "acquire") == GC_STATE_LIVE:
+                            if (load_i32(obj, 12) & required_flags) == required_flags:
+                                if total < capacity:
+                                    store_ptr(out, total * 8, obj)
+                                total = total + 1
+                        cell = cell + 1
+        index = index + 1
+    return total
+
+
 @c_abi_export("pcc_allocator_granule_span_cache_set_fill")
 def pcc_allocator_granule_span_cache_set_fill(enabled: i64) -> i64:
     """Measurement control for the span cache: clear it and stop filling.
