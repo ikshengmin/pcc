@@ -52,6 +52,7 @@ class Node:
     constant: int | bool | None = None
     completes: bool = True
     operation_type: str | None = None
+    is_final: bool = False
 
 
 @dataclass
@@ -64,6 +65,7 @@ class SourceMethod:
     owner: str = ""
     modifiers: frozenset[str] = frozenset()
     parameter_types: tuple[str, ...] = ()
+    parameter_final: tuple[bool, ...] = ()
 
     @property
     def descriptor(self):
@@ -238,9 +240,12 @@ class SourceParser:
             if result.text not in DECLARED | {"void"}:
                 result.error("source method results currently require boolean, int, long or void", True)
             self.expect("(")
-            parameters, parameter_types = [], []
+            parameters, parameter_types, parameter_final = [], [], []
             if self.peek().text != ")":
                 while True:
+                    parameter_final.append(bool(self.accept("final")))
+                    if self.peek().text == "final":
+                        self.peek().error("duplicate final parameter modifier")
                     dtype = self.take()
                     if dtype.text not in DECLARED:
                         dtype.error("source parameters require boolean, int or long", True)
@@ -252,7 +257,8 @@ class SourceParser:
             if sum(2 if dtype == "long" else 1 for dtype in parameter_types) > 255:
                 method_name.error("too many static method parameters")
             methods.append(SourceMethod(method_name, result.text, tuple(parameters), self.block(),
-                                        owner=owner, modifiers=frozenset(mods), parameter_types=tuple(parameter_types)))
+                                        owner=owner, modifiers=frozenset(mods), parameter_types=tuple(parameter_types),
+                                        parameter_final=tuple(parameter_final)))
         self.expect("<eof>")
         return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields))
 
@@ -307,13 +313,20 @@ class SourceParser:
 
     def simple(self, allow_declaration=False):
         token = self.peek()
-        if token.text in DECLARED:
-            self.take()
+        is_final = bool(self.accept("final"))
+        if is_final and self.peek().text == "final":
+            self.peek().error("duplicate final local modifier")
+        if self.peek().text in DECLARED:
+            dtype = self.take().text
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
             name = self.identifier()
             children = [self.expression()] if self.accept("=") else []
-            return Node("var", name, token.text, children)
+            if is_final and not children:
+                name.error("blank final locals require the definite-unassignment source domain", True)
+            return Node("var", name, dtype, children, is_final=is_final)
+        if is_final:
+            token.error("final local declarations require boolean, int or long", True)
         if self.peek(1).text in ASSIGNMENTS | {"++", "--"}:
             name = self.identifier()
             operation = self.take().text

@@ -49,6 +49,12 @@ contract and are rejected, even when unused. No Java storage or initialization
 substitute is synthesized. Character literals represent one unsigned UTF-16 code
 unit, with ordinary/octal Java escapes; Unicode-escape translation remains gated.
 
+Initialized `final` boolean/int/long locals and `final` parameters preserve their
+lexical binding and prohibit reassignment. Only locals initialized by constant
+expressions become constant variables; a runtime call initializer is still
+evaluated exactly once and read from its local slot. Blank final locals remain an
+explicit definite-unassignment boundary, not an assumed value or dropped declaration.
+
 Heap objects/arrays, runtime fields and class initialization, exceptions including int
 division/remainder, monitors, strings and library/runtime APIs remain explicit
 capability errors. They must use the shared pcc-Python GC/scheduler/exception

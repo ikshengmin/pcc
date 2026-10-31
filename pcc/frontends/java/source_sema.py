@@ -1,7 +1,7 @@
 """Java source typing, lexical bindings, reachability and definite assignment.
 
 This pass creates typed source AST, not JVM instructions. The scalar
-subset has no assignment expressions, final locals or reference values; those
+subset has no assignment expressions, blank final locals or reference values; those
 boundaries keep its structured definite-assignment rules explicit.
 """
 from dataclasses import dataclass
@@ -19,6 +19,7 @@ class Binding:
     name: str
     slot: int
     dtype: str = "int"
+    is_final: bool = False
 
 
 def character_literal(node):
@@ -113,18 +114,19 @@ class SourceAnalyzer:
         for method in self.program.methods:
             self.method = method
             self.scopes, self.loops = [{}], []
+            self.constant_locals = {}
             assigned = set()
-            for parameter, dtype in zip(method.parameters, method.parameter_types):
-                assigned.add(self.declare(parameter, dtype))
+            for parameter, dtype, is_final in zip(method.parameters, method.parameter_types, method.parameter_final):
+                assigned.add(self.declare(parameter, dtype, is_final))
             outgoing = self.statement(method.body, assigned)
             if method.result != "void" and outgoing is not None:
                 method.token.error("missing return in " + method.result + " method")
         return self.program
 
-    def declare(self, token, dtype="int"):
+    def declare(self, token, dtype="int", is_final=False):
         if any(token.text in scope for scope in self.scopes):
             token.error("local or parameter name is already in scope")
-        binding = Binding(token.text, len(self.method.locals), dtype)
+        binding = Binding(token.text, len(self.method.locals), dtype, is_final)
         self.method.locals.append(binding)
         if len(self.method.locals) > 4096:
             token.error("source method exceeds the local-variable budget", True)
@@ -206,6 +208,7 @@ class SourceAnalyzer:
                         if node.symbol not in assigned:
                             node.token.error("local variable is not definitely assigned: " + node.symbol.name)
                         node.dtype = node.symbol.dtype
+                        node.constant = self.constant_locals.get(node.symbol)
                         return
             field = self.project.resolve_field(self, node)
             if (self.current_field is not None and "." not in op and field.owner == self.program.name
@@ -313,13 +316,17 @@ class SourceAnalyzer:
                 assigned = self.statement(child, assigned)
             self.scopes.pop()
         elif kind == "var":
-            node.symbol = self.declare(node.token, node.value)
+            node.symbol = self.declare(node.token, node.value, node.is_final)
             if node.children:
                 self.expression(node.children[0], assigned)
                 self.assignment_value(node.children[0], node.symbol.dtype)
                 assigned.add(node.symbol)
+                if node.is_final and node.children[0].constant is not None:
+                    self.constant_locals[node.symbol] = node.children[0].constant
         elif kind == "assign":
             node.symbol = self.lookup(node.token)
+            if node.symbol.is_final:
+                node.token.error("cannot assign an initialized final local or final parameter: " + node.symbol.name)
             if node.value != "=" and node.symbol not in assigned:
                 node.token.error("local variable is not definitely assigned: " + node.symbol.name)
             for child in node.children:
