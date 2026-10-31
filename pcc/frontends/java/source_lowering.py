@@ -14,8 +14,9 @@ OPERATIONS = {"+": "add", "-": "sub", "*": "mul", "&": "and", "|": "or", "^": "x
 
 
 class SourceLowerer:
-    def __init__(self, program, target):
+    def __init__(self, program, target, programs=None):
         self.program = program
+        self.programs = tuple(sorted(programs or (program,), key=lambda item: item.name))
         self.module = ir.Module(name="java_" + program.name.encode("utf-8").hex())
         self.module.triple = target
         self.functions = {}
@@ -23,13 +24,14 @@ class SourceLowerer:
         self.loops = []
 
     def lower(self, entry):
-        for method in self.program.methods:
-            key = (method.token.text, method.descriptor)
+        methods = [method for program in self.programs for method in program.methods]
+        for method in methods:
+            key = (method.owner, method.token.text, method.descriptor)
             signature = ir.FunctionType(self.i32 if method.result == "int" else ir.VoidType(),
                                         [self.i32 for _ in method.parameters])
-            self.functions[key] = ir.Function(self.module, signature, method_symbol(self.program.name, *key))
-        for method in self.program.methods:
-            self.function = self.functions[method.token.text, method.descriptor]
+            self.functions[key] = ir.Function(self.module, signature, method_symbol(*key))
+        for method in methods:
+            self.function = self.functions[method.owner, method.token.text, method.descriptor]
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.slots = {binding: self.builder.alloca(self.i32, name="local_" + str(binding.slot))
                           for binding in method.locals}
@@ -41,7 +43,9 @@ class SourceLowerer:
                     self.builder.ret_void()
                 else:
                     raise AssertionError("source sema admitted a missing return")
-        return JavaCompilation(self.module, self.program.name, entry, tuple(self.functions))
+        return JavaCompilation(self.module, self.program.name, entry,
+                               tuple((method.token.text, method.descriptor) for method in self.program.methods),
+                               tuple(self.functions))
 
     def expression(self, node):
         if node.constant is not None:
@@ -51,7 +55,7 @@ class SourceLowerer:
             return self.builder.load(self.slots[node.symbol])
         if kind == "call":
             arguments = [self.expression(argument) for argument in node.children]
-            return self.builder.call(self.functions[node.symbol.token.text, node.symbol.descriptor], arguments)
+            return self.builder.call(self.functions[node.symbol.owner, node.symbol.token.text, node.symbol.descriptor], arguments)
         if kind == "group":
             return self.expression(node.children[0])
         if kind == "cast":

@@ -58,6 +58,8 @@ class SourceMethod:
     parameters: tuple[Token, ...]
     body: Node
     locals: list = field(default_factory=list)
+    owner: str = ""
+    modifiers: frozenset[str] = frozenset()
 
     @property
     def descriptor(self):
@@ -68,6 +70,12 @@ class SourceMethod:
 class SourceClass:
     name: str
     methods: tuple[SourceMethod, ...]
+    modifiers: frozenset[str] = frozenset()
+    imports: tuple[tuple[Token, ...], ...] = ()
+
+    @property
+    def package(self):
+        return self.name.rpartition("/")[0]
 
 
 def tokenize(source, filename):
@@ -157,13 +165,26 @@ class SourceParser:
             while self.accept("."):
                 package.append(self.identifier().text)
             self.expect(";")
-        if self.peek().text == "import":
-            self.peek().error("imports require source-project dependency resolution", True)
+        imports = []
+        while self.accept("import"):
+            if self.peek().text == "static":
+                self.peek().error("static imports require the next source-project lookup domain", True)
+            imported = [self.identifier()]
+            while self.accept("."):
+                if self.peek().text == "*":
+                    self.peek().error("on-demand imports require the next source-project lookup domain", True)
+                imported.append(self.identifier())
+            self.expect(";")
+            if len(imported) < 2:
+                imported[0].error("cannot import a type from the unnamed package")
+            imports.append(tuple(imported))
         mods = self.modifiers()
         if mods - {"public", "final", "strictfp"}:
             self.peek().error("unsupported top-level class modifiers", True)
         self.expect("class")
         name = self.identifier().text
+        class_modifiers = frozenset(mods)
+        owner = "/".join(package + [name])
         if self.peek().text != "{":
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime", True)
         self.expect("{")
@@ -191,9 +212,10 @@ class SourceParser:
             self.expect(")")
             if len(parameters) > 255:
                 method_name.error("too many static method parameters")
-            methods.append(SourceMethod(method_name, result.text, tuple(parameters), self.block()))
+            methods.append(SourceMethod(method_name, result.text, tuple(parameters), self.block(),
+                                        owner=owner, modifiers=frozenset(mods)))
         self.expect("<eof>")
-        return SourceClass("/".join(package + [name]), tuple(methods))
+        return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports))
 
     def block(self):
         token = self.expect("{")
@@ -279,6 +301,9 @@ class SourceParser:
         elif token.text[0:1].isdigit():
             node = Node("integer", token, token.text)
         elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:
+            parts = [token.text]
+            while self.accept("."):
+                parts.append(self.identifier().text)
             if self.accept("("):
                 arguments = []
                 if self.peek().text != ")":
@@ -287,8 +312,10 @@ class SourceParser:
                         if not self.accept(","):
                             break
                 self.expect(")")
-                node = Node("call", token, token.text, arguments)
+                node = Node("call", token, ".".join(parts), arguments)
             else:
+                if len(parts) != 1:
+                    token.error("field values require shared Java class/object storage", True)
                 node = Node("name", token, token.text)
         else:
             token.error("unsupported Java expression or statement", True)

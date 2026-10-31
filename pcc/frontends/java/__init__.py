@@ -6,7 +6,7 @@ features must use PCC's shared pcc-Python runtime contracts.
 """
 from .diagnostics import JavaError, UnsupportedJava
 from .artifact import JavaCompilation, method_symbol
-from .source import compile_source
+from .source import compile_source, compile_sources
 
 
 def parse_class(data):
@@ -21,4 +21,4 @@ def compile_class(data, *, entry="run", descriptor="()I", target="x86_64-unknown
     return compile_compatibility(data, entry=entry, descriptor=descriptor, target=target)
 
 
-__all__ = ["JavaCompilation", "JavaError", "UnsupportedJava", "compile_source", "compile_class", "method_symbol", "parse_class"]
+__all__ = ["JavaCompilation", "JavaError", "UnsupportedJava", "compile_source", "compile_sources", "compile_class", "method_symbol", "parse_class"]

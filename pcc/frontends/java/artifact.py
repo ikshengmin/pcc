@@ -19,6 +19,9 @@ class JavaCompilation:
     class_name: str
     entry: tuple[str, str]
     admitted_methods: tuple[tuple[str, str], ...]
+    # Source projects retain class-qualified identities; compatibility callers
+    # keep their existing four-argument construction and single-class field.
+    emitted_class_methods: tuple[tuple[str, str, str], ...] = ()
 
     @property
     def entry_symbol(self) -> str:

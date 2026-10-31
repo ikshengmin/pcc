@@ -41,13 +41,14 @@ def integer_literal(node, allow_min=False):
 
 
 class SourceAnalyzer:
-    def __init__(self, program):
+    def __init__(self, program, project=None):
         self.program = program
+        self.project = project
         self.methods = {}
         self.scopes = []
         self.loops = []
 
-    def analyze(self):
+    def declare_methods(self):
         if self.program.name == "java/lang/Object":
             raise UnsupportedJava("bootstrap Object requires the shared runtime definition")
         for method in self.program.methods:
@@ -58,6 +59,10 @@ class SourceAnalyzer:
             if key in self.methods:
                 method.token.error("duplicate method signature (return type does not overload)")
             self.methods[key] = method
+
+    def analyze(self):
+        if not self.methods:
+            self.declare_methods()
         for method in self.program.methods:
             self.method = method
             self.scopes, self.loops = [{}], []
@@ -136,7 +141,8 @@ class SourceAnalyzer:
             node.dtype = "int"
             return
         if kind == "call":
-            method = self.methods.get((op, len(node.children)))
+            method = (self.project.resolve_call(self, node) if self.project is not None
+                      else self.methods.get((op, len(node.children))))
             if method is None:
                 node.token.error("unresolved same-class static method " + str(op))
             for argument in node.children:
