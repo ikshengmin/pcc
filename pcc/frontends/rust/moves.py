@@ -6,39 +6,24 @@ edge; loop backedges reach a finite fixed point rather than assuming one pass.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pcc.analysis.ownership import (
+    Field,
+    LoopEdges,
+    Place,
+    State,
+    clone,
+    join,
+    prefix,
+    solve_loop,
+)
 
 from .syntax import Expr
 
-State = dict[int, set[tuple[int, ...]]]
 
-
-def clone(state: State) -> State:
-    return {binding: set(paths) for binding, paths in state.items()}
-
-
-def join(states: list[State]) -> State | None:
-    if not states:
-        return None
-    result = clone(states[0])
-    for state in states[1:]:
-        for binding, paths in state.items():
-            result.setdefault(binding, set()).update(paths)
-    return result
-
-
-def prefix(left: tuple[int, ...], right: tuple[int, ...]) -> bool:
-    return right[:len(left)] == left
-
-
-@dataclass
-class LoopEdges:
-    visible: set[int]
-    breaks: list[State] = field(default_factory=list)
-    continues: list[State] = field(default_factory=list)
-
-    def outer(self, state: State) -> State:
-        return {binding: set(paths) for binding, paths in state.items() if binding in self.visible}
+def structural_place(binding, path) -> Place:
+    # Rust sema owns resolving names, dereferences and nominal field ordinals.
+    # Shared place identity does not independently prove referent non-aliasing.
+    return Place(binding.serial, tuple(Field(index) for index in path))
 
 
 class MoveChecker:
@@ -51,8 +36,8 @@ class MoveChecker:
         self.loans = []
 
     def conflict(self, binding, path, token):
-        if any(owner.serial == binding.serial and (prefix(loan, path) or prefix(path, loan))
-               for owner, loan in self.loans):
+        place = structural_place(binding, path)
+        if any(loan.overlaps(place) for loan in self.loans):
             raise token.error("cannot move or mutate a place while borrowed by a shared call argument")
 
     def check(self) -> None:
@@ -66,12 +51,13 @@ class MoveChecker:
         self.expression(function.body, state)
 
     def access(self, binding, path, ty, token, state, *, consume=False):
+        place = structural_place(binding, path)
         moved = state[binding.serial]
-        if any(prefix(item, path) or prefix(path, item) for item in moved):
+        if any(Place(place.root, item).overlaps(place) for item in moved):
             raise token.error(f"use of moved or possibly moved value {binding.name!r}")
         if consume and not self.checker.copy_type(ty):
             self.conflict(binding, path, token)
-            moved.add(path)
+            moved.add(place.path)
 
     def read_place(self, expr: Expr, state: State, *, consume: bool = True) -> None:
         binding, path = self.checker.place(expr)
@@ -119,7 +105,7 @@ class MoveChecker:
             # variable which stores that pointer. Rebinding that Copy variable
             # is legal; writing the pointee is separately forbidden by sema.
             if not self.checker.through_reference(children[0]):
-                self.loans.append(self.checker.place(children[0]))
+                self.loans.append(structural_place(*self.checker.place(children[0])))
             return state
         if kind == "deref":
             return self.expression(children[0], state)
@@ -152,6 +138,7 @@ class MoveChecker:
                 return None
             binding, path = self.checker.place(children[0])
             self.conflict(binding, path, expr.token)
+            path = structural_place(binding, path).path
             moved = result[binding.serial]
             if expr.value != "=":
                 self.read_place(children[0], result, consume=False)
@@ -194,20 +181,19 @@ class MoveChecker:
             after_right = self.expression(children[1], clone(after_left))
             return join([after_left] + ([after_right] if after_right is not None else []))
         if kind == "while":
-            entry = clone(state)
-            header = clone(state)
-            while True:
-                edges = LoopEdges(set(entry))
+            visible = set(state)
+
+            def transfer(header):
+                edges = LoopEdges(visible)
                 self.loops.append(edges)
-                condition = self.expression(children[0], clone(header))
+                condition = self.expression(children[0], header)
                 body = self.expression(children[1], clone(condition)) if condition is not None else None
                 self.loops.pop()
                 backs = edges.continues + ([edges.outer(body)] if body is not None else [])
-                next_header = join([entry] + backs)
-                if next_header == header:
-                    exits = edges.breaks + ([edges.outer(condition)] if condition is not None else [])
-                    return join(exits)
-                header = next_header
+                exits = edges.breaks + ([edges.outer(condition)] if condition is not None else [])
+                return backs, exits
+
+            return solve_loop(state, transfer)
         if kind in {"break", "continue"}:
             edges = self.loops[-1]
             (edges.breaks if kind == "break" else edges.continues).append(edges.outer(state))
