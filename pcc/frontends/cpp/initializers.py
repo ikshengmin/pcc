@@ -2,8 +2,8 @@
 
 This layer retains typed initializer clauses in source order and adds only
 list-initialization constraints to the existing arithmetic/pointer conversion
-owner. Constructor overloads, class copies, brace elision and typed constant-
-expression evaluation remain explicit capability boundaries. No host floating
+owner. Constructor overloads, class copies, brace elision and floating/object
+constant evaluation remain explicit capability boundaries. No host floating
 point or C constant evaluator substitutes for missing C++ constexpr semantics.
 
 Rules: WG21 N4659 [dcl.init.aggr], [dcl.init.list], [expr.const], with P1957R2's
@@ -18,6 +18,7 @@ from pcc.frontends.cpp.classes import (
     require_complete,
 )
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.constants import KNOWN, NOT_CONSTANT
 from pcc.frontends.cpp.types import PointerType, unqualified
 
 
@@ -72,9 +73,10 @@ def _integral_range(dtype, types):
 def check_list_conversion(expression, dtype, types, coord):
     """Check a copy-initialized aggregate element without evaluating it.
 
-    Potentially valid value-dependent cases retain a capability diagnostic
-    until typed constexpr evaluation exists. A const-looking source spelling,
-    host float conversion, or C constant evaluator is not a substitute.
+    Value-dependent integral conversions consume the shared typed constant
+    proof. Unmodeled floating/object cases retain a capability diagnostic.
+    A const-looking source spelling, host float conversion, or C constant
+    evaluator is not a substitute.
     This is not general direct-list-initialization: e.g. nullptr-to-bool has a
     special direct-initialization rule, but is not an implicit conversion for
     an aggregate element. Reuse the shared implicit conversion owner here.
@@ -108,6 +110,24 @@ def check_list_conversion(expression, dtype, types, coord):
     elif source in _FLOAT_RANKS and destination in _FLOAT_RANKS:
         needs_constant = _FLOAT_RANKS[source] > _FLOAT_RANKS[destination]
     if needs_constant:
+        if source_integral and destination_integral:
+            fact = expression.constant_fact
+            # Only the typed C++ proof owner may discharge this exception.
+            # An arbitrary C Constant node or a source spelling is not proof.
+            if fact is not None and fact.dtype == source:
+                if fact.status == KNOWN:
+                    if destination_min <= fact.value <= destination_max:
+                        return
+                    raise CppDiagnostic(
+                        "cpp.narrowing-conversion",
+                        "constant value is not representable in the destination type", coord,
+                    )
+                if fact.status == NOT_CONSTANT:
+                    raise CppDiagnostic(
+                        "cpp.narrowing-conversion",
+                        "integer list conversion requires a constant expression: " + fact.reason,
+                        coord,
+                    )
         raise CppDiagnostic(
             "cpp.unsupported.narrowing-analysis",
             "this list conversion requires typed constant-expression analysis", coord,

@@ -264,6 +264,11 @@ class ArithmeticTypes:
         return "unsigned " + signed
 
     def integer_literal(self, raw):
+        name, spelling, _ = self.integer_literal_info(raw)
+        return name, spelling
+
+    def integer_literal_info(self, raw):
+        """Validate once and retain the target-typed integer's exact value."""
         # The shared C rules match C++17's ordinary integer literal candidates.
         # Validate suffix syntax first: the C utility intentionally only strips
         # suffix characters and must not admit e.g. 1lL as a C++ long-long token.
@@ -282,7 +287,7 @@ class ArithmeticTypes:
         # nondecimal source spelling chose an unsigned candidate.
         suffix = {"int": "", "unsigned int": "u", "long": "l", "unsigned long": "ul",
                   "long long": "ll", "unsigned long long": "ull"}[name]
-        return name, str(number) + suffix
+        return name, str(number) + suffix, number
 
     def floating_literal_type(self, raw):
         """Validate syntax the reused C lexer intentionally leaves to Sema."""

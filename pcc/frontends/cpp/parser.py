@@ -24,6 +24,9 @@ from pcc.frontends.cpp.classes import (
 from pcc.frontends.cpp.initializers import (
     lower_aggregate_initializer, parse_initializer_list,
 )
+from pcc.frontends.cpp.constants import (
+    binary_fact, converted_fact, known, not_constant, unary_fact, unmodeled,
+)
 from pcc.frontends.cpp.types import (
     ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
     pointer_type, qualify_const, unqualified,
@@ -109,13 +112,14 @@ class TentativeParse:
 
 class Expression:
     def __init__(self, node, dtype="int", lvalue=False, symbol=None, null_pointer=False,
-                 assignment_result=False):
+                 assignment_result=False, constant_fact=None):
         self.node = node
         self.dtype = dtype
         self.lvalue = lvalue
         self.symbol = symbol
         self.null_pointer = null_pointer
         self.assignment_result = assignment_result
+        self.constant_fact = constant_fact
 
 
 class CppParser:
@@ -711,6 +715,12 @@ class CppParser:
             if self.template_function is not None:
                 return Pattern("decl", name.coord, symbol,
                                [] if initializer is None else [initializer])
+            if (isinstance(dtype, ConstType) and self.types.integral(dtype)
+                    and initializer is not None):
+                symbol.constant_fact = converted_fact(
+                    self._constant_fact(initializer), dtype, self.types, name.coord,
+                )
+            symbol.initialization_complete = True
             return self._decl(name.value, dtype, name.coord, init)
         expression = self._expression()
         self._require_value(expression, allow_void=True)
@@ -725,7 +735,30 @@ class CppParser:
                                 self._peek().coord)
         expression = self._expression()
         self._expect(")")
-        return Expression(self._convert(expression, "bool", expression.node.coord, contextual=True), "bool")
+        coord = expression.node.coord
+        return Expression(self._convert(expression, "bool", coord, contextual=True), "bool",
+                          constant_fact=converted_fact(self._constant_fact(expression),
+                                                       "bool", self.types, coord))
+
+    def _constant_fact(self, expression):
+        if expression.constant_fact is not None:
+            return expression.constant_fact
+        return unmodeled(unqualified(expression.dtype),
+                         "constant semantics for this expression are not implemented",
+                         expression.node.coord)
+
+    def _symbol_constant_fact(self, symbol, coord):
+        # Snapshot the already-resolved declaration now. In particular, a read
+        # during its own initializer must not acquire a proof retroactively.
+        if self.template_function is not None or not self.types.integral(symbol.dtype):
+            return unmodeled(unqualified(symbol.dtype), "dependent or non-integral object", coord)
+        if not isinstance(symbol.dtype, ConstType):
+            return not_constant(unqualified(symbol.dtype), "read of a non-const integral object", coord)
+        if not symbol.initialization_complete:
+            return not_constant(unqualified(symbol.dtype), "const object has no preceding completed initialization", coord)
+        if symbol.constant_fact is None:
+            return unmodeled(unqualified(symbol.dtype), "const initialization proof is unavailable", coord)
+        return symbol.constant_fact
 
     def _substatement(self):
         # C++ selection/iteration substatements have block scope even without
@@ -822,7 +855,9 @@ class CppParser:
             node = c_ast.StmtExpr(c_ast.Compound([temporary, assignment], coord), coord)
         else:
             node = c_ast.Assignment("=", lhs.node, converted, coord)
-        return Expression(node, lhs.dtype, assignment_result=True)
+        return Expression(node, lhs.dtype, assignment_result=True,
+                          constant_fact=not_constant(unqualified(lhs.dtype),
+                                                     "modification of a runtime object", coord))
 
     def _binary(self, minimum):
         lhs = self._unary()
@@ -871,7 +906,10 @@ class CppParser:
             # C comparisons/logical operators yield int; C++ yields bool. Keep
             # the bool projection explicit for overloads and following C ops.
             node = self._convert(Expression(node, "int"), "bool", coord)
-        return Expression(node, dtype)
+        return Expression(node, dtype, constant_fact=binary_fact(
+            operator, self._constant_fact(lhs), self._constant_fact(rhs),
+            operand_type, rhs_type, dtype, self.types, coord,
+        ))
 
     def _composite_pointer_type(self, lhs, rhs, coord):
         first, second = unqualified(lhs.dtype), unqualified(rhs.dtype)
@@ -941,13 +979,19 @@ class CppParser:
         node = c_ast.UnaryOp(operator, self._convert(expression, dtype, coord, contextual=operator == "!"), coord)
         if operator == "!":
             node = self._convert(Expression(node, "int"), "bool", coord)
-        return Expression(node, dtype)
+        return Expression(node, dtype, constant_fact=unary_fact(
+            operator, self._constant_fact(expression), dtype, dtype, self.types, coord,
+        ))
 
-    def _literal(self, kind, value, dtype, coord):
+    def _literal(self, kind, value, dtype, coord, integer_value=None):
         null_pointer = dtype == "nullptr" or kind == "int" and value.rstrip("uUlL") == "0"
+        fact = (known(dtype, integer_value, coord) if integer_value is not None
+                else unmodeled(dtype, "non-integral literal constant semantics", coord))
         if self.template_function is not None:
-            return Expression(Pattern("literal", coord, (kind, value, dtype)), dtype, null_pointer=null_pointer)
-        return Expression(c_ast.Constant(kind, value, coord), dtype, null_pointer=null_pointer)
+            return Expression(Pattern("literal", coord, (kind, value, dtype, integer_value)), dtype,
+                              null_pointer=null_pointer, constant_fact=fact)
+        return Expression(c_ast.Constant(kind, value, coord), dtype,
+                          null_pointer=null_pointer, constant_fact=fact)
 
     def _call_expression(self, group, arguments, coord):
         if any(is_class_type(arg.dtype) for arg in arguments):
@@ -979,8 +1023,10 @@ class CppParser:
                 selected = cached
         converted = [self._convert(arg, dtype, coord)
                      for arg, dtype in zip(arguments, selected.parameters)]
+        dtype = unqualified(selected.dtype)
         return Expression(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
-                                          c_ast.ExprList(converted, coord), coord), unqualified(selected.dtype))
+                                          c_ast.ExprList(converted, coord), coord), dtype,
+                          constant_fact=not_constant(dtype, "call to a non-constexpr function", coord))
 
     def _primary(self):
         token = self.cursor.take()
@@ -998,10 +1044,10 @@ class CppParser:
                 raise CppDiagnostic("cpp.invalid-literal", "invalid octal integer literal",
                                     token.coord)
             try:
-                dtype, value = self.types.integer_literal(token.value)
+                dtype, value, integer_value = self.types.integer_literal_info(token.value)
             except ValueError as error:
                 raise CppDiagnostic("cpp.invalid-literal", str(error), token.coord)
-            return self._literal("int", value, dtype, token.coord)
+            return self._literal("int", value, dtype, token.coord, integer_value)
         if token.kind in ("FLOAT_CONST", "HEX_FLOAT_CONST"):
             try:
                 dtype = self.types.floating_literal_type(token.value)
@@ -1011,9 +1057,9 @@ class CppParser:
             return self._literal("float", token.value, dtype, token.coord)
         if token.value in ("true", "false"):
             value = "1" if token.value == "true" else "0"
-            node = self._convert(self._literal("int", value, "int", token.coord),
+            node = self._convert(self._literal("int", value, "int", token.coord, int(value)),
                                  "bool", token.coord)
-            return Expression(node, "bool")
+            return Expression(node, "bool", constant_fact=known("bool", int(value), token.coord))
         symbol = None
         if token.kind == "ID" and token.value not in _KEYWORDS or token.value in (":", "::"):
             self.cursor.position -= 1
@@ -1028,11 +1074,15 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.class-initialization", "class temporary materialization is not implemented", token.coord)
             self._expect("(")
             if self._accept(")"):
-                zero = self._literal("int", "0", "int", token.coord)
-                return Expression(self._convert(zero, dtype, token.coord, force=True), dtype)
+                zero = self._literal("int", "0", "int", token.coord, 0)
+                return Expression(self._convert(zero, dtype, token.coord, force=True), dtype,
+                                  constant_fact=converted_fact(self._constant_fact(zero), dtype,
+                                                               self.types, token.coord))
             expression = self._expression()
             self._expect(")")
-            return Expression(self._convert(expression, dtype, token.coord, force=True), dtype)
+            return Expression(self._convert(expression, dtype, token.coord, force=True), dtype,
+                              constant_fact=converted_fact(self._constant_fact(expression), dtype,
+                                                           self.types, token.coord))
         if symbol is not None and symbol.kind in ("namespace", "namespace-alias"):
             raise CppDiagnostic("cpp.not-a-value", "namespace name does not denote a value", token.coord)
         if (symbol is not None and symbol.kind == "function" and symbol.name == "main"
@@ -1065,14 +1115,15 @@ class CppParser:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
         return Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
-                          symbol.kind == "value", symbol)
+                          symbol.kind == "value", symbol,
+                          constant_fact=self._symbol_constant_fact(symbol, token.coord))
 
     def _instantiate_expression(self, expression, bindings, environment):
         pattern = expression.node if isinstance(expression, Expression) else expression
         kind, coord = pattern.kind, pattern.coord
         if kind == "literal":
-            literal_kind, value, dtype = pattern.value
-            return self._literal(literal_kind, value, dtype, coord)
+            literal_kind, value, dtype, integer_value = pattern.value
+            return self._literal(literal_kind, value, dtype, coord, integer_value)
         if kind == "name":
             symbol = pattern.value
             return environment[id(symbol)]
@@ -1080,7 +1131,9 @@ class CppParser:
                      for child in pattern.children]
         if kind == "cast":
             dtype = substitute(pattern.value, bindings)
-            return Expression(self._convert(arguments[0], dtype, coord, force=True), dtype)
+            return Expression(self._convert(arguments[0], dtype, coord, force=True), dtype,
+                              constant_fact=converted_fact(self._constant_fact(arguments[0]), dtype,
+                                                           self.types, coord))
         if kind == "binary":
             return self._binary_expression(pattern.value, arguments[0], arguments[1], coord)
         if kind == "unary":

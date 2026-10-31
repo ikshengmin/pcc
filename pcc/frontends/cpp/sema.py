@@ -33,6 +33,10 @@ class Symbol:
         self.owner = None
         self.namespace_scope = None
         self.internal_linkage = False
+        # Constant-expression proof belongs to this declaration identity, not
+        # to its spelling or C AST. Publish only after successful initialization.
+        self.constant_fact = None
+        self.initialization_complete = False
 
 
 class Scope:
