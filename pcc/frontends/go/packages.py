@@ -8,6 +8,7 @@ initializers remain separate, unsupported driver/runtime boundaries.
 
 from dataclasses import dataclass
 
+from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.lowering import Lowerer
 from pcc.frontends.go.sema import Analyzer, PREDECLARED
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser, Program
@@ -61,11 +62,11 @@ def compile_packages(packages, *, main_package, target_triple):
         imports = {}
         for imported in program.imports:
             if imported.alias == "_":
-                raise GoDiagnostic(imported.token, "blank imports require shared-runtime package initialization support")
+                raise UnsupportedGo(imported.token, 'go.unsupported.package-initialization', "blank imports require shared-runtime package initialization support")
             dependency = visit(imported.path, imported.token)
             alias = imported.alias or dependency.program.token.text
             if alias in PREDECLARED:
-                raise GoDiagnostic(imported.token, "import alias shadows predeclared name " + alias)
+                raise UnsupportedGo(imported.token, "go.unsupported.predeclared-shadowing", "import alias shadows predeclared name " + alias)
             file_imports = imports.setdefault(imported.token.filename, {})
             if alias in file_imports:
                 raise GoDiagnostic(imported.token, "duplicate import name " + alias)

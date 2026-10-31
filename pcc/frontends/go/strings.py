@@ -1,5 +1,6 @@
 """Go string literal bytes, not Python string-expression semantics."""
 
+from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.syntax import GoDiagnostic
 
 MAX_STRING_BYTES = 1 << 20
@@ -7,7 +8,7 @@ MAX_STRING_BYTES = 1 << 20
 
 def bounded(data, token):
     if len(data) > MAX_STRING_BYTES:
-        raise GoDiagnostic(token, "string exceeds implementation limit (1 MiB)")
+        raise UnsupportedGo(token, 'go.unsupported.limit-string-bytes', "string exceeds implementation limit (1 MiB)")
     return data
 
 
@@ -62,5 +63,5 @@ def literal_bytes(token):
                         raise GoDiagnostic(token, "string byte escape overflows byte")
                     output.append(value)
         if len(output) > MAX_STRING_BYTES:
-            raise GoDiagnostic(token, "string exceeds implementation limit (1 MiB)")
+            raise UnsupportedGo(token, 'go.unsupported.limit-string-bytes', "string exceeds implementation limit (1 MiB)")
     return bytes(output)

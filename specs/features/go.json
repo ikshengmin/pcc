@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Initial evidence-bound expression-switch row plus explicit missing inventory rows, not a claim of complete Go inventory. Existing whole-language final775 gate:706 PASS including53 explicit official-reference nodes;175 native raw observations including18 switch helpers. Original upstream go/test/ken/for.go and complete math/bits closure remain frontier tests, not successful package qualification. Unit command retains real pytest options with isolated output location redacted; program commands use actual executable basenames."
+    "notes": "Initial evidence-bound expression-switch row plus explicit missing inventory rows, not a claim of complete Go inventory. Existing whole-language final775 gate:706 PASS including53 explicit official-reference nodes;175 native raw observations including18 switch helpers. Original upstream go/test/ken/for.go and complete math/bits closure remain frontier tests, not successful package qualification. Unit command retains real pytest options with isolated output location redacted; program commands use actual executable basenames. This candidate adds 34 explicit capability/implementation-limit codes with canonical feature rows; ordinary invalid-program errors remain uncoded. New diagnostic tests and native/reference control are pending until the candidate gate is recorded."
   },
   "chapters": [
     {
@@ -131,6 +131,81 @@
       "id": "assignment",
       "title": "Assignments",
       "url": "https://go.dev/ref/spec#Assignments"
+    },
+    {
+      "id": "comparison",
+      "title": "Comparison operators",
+      "url": "https://go.dev/ref/spec#Comparison_operators"
+    },
+    {
+      "id": "index",
+      "title": "Index expressions",
+      "url": "https://go.dev/ref/spec#Index_expressions"
+    },
+    {
+      "id": "arrays",
+      "title": "Array types",
+      "url": "https://go.dev/ref/spec#Array_types"
+    },
+    {
+      "id": "numeric",
+      "title": "Numeric types",
+      "url": "https://go.dev/ref/spec#Numeric_types"
+    },
+    {
+      "id": "arithmetic",
+      "title": "Arithmetic operators",
+      "url": "https://go.dev/ref/spec#Arithmetic_operators"
+    },
+    {
+      "id": "imports",
+      "title": "Import declarations",
+      "url": "https://go.dev/ref/spec#Import_declarations"
+    },
+    {
+      "id": "string-conversions",
+      "title": "Conversions to and from a string type",
+      "url": "https://go.dev/ref/spec#Conversions_to_and_from_a_string_type"
+    },
+    {
+      "id": "structs",
+      "title": "Struct types",
+      "url": "https://go.dev/ref/spec#Struct_types"
+    },
+    {
+      "id": "interfaces",
+      "title": "Interface types",
+      "url": "https://go.dev/ref/spec#Interface_types"
+    },
+    {
+      "id": "function-types",
+      "title": "Function types",
+      "url": "https://go.dev/ref/spec#Function_types"
+    },
+    {
+      "id": "string-types",
+      "title": "String types",
+      "url": "https://go.dev/ref/spec#String_types"
+    },
+    {
+      "id": "type-declarations",
+      "title": "Type declarations",
+      "url": "https://go.dev/ref/spec#Type_declarations"
+    },
+    {
+      "id": "method-values",
+      "title": "Method values",
+      "url": "https://go.dev/ref/spec#Method_values"
+    },
+    {
+      "id": "methods",
+      "title": "Method declarations",
+      "url": "https://go.dev/ref/spec#Method_declarations"
+    },
+    {
+      "id": "slices",
+      "title": "Slice types",
+      "url": "https://go.dev/ref/spec#Slice_types"
     }
   ],
   "features": [
@@ -381,366 +456,1009 @@
       "tests": [],
       "diagnostics": [],
       "evidence": []
+    },
+    {
+      "id": "go.capability.aggregate-comparison",
+      "title": "Aggregate comparison",
+      "chapter_ids": [
+        "comparison"
+      ],
+      "scope": "Equality of otherwise comparable admitted fixed arrays and records; scalar/static-string comparisons remain admitted.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.aggregate-comparison"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.aggregate-switch",
+      "title": "Aggregate switch",
+      "chapter_ids": [
+        "switch"
+      ],
+      "scope": "Comparable fixed-array or record expression-switch selectors; scalar/static-string switches remain admitted.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.aggregate-switch"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.array-bounds-panic",
+      "title": "Array bounds panic",
+      "chapter_ids": [
+        "index"
+      ],
+      "scope": "Explicitly rejected capability: array bounds panic. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.array-bounds-panic"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.array-element-types",
+      "title": "Array element types",
+      "chapter_ids": [
+        "arrays"
+      ],
+      "scope": "Nested arrays and string/aggregate array elements; existing scalar-element value arrays remain admitted.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.array-element-types"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.blank-function-declarations",
+      "title": "Blank function declarations",
+      "chapter_ids": [
+        "declarations"
+      ],
+      "scope": "Explicitly rejected capability: blank function declarations. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.blank-function-declarations"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.blank-method-declarations",
+      "title": "Blank method declarations",
+      "chapter_ids": [
+        "declarations"
+      ],
+      "scope": "Explicitly rejected capability: blank method declarations. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.blank-method-declarations"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.blank-package-variables",
+      "title": "Blank package variables",
+      "chapter_ids": [
+        "declarations"
+      ],
+      "scope": "Explicitly rejected capability: blank package variables. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.blank-package-variables"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.blank-struct-fields",
+      "title": "Blank struct fields",
+      "chapter_ids": [
+        "declarations"
+      ],
+      "scope": "Explicitly rejected capability: blank struct fields. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.blank-struct-fields"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.blank-type-declarations",
+      "title": "Blank type declarations",
+      "chapter_ids": [
+        "declarations"
+      ],
+      "scope": "Blank package type declarations only; package type named init is an invalid declaration and remains uncoded.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.blank-type-declarations"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.complex-types",
+      "title": "Complex types",
+      "chapter_ids": [
+        "numeric"
+      ],
+      "scope": "Explicitly rejected capability: complex types. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.complex-types"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.division-panic",
+      "title": "Division panic",
+      "chapter_ids": [
+        "arithmetic"
+      ],
+      "scope": "Division or remainder with a nonconstant divisor requiring division-by-zero panic handling; constant zero is an invalid constant expression, not this capability.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.division-panic"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.dot-imports",
+      "title": "Dot imports",
+      "chapter_ids": [
+        "imports"
+      ],
+      "scope": "Explicitly rejected capability: dot imports. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.dot-imports"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.dynamic-string-concatenation",
+      "title": "Dynamic string concatenation",
+      "chapter_ids": [
+        "arithmetic"
+      ],
+      "scope": "Explicitly rejected capability: dynamic string concatenation. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.dynamic-string-concatenation"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.dynamic-string-conversion",
+      "title": "Dynamic string conversion",
+      "chapter_ids": [
+        "string-conversions"
+      ],
+      "scope": "Explicitly rejected capability: dynamic string conversion. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.dynamic-string-conversion"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.embedded-fields",
+      "title": "Embedded fields",
+      "chapter_ids": [
+        "structs"
+      ],
+      "scope": "Explicitly rejected capability: embedded fields. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.embedded-fields"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.floating-types",
+      "title": "Floating types",
+      "chapter_ids": [
+        "numeric"
+      ],
+      "scope": "Explicitly rejected capability: floating types. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.floating-types"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.interface-types",
+      "title": "Interface types",
+      "chapter_ids": [
+        "interfaces"
+      ],
+      "scope": "Predeclared any and error interface types; no dynamic interface representation or dispatch.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.interface-types"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-array-elements",
+      "title": "Limit array elements",
+      "chapter_ids": [
+        "arrays"
+      ],
+      "scope": "Explicitly rejected capability: limit array elements. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-array-elements"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-constant-precision",
+      "title": "Limit constant precision",
+      "chapter_ids": [
+        "constants"
+      ],
+      "scope": "Explicitly rejected capability: limit constant precision. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-constant-precision"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-function-arity",
+      "title": "Limit function arity",
+      "chapter_ids": [
+        "function-types"
+      ],
+      "scope": "Explicitly rejected capability: limit function arity. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-function-arity"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-record-layout",
+      "title": "Limit record layout",
+      "chapter_ids": [
+        "structs"
+      ],
+      "scope": "Explicitly rejected capability: limit record layout. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-record-layout"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-string-bytes",
+      "title": "Limit string bytes",
+      "chapter_ids": [
+        "string-types"
+      ],
+      "scope": "Explicitly rejected capability: limit string bytes. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-string-bytes"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-struct-fields",
+      "title": "Limit struct fields",
+      "chapter_ids": [
+        "structs"
+      ],
+      "scope": "Explicitly rejected capability: limit struct fields. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-struct-fields"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.limit-type-expansion",
+      "title": "Limit type expansion",
+      "chapter_ids": [
+        "type-declarations"
+      ],
+      "scope": "Explicitly rejected capability: limit type expansion. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.limit-type-expansion"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.local-type-declarations",
+      "title": "Local type declarations",
+      "chapter_ids": [
+        "type-declarations"
+      ],
+      "scope": "Explicitly rejected capability: local type declarations. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.local-type-declarations"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.method-values",
+      "title": "Method values",
+      "chapter_ids": [
+        "method-values"
+      ],
+      "scope": "Explicitly rejected capability: method values. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.method-values"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.negative-shift-panic",
+      "title": "Negative shift panic",
+      "chapter_ids": [
+        "arithmetic"
+      ],
+      "scope": "Dynamic signed shift counts requiring negative-count panic handling; negative constant shifts remain invalid expressions.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.negative-shift-panic"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.non-array-range",
+      "title": "Non array range",
+      "chapter_ids": [
+        "range"
+      ],
+      "scope": "Integer and string range, distinct from the admitted fixed-array range subset. Other iterator types may fail at earlier unimplemented syntax/type boundaries.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.non-array-range"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.package-initialization",
+      "title": "Package initialization",
+      "chapter_ids": [
+        "initialization"
+      ],
+      "scope": "Blank imports, init functions and package initializers requiring runtime execution; static package data remains admitted.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.package-initialization"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.pointer-receivers",
+      "title": "Pointer receivers",
+      "chapter_ids": [
+        "methods"
+      ],
+      "scope": "Explicitly rejected capability: pointer receivers. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.pointer-receivers"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.predeclared-shadowing",
+      "title": "Predeclared shadowing",
+      "chapter_ids": [
+        "declarations"
+      ],
+      "scope": "Rebinding predeclared names by declarations or imported package aliases; invalid undeclared names do not get this code.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.predeclared-shadowing"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.slice-storage",
+      "title": "Slice storage",
+      "chapter_ids": [
+        "slices"
+      ],
+      "scope": "Explicitly rejected capability: slice storage. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.slice-storage"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.string-bounds-panic",
+      "title": "String bounds panic",
+      "chapter_ids": [
+        "index"
+      ],
+      "scope": "Explicitly rejected capability: string bounds panic. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.string-bounds-panic"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "go.capability.struct-tags",
+      "title": "Struct tags",
+      "chapter_ids": [
+        "structs"
+      ],
+      "scope": "Explicitly rejected capability: struct tags. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [
+        "go.unsupported.struct-tags"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
     "inventory_complete": false,
-    "codes": [],
+    "codes": [
+      {
+        "code": "go.unsupported.aggregate-comparison",
+        "feature_id": "go.capability.aggregate-comparison",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.aggregate-switch",
+        "feature_id": "go.capability.aggregate-switch",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.array-bounds-panic",
+        "feature_id": "go.capability.array-bounds-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.array-element-types",
+        "feature_id": "go.capability.array-element-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.blank-function-declarations",
+        "feature_id": "go.capability.blank-function-declarations",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.blank-method-declarations",
+        "feature_id": "go.capability.blank-method-declarations",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.blank-package-variables",
+        "feature_id": "go.capability.blank-package-variables",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.blank-struct-fields",
+        "feature_id": "go.capability.blank-struct-fields",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.blank-type-declarations",
+        "feature_id": "go.capability.blank-type-declarations",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.complex-types",
+        "feature_id": "go.capability.complex-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.division-panic",
+        "feature_id": "go.capability.division-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.dot-imports",
+        "feature_id": "go.capability.dot-imports",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.dynamic-string-concatenation",
+        "feature_id": "go.capability.dynamic-string-concatenation",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.dynamic-string-conversion",
+        "feature_id": "go.capability.dynamic-string-conversion",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.embedded-fields",
+        "feature_id": "go.capability.embedded-fields",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.floating-types",
+        "feature_id": "go.capability.floating-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.interface-types",
+        "feature_id": "go.capability.interface-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-array-elements",
+        "feature_id": "go.capability.limit-array-elements",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-constant-precision",
+        "feature_id": "go.capability.limit-constant-precision",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-function-arity",
+        "feature_id": "go.capability.limit-function-arity",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-record-layout",
+        "feature_id": "go.capability.limit-record-layout",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-string-bytes",
+        "feature_id": "go.capability.limit-string-bytes",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-struct-fields",
+        "feature_id": "go.capability.limit-struct-fields",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-type-expansion",
+        "feature_id": "go.capability.limit-type-expansion",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.local-type-declarations",
+        "feature_id": "go.capability.local-type-declarations",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.method-values",
+        "feature_id": "go.capability.method-values",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.negative-shift-panic",
+        "feature_id": "go.capability.negative-shift-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.non-array-range",
+        "feature_id": "go.capability.non-array-range",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.package-initialization",
+        "feature_id": "go.capability.package-initialization",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-receivers",
+        "feature_id": "go.capability.pointer-receivers",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.predeclared-shadowing",
+        "feature_id": "go.capability.predeclared-shadowing",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.slice-storage",
+        "feature_id": "go.capability.slice-storage",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.string-bounds-panic",
+        "feature_id": "go.capability.string-bounds-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      },
+      {
+        "code": "go.unsupported.struct-tags",
+        "feature_id": "go.capability.struct-tags",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "20b2c6ce0a4e21d4d347444e856206d65d65a03f29786877666b2a91065d4c68"
+        }
+      }
+    ],
     "message_only": [
       {
-        "message": "blank imports require shared-runtime package initialization support",
+        "message": "'Go scalar frontend requires a supported 64-bit target'",
         "source": {
           "path": "pcc/frontends/go/packages.py",
-          "sha256": "156ec5f6d6bb35afbd7ad8d268996d261eef260bab8332c31ca4e98841f4c513"
+          "sha256": "53aca570c9c9a93ca19ca5a5c75ff2bcec40a92db880d7966bbba28ecc7dca82"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "f'unsupported type {token.text!r}; shared runtime or numeric support is missing'",
+        "message": "f'unsupported character {char!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "function-local type declarations are not implemented",
+        "message": "'unsupported package: initial frontend requires package main'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
         "message": "f'unsupported statement {token.text!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "dot imports are not implemented",
+        "message": "'unsupported or invalid import path'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "slice types require shared-runtime backing storage support",
+        "message": "'unsupported for clause'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "function exceeds implementation limit (256 results/parameters)",
+        "message": "'only named function calls/conversions are supported'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "struct tags are not implemented",
+        "message": "'unsupported package declaration; expected func, const or var'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "unsupported for clause (range is not implemented)",
-        "source": {
-          "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "unsupported package declaration; expected func, const or var",
-        "source": {
-          "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
         "message": "f'unsupported expression token {token.text!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "c9b4b544bde416f33dedfb1d53b55c0c7557631cc880e3d068077b7ca120f827"
+          "sha256": "89b378b29e397be91074d2b61e15bb2b30faa080929e14f86bf204ae246dbe5a"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "string exceeds implementation limit (1 MiB)",
-        "source": {
-          "path": "pcc/frontends/go/strings.py",
-          "sha256": "674713cc423bdec467423235766520d84176d1a1a426c56b42871b52de34f14f"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "string exceeds implementation limit (1 MiB)",
-        "source": {
-          "path": "pcc/frontends/go/strings.py",
-          "sha256": "674713cc423bdec467423235766520d84176d1a1a426c56b42871b52de34f14f"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "nonconstant package initializer requires shared-runtime initialization support",
+        "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "constant exceeds implementation precision limit (4096 bits)",
+        "message": "'switch currently requires integer, boolean or string comparison support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "'shadowing predeclared names is not implemented: ' + token.text",
+        "message": "'range currently requires a fixed array; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "type declaration expansion exceeds implementation limit (32 levels)",
+        "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "nested arrays and string-element arrays are not implemented",
+        "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "arrays of aggregate elements are not implemented",
+        "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "array exceeds implementation limit (4096 elements)",
+        "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
+          "sha256": "6140d78cb5c42962bab2f5fec71dee4f67dc2b786c65d4ae169c1790b8cb58b6"
         },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "blank or init package type declarations are not implemented",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "init functions require shared-runtime initialization support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "struct exceeds implementation limit (256 fields)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "switch currently requires integer, boolean or string comparison support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "indexing requires an array or string (slices/maps are not implemented)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "stored method values require shared closure and bound-receiver support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "integer-to-string conversion requires shared-runtime allocation support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "dynamic division requires shared-runtime division-by-zero panic support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "integer constant exceeds implementation precision limit (4096 bits)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "blank method declarations are not implemented",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "blank struct fields are not implemented",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "record layout exceeds implementation limit (4096 scalar slots)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "nested arrays and non-scalar array elements are not implemented",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "unproven string bounds require shared-runtime bounds-panic support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "unproven array bounds require shared-runtime bounds-panic support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "len currently supports strings; array/slice/map length is not implemented",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "dynamic string concatenation requires shared-runtime allocation support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "string exceeds implementation limit (1 MiB)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "dynamic signed shift counts require shared-runtime negative-count panic support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "constant exceeds implementation precision limit (4096 bits)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "array exceeds implementation limit (4096 elements)",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
-      },
-      {
-        "message": "unproven string bounds require shared-runtime bounds-panic support",
-        "source": {
-          "path": "pcc/frontends/go/sema.py",
-          "sha256": "19721ddab8a57f31eaa312921dbfbf0452c07717bd8420c4e44eb97f2970adbb"
-        },
-        "reason": "Existing message-only capability/mixed-syntax boundary; no stable diagnostic code. Must split invalid-source errors from unsupported valid-source capabilities before assigning granular feature codes."
+        "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }
     ],
-    "notes": "GoDiagnostic currently exposes source filename/line/column and message but no stable code. No synthetic generic unsupported code has been introduced or falsely mapped. Stable Go-owned feature codes require a separately reviewed change."
+    "notes": "Stable codes are selected explicitly at capability call sites and checked against the Go registry; messages never classify errors. The previous 52 heuristic message candidates were not 52 distinct valid-language capabilities: malformed syntax, forbidden operators, init type names and non-iterable values are not relabeled unsupported. Remaining generic syntax/internal diagnostics are listed conservatively; complete diagnostic/feature coverage is not claimed. Uncoded legacy diagnostics remain kind=unclassified; absence of a capability code is not a validity-error classification."
   },
   "evidence": [
     {

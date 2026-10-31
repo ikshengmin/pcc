@@ -9,6 +9,7 @@ pcc-Python's shared runtime/GC contract; there is no independent Go runtime.
 from pcc.frontends.go.lowering import GO_MAIN_SYMBOL, function_symbol
 from pcc.frontends.go.packages import compile_packages
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser
+from pcc.frontends.go.diagnostics import UnsupportedGo
 
 
 DEFAULT_TARGET = "x86_64-unknown-linux-gnu"
@@ -35,6 +36,6 @@ def compile_go(source, filename="<go>", *, target_triple=DEFAULT_TARGET):
 
 
 __all__ = [
-    "GoDiagnostic", "GoParser", "compile_go", "compile_go_sources", "compile_go_packages",
+    "GoDiagnostic", "UnsupportedGo", "GoParser", "compile_go", "compile_go_sources", "compile_go_packages",
     "function_symbol", "GO_MAIN_SYMBOL", "DEFAULT_TARGET",
 ]

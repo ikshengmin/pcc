@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import re
 import unicodedata
 
+from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic, Stmt, StructSyntax, TypeName
 from pcc.frontends.go.records import DefinedType, Field, StructType, underlying, is_named, same_underlying
 from pcc.frontends.go.types import (
@@ -58,7 +59,7 @@ def integer_literal(expr):
             for char in digits:
                 value = value * base + int(char, base)
                 if value.bit_length() > MAX_CONSTANT_BITS:
-                    raise GoDiagnostic(expr.token, "integer constant exceeds implementation precision limit (4096 bits)")
+                    raise UnsupportedGo(expr.token, 'go.unsupported.limit-constant-precision', "integer constant exceeds implementation precision limit (4096 bits)")
             return value
     raise GoDiagnostic(expr.token, "invalid or unsupported integer literal " + repr(text))
 
@@ -90,7 +91,7 @@ def check_representable(expr):
         return
     if is_integer(expr.type):
         if abs(expr.constant).bit_length() > MAX_CONSTANT_BITS:
-            raise GoDiagnostic(expr.token, "constant exceeds implementation precision limit (4096 bits)")
+            raise UnsupportedGo(expr.token, 'go.unsupported.limit-constant-precision', "constant exceeds implementation precision limit (4096 bits)")
         if expr.type != "untyped int":
             minimum, maximum = integer_bounds(expr.type)
             if not minimum <= expr.constant <= maximum:
@@ -143,8 +144,10 @@ class Analyzer:
         for declaration in self.program.types:
             self.check_name(declaration.token)
             name = declaration.token.text
-            if name in ("_", "init"):
-                raise GoDiagnostic(declaration.token, "blank or init package type declarations are not implemented")
+            if name == "_":
+                raise UnsupportedGo(declaration.token, "go.unsupported.blank-type-declarations", "blank package type declarations are not implemented")
+            if name == "init":
+                raise GoDiagnostic(declaration.token, "init is reserved for package initialization function declarations")
             if name in self.types:
                 raise GoDiagnostic(declaration.token, "duplicate package declaration " + name)
             self.types[name] = declaration
@@ -155,11 +158,11 @@ class Analyzer:
             function.abi_symbol = function_symbol(function.token.text, self.package_path)
             name = function.token.text
             if name == "_":
-                raise GoDiagnostic(function.token, "blank function declarations are not supported")
+                raise UnsupportedGo(function.token, 'go.unsupported.blank-function-declarations', "blank function declarations are not supported")
             if name in self.functions or name in self.types:
                 raise GoDiagnostic(function.token, "duplicate package declaration " + name)
             if name == "init":
-                raise GoDiagnostic(function.token, "init functions require shared-runtime initialization support")
+                raise UnsupportedGo(function.token, 'go.unsupported.package-initialization', "init functions require shared-runtime initialization support")
             self.functions[name] = function
         for declaration in self.program.constants + self.program.variables:
             if declaration.exprs and len(declaration.names) != len(declaration.exprs):
@@ -168,7 +171,7 @@ class Analyzer:
                 expr = declaration.exprs[index] if declaration.exprs else None
                 self.check_name(token)
                 if token.text == "_" and declaration.kind != "const":
-                    raise GoDiagnostic(token, "blank package variables are not supported")
+                    raise UnsupportedGo(token, 'go.unsupported.blank-package-variables', "blank package variables are not supported")
                 if token.text == "init":
                     raise GoDiagnostic(token, "package name init is reserved for init function declarations")
                 if token.text in self.globals or token.text in self.functions or token.text in self.types:
@@ -202,7 +205,7 @@ class Analyzer:
                     raise GoDiagnostic(token, "method receiver base must be a defined type in the same package")
                 name = function.token.text
                 if name == "_":
-                    raise GoDiagnostic(function.token, "blank method declarations are not implemented")
+                    raise UnsupportedGo(function.token, 'go.unsupported.blank-method-declarations', "blank method declarations are not implemented")
                 if name in dtype.methods:
                     raise GoDiagnostic(function.token, "duplicate method " + name)
                 base = underlying(dtype)
@@ -241,7 +244,7 @@ class Analyzer:
 
     def check_name(self, token):
         if token.text in PREDECLARED:
-            raise GoDiagnostic(token, "shadowing predeclared names is not implemented: " + token.text)
+            raise UnsupportedGo(token, "go.unsupported.predeclared-shadowing", "shadowing predeclared names is not implemented: " + token.text)
 
     def resolve_type_declaration(self, declaration):
         if declaration.resolved is not None:
@@ -249,7 +252,7 @@ class Analyzer:
         if declaration.resolving:
             raise GoDiagnostic(declaration.token, "invalid recursive type or alias cycle")
         if self.type_depth >= 32:
-            raise GoDiagnostic(declaration.token, "type declaration expansion exceeds implementation limit (32 levels)")
+            raise UnsupportedGo(declaration.token, 'go.unsupported.limit-type-expansion', "type declaration expansion exceeds implementation limit (32 levels)")
         declaration.resolving = True
         self.type_depth += 1
         try:
@@ -277,11 +280,11 @@ class Analyzer:
             return owner.resolve_type_declaration(declaration)
         if isinstance(dtype, StructSyntax):
             if len(dtype.fields) > 256:
-                raise GoDiagnostic(dtype.token, "struct exceeds implementation limit (256 fields)")
+                raise UnsupportedGo(dtype.token, 'go.unsupported.limit-struct-fields', "struct exceeds implementation limit (256 fields)")
             fields, names = [], set()
             for token, field_type in dtype.fields:
                 if token.text == "_":
-                    raise GoDiagnostic(token, "blank struct fields are not implemented")
+                    raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields', "blank struct fields are not implemented")
                 if token.text in names:
                     raise GoDiagnostic(token, "duplicate struct field " + token.text)
                 names.add(token.text)
@@ -293,7 +296,7 @@ class Analyzer:
                 item = underlying(pending.pop())
                 count += item.count if isinstance(item, ArrayType) else 1
                 if count > 4096:
-                    raise GoDiagnostic(dtype.token, "record layout exceeds implementation limit (4096 scalar slots)")
+                    raise UnsupportedGo(dtype.token, 'go.unsupported.limit-record-layout', "record layout exceeds implementation limit (4096 scalar slots)")
                 if isinstance(item, StructType):
                     pending.extend(field.type for field in item.fields)
             return result
@@ -301,14 +304,14 @@ class Analyzer:
             return dtype
         element = self.resolve_type(dtype.element)
         if isinstance(underlying(element), ArrayType) or is_string(element):
-            raise GoDiagnostic(dtype.token, "nested arrays and string-element arrays are not implemented")
+            raise UnsupportedGo(dtype.token, 'go.unsupported.array-element-types', "nested arrays and string-element arrays are not implemented")
         if not is_integer(element) and not is_boolean(element):
-            raise GoDiagnostic(dtype.token, "arrays of aggregate elements are not implemented")
+            raise UnsupportedGo(dtype.token, 'go.unsupported.array-element-types', "arrays of aggregate elements are not implemented")
         if dtype.length is None:
             raise GoDiagnostic(dtype.token, "array length inference requires a composite literal")
         count = self.array_index_constant(dtype.length, "array length")
         if count > 4096:
-            raise GoDiagnostic(dtype.token, "array exceeds implementation limit (4096 elements)")
+            raise UnsupportedGo(dtype.token, 'go.unsupported.limit-array-elements', "array exceeds implementation limit (4096 elements)")
         return ArrayType(count, element)
 
     def static_initializer(self, expr):
@@ -323,7 +326,7 @@ class Analyzer:
             return tuple(values)
         if expr.kind == "call" and expr.symbol is None and same_underlying(expr.type, expr.args[0].type):
             return self.static_initializer(expr.args[0])
-        raise GoDiagnostic(expr.token, "nonconstant package initializer requires shared-runtime initialization support")
+        raise UnsupportedGo(expr.token, 'go.unsupported.package-initialization', "nonconstant package initializer requires shared-runtime initialization support")
 
     def array_index_constant(self, expr, label):
         self.expression(expr)
@@ -555,6 +558,8 @@ class Analyzer:
             self.expression(selector)
             coerce(selector, default_type(selector.type))
             if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)):
+                if isinstance(underlying(selector.type), (ArrayType, StructType)):
+                    raise UnsupportedGo(selector.token, "go.unsupported.aggregate-switch", "switch currently requires integer, boolean or string comparison support")
                 raise GoDiagnostic(selector.token, "switch currently requires integer, boolean or string comparison support")
             statement.exprs = [selector]
             defaults, constants = 0, set()
@@ -598,6 +603,8 @@ class Analyzer:
             self.expression(ranged)
             dtype = underlying(ranged.type)
             if not isinstance(dtype, ArrayType):
+                if is_integer(ranged.type) or is_string(ranged.type):
+                    raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
                 raise GoDiagnostic(ranged.token, "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
             if len(statement.targets) > 2:
                 raise GoDiagnostic(statement.token, "array range permits at most two iteration variables")
@@ -693,7 +700,7 @@ class Analyzer:
             if isinstance(syntax, ArraySyntax) and syntax.length is None:
                 element = self.resolve_type(syntax.element)
                 if not is_integer(element) and not is_boolean(element):
-                    raise GoDiagnostic(syntax.token, "nested arrays and non-scalar array elements are not implemented")
+                    raise UnsupportedGo(syntax.token, 'go.unsupported.array-element-types', "nested arrays and non-scalar array elements are not implemented")
                 dtype = None
             else:
                 expr.type = self.resolve_type(syntax)
@@ -738,7 +745,7 @@ class Analyzer:
                 if dtype is None:
                     count = max(indices, default=-1) + 1
                     if count > 4096:
-                        raise GoDiagnostic(syntax.token, "array exceeds implementation limit (4096 elements)")
+                        raise UnsupportedGo(syntax.token, 'go.unsupported.limit-array-elements', "array exceeds implementation limit (4096 elements)")
                     expr.type = dtype = ArrayType(count, element)
                 expr.indices = indices
                 for index, item in zip(indices, expr.args):
@@ -759,7 +766,7 @@ class Analyzer:
                 if index.constant is not None and index.constant < 0:
                     raise GoDiagnostic(index.token, "string index must be nonnegative")
                 if base.constant is None:
-                    raise GoDiagnostic(index.token, "unproven string bounds require shared-runtime bounds-panic support")
+                    raise UnsupportedGo(index.token, 'go.unsupported.string-bounds-panic', "unproven string bounds require shared-runtime bounds-panic support")
                 if index.constant is not None:
                     value = self.array_index_constant(index, "string index")
                     if value >= len(base.constant):
@@ -767,7 +774,7 @@ class Analyzer:
                 else:
                     upper = self.index_upper_bound(index)
                     if upper is None or upper >= len(base.constant):
-                        raise GoDiagnostic(index.token, "unproven string bounds require shared-runtime bounds-panic support")
+                        raise UnsupportedGo(index.token, 'go.unsupported.string-bounds-panic', "unproven string bounds require shared-runtime bounds-panic support")
                 coerce(index, default_type(index.type))
                 # A string index is a byte value, but is not a Go constant
                 # expression even when both operands happen to be constant.
@@ -785,7 +792,7 @@ class Analyzer:
             else:
                 upper = self.index_upper_bound(index)
                 if upper is None or upper >= array_type.count:
-                    raise GoDiagnostic(index.token, "unproven array bounds require shared-runtime bounds-panic support")
+                    raise UnsupportedGo(index.token, 'go.unsupported.array-bounds-panic', "unproven array bounds require shared-runtime bounds-panic support")
             coerce(index, default_type(index.type))
             expr.type, expr.addressable = array_type.element, base.addressable
             if not base.addressable and self.function is not None:
@@ -834,7 +841,7 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "first-class method expressions require function-value support")
             self.expression(base)
             if isinstance(base.type, DefinedType) and expr.value in base.type.methods:
-                raise GoDiagnostic(expr.token, "stored method values require shared closure and bound-receiver support")
+                raise UnsupportedGo(expr.token, 'go.unsupported.method-values', "stored method values require shared closure and bound-receiver support")
             dtype = underlying(base.type)
             if not isinstance(dtype, StructType):
                 raise GoDiagnostic(expr.token, "field selector requires a struct value")
@@ -961,7 +968,7 @@ class Analyzer:
         self.expression(arg)
         if is_string(target) and is_integer(arg.type):
             if arg.constant is None:
-                raise GoDiagnostic(expr.token, "integer-to-string conversion requires shared-runtime allocation support")
+                raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-conversion', "integer-to-string conversion requires shared-runtime allocation support")
             codepoint = arg.constant
             if codepoint < 0 or codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
                 codepoint = 0xfffd
@@ -1005,14 +1012,14 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "unsupported string operator " + op)
             if left.constant is None or right.constant is None:
                 if op == "+":
-                    raise GoDiagnostic(expr.token, "dynamic string concatenation requires shared-runtime allocation support")
+                    raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-concatenation', "dynamic string concatenation requires shared-runtime allocation support")
                 expr.kind, expr.type = "string_compare", "untyped bool"
                 return
             a, b = left.constant, right.constant
             if op == "+":
                 from pcc.frontends.go.strings import MAX_STRING_BYTES
                 if len(a) + len(b) > MAX_STRING_BYTES:
-                    raise GoDiagnostic(expr.token, "string exceeds implementation limit (1 MiB)")
+                    raise UnsupportedGo(expr.token, 'go.unsupported.limit-string-bytes', "string exceeds implementation limit (1 MiB)")
                 expr.type, expr.constant = left.type, a + b
             else:
                 expr.type = "untyped bool"
@@ -1024,7 +1031,7 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "shifts require integer operands")
             if right.constant is None:
                 if integer_signed(right.type):
-                    raise GoDiagnostic(expr.token, "dynamic signed shift counts require shared-runtime negative-count panic support")
+                    raise UnsupportedGo(expr.token, 'go.unsupported.negative-shift-panic', "dynamic signed shift counts require shared-runtime negative-count panic support")
             elif right.constant < 0:
                 raise GoDiagnostic(expr.token, "negative shift count")
             elif right.constant > MAX_SHIFT_COUNT:
@@ -1047,6 +1054,8 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "logical operators require bool")
             elif op in ("==", "!="):
                 if not is_integer(left.type) and not is_boolean(left.type):
+                    if isinstance(underlying(left.type), (ArrayType, StructType)):
+                        raise UnsupportedGo(expr.token, "go.unsupported.aggregate-comparison", "unsupported comparison operands")
                     raise GoDiagnostic(expr.token, "unsupported comparison operands")
                 expr.type = "untyped bool"
             elif op in ("<", "<=", ">", ">="):
@@ -1059,12 +1068,12 @@ class Analyzer:
             if right.constant == 0:
                 raise GoDiagnostic(expr.token, "division by zero")
             if right.constant is None:
-                raise GoDiagnostic(expr.token, "dynamic division requires shared-runtime division-by-zero panic support")
+                raise UnsupportedGo(expr.token, 'go.unsupported.division-panic', "dynamic division requires shared-runtime division-by-zero panic support")
         if left.constant is not None and right.constant is not None:
             a, b = left.constant, right.constant
             if op == "<<" and b > MAX_CONSTANT_BITS:
                 if a != 0:
-                    raise GoDiagnostic(expr.token, "constant exceeds implementation precision limit (4096 bits)")
+                    raise UnsupportedGo(expr.token, 'go.unsupported.limit-constant-precision', "constant exceeds implementation precision limit (4096 bits)")
                 expr.constant = 0
             elif op in ("/", "%"):
                 quotient = abs(a) // abs(b)

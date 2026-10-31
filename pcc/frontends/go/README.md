@@ -301,3 +301,22 @@ unsupported; no slice backing, UTF-8 iterator, scheduler or managed allocation
 is manufactured. Relevant rules are the official Go specification's
 [range clauses](https://go.dev/ref/spec#For_range) and
 [length and capacity](https://go.dev/ref/spec#Length_and_capacity).
+
+### Structured capability diagnostics
+
+`UnsupportedGo` is a `GoDiagnostic` subclass with stable `code`, `feature_id`,
+`kind`, location, and explanatory `message` fields. Its code is selected at the
+recognizing parser/semantic boundary, never inferred from message text. The
+canonical Go feature map pairs every registered code with one feature row.
+Implementation limits have explicit codes as well; they do not assert that the
+language specification itself forbids a larger program.
+
+Uncoded `GoDiagnostic` has `kind="unclassified"` and `code=None`: legacy parser
+and builtin boundaries are not all classified, so consumers must not infer a
+validity error from the absence of a capability code. Known invalid-source
+regressions still remain uncoded rather than becoming missing features. In particular,
+forbidden string operators, non-iterable values, negative constant shifts and
+package type declarations named `init` are not described as missing features.
+A capability rejection identifies the first unsupported boundary, not proof
+that the rest of the source is valid. Generic parser gaps remain uncoded and are
+listed as incomplete inventory rather than assigned fabricated feature codes.

@@ -10,16 +10,7 @@ from dataclasses import dataclass, field
 import unicodedata
 
 from pcc.frontends.go.types import Results, TYPE_NAMES
-
-
-class GoDiagnostic(ValueError):
-    """A rejected Go program or an explicit unimplemented language boundary."""
-
-    def __init__(self, token, message):
-        self.filename = token.filename
-        self.line = token.line
-        self.column = token.column
-        super().__init__(f"{self.filename}:{self.line}:{self.column}: Go: {message}")
+from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
 
 
 @dataclass(frozen=True)
@@ -310,6 +301,9 @@ class GoParser:
     def fail(self, token, message):
         raise GoDiagnostic(token, message)
 
+    def unsupported(self, token, code, message):
+        raise UnsupportedGo(token, code, message)
+
     def end_statement(self):
         if not self.accept(";") and not self.at("}") and not self.at("eof"):
             self.fail(self.current, "expected semicolon or newline")
@@ -325,7 +319,7 @@ class GoParser:
                 self.fail(self.current, "empty import specifications are not permitted")
             alias = self.take("name").text if self.at("name") else None
             if self.at("."):
-                self.fail(self.current, "dot imports are not implemented")
+                self.unsupported(self.current, 'go.unsupported.dot-imports', "dot imports are not implemented")
             token = self.take("string")
             path = token.text[1:-1]
             if (not path or "\\" in path or any(char.isspace() for char in path) or
@@ -342,7 +336,7 @@ class GoParser:
         if self.at("["):
             token = self.take("[")
             if self.at("]"):
-                self.fail(token, "slice types require shared-runtime backing storage support")
+                self.unsupported(token, 'go.unsupported.slice-storage', "slice types require shared-runtime backing storage support")
             if self.accept("..."):
                 if not literal:
                     self.fail(token, "inferred array length is only valid in a composite literal")
@@ -361,10 +355,10 @@ class GoParser:
                 while self.accept(","):
                     names.append(self.take("name"))
                 if self.at(";") or self.at("}") or self.at("."):
-                    self.fail(names[0], "embedded fields require method/promotion support")
+                    self.unsupported(names[0], 'go.unsupported.embedded-fields', "embedded fields require method/promotion support")
                 dtype = self.datatype()
                 if self.at("string"):
-                    self.fail(self.current, "struct tags are not implemented")
+                    self.unsupported(self.current, 'go.unsupported.struct-tags', "struct tags are not implemented")
                 fields.extend((name, dtype) for name in names)
                 self.end_statement()
             self.take("}")
@@ -374,8 +368,14 @@ class GoParser:
             return TypeName(self.take("name"), token.text)
         if token.text in TYPE_NAMES:
             return TYPE_NAMES[token.text]
-        if token.text in ("error", "any", "comparable", "float32", "float64", "complex64", "complex128"):
-            self.fail(token, f"unsupported type {token.text!r}; shared runtime or numeric support is missing")
+        capability = ({"error": "interface-types", "any": "interface-types",
+                       "float32": "floating-types", "float64": "floating-types",
+                       "complex64": "complex-types", "complex128": "complex-types"}).get(token.text)
+        if capability is not None:
+            self.unsupported(token, "go.unsupported." + capability,
+                             f"unsupported type {token.text!r}; shared runtime or numeric support is missing")
+        if token.text == "comparable":
+            self.fail(token, "comparable is only permitted as a type constraint")
         return TypeName(token)
 
     def type_declarations(self):
@@ -420,7 +420,7 @@ class GoParser:
                 types.append(self.datatype())
                 names.append(None)
             if len(types) > 256:
-                self.fail(self.current, "function exceeds implementation limit (256 results/parameters)")
+                self.unsupported(self.current, 'go.unsupported.limit-function-arity', "function exceeds implementation limit (256 results/parameters)")
             if not self.accept(","):
                 break
         self.take(")")
@@ -435,7 +435,7 @@ class GoParser:
                 if token.kind == ")":
                     break
                 if token.kind == "*":
-                    self.fail(token, "pointer receivers require nonescaping-pointer and method-set support")
+                    self.unsupported(token, 'go.unsupported.pointer-receivers', "pointer receivers require nonescaping-pointer and method-set support")
             receiver_types, receiver_names = self.parameter_list()
             if len(receiver_types) != 1:
                 self.fail(self.current, "method receiver must be exactly one non-variadic parameter")
@@ -599,7 +599,7 @@ class GoParser:
             return Stmt("for", token, exprs=[] if condition is None else [condition],
                         body=self.block(), init=init, post=post)
         if token.kind == "type":
-            self.fail(token, "function-local type declarations are not implemented")
+            self.unsupported(token, 'go.unsupported.local-type-declarations', "function-local type declarations are not implemented")
         if token.kind in KEYWORDS:
             self.fail(token, f"unsupported statement {token.text!r}")
         return self.simple()
