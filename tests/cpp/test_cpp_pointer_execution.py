@@ -20,10 +20,14 @@ from tests.cpp.owned_execution import (
     write_host_executable,
 )
 from tests.cpp.test_cpp_grouped_names import owned_only
-from tests.cpp.test_cpp_pointers import FORMER_UNSUPPORTED_ARRAY_SOURCE, NEGATIVE_CASES
+from tests.cpp.test_cpp_pointers import (
+    FORMER_UNSUPPORTED_ARRAY_SOURCE, FORMER_UNSUPPORTED_COMPOUND_SOURCE, NEGATIVE_CASES,
+)
 
 
 CASES = (
+    ("previously-unsupported-pointer-compound-assignment",
+     FORMER_UNSUPPORTED_COMPOUND_SOURCE + "int cpp_test_entry(){return f()+39;}", 42),
     ("previously-unsupported-array-declaration",
      FORMER_UNSUPPORTED_ARRAY_SOURCE + "int cpp_test_entry(){return f()+42;}", 42),
     ("fixed-array-elements-and-pointer-decay",

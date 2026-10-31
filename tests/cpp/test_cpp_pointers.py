@@ -60,7 +60,6 @@ NEGATIVE_CASES = (
     ("int f(){return *1;}", "cpp.invalid-dereference"),
     ("int f(){void *p=nullptr;*p;return 0;}", "cpp.invalid-dereference"),
     ("int f(){int *p=&1;return 0;}", "cpp.not-lvalue"),
-    ("int f(){int x=1;int *p=&x;*p+=2;return x;}", "cpp.unsupported.compound-assignment"),
     ("int f(){int x=1;int *p=&x;(*p=2)=3;return x;}", "cpp.unsupported.syntax"),
     ("int f(){int x=1;int *p=&x;int *q=&(*p=2);return x;}", "cpp.unsupported.syntax"),
     ("int f(){int x=1;int *p=&x;return p;}", "cpp.invalid-conversion"),
@@ -105,3 +104,10 @@ def test_original_array_declaration_is_a_real_fixed_array():
     assert isinstance(declaration.type, c_ast.ArrayDecl)
     assert declaration.type.dim.value == "2"
     assert declaration.type.type.type.names == ["int"]
+
+
+FORMER_UNSUPPORTED_COMPOUND_SOURCE = "int f(){int x=1;int *p=&x;*p+=2;return x;}"
+
+
+def test_original_pointer_compound_assignment_is_now_supported():
+    CppParser().parse(FORMER_UNSUPPORTED_COMPOUND_SOURCE, "compound-now-supported.cpp")

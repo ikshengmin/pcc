@@ -69,7 +69,8 @@ _BINARY_PRECEDENCE = {
 }
 _COMPARISONS = frozenset(("==", "!=", "<", "<=", ">", ">="))
 _ALTERNATIVE_TOKENS = {"and": "&&", "or": "||", "not": "!", "bitand": "&",
-                       "bitor": "|", "xor": "^", "compl": "~", "not_eq": "!="}
+                       "bitor": "|", "xor": "^", "compl": "~", "not_eq": "!=",
+                       "and_eq": "&=", "or_eq": "|=", "xor_eq": "^="}
 
 
 class CppToken:
@@ -538,8 +539,11 @@ class CppParser:
         if (name not in self.function_projection_names
                 and all(symbol.c_name != name for symbol in self.namespace_objects)):
             return name
+        return self._fresh_projection_name("__pcc_cpp_local_")
+
+    def _fresh_projection_name(self, prefix):
         while True:
-            projected = "__pcc_cpp_local_" + str(self.local_projection_index)
+            projected = prefix + str(self.local_projection_index)
             self.local_projection_index += 1
             if projected not in self.projection_names:
                 self.projection_names.add(projected)
@@ -1119,14 +1123,68 @@ class CppParser:
     def _expression(self):
         lhs = self._binary(1)
         if self._peek().value in ("+=", "-=", "*=", "/=", "%=", "<<=", ">>=",
-                                  "&=", "^=", "|=", "and_eq", "or_eq", "xor_eq"):
-            raise CppDiagnostic("cpp.unsupported.compound-assignment",
-                                "compound assignment semantics are not implemented", self._peek().coord)
+                                  "&=", "^=", "|="):
+            assignment = self.cursor.take()
+            rhs = self._expression()
+            return self._compound_assignment_expression(assignment.value[:-1], lhs, rhs, assignment.coord)
         assignment = self._accept("=")
         if assignment:
             rhs = self._expression()
             return self._assignment_expression(lhs, rhs, assignment.coord)
         return lhs
+
+    def _compound_assignment_expression(self, operator, lhs, rhs, coord):
+        if array_type(lhs.dtype):
+            raise CppDiagnostic("cpp.array-not-assignable", "builtin array assignment is not permitted", coord)
+        if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
+            raise CppDiagnostic("cpp.unsupported.class-assignment", "class compound assignment requires operator lookup", coord)
+        if lhs.assignment_result:
+            raise CppDiagnostic("cpp.unsupported.syntax", "simple-assignment result lvalue lowering", coord)
+        if not lhs.lvalue:
+            raise CppDiagnostic("cpp.not-lvalue", "compound assignment requires an lvalue", coord)
+        if isinstance(lhs.dtype, ConstType):
+            raise CppDiagnostic("cpp.const-assignment", "compound assignment requires a modifiable lvalue", coord)
+        self._require_value(rhs)
+        rhs = self._decay_array(rhs)
+        dtype = unqualified(lhs.dtype)
+        pointer = pointer_type(dtype)
+        if pointer:
+            if operator not in ("+", "-") or not self.types.integral_operand(rhs.dtype):
+                raise CppDiagnostic("cpp.invalid-operands", "pointer compound assignment requires += or -= and an integral offset", coord)
+            if unqualified(dtype.pointee) == "void":
+                raise CppDiagnostic("cpp.invalid-operands", "pointer arithmetic requires a complete object type", coord)
+            require_complete(dtype.pointee, coord)
+            require_complete_array(dtype.pointee, coord)
+            if is_enum_type(dtype.pointee) and not unqualified(dtype.pointee).complete:
+                raise CppDiagnostic("cpp.incomplete-enum", "pointer arithmetic requires a complete enum", coord)
+        if self.template_function is not None:
+            # Type checking at definition when possible, then instance-local
+            # replay. Do not lower dependent operations into mixed C/Pattern IR.
+            result = self._binary_expression(operator, lhs, rhs, coord)
+            self._convert(result, dtype, coord)
+            return Expression(Pattern("compound-assignment", coord, operator, [lhs, rhs]), dtype, True)
+        # [expr.ass] sequences RHS before LHS and evaluates LHS only once.
+        # Retain that order independently of C's assignment operand policy.
+        # The final address (not a copied value) preserves C++'s lvalue result.
+        rhs_name = self._fresh_projection_name("__pcc_cpp_compound_rhs_")
+        ptr_name = self._fresh_projection_name("__pcc_cpp_compound_ptr_")
+        rhs_type = self.types.promote(rhs.dtype) if pointer else unqualified(rhs.dtype)
+        rhs_decl = self._decl(rhs_name, rhs_type, coord, self._convert(rhs, rhs_type, coord))
+        address = (lhs.node.expr if isinstance(lhs.node, c_ast.UnaryOp) and lhs.node.op == "*"
+                   else c_ast.UnaryOp("&", lhs.node, coord))
+        ptr_decl = self._decl(ptr_name, PointerType(dtype), coord, address)
+        pointer_node = c_ast.ID(ptr_name, coord)
+        object_node = c_ast.UnaryOp("*", pointer_node, coord)
+        left_value = Expression(object_node, dtype, True)
+        right_value = Expression(c_ast.ID(rhs_name, coord), rhs_type)
+        if pointer:
+            result = Expression(c_ast.BinaryOp(operator, object_node, right_value.node, coord), dtype)
+        else:
+            result = self._binary_expression(operator, left_value, right_value, coord)
+        update = c_ast.Assignment("=", object_node, self._convert(result, dtype, coord), coord)
+        body = c_ast.StmtExpr(c_ast.Compound([rhs_decl, ptr_decl, update, pointer_node], coord), coord)
+        return Expression(c_ast.UnaryOp("*", body, coord), dtype, True,
+                          constant_fact=not_constant(dtype, "modification of a runtime object", coord))
 
     def _assignment_expression(self, lhs, rhs, coord):
         if array_type(lhs.dtype):
@@ -1246,8 +1304,54 @@ class CppParser:
                 return PointerType(pointee)
         raise CppDiagnostic("cpp.invalid-operands", "incompatible operands for pointer equality", coord)
 
+    def _c_style_cast_ahead(self):
+        if self._peek().value != "(":
+            return False
+        with self.cursor.tentative():
+            self.cursor.take()
+            if not self._is_type(self._peek()):
+                return False
+            try:
+                self._abstract_pointer_type(self._type())
+            except CppDiagnostic:
+                return False
+            # A type-id must finish here: (int(42)) is instead a parenthesized
+            # functional conversion. A shadowing value is never re-found as a
+            # typedef by this tentative ordinary-name lookup.
+            return self._peek().value == ")"
+
+    def _explicit_arithmetic_cast(self, dtype, expression, coord, style):
+        target, source = unqualified(dtype), unqualified(expression.dtype)
+        feature = "static-cast" if style == "static_cast" else "c-style-cast"
+        if dependent(target) or dependent(source):
+            raise CppDiagnostic("cpp.unsupported." + feature,
+                                "dependent explicit casts require additional template conversion semantics", coord)
+        if is_class_type(target) or is_class_type(source):
+            raise CppDiagnostic("cpp.unsupported.class-conversions",
+                                "explicit class conversions require constructor/conversion lookup", coord)
+        if source == "void" and target != "void":
+            self._require_value(expression)
+        same_enum = is_enum_type(target) and source is target
+        if is_enum_type(target) and not same_enum:
+            raise CppDiagnostic("cpp.unsupported.enum-casts",
+                                "integer/distinct-enum destination casts require range semantics", coord)
+        if target != "void" and not (same_enum or
+                self.types.arithmetic_operand(target)
+                and (self.types.arithmetic_operand(source) or is_enum_type(source))):
+            raise CppDiagnostic("cpp.unsupported." + feature,
+                                "explicit pointer/reference/representation casts are not implemented", coord)
+        node = self._convert(expression, target, coord, force=True)
+        return Expression(node, target, constant_fact=converted_fact(
+            self._constant_fact(expression), target, self.types, coord, allow_scoped=True,
+        ))
+
     def _unary(self):
         token = self._peek()
+        if self._c_style_cast_ahead():
+            self.cursor.take()
+            dtype = self._abstract_pointer_type(self._type())
+            self._expect(")")
+            return self._explicit_arithmetic_cast(dtype, self._unary(), token.coord, "C-style")
         if token.value in ("++", "--"):
             self.cursor.take()
             return self._increment_expression(token.value, self._unary(), token.coord)
@@ -1482,15 +1586,7 @@ class CppParser:
             self._expect("(")
             expression = self._expression()
             self._expect(")")
-            if (dependent(dtype) or dependent(expression.dtype)
-                    or not self.types.integral(dtype)
-                    or not self.types.integral(expression.dtype)):
-                raise CppDiagnostic("cpp.unsupported.static-cast",
-                                    "static_cast currently requires fundamental integer operands", token.coord)
-            node = self._convert(expression, dtype, token.coord, force=True)
-            return Expression(node, unqualified(dtype), constant_fact=converted_fact(
-                self._constant_fact(expression), dtype, self.types, token.coord,
-            ))
+            return self._explicit_arithmetic_cast(dtype, expression, token.coord, "static_cast")
         if token.value == "nullptr":
             if self.parsing_template:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
@@ -1636,6 +1732,8 @@ class CppParser:
             return self._increment_expression(operator, arguments[0], coord, postfix)
         if kind == "assignment":
             return self._assignment_expression(arguments[0], arguments[1], coord)
+        if kind == "compound-assignment":
+            return self._compound_assignment_expression(pattern.value, arguments[0], arguments[1], coord)
         if kind == "call":
             return self._call_expression(pattern.value, arguments, coord)
         raise CppDiagnostic("cpp.internal-pattern", "unknown expression pattern", coord)

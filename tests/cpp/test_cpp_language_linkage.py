@@ -80,7 +80,6 @@ UNSUPPORTED = (
     'extern "Fortran" int f();',
     'extern "C" {static int f(){return 1;}}',
     'namespace {extern "C" int f();}',
-    'int f(){return static_cast<int>(1.5);}',
     'int f(){int x=0;return static_cast<int>(&x);}',
     'template<class T>T f(T x){return static_cast<T>(x);}',
 )
@@ -210,3 +209,8 @@ def test_original_c_object_declaration_is_now_supported_without_source_rewrite()
     symbol = parser.scope.names['x']
     assert symbol.language_linkage == "C" and not symbol.defined
     assert symbol.c_name == symbol.name and symbol.dtype == "int"
+
+
+def test_original_arithmetic_static_cast_source_is_now_supported():
+    # Original capability source is retained without editing its operand/type.
+    CppParser().parse("int f(){return static_cast<int>(1.5);}")
