@@ -35,8 +35,10 @@ class Symbol:
         self.owner = None
         self.namespace_scope = None
         self.internal_linkage = False
-        # Function language linkage is part of its semantic type/identity,
-        # not a post-lowering symbol-name patch. None means no specification.
+        # Function type/name and external object-name language linkage belong
+        # to semantic identity, not a post-lowering symbol-name patch.
+        # Object types themselves do not acquire language linkage.
+        # None means no specification.
         self.requested_language_linkage = None
         self.language_linkage = "C++"
         self.declaration_scopes = []
@@ -67,6 +69,7 @@ class Scope:
         self.unnamed_namespace = None
         if parent is None:
             self.c_linkage_functions = {}
+            self.c_linkage_objects = {}
         self.internal_linkage = anonymous or (parent is not None and parent.internal_linkage)
 
     def namespace(self):
@@ -324,15 +327,15 @@ class Scope:
         return symbol
 
     def declare_namespace_object(self, symbol, definition, storage=None):
-        if (self.parent is None and symbol.name in self.c_linkage_functions):
-            raise CppDiagnostic("cpp.c-linkage-name-conflict",
-                                "a global object cannot share a C function's name", symbol.coord)
         if self.kind != "namespace":
             raise CppDiagnostic("cpp.unsupported.block-storage",
                                 "non-namespace object linkage is not implemented", symbol.coord)
+        root = self.global_scope()
         previous = self.names.get(symbol.name)
         if previous is not None:
-            if previous.owner is not self:
+            if (previous.owner is not self and self not in previous.declaration_scopes
+                    and not (symbol.requested_language_linkage == "C"
+                             and previous.language_linkage == "C")):
                 raise CppDiagnostic("cpp.using-declaration-conflict",
                                     "object declaration conflicts with an imported entity", symbol.coord)
             if not getattr(previous, "namespace_object", False):
@@ -348,16 +351,54 @@ class Scope:
             if storage == "static" and not previous.internal_linkage:
                 raise CppDiagnostic("cpp.conflicting-linkage",
                                     "static declaration follows an external object declaration", symbol.coord)
+            if (not previous.internal_linkage and symbol.requested_language_linkage is not None
+                    and symbol.requested_language_linkage != previous.language_linkage):
+                raise CppDiagnostic("cpp.conflicting-language-linkage",
+                                    "object redeclared with different language linkage", symbol.coord)
             if definition and previous.defined:
                 raise CppDiagnostic("cpp.redefinition", "object has more than one definition", symbol.coord)
             if definition:
                 previous.defined = True
+            if self not in previous.declaration_scopes:
+                previous.declaration_scopes.append(self)
             return previous
         symbol.namespace_object = True
         symbol.defined = definition
         local_name = storage == "static" or isinstance(symbol.dtype, ConstType) and storage != "extern"
         symbol.internal_linkage = local_name or self.internal_linkage
-        symbol.c_name = mangle_object(symbol.name, self.namespace_path(), local_name)
+        # [dcl.link] specifies the language of external variable *names*.
+        # In particular a block-form static/const object does not join the
+        # cross-namespace C registry merely because it is lexically in "C".
+        symbol.language_linkage = (symbol.requested_language_linkage or "C++") if not symbol.internal_linkage else "C++"
+        canonical = root.c_linkage_objects.get(symbol.name)
+        if self is root and (canonical is not None or symbol.name in root.c_linkage_functions):
+            if not (symbol.language_linkage == "C" and canonical is not None):
+                raise CppDiagnostic("cpp.c-linkage-name-conflict",
+                                    "a global object cannot share a distinct C entity's name", symbol.coord)
+        if symbol.language_linkage == "C":
+            global_object = root.names.get(symbol.name)
+            if (symbol.name in root.c_linkage_functions
+                    or getattr(global_object, "namespace_object", False)
+                    and global_object.owner is root and global_object is not canonical):
+                raise CppDiagnostic("cpp.c-linkage-name-conflict",
+                                    "a C object conflicts with a C function or distinct global object", symbol.coord)
+            if canonical is not None:
+                if not same_type(canonical.dtype, symbol.dtype):
+                    raise CppDiagnostic("cpp.conflicting-c-linkage-type",
+                                        "C object declarations across namespaces have different types", symbol.coord)
+                if definition and canonical.defined:
+                    raise CppDiagnostic("cpp.redefinition", "C object has more than one definition", symbol.coord)
+                if definition:
+                    canonical.defined = True
+                if self not in canonical.declaration_scopes:
+                    canonical.declaration_scopes.append(self)
+                self.names[symbol.name] = canonical
+                return canonical
+            root.c_linkage_objects[symbol.name] = symbol
+            symbol.c_name = symbol.name
+        else:
+            symbol.c_name = mangle_object(symbol.name, self.namespace_path(), local_name)
+        symbol.declaration_scopes.append(self)
         return self.declare(symbol)
 
     def declare_function(self, symbol, definition):
@@ -398,10 +439,11 @@ class Scope:
         symbol.language_linkage = symbol.requested_language_linkage or "C++"
         if symbol.language_linkage == "C":
             global_object = self.global_scope().names.get(symbol.name)
-            if (getattr(global_object, "namespace_object", False)
+            if (symbol.name in self.global_scope().c_linkage_objects
+                    or getattr(global_object, "namespace_object", False)
                     and global_object.owner is self.global_scope()):
                 raise CppDiagnostic("cpp.c-linkage-name-conflict",
-                                    "a C function cannot share a global object's name", symbol.coord)
+                                    "a C function cannot share a C or global object's name", symbol.coord)
             registry = self.global_scope().c_linkage_functions
             canonical = registry.get(symbol.name)
             if canonical is not None:

@@ -150,9 +150,13 @@ class CppParser:
         self.pending_instances = []
         self.loop_depth = 0
         self.assignment_index = 0
+        self.local_projection_index = 0
+        self.function_projection_names = set()
         self.namespace_objects = []
         self.language_linkage = None
-        self.cursor = TokenCursor(self._tokenize(text, filename))
+        tokens = self._tokenize(text, filename)
+        self.projection_names = {token.value for token in tokens if token.kind == "ID"}
+        self.cursor = TokenCursor(tokens)
         declarations = self._declarations()
         for symbol in self.namespace_objects:
             if symbol.internal_linkage and not symbol.defined:
@@ -525,6 +529,22 @@ class CppParser:
     def _decl(self, name, dtype, coord, init=None):
         return c_ast.Decl(name, [], [], [], self._scalar_type(name, dtype, coord), init, None, coord)
 
+    def _local_projection_name(self, name):
+        # A qualified C++ reference can select a namespace entity even when a
+        # local of the same spelling is visible. C AST has no qualified IDs:
+        # do not let C lexical lookup rebind that already-resolved reference.
+        # Preserve other local spellings, and allocate a private name only on
+        # a collision with an emitted namespace object/function name.
+        if (name not in self.function_projection_names
+                and all(symbol.c_name != name for symbol in self.namespace_objects)):
+            return name
+        while True:
+            projected = "__pcc_cpp_local_" + str(self.local_projection_index)
+            self.local_projection_index += 1
+            if projected not in self.projection_names:
+                self.projection_names.add(projected)
+                return projected
+
     def _decay_array(self, expression):
         if not array_type(expression.dtype):
             return expression
@@ -733,6 +753,10 @@ class CppParser:
                                     "C function type with internal name linkage is not implemented", name.coord)
         registry = self.scope if declaration_scope is None else declaration_scope
         symbol = registry.declare_function(new_symbol, definition)
+        self.function_projection_names.add(symbol.c_name)
+        for parameter in parameter_symbols:
+            if parameter is not None:
+                parameter.c_name = self._local_projection_name(parameter.name)
         if template_parameters:
             if not definition:
                 self._expect(";")
@@ -753,7 +777,7 @@ class CppParser:
         # An unnamed definition parameter still occupies its ABI position,
         # but introduces no C++ binding. Only the C projection needs a private
         # name for its argument slot; never install it in the semantic scope.
-        param_decls = [self._decl(p.value if p else
+        param_decls = [self._decl(parameter_symbols[index].c_name if p else
                                  ("__pcc_cpp_unnamed_" + str(index) if definition else None),
                                  dtype, p.coord if p else name.coord)
                        for index, (p, dtype) in enumerate(params)]
@@ -862,7 +886,10 @@ class CppParser:
             name, dtype = self._declarator(dtype)
             self._check_object_type(dtype, name.coord)
             # The point of declaration precedes the initializer.
-            symbol = self.scope.declare(Symbol(name.value, "value", name.coord, dtype=dtype))
+            symbol = self.scope.declare(Symbol(
+                name.value, "value", name.coord, dtype=dtype,
+                c_name=self._local_projection_name(name.value),
+            ))
             init = None
             initializer = None
             if array_type(dtype):
@@ -878,7 +905,7 @@ class CppParser:
                     raise CppDiagnostic("cpp.const-initializer", "const array elements require initialization", name.coord)
                 self._expect(";")
                 symbol.initialization_complete = True
-                return self._decl(name.value, dtype, name.coord, init)
+                return self._decl(symbol.c_name, dtype, name.coord, init)
             if is_class_type(dtype):
                 if self.template_function is not None:
                     raise CppDiagnostic("cpp.unsupported.class-templates", "class objects in templates are not implemented", name.coord)
@@ -894,7 +921,7 @@ class CppParser:
                 else:
                     init = default_initialize(dtype, name.coord)
                 self._expect(";")
-                return self._decl(name.value, dtype, name.coord, init)
+                return self._decl(symbol.c_name, dtype, name.coord, init)
             if self._accept("="):
                 if is_enum_type(dtype) and self._peek().value == "{":
                     raise CppDiagnostic("cpp.unsupported.enum-list-initialization",
@@ -932,7 +959,7 @@ class CppParser:
                     self._constant_fact(initializer), dtype, self.types, name.coord,
                 )
             symbol.initialization_complete = True
-            return self._decl(name.value, dtype, name.coord, init)
+            return self._decl(symbol.c_name, dtype, name.coord, init)
         expression = self._expression()
         self._require_value(expression, allow_void=True)
         self._expect(";")
@@ -1670,8 +1697,8 @@ class CppParser:
             if dtype == "void":
                 raise CppDiagnostic("cpp.invalid-parameter",
                                     "template substitution formed a void parameter", symbol.coord)
-            parameters.append(self._decl(symbol.name, dtype, symbol.coord))
-            environment[id(symbol)] = Expression(c_ast.ID(symbol.name, symbol.coord), dtype, True)
+            parameters.append(self._decl(symbol.c_name, dtype, symbol.coord))
+            environment[id(symbol)] = Expression(c_ast.ID(symbol.c_name, symbol.coord), dtype, True)
         declaration = self._decl(instance.c_name, instance.dtype, origin.coord)
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(parameters, origin.coord),
                                           declaration.type, origin.coord)

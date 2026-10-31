@@ -74,7 +74,6 @@ NEGATIVE_CASES = (
     ("int f(int *volatile p);", "cpp.unsupported.volatile"),
     ("int f(int &p);", "cpp.unsupported.references"),
     ("int (*fp)();", "cpp.unsupported.function-pointers"),
-    ("int f(){int a[2];return 0;}", "cpp.unsupported.arrays-or-lambdas"),
     ("int f(){int *p=new int;return 0;}", "cpp.unsupported.allocation"),
     ("template<class T>T *f(T *p){return p;}", "cpp.unsupported.pointer-templates"),
     ("template<class T>T f(T p){return p;}int g(){int x=1;f(&x);return 0;}",
@@ -92,3 +91,17 @@ def test_pointer_invalid_and_unimplemented_semantics_fail_closed(source, code):
         CppParser().parse(source, "pointer-negative.cpp")
     assert error.value.code == code
     assert error.value.coord.file == "pointer-negative.cpp"
+
+
+# Exact former negative source, retained as a positive obligation after the
+# fixed-array frontend landed. The uninitialized elements are never read.
+FORMER_UNSUPPORTED_ARRAY_SOURCE = "int f(){int a[2];return 0;}"
+
+
+def test_original_array_declaration_is_a_real_fixed_array():
+    ast = CppParser().parse(FORMER_UNSUPPORTED_ARRAY_SOURCE, "array-now-supported.cpp")
+    declaration = ast.ext[0].body.block_items[0]
+    assert declaration.name == "a" and declaration.init is None
+    assert isinstance(declaration.type, c_ast.ArrayDecl)
+    assert declaration.type.dim.value == "2"
+    assert declaration.type.type.type.names == ["int"]

@@ -27,9 +27,6 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
     so C tentative-definition rules cannot weaken C++'s one-definition check.
     """
     coord = name.coord
-    if parser.language_linkage == "C":
-        raise CppDiagnostic("cpp.unsupported.c-linkage-objects",
-                            "C language linkage objects require cross-namespace identity", coord)
     if name.value == "main" and not parser.scope.namespace_path():
         raise CppDiagnostic("cpp.main-object", "main cannot name a global object", coord)
     if array_type(dtype):
@@ -43,6 +40,7 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
     specifier = storage.value if storage is not None else ("extern" if implicit_extern else None)
     definition = specifier != "extern" or has_initializer
     fresh = Symbol(name.value, "value", coord, dtype=dtype)
+    fresh.requested_language_linkage = parser.language_linkage
     symbol = parser.scope.declare_namespace_object(fresh, definition, specifier)
     first = symbol is fresh
     if first:

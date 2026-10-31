@@ -20,10 +20,14 @@ from tests.cpp.owned_execution import (
     write_host_executable,
 )
 from tests.cpp.test_cpp_grouped_names import owned_only
-from tests.cpp.test_cpp_pointers import NEGATIVE_CASES
+from tests.cpp.test_cpp_pointers import FORMER_UNSUPPORTED_ARRAY_SOURCE, NEGATIVE_CASES
 
 
 CASES = (
+    ("previously-unsupported-array-declaration",
+     FORMER_UNSUPPORTED_ARRAY_SOURCE + "int cpp_test_entry(){return f()+42;}", 42),
+    ("fixed-array-elements-and-pointer-decay",
+     "int cpp_test_entry(){int a[2];a[0]=17;a[1]=25;int*p=a;return p[0]+p[1];}", 42),
     ("address-dereference-mutation-return-call",
      "int *identity(int *p){return p;}int cpp_test_entry(){int x=4;int *p=&x;"
      "*identity(p)=37;return *p+x;}", 74),

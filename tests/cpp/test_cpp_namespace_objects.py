@@ -83,7 +83,6 @@ UNIMPLEMENTED = (
     'int value{42};',
     'int a=1,b=2;',
     'struct S{int value;};S object;',
-    'extern "C" int value;',
     'inline int value=42;',
     'thread_local int value=42;',
     'int value=42;template<class T>T get(T x){return value;}',
@@ -228,3 +227,12 @@ def test_public_namespace_object_artifact_executes_without_external_build_tools(
                             capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
     record_execution(oracle, expected)
+
+
+def test_original_c_object_declaration_is_now_supported_without_source_rewrite():
+    # Exact former capability case; a declaration does not define storage.
+    parser = CppParser()
+    parser.parse('extern "C" int value;')
+    symbol = parser.scope.names['value']
+    assert symbol.language_linkage == "C" and not symbol.defined
+    assert symbol.c_name == symbol.name and symbol.dtype == "int"

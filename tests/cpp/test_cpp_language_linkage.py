@@ -80,7 +80,6 @@ UNSUPPORTED = (
     'extern "Fortran" int f();',
     'extern "C" {static int f(){return 1;}}',
     'namespace {extern "C" int f();}',
-    'extern "C" int x;',
     'int f(){return static_cast<int>(1.5);}',
     'int f(){int x=0;return static_cast<int>(&x);}',
     'template<class T>T f(T x){return static_cast<T>(x);}',
@@ -202,3 +201,12 @@ def test_c_eight_argument_entry_is_observed_by_independent_amd64_assembly(tmp_pa
     oracle = compile_reference_cpp((("entry.cpp", source), ("observer.cpp", helper)),
                                    tmp_path / 'reference', compiler=compiler)
     record_execution(oracle, expected)
+
+
+def test_original_c_object_declaration_is_now_supported_without_source_rewrite():
+    # Exact former capability case; a declaration does not define storage.
+    parser = CppParser()
+    parser.parse('extern "C" int x;')
+    symbol = parser.scope.names['x']
+    assert symbol.language_linkage == "C" and not symbol.defined
+    assert symbol.c_name == symbol.name and symbol.dtype == "int"
