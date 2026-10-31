@@ -44,7 +44,7 @@ remainder require a statically known nonzero divisor (and not signed -1).
 Dynamic/panic-capable division is rejected, never emitted as unsafe raw `sdiv`.
 Shifts are currently rejected instead of silently using a target's shift mask.
 
-Symbols are `__pcc_rust_<name>` and returned in `symbols`; this is **not rustc's
+By default symbols are `__pcc_rust_<name>` and returned in `symbols`; this is **not rustc's
 Rust ABI or symbol mangling**. The finite `extern "C"` scalar boundary uses
 32/64-bit integer parameters and integer/unit return values. All aggregate
 foreign arguments/returns remain rejected, including repr(C), pending a separate
@@ -53,7 +53,7 @@ cross-compiler ABI is claimed; no native Rust standard-library objects are linke
 
 ## Boundaries and next owners
 
-This is not C-level language/ecosystem parity. References/lifetimes/borrowing,
+This is not C-level language/ecosystem parity. General references/lifetimes/borrowing,
 Drop analysis, user-defined Copy, zero-field structs, tuple structs, enums/arrays,
 patterns/match, modules/imports, never-typed tuple operands,
 generics/traits/impls, closures, macros, pointer operations, heap allocation,
@@ -139,8 +139,9 @@ IR layout. This is a permitted implementation choice, **not** a guarantee that
 Rust defaults to C layout, not rustc's layout, and not a stable cross-compiler
 Rust ABI. `#[repr(C)]` is parsed and retained, but does not by itself authorize an
 aggregate foreign signature. No pointer/address/layout reflection is admitted.
-Reference types, packed/aligned/transparent representations and arbitrary field
-projections through pointers remain unsupported.
+General reference types, packed/aligned/transparent representations and arbitrary
+field projections through pointers remain unsupported; the qualified readonly
+repr(C) parameter boundary below is narrower.
 
 Aggregate tests include 16-byte and 24-byte values, nested Copy tuples, unit
 fields and zero-sized values, aggregate-valued branches, source-order
@@ -162,9 +163,9 @@ The unchanged existing Meson `rust/15 polyglot sharedlib/adder.rs` is retained a
 `tests/rust/upstream/meson_adder.rs` with its original blob and SHA-256 recorded
 in the adjacent provenance file. It needs `#[repr(C)]`, a named `Adder` field,
 then extern declarations, `&Adder`, `unsafe`, `no_mangle`, and external `zero`
-symbols. The new parser crosses the struct boundary and explicitly stops at the
-still-unsupported extern block. This is a measured **blocked** upstream input,
-not a successful real-crate integration claim.
+symbols. The first object-boundary integration below now supplies these frontend
+capabilities using the original C definitions. The full shared-library project
+and its allocation dependencies remain unfinished.
 
 The pinned upstream [Rust 1.90.0 core/cmp.rs](https://github.com/rust-lang/rust/blob/1.90.0/library/core/src/cmp.rs)
 contains `Reverse<T>` (line 645), requiring tuple structs, generic parameters,
@@ -182,3 +183,41 @@ rejecting recursive instantiation cycles. Rust name resolution, trait obligation
 coherence, associated types and lifetime constraints remain frontend-owned input
 to that contract. It must not imply a separate language runtime, allocator or GC.
 No private generic engine or runtime has been introduced here.
+
+## First original Rust/C object boundary
+
+The edition-2021-compatible slice admits non-unwinding `extern "C"` (also the
+implicit `extern` spelling), external function declarations, unsafe functions
+and lexical `unsafe {}` blocks. An imported function is unsafe to call and is
+rejected outside an unsafe context; unsafe does not disable any type, move,
+mutability or reference checks. `#[no_mangle]` is supported only on extern C
+definitions and preserves the source name. Other functions retain private PCC
+names; imported symbols preserve the external name. External statics, variadics,
+link attributes and edition-2024 attribute forms are not yet supported.
+
+`C-unwind` is explicitly rejected: there is no owned Rust panic/unwind or
+cross-language exception adapter here. Imported C functions must obey their
+non-unwinding ABI and all declared contracts. No external unwinder is linked.
+
+`&Record` parameters are supported only for an explicit `#[repr(C)]` named
+record whose fields are i32/i64/u32/u64. The two admitted LP64 targets use their
+existing backend's natural scalar struct layout and 64-bit pointer ABI. Field
+reads use typed GEP/load, not a copied struct or a Python object. Shared
+references are Copy, may be forwarded or rebound as values, and never permit
+referent writes. Mutable references, reference creation/dereference/casts,
+reference returns, references stored inside aggregates and lifetime syntax
+remain explicit capability gaps. Default Rust aggregates are not an FFI layout.
+
+This remains **caller-attested compilation, not borrow checking**. The caller
+must supply independently rustc-checked unchanged Rust source. Foreign callers
+must additionally provide nonnull, aligned, initialized, live objects and must
+not mutate the shared referent during its lifetime. The compiler does not prove
+these foreign obligations, add noalias promises, or create a new allocation owner.
+
+The unchanged Meson `adder.rs`, `zero.c` and `zero_static.c` exercise actual Rust
+extern calls into objects from the existing C frontend. Linux tests observe
+12 full result bytes, including a high-bit result and a negative result; a
+separate mixed-width repr(C) reference fixture observes all 8 result bytes.
+Darwin is cross-object/relocation evidence only. This does not compile the whole
+Meson shared-library/malloc/free project, or core/alloc. See the upstream test
+provenance rather than treating a library-shaped fixture as project completion.

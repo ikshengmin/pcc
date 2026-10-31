@@ -6,6 +6,7 @@ from pcc.ir.compat import ir
 from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
 from .targets import RustTarget
+from .types import SharedReference
 
 
 def ir_type(ty: str):
@@ -34,6 +35,8 @@ class Lowerer:
         self.function = None
 
     def type(self, ty):
+        if isinstance(ty, SharedReference):
+            return self.type(ty.referent).as_pointer()
         if self.checker.aggregate(ty):
             # An implementation-private Rust storage choice, not rustc layout
             # or a promise that repr(Rust) has the C ABI. Foreign aggregates
@@ -50,7 +53,9 @@ class Lowerer:
         if expr.kind == "name":
             return self.slots.get(expr.binding.serial)
         if expr.kind == "field":
-            return self.builder.gep(self.place_pointer(expr.children[0]), [
+            base = expr.children[0]
+            pointer = self.expression(base) if isinstance(base.ty, SharedReference) else self.place_pointer(base)
+            return self.builder.gep(pointer, [
                 ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), expr.value)
             ])
         raise expr.token.error("unsupported place")
@@ -58,12 +63,14 @@ class Lowerer:
     def lower(self):
         for fn in self.functions:
             name = fn.token.text
-            symbol = "__pcc_rust_" + name
+            symbol = name if fn.body is None or fn.no_mangle else "__pcc_rust_" + name
             self.symbols[name] = symbol
             # Unit has no payload and is erased at this private calling boundary.
             signature = ir.FunctionType(self.type(fn.result), [self.type(ty) for _, ty, _ in fn.params if ty != "()"])
             self.declarations[name] = ir.Function(self.module, signature, name=symbol)
         for fn in self.functions:
+            if fn.body is None:
+                continue
             self.function = self.declarations[fn.token.text]
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.slots = {}
@@ -98,7 +105,7 @@ class Lowerer:
         if self.builder.block.is_terminated:
             return None
         kind, children = expr.kind, expr.children
-        if kind == "group":
+        if kind in {"group", "unsafe"}:
             return self.expression(children[0])
         if kind == "integer":
             return ir.Constant(self.type(expr.ty), expr.value)
@@ -124,6 +131,11 @@ class Lowerer:
                     self.builder.store(value, field)
             return self.builder.load(pointer)
         if kind == "field":
+            if isinstance(children[0].ty, SharedReference):
+                pointer = self.builder.gep(self.expression(children[0]), [
+                    ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), expr.value)
+                ])
+                return self.builder.load(pointer)
             if self.checker.place(expr) is not None:
                 return None if expr.ty == "()" else self.builder.load(self.place_pointer(expr))
             aggregate = self.expression(children[0])

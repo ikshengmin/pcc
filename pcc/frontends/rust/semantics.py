@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 
 from .syntax import Expr, Function, Record, RustError, Token
-from .types import TupleType
+from .types import SharedReference, TupleType
 
 INTEGERS = {"i32", "i64", "u32", "u64"}
 NEVER = "!"
@@ -25,6 +25,8 @@ class Binding:
 
 
 def resolve(ty: object) -> object:
+    if isinstance(ty, SharedReference):
+        return ty
     if isinstance(ty, TupleType):
         return TupleType(tuple(resolve(item) for item in ty.elements))
     if isinstance(ty, InferredInteger):
@@ -100,6 +102,7 @@ class Checker:
         self.loops = 0
         self.result = "()"
         self.parameters: dict[str, list[Binding]] = {}
+        self.unsafe_depth = 0
 
     def bind(self, token: Token, ty: object, mutable: bool) -> Binding:
         self.serial += 1
@@ -124,17 +127,26 @@ class Checker:
         return isinstance(ty, TupleType) or ty in self.records
 
     def copy_type(self, ty: object) -> bool:
+        if isinstance(ty, SharedReference):
+            return True
         if isinstance(ty, TupleType):
             return all(self.copy_type(item) for item in ty.elements)
         # Named Rust structs do NOT become Copy just because their fields are.
         return ty in INTEGERS | {"bool", "()"}
 
-    def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = ()) -> None:
+    def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
         if ty in INTEGERS | {"bool", "()"}:
+            return
+        if isinstance(ty, SharedReference):
+            if not allow_reference:
+                raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
+            record = self.records.get(ty.referent)
+            if record is None or not record.repr_c or not record.fields or any(field_ty not in INTEGERS for _, field_ty in record.fields):
+                raise token.error("unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields")
             return
         if isinstance(ty, TupleType):
             for item in ty.elements:
-                self.valid_type(item, token, stack)
+                self.valid_type(item, token, stack, allow_reference=False)
             return
         if ty not in self.records:
             raise token.error(f"unsupported Rust type {ty!r}")
@@ -148,7 +160,7 @@ class Checker:
             if field.text in names:
                 raise field.error("duplicate struct field")
             names.add(field.text)
-            self.valid_type(field_ty, field, stack + (ty,))
+            self.valid_type(field_ty, field, stack + (ty,), allow_reference=False)
 
     def place(self, expr: Expr):
         if expr.kind == "group":
@@ -161,24 +173,40 @@ class Checker:
                 return base[0], base[1] + (expr.value,)
         return None
 
+    def through_reference(self, expr: Expr) -> bool:
+        if expr.kind == "group":
+            return self.through_reference(expr.children[0])
+        if expr.kind == "field":
+            return isinstance(expr.children[0].ty, SharedReference) or self.through_reference(expr.children[0])
+        return False
+
     def check(self) -> None:
         for name, record in self.records.items():
             self.valid_type(name, record.token)
         for fn in self.functions:
-            self.valid_type(fn.result, fn.token)
+            self.valid_type(fn.result, fn.token, allow_reference=False)
+            parameter_names = set()
             for token, ty, _ in fn.params:
+                if token.text in parameter_names:
+                    raise token.error(f"duplicate parameter {token.text!r}")
+                parameter_names.add(token.text)
                 self.valid_type(ty, token)
             name = fn.token.text
             if name in self.names:
                 raise fn.token.error(f"duplicate function {name!r}")
             if name.startswith("__pcc_rust_"):
                 raise fn.token.error("reserved PCC Rust symbol prefix")
+            if fn.no_mangle and fn.abi != "C":
+                raise fn.token.error("no_mangle is supported only on extern C function definitions")
             self.names[name] = fn
-            if fn.abi == "C" and (any(ty not in INTEGERS for _, ty, _ in fn.params) or fn.result not in INTEGERS | {"()"}):
-                raise fn.token.error("extern C currently supports only i32/i64/u32/u64 parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape")
+            if fn.abi == "C" and (any(ty not in INTEGERS and not isinstance(ty, SharedReference) for _, ty, _ in fn.params) or fn.result not in INTEGERS | {"()"}):
+                raise fn.token.error("extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape")
         for fn in self.functions:
+            if fn.body is None:
+                continue
             self.scopes = [{}]
             self.result = fn.result
+            self.unsafe_depth = int(fn.unsafe)
             params: list[Binding] = []
             for name, ty, mutable in fn.params:
                 if name.text in self.scopes[0]:
@@ -218,6 +246,8 @@ class Checker:
             elements = tuple(self.expression(child) for child in children)
             if NEVER in elements:
                 raise expr.token.error("diverging tuple operands require never-type layout support, which is not implemented")
+            if any(isinstance(item, SharedReference) for item in elements):
+                raise expr.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
             ty = TupleType(elements)
         elif kind == "construct":
             record = self.records.get(expr.token.text)
@@ -241,6 +271,8 @@ class Checker:
             ty = record.token.text
         elif kind == "field":
             base_ty = self.expression(children[0])
+            if isinstance(base_ty, SharedReference):
+                base_ty = base_ty.referent
             if isinstance(base_ty, TupleType):
                 if not str(expr.value).isdecimal() or int(expr.value) >= len(base_ty.elements):
                     raise expr.token.error("unknown tuple field")
@@ -273,6 +305,10 @@ class Checker:
             else:
                 ty = NEVER if diverges else "()"
             self.scopes.pop()
+        elif kind == "unsafe":
+            self.unsafe_depth += 1
+            ty = self.expression(children[0])
+            self.unsafe_depth -= 1
         elif kind == "call":
             callee = children[0]
             while callee.kind == "group":
@@ -282,6 +318,8 @@ class Checker:
             fn = self.names.get(str(callee.value))
             if fn is None:
                 raise callee.token.error(f"unknown function {callee.value!r}")
+            if fn.unsafe and not self.unsafe_depth:
+                raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
             if len(children) - 1 != len(fn.params):
                 raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
             expr.binding = fn
@@ -312,6 +350,8 @@ class Checker:
             place = self.place(lhs)
             if place is None:
                 raise lhs.token.error("assignment target must be a local binding or field")
+            if self.through_reference(lhs):
+                raise lhs.token.error("cannot assign through a shared reference")
             if not place[0].mutable:
                 raise lhs.token.error(f"cannot assign to immutable binding {place[0].name!r}")
             unify(target, self.expression(children[1]), expr.token)

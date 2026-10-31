@@ -10,3 +10,11 @@ class TupleType:
 
     def __str__(self) -> str:
         return "(" + ", ".join(str(item) for item in self.elements) + ",)"
+
+
+@dataclass(frozen=True)
+class SharedReference:
+    referent: object
+
+    def __str__(self) -> str:
+        return "&" + str(self.referent)

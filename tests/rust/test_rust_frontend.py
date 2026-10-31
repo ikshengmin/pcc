@@ -122,7 +122,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("fn f(){ let x=Box::new(1); }", "expected ';'"),
     ("fn f(){ 1<<2; }", "expected ';'"),
     ("extern \"C\" fn f(x:bool){}", "extern C currently supports"),
-    ("#[no_mangle] fn f(){}", "unsupported Rust attribute"),
+    ("#[no_mangle] fn f(){}", "no_mangle is supported only on extern C"),
     ("fn __pcc_rust_bad(){}", "reserved"),
 ])
 def test_strict_diagnostics(source, message):

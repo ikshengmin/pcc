@@ -136,12 +136,15 @@ def test_parenthesized_struct_in_unary_condition_is_accepted(keyword, condition)
     assert "define" in compile_source("struct P{x:bool} struct N{x:i32} fn f(){" + keyword + " " + condition + " {}}").ir_text
 
 
-def test_upstream_meson_adder_is_unchanged_and_stops_at_next_real_boundary():
+def test_upstream_meson_adder_is_unchanged_and_lowers_declared_foreign_calls():
     path = Path(__file__).parent / "upstream" / "meson_adder.rs"
     source = path.read_bytes()
     assert hashlib.sha256(source).hexdigest() == "654d4f498384c21d51627908a842fe8454e5918ef7ba9317a740d7623c9c0933"
-    with pytest.raises(RustError, match="external function declarations"):
-        compile_source(source.decode())
+    result = compile_source(source.decode())
+    assert "declare i32 @zero()" in result.ir_text
+    assert "declare i32 @zero_static()" in result.ir_text
+    assert "getelementptr { i32 }" in result.ir_text
+    assert result.symbols["adder_add_r"] == "adder_add_r"
 
 
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith("linux") and platform.machine() in {"x86_64", "AMD64"} else "requires Linux x86-64 owned execution")

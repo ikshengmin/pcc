@@ -48,6 +48,8 @@ class MoveChecker:
 
     def check(self) -> None:
         for function in self.checker.functions:
+            if function.body is None:
+                continue
             state = {binding.serial: set() for binding in self.checker.parameters[function.token.text]}
             self.expression(function.body, state)
 
@@ -84,7 +86,7 @@ class MoveChecker:
             if result is not None:
                 result[expr.binding.serial] = set()
             return result
-        if kind in {"discard", "statement", "cast", "unary"}:
+        if kind in {"discard", "statement", "cast", "unary", "unsafe"}:
             return self.expression(children[0], state)
         if kind == "assign":
             result = self.expression(children[1], state)

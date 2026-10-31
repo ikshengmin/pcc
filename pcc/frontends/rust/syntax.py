@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .types import TupleType
+from .types import SharedReference, TupleType
 
 
 class RustError(ValueError):
@@ -121,11 +121,13 @@ class Expr:
 @dataclass
 class Function:
     token: Token
-    params: list[tuple[Token, str, bool]]
-    result: str
-    body: Expr
+    params: list[tuple[Token, object, bool]]
+    result: object
+    body: Expr | None
     abi: str = "Rust"
     public: bool = False
+    no_mangle: bool = False
+    unsafe: bool = False
 
 
 @dataclass
@@ -174,6 +176,10 @@ class Parser:
     def type(self) -> object:
         token = self.take()
         text = token.text
+        if text == "&":
+            if self.token.text == "mut":
+                raise self.token.error("mutable references and borrow checking are not implemented")
+            return SharedReference(self.type())
         if text == "(":
             if self.accept(")"):
                 return "()"
@@ -215,49 +221,73 @@ class Parser:
             self.expect("no_std")
             self.expect("]")
         while self.token.kind != "eof":
-            repr_c = False
-            if self.accept("#"):
+            repr_c = no_mangle = False
+            while self.accept("#"):
                 self.expect("[")
                 attribute = self.take()
-                if attribute.text != "repr":
-                    raise attribute.error("unsupported Rust attribute; only repr(C) records are admitted")
-                self.expect("(")
-                self.expect("C")
-                self.expect(")")
+                if attribute.text == "repr" and not repr_c:
+                    self.expect("(")
+                    self.expect("C")
+                    self.expect(")")
+                    repr_c = True
+                elif attribute.text == "no_mangle" and not no_mangle:
+                    no_mangle = True
+                else:
+                    raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                 self.expect("]")
-                repr_c = True
             public = self.accept("pub")
             if self.accept("struct"):
+                if no_mangle:
+                    raise self.token.error("no_mangle is supported only on extern C function definitions")
                 self.record(repr_c)
                 continue
             if repr_c:
                 raise self.token.error("repr(C) applies only to a struct")
+            unsafe = self.accept("unsafe")
             abi = "Rust"
             if self.accept("extern"):
-                token = self.take()
-                if token.kind != "string" or token.text != "C":
-                    raise token.error('only extern "C" function definitions are supported')
+                if self.token.kind == "string":
+                    token = self.take()
+                    if token.text == "C-unwind":
+                        raise token.error("C-unwind requires owned cross-language unwinding, which is not implemented")
+                    if token.text != "C":
+                        raise token.error('only the non-unwinding extern "C" ABI is supported')
                 abi = "C"
-                if self.token.text == "{":
-                    raise self.token.error("external function declarations are not implemented")
-            self.expect("fn")
-            name = self.name()
-            self.expect("(")
-            params: list[tuple[Token, str, bool]] = []
-            if not self.accept(")"):
-                while True:
-                    mutable = self.accept("mut")
-                    param = self.name()
-                    self.expect(":")
-                    params.append((param, self.type(), mutable))
-                    if self.accept(")"):
-                        break
-                    self.expect(",")
-                    if self.accept(")"):
-                        break
-            result = self.type() if self.accept("->") else "()"
-            functions.append(Function(name, params, result, self.block(), abi, public))
+                if self.accept("{"):
+                    if no_mangle or public:
+                        raise self.token.error("attributes and visibility on extern blocks are not supported")
+                    while not self.accept("}"):
+                        visible = self.accept("pub")
+                        functions.append(self.function("C", visible, False, True, declaration=True))
+                    continue
+            functions.append(self.function(abi, public, no_mangle, unsafe))
         return functions
+
+    def function(self, abi, public, no_mangle, unsafe, declaration=False) -> Function:
+        self.expect("fn")
+        name = self.name()
+        self.expect("(")
+        params = []
+        if not self.accept(")"):
+            while True:
+                mutable = self.accept("mut")
+                if declaration and mutable:
+                    raise self.token.error("extern declarations cannot contain parameter patterns")
+                param = self.name()
+                self.expect(":")
+                params.append((param, self.type(), mutable))
+                if self.accept(")"):
+                    break
+                self.expect(",")
+                if self.accept(")"):
+                    break
+        result = self.type() if self.accept("->") else "()"
+        if declaration:
+            self.expect(";")
+            body = None
+        else:
+            body = self.block()
+        return Function(name, params, result, body, abi, public, no_mangle, unsafe)
 
     def block(self) -> Expr:
         token = self.expect("{")
@@ -283,7 +313,7 @@ class Parser:
             elif self.token.text == "}":
                 tail = expr
                 break
-            elif expr.kind in {"if", "block", "while"}:
+            elif expr.kind in {"if", "block", "while", "unsafe"}:
                 statements.append(Expr("statement", expr.token, children=[expr]))
             else:
                 raise self.token.error("expected ';' or end of block")
@@ -316,6 +346,8 @@ class Parser:
         elif text == "{":
             self.pos -= 1
             expr = self.block()
+        elif text == "unsafe":
+            expr = Expr("unsafe", token, children=[self.block()])
         elif text == "if":
             condition = self.expression(allow_struct=False)
             yes = self.block()
