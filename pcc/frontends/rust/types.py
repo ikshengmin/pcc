@@ -18,3 +18,24 @@ class SharedReference:
 
     def __str__(self) -> str:
         return "&" + str(self.referent)
+
+
+@dataclass(frozen=True)
+class TypeApplication:
+    """Nominal application, resolved within one declaration-owning checker."""
+    name: str
+    arguments: tuple[object, ...]
+
+    def __str__(self) -> str:
+        return self.name + "<" + ", ".join(map(str, self.arguments)) + ">"
+
+
+@dataclass(frozen=True)
+class TypeParameter:
+    """A declaration-bound type variable, never a runtime value or IR type."""
+    owner: str
+    index: int
+    name: str
+
+    def __str__(self) -> str:
+        return self.name

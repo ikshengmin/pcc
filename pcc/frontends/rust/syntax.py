@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .types import SharedReference, TupleType
+from .types import SharedReference, TupleType, TypeApplication
 
 
 class RustError(ValueError):
@@ -135,6 +135,7 @@ class Record:
     token: Token
     fields: list[tuple[Token, object]]
     repr_c: bool = False
+    type_parameters: tuple[Token, ...] = ()
 
 
 @dataclass
@@ -144,6 +145,7 @@ class Enumeration:
     representation: str | None = None
     discriminants: dict[str, int] = field(default_factory=dict)
     payloads: dict[str, tuple[object, ...]] = field(default_factory=dict)
+    type_parameters: tuple[Token, ...] = ()
 
 
 @dataclass
@@ -168,6 +170,7 @@ class Parser:
         self.pos = 0
         self.records: list[Record] = []
         self.enums: list[Enumeration] = []
+        self.type_argument_depth = 0
 
     @property
     def token(self) -> Token:
@@ -216,11 +219,81 @@ class Parser:
                 self.expect(",")
             return TupleType(tuple(elements))
         if text in _TYPES or (token.kind == "name" and text != "_"):
+            if self.token.text == "<":
+                return TypeApplication(text, self.type_arguments())
             return text
         raise token.error(f"unsupported Rust type {text!r}; references and traits are not implemented")
 
+    def generic_close(self) -> bool:
+        # Rust punctuation is split only in a type-argument context. Keep the
+        # remainder (including '=') with its own original source coordinate.
+        token = self.token
+        if token.text == ">":
+            self.take()
+            return True
+        if token.text in {">>", ">=", ">>="}:
+            self.tokens[self.pos] = Token(token.text[1:], token.kind,
+                                          token.line, token.column + 1)
+            return True
+        return False
+
+    def type_arguments(self) -> tuple[object, ...]:
+        start = self.expect("<")
+        self.type_argument_depth += 1
+        if self.type_argument_depth > 16:
+            raise start.error("generic argument nesting exceeds implementation limit (16)")
+        if self.generic_close():
+            raise start.error("empty/inferred generic arguments are not implemented; supply explicit types")
+        arguments = []
+        try:
+            while True:
+                arguments.append(self.type())
+                if len(arguments) > 16:
+                    raise start.error("generic argument count exceeds implementation limit (16)")
+                if self.generic_close():
+                    return tuple(arguments)
+                self.expect(",")
+                if self.generic_close():
+                    return tuple(arguments)
+        finally:
+            self.type_argument_depth -= 1
+
+    def generic_parameters(self) -> tuple[Token, ...]:
+        if not self.accept("<"):
+            return ()
+        if self.token.text == ">":
+            raise self.token.error("empty generic parameter lists are not implemented")
+        parameters = []
+        while True:
+            if self.token.text == "const":
+                raise self.token.error("const generic parameters are not implemented")
+            parameters.append(self.name())
+            if len(parameters) > 16:
+                raise parameters[-1].error("generic parameter count exceeds implementation limit (16)")
+            if self.token.text in {":", "="}:
+                raise self.token.error("generic bounds and default arguments require trait/constraint checking, which is not implemented")
+            if self.accept(">"):
+                break
+            self.expect(",")
+            if self.accept(">"):
+                break
+        return tuple(parameters)
+
+    def expression_path(self, token: Token) -> tuple[object, str | None]:
+        owner = token.text
+        if not self.accept("::"):
+            return owner, None
+        if self.token.text == "<":
+            owner = TypeApplication(owner, self.type_arguments())
+            if not self.accept("::"):
+                return owner, None
+        return owner, self.name().text
+
     def record(self, repr_c: bool) -> None:
         name = self.name()
+        parameters = self.generic_parameters()
+        if self.token.text == "where":
+            raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
         fields = []
         while not self.accept("}"):
@@ -231,7 +304,7 @@ class Parser:
             if self.accept("}"):
                 break
             self.expect(",")
-        self.records.append(Record(name, fields, repr_c))
+        self.records.append(Record(name, fields, repr_c, parameters))
 
     def parse(self) -> list[Function]:
         functions: list[Function] = []
@@ -300,6 +373,8 @@ class Parser:
     def function(self, abi, public, no_mangle, unsafe, declaration=False) -> Function:
         self.expect("fn")
         name = self.name()
+        if self.token.text == "<":
+            raise self.token.error("generic functions require abstract body checking, which is not implemented")
         self.expect("(")
         params = []
         if not self.accept(")"):
@@ -418,10 +493,11 @@ class Parser:
         elif text in {"-", "!"}:
             expr = Expr("unary", token, text, [self.expression(12, allow_struct=allow_struct)])
         elif token.kind == "name" and text != "_":
-            if self.accept("::"):
-                expr = Expr("variant", token, (text, self.name().text))
+            owner, variant = self.expression_path(token)
+            if variant is not None:
+                expr = Expr("variant", token, (owner, variant))
             else:
-                expr = Expr("name", token, text)
+                expr = Expr("name", token, owner)
         else:
             raise token.error(f"unsupported expression {text!r}; borrowing, heap, macros and panic are not implemented")
         while True:
@@ -435,7 +511,7 @@ class Parser:
                     if self.accept("}"):
                         break
                     self.expect(",")
-                expr = Expr("construct", expr.token, fields, values)
+                expr = Expr("construct", expr.token, fields, values, binding=expr.value)
                 continue
             if self.token.text == ".":
                 self.take()
@@ -473,6 +549,9 @@ class Parser:
 
     def enumeration(self, representation) -> None:
         name = self.name()
+        parameters = self.generic_parameters()
+        if self.token.text == "where":
+            raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
         variants, payloads = [], {}
         while not self.accept("}"):
@@ -498,7 +577,8 @@ class Parser:
             raise name.error("empty enums require uninhabited-type analysis, which is not implemented")
         if payloads and representation is None and any(value is not None for _, value in variants):
             raise name.error("explicit discriminants on an enum with payloads require an integer repr")
-        self.enums.append(Enumeration(name, variants, representation, payloads=payloads))
+        self.enums.append(Enumeration(name, variants, representation, payloads=payloads,
+                                      type_parameters=parameters))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:
@@ -538,8 +618,11 @@ class Parser:
                 self.take()
                 value = Expr("bool", token, token.text == "true")
             result = Pattern("literal", token, value)
-        elif token.kind == "name" and self.accept("::"):
-            result = Pattern("variant", token, (token.text, self.name().text))
+        elif token.kind == "name" and self.token.text == "::":
+            owner, variant = self.expression_path(token)
+            if variant is None:
+                raise token.error("generic type path is not a value binding pattern")
+            result = Pattern("variant", token, (owner, variant))
             if self.accept("("):
                 result.kind = "payload"
                 while not self.accept(")"):

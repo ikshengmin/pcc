@@ -5,14 +5,14 @@ partitions plus an explicit other-value class. This is not match ergonomics,
 a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, bounds, resolve, unify
-from .types import TupleType
+from .types import TupleType, TypeApplication
 
 MAX_PATTERN_ROWS = 512
 MAX_COVERAGE_STEPS = 65536
 
 
-def check_enums(checker):
-    for enum in checker.enums.values():
+def check_enums(checker, declarations=None):
+    for enum in checker.enums.values() if declarations is None else declarations:
         previous = -1
         seen = set()
         for token, expr in enum.variants:
@@ -76,6 +76,9 @@ def check_pattern(checker, pattern, ty):
         unify(ty, checker.expression(pattern.value), pattern.token)
     elif pattern.kind in {"variant", "payload"}:
         name, variant = pattern.value
+        if isinstance(name, TypeApplication) or name in checker.generics.definitions:
+            name = checker.generics.path_type(name, pattern.token, expected=ty)
+            checker.valid_type(name, pattern.token)
         enum = checker.enums.get(name)
         if enum is None or variant not in enum.discriminants:
             raise pattern.token.error("unknown enum variant pattern")

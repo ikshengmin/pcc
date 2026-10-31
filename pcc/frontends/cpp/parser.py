@@ -10,6 +10,7 @@ semantics. Unimplemented features remain explicit errors.
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
+from pcc.support.instantiation import InstanceRegistry
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.declarators import (
     DeclaratorParser, parse_cv_qualifiers, parse_qualified_name,
@@ -148,8 +149,9 @@ class CppParser:
         self.template_function = None
         self.parsing_template = False
         self.instantiating_template = False
-        self.pending_instances = []
+        self.instance_registry = InstanceRegistry()
         self.loop_depth = 0
+        self.switch_contexts = []
         self.assignment_index = 0
         self.local_projection_index = 0
         self.function_projection_names = set()
@@ -163,12 +165,9 @@ class CppParser:
             if symbol.internal_linkage and not symbol.defined:
                 raise CppDiagnostic("cpp.unsupported.internal-object-declaration",
                                     "undefined internal objects need ODR-use tracking", symbol.coord)
-        instances = []
-        index = 0
-        while index < len(self.pending_instances):
-            instance, request_coord = self.pending_instances[index]
-            instances.append(self._instantiate_body(instance, request_coord))
-            index += 1
+        instances = self.instance_registry.drain(
+            lambda entry: self._instantiate_body(entry.value, entry.context),
+        )
         if instances:
             # Instances may call declarations appearing anywhere earlier in
             # the source definition context. Publish ordinary C prototypes,
@@ -182,6 +181,12 @@ class CppParser:
                     names.add(decl.name)
             return c_ast.FileAST(prototypes + declarations + instances)
         return c_ast.FileAST(declarations)
+
+    @property
+    def pending_instances(self):
+        # Compatibility inspection only: the shared registry is the sole
+        # registration/state/worklist owner. This is not a second queue.
+        return self.instance_registry.pending
 
     def _declarations(self, namespace_body=False, single=False):
         declarations = []
@@ -757,6 +762,10 @@ class CppParser:
                                     "C function type with internal name linkage is not implemented", name.coord)
         registry = self.scope if declaration_scope is None else declaration_scope
         symbol = registry.declare_function(new_symbol, definition)
+        if template_parameters:
+            # Sema may inspect viable signatures without registering work.
+            # Only the selected call requests an entry in this shared owner.
+            symbol.instances = self.instance_registry.value_view(symbol)
         self.function_projection_names.add(symbol.c_name)
         for parameter in parameter_symbols:
             if parameter is not None:
@@ -848,6 +857,12 @@ class CppParser:
         if token.value in ("using", "typedef"):
             self._alias()
             return None
+        if token.value == "switch":
+            from pcc.frontends.cpp.switches import parse_switch
+            return parse_switch(self)
+        if token.value in ("case", "default"):
+            from pcc.frontends.cpp.switches import parse_case
+            return parse_case(self)
         if token.value == "if":
             self.cursor.take()
             condition = self._condition()
@@ -861,6 +876,8 @@ class CppParser:
             return c_ast.If(condition.node, consequent, alternative, token.coord)
         if token.value == "for":
             return self._for_statement()
+        if token.value == "do":
+            return self._do_while_statement()
         if token.value == "while":
             self.cursor.take()
             condition = self._condition()
@@ -874,7 +891,7 @@ class CppParser:
             return c_ast.While(condition.node, body, token.coord)
         if token.value in ("break", "continue"):
             self.cursor.take()
-            if not self.loop_depth:
+            if not self.loop_depth and not (token.value == "break" and self.switch_contexts):
                 raise CppDiagnostic("cpp.jump-outside-loop",
                                     token.value + " is not inside an implemented loop", token.coord)
             self._expect(";")
@@ -909,6 +926,7 @@ class CppParser:
                     raise CppDiagnostic("cpp.const-initializer", "const array elements require initialization", name.coord)
                 self._expect(";")
                 symbol.initialization_complete = True
+                symbol.jump_entry = "uninitialized" if init is None else "initialized"
                 return self._decl(symbol.c_name, dtype, name.coord, init)
             if is_class_type(dtype):
                 if self.template_function is not None:
@@ -925,6 +943,7 @@ class CppParser:
                 else:
                     init = default_initialize(dtype, name.coord)
                 self._expect(";")
+                symbol.jump_entry = "class-default" if init is None else "initialized"
                 return self._decl(symbol.c_name, dtype, name.coord, init)
             if self._accept("="):
                 if is_enum_type(dtype) and self._peek().value == "{":
@@ -954,6 +973,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.for-declaration-list",
                                     "multiple init-declarators are not implemented", self._peek().coord)
             self._expect(";")
+            symbol.jump_entry = "uninitialized" if initializer is None else "initialized"
             if self.template_function is not None:
                 return Pattern("decl", name.coord, symbol,
                                [] if initializer is None else [initializer])
@@ -1024,9 +1044,28 @@ class CppParser:
         return c_ast.Compound([c_ast.For(init, None if condition is None else condition.node,
                                          step, body, start.coord)], start.coord)
 
-    def _condition(self):
+    def _do_while_statement(self):
+        start = self._expect("do")
+        self.loop_depth += 1
+        try:
+            body = self._substatement()
+        finally:
+            self.loop_depth -= 1
+        self._expect("while")
+        # Unlike while/for, this grammar requires an expression, not a
+        # condition-declaration. The body's scope has already ended here.
+        condition = self._condition(allow_declaration=False)
+        self._expect(";")
+        if self.template_function is not None:
+            return Pattern("do-while", start.coord, children=[condition, body])
+        return c_ast.DoWhile(condition.node, body, start.coord)
+
+    def _condition(self, allow_declaration=True):
         self._expect("(")
         if self._is_declaration():
+            if not allow_declaration:
+                raise CppDiagnostic("cpp.invalid-do-condition",
+                                    "do-while requires an expression, not a declaration", self._peek().coord)
             raise CppDiagnostic("cpp.unsupported.condition-declaration",
                                 "condition declarations and init-statements are not implemented",
                                 self._peek().coord)
@@ -1558,12 +1597,10 @@ class CppParser:
         selected = resolve_overload(group, argument_types, self.types, coord, null_constants)
         if selected.template_origin is not None:
             origin = selected.template_origin
-            cached = origin.instances.get(selected.template_arguments)
-            if cached is None:
-                origin.instances[selected.template_arguments] = selected
-                self.pending_instances.append((selected, coord))
-            else:
-                selected = cached
+            entry = self.instance_registry.request(
+                (origin, selected.template_arguments), selected, context=coord,
+            )
+            selected = entry.value
         converted = [self._convert(arg, dtype, coord)
                      for arg, dtype in zip(arguments, selected.parameters)]
         dtype = unqualified(selected.dtype)
@@ -1762,6 +1799,10 @@ class CppParser:
         if kind == "discarded-sequence":
             return c_ast.ExprList([self._instantiate_expression(child, bindings, environment).node
                                    for child in pattern.children], coord)
+        if kind == "do-while":
+            condition = self._instantiate_expression(pattern.children[0], bindings, environment)
+            body = self._instantiate_statement(pattern.children[1], bindings, dict(environment))
+            return c_ast.DoWhile(condition.node, body, coord)
         if kind == "while":
             condition = self._instantiate_expression(pattern.children[0], bindings, environment)
             body = self._instantiate_statement(pattern.children[1], bindings, environment)

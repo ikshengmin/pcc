@@ -117,7 +117,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("fn f(){ panic!(); }", "expected ';'"),
     ("trait T {}", "expected 'fn'"),
     ("struct S {}", "zero-field structs"),
-    ("fn f<T>(x:T){}", "expected '('"),
+    ("fn f<T>(x:T){}", "generic functions require abstract body checking"),
     ("fn f(){ [1,2]; }", "unsupported expression"),
     ("fn f(){ let x=Box::new(1); }", "unknown enum constructor"),
     ("fn f(){ 1<<2; }", "expected ';'"),

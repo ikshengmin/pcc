@@ -5,6 +5,8 @@ a local value hides an outer type name; searching onwards for a typedef would
 misparse C++ declaration/expression ambiguities.
 """
 
+from types import MappingProxyType
+
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
     ConstType, array_type, is_enum_type, mangle_function, mangle_object, pointer_type, unqualified,
@@ -31,7 +33,9 @@ class Symbol:
         self.template_arguments = ()
         self.pattern = None
         self.parameter_symbols = []
-        self.instances = {}
+        # Canonical template declarations bind the shared registry's value
+        # view. Speculative signatures have no independent writable cache.
+        self.instances = MappingProxyType({})
         self.owner = None
         self.namespace_scope = None
         self.internal_linkage = False

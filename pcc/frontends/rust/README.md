@@ -280,3 +280,55 @@ There is no heap allocation or private drop/GC/unwind runtime. Full original
 Rust 1.90.0 Option/Result inputs still fail at documentation attributes and need
 generics, derives, impls, macros, lang items, references and owned intrinsics;
 the six original PCC payload programs are separate specification fixtures.
+# Generic data declaration contract
+
+Named structs and tuple-payload enums may declare unconstrained type parameters.
+Type positions use explicit applications (`Wrap<u64>`); constructors use Rust
+turbofish syntax (`Wrap::<u64> { value: 7 }`, `Maybe::<u64>::Some(7)`). An enum
+pattern may use `Maybe::Some(value)` when the scrutinee already supplies that
+exact nominal instance. Constructor inference, `_` arguments, generic functions,
+impl/methods, trait bounds, defaults, where clauses, lifetimes and const generics
+remain explicit unsupported capabilities, not erased syntax.
+
+This is a declaration-checked type facility, not C++ template-body deferral:
+**every** data declaration is resolved and checked, even if unused. Duplicate or
+unused parameters, missing types, wrong arity and recursive/growing value layouts
+are rejected before lowering. Generic function declarations are rejected outright
+until abstract body checking and trait obligations exist; an invalid unused body
+cannot evade checking by never being instantiated.
+
+The shared `pcc.support.instantiation.InstanceRegistry` owns registration,
+placeholder identity, failure state and deterministic FIFO materialization inside
+one checker context. C++ uses the same worklist for selected function instances;
+its in-progress recursive function placeholders are not rejected as Rust layout
+cycles. Rust declaration/finite-layout checks, type identity and resource limits
+remain frontend-owned. The key is definition identity plus complete type arguments;
+neither in-memory identity keys nor type parameters become IR values.
+Substitution creates independent field/payload types; equal machine widths do not
+unify different nominal instances. The existing move/partial-move, match coverage,
+evaluation order and Copy rules then apply unchanged: a named generic struct/enum
+is not implicitly Copy, and unsupported references/Drop are not synthesized away.
+Concrete types lower through the existing public IR and selected target layout.
+There is no global cross-target layout cache, generic runtime, allocator or new
+calling convention. Generic `&repr(C)` instances remain unqualified for foreign
+calls; private aggregate values do not promise rustc or C layout.
+
+Implementation limits are explicit: 16 parameters/arguments, 16 nested argument
+lists, 128 logical nodes per expanded type, 128 concrete data instances, and 4096
+layout steps / 32 declaration-expansion depth. These stop growing recursive types
+without turning recursion overflow into acceptance. Bounds and generic-body
+obligations must be added to the same semantic contract before generic methods,
+functions or closure/dispatch specialization can use it.
+
+The full pinned Rust 1.90.0 `option.rs` / `result.rs` remain unchanged dependency
+evidence (see `tests/rust/upstream/README.md` and original dual licenses). Their
+generic enum declarations at lines 593 and 548 motivate this domain, but their
+first documentation-attribute frontier, imports, derives, impl/methods, trait and
+closure bounds, references, lang items and intrinsics are still unmet. Authored
+generic programs are specification fixtures, **not** original core/alloc success.
+Optional rustc checks remain unavailable when the tool is absent; the public flag
+is only caller attestation, never proof that PCC checked ownership or lifetimes.
+
+References: [generic parameters](https://doc.rust-lang.org/reference/items/generics.html),
+[expression/pattern paths](https://doc.rust-lang.org/reference/paths.html),
+[unused parameters](https://doc.rust-lang.org/error_codes/E0392.html).

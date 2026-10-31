@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 
 from .syntax import Enumeration, Expr, Function, Record, RustError, Token
-from .types import SharedReference, TupleType
+from .types import SharedReference, TupleType, TypeApplication
 
 INTEGERS = {"i32", "i64", "u32", "u64"}
 NEVER = "!"
@@ -25,7 +25,7 @@ class Binding:
 
 
 def resolve(ty: object) -> object:
-    if isinstance(ty, SharedReference):
+    if isinstance(ty, (SharedReference, TypeApplication)):
         return ty
     if isinstance(ty, TupleType):
         return TupleType(tuple(resolve(item) for item in ty.elements))
@@ -109,6 +109,8 @@ class Checker:
         self.result = "()"
         self.parameters: dict[str, list[Binding]] = {}
         self.unsafe_depth = 0
+        from .generics import GenericDeclarations
+        self.generics = GenericDeclarations(self)
 
     def bind(self, token: Token, ty: object, mutable: bool) -> Binding:
         self.serial += 1
@@ -141,6 +143,8 @@ class Checker:
         return ty in INTEGERS | {"bool", "()"}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
+        if isinstance(ty, TypeApplication):
+            self.generics.instantiate(ty, token)
         if ty in INTEGERS | {"bool", "()"}:
             return
         if ty in self.enums:
@@ -153,6 +157,8 @@ class Checker:
         if isinstance(ty, SharedReference):
             if not allow_reference:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
+            if isinstance(ty.referent, TypeApplication):
+                raise token.error("generic shared-reference ABI requires separate per-instance qualification")
             record = self.records.get(ty.referent)
             if record is None or not record.repr_c or not record.fields or any(field_ty not in INTEGERS for _, field_ty in record.fields):
                 raise token.error("unsupported Rust type: shared references currently require a repr(C) record containing only i32/i64/u32/u64 fields")
@@ -196,12 +202,17 @@ class Checker:
     def check(self) -> None:
         from .patterns import check_enums
 
-        check_enums(self)
-        for name, enum in self.enums.items():
+        self.generics.prepare()
+        check_enums(self, self.generics.enum_definitions)
+        self.generics.check_layouts()
+        for name, enum in list(self.enums.items()):
             self.valid_type(name, enum.token)
-        for name, record in self.records.items():
+        for name, record in list(self.records.items()):
             self.valid_type(name, record.token)
         for fn in self.functions:
+            fn.result = self.generics.normalize(fn.result, fn.token)
+            fn.params = [(token, self.generics.normalize(ty, token), mutable)
+                         for token, ty, mutable in fn.params]
             self.valid_type(fn.result, fn.token, allow_reference=False)
             parameter_names = set()
             for token, ty, _ in fn.params:
@@ -244,6 +255,9 @@ class Checker:
             ty = "bool"
         elif kind == "variant":
             enum_name, variant = expr.value
+            if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions:
+                enum_name = self.generics.path_type(enum_name, expr.token)
+                self.valid_type(enum_name, expr.token)
             enum = self.enums.get(enum_name)
             if enum is None or variant not in enum.discriminants:
                 raise expr.token.error("unknown enum variant")
@@ -260,6 +274,7 @@ class Checker:
                 if init_ty == NEVER:
                     raise expr.token.error("diverging let initializers are not implemented")
                 if annotation is not None:
+                    annotation = self.generics.normalize(annotation, expr.token)
                     self.valid_type(annotation, expr.token)
                     unify(annotation, init_ty, expr.token)
                     init_ty = annotation
@@ -278,7 +293,9 @@ class Checker:
                 raise expr.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
             ty = TupleType(elements)
         elif kind == "construct":
-            record = self.records.get(expr.token.text)
+            record_name = self.generics.path_type(expr.binding, expr.token)
+            self.valid_type(record_name, expr.token)
+            record = self.records.get(record_name)
             if record is None:
                 raise expr.token.error(f"unknown struct {expr.token.text!r}")
             provided = set()
@@ -296,7 +313,7 @@ class Checker:
             if provided != set(names):
                 raise expr.token.error("missing struct field initializer")
             expr.value = indices
-            ty = record.token.text
+            ty = record_name
         elif kind == "field":
             base_ty = self.expression(children[0])
             if isinstance(base_ty, SharedReference):
@@ -343,6 +360,9 @@ class Checker:
                 callee = callee.children[0]
             if callee.kind == "variant":
                 enum_name, variant = callee.value
+                if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions:
+                    enum_name = self.generics.path_type(enum_name, callee.token)
+                    self.valid_type(enum_name, callee.token)
                 enum = self.enums.get(enum_name)
                 if enum is None or variant not in enum.discriminants:
                     raise callee.token.error("unknown enum constructor")
@@ -356,6 +376,8 @@ class Checker:
                 expr.kind, expr.value, expr.children = "enum_construct", variant, children[1:]
                 expr.ty = enum_name
                 return enum_name
+            if isinstance(callee.value, TypeApplication):
+                raise callee.token.error("generic functions require abstract body checking, which is not implemented")
             if callee.kind != "name" or self.local(str(callee.value)) is not None:
                 raise callee.token.error("only unshadowed direct function calls are supported")
             fn = self.names.get(str(callee.value))
