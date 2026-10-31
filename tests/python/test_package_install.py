@@ -5,6 +5,7 @@ import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -381,7 +382,10 @@ def test_local_install_overlays_pcc_meson_build_payload(tmp_path):
     assert (tmp_path / "cache" / "demo_pkg" / "generated.py").exists()
 
 
+@pytest.mark.pcc_gate(unavailable=None if shutil.which("ninja") else "host-reference source-build test requires real Ninja")
 def test_local_install_can_build_source_before_overlay(tmp_path):
+    if shutil.which("ninja") is None:
+        pytest.fail("host-reference source-build test requires real Ninja")
     project = _write_demo_project(tmp_path / "demo_pkg-0.1")
     _write_fake_vendored_meson(project)
 
@@ -407,6 +411,36 @@ def test_local_install_can_build_source_before_overlay(tmp_path):
     assert (tmp_path / "site" / "demo_pkg" / "__init__.py").read_text(
         encoding="utf-8"
     ) == "VALUE = 2\n"
+
+
+@pytest.mark.parametrize("ninja_available", [False, True])
+def test_real_ninja_prerequisite_deselects_only_the_host_reference_node(ninja_available):
+    """Exercise the existing collection policy, not a fake build-tool run."""
+    import ast
+    from types import SimpleNamespace
+    from tests import conftest as gates
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "test_local_install_can_build_source_before_overlay")
+    marker = next(node for node in function.decorator_list if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute) and node.func.attr == "pcc_gate")
+    requested = []
+    def which(name):
+        requested.append(name)
+        return "/fixture-tools/ninja" if ninja_available else None
+    mark = eval(compile(ast.Expression(marker), __file__, "eval"),
+                {"pytest": pytest, "shutil": SimpleNamespace(which=which)}).mark
+    assert requested == ["ninja"]
+    node = "tests/python/test_package_install.py::" + function.name
+    ordinary = SimpleNamespace(nodeid="ordinary_install", iter_markers=lambda name: iter(()))
+    reference = SimpleNamespace(nodeid=node, iter_markers=lambda name: iter((mark,)))
+    items = [ordinary, reference]
+    deselected = []
+    config = SimpleNamespace(hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items)))
+    gates.pytest_collection_modifyitems(config, items)
+    assert items == ([ordinary, reference] if ninja_available else [ordinary])
+    assert deselected == ([] if ninja_available else [reference])
 
 
 def test_cython_tool_wrapper_does_not_discover_the_package_project():
@@ -669,11 +703,22 @@ def test_pcc_package_install_cli_and_pip_install_shape(tmp_path):
     assert (tmp_path / "site2" / "demo_pkg" / "__init__.py").exists()
     assert (tmp_path / "site2" / "demo_pkg" / "core.py").exists()
 
+
+
+def test_host_module_pip_source_install_requires_native_compiler(tmp_path):
+    env = os.environ.copy()
+    cache = tmp_path / "cache"
+    # Invoke the public host module entry explicitly: its argv[0] is not a
+    # native pcc compiler, irrespective of installed console-script names.
     native_project = _write_demo_project(tmp_path / "native-demo-pkg")
     proc = subprocess.run(
         [
             "uv",
             "run",
+            "--offline",
+            "--no-sync",
+            "python",
+            "-m",
             "pcc",
             "-m",
             "pip",
@@ -695,7 +740,7 @@ def test_pcc_package_install_cli_and_pip_install_shape(tmp_path):
     assert plan["ok"] is False
     assert plan["build_mode_requested"] == "owned"
     assert plan["installs"][0]["build_report"]["diagnostics"] == [
-        "PCC-PKG-OWNED-MESON-SOURCE-REQUIRED"
+        "PCC-PKG-OWNED-BUILD-COMPILER-REQUIRED"
     ]
 
 

@@ -31,11 +31,18 @@ def test_uv_run_exposes_project_virtual_environment_to_shared_resolver(tmp_path)
     project = tmp_path / "project"
     _write_project(project)
     venv = project / ".venv"
+    env = os.environ.copy()
+    env.pop("VIRTUAL_ENV", None)
+    env["UV_PROJECT_ENVIRONMENT"] = str(venv)
+    env["UV_PYTHON_DOWNLOADS"] = "never"
+    env["UV_OFFLINE"] = "1"
+    env["UV_NO_SYNC"] = "1"
     create = subprocess.run(
-        ["uv", "venv", "--python", sys.executable, str(venv)],
+        ["uv", "venv", "--offline", "--python", sys.executable, str(venv)],
         text=True,
         capture_output=True,
         timeout=60,
+        env=env,
     )
     assert create.returncode == 0, create.stdout + create.stderr
 
@@ -43,6 +50,7 @@ def test_uv_run_exposes_project_virtual_environment_to_shared_resolver(tmp_path)
         [
             "uv",
             "run",
+            "--offline",
             "--project",
             str(project),
             "--no-sync",
@@ -53,6 +61,7 @@ def test_uv_run_exposes_project_virtual_environment_to_shared_resolver(tmp_path)
         text=True,
         capture_output=True,
         timeout=60,
+        env=env,
     )
     assert probe.returncode == 0, probe.stdout + probe.stderr
     uv_env = json.loads(probe.stdout)
