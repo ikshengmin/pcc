@@ -34,19 +34,24 @@ def test_staged_replays_share_one_canonical_name_tuple(tmp_path, monkeypatch):
     original_name = macho_link._relocation_symbol_name
     original_check = host._Ledger.check
     caches, count_caches, fallbacks, charges = [], [], [], {}
+    checked_counts, replay_counts = [], []
 
     def observed_count(data, sections, symbols, names=None):
         assert type(names) is tuple
         assert all(name is symbol["name"] for name, symbol in zip(names, symbols))
         count_caches.append(names)
-        return original_count(data, sections, symbols, names)
+        count = original_count(data, sections, symbols, names)
+        checked_counts.append(count)
+        return count
 
-    def observed_rows(data, sections, symbols, names=None):
+    def observed_rows(data, sections, symbols, names=None, _checked_count=None):
         assert type(names) is tuple
         assert len(names) == len(symbols)
         assert all(name is symbol["name"] for name, symbol in zip(names, symbols))
+        assert type(_checked_count) is int and _checked_count == checked_counts[-1]
+        replay_counts.append(_checked_count)
         caches.append(names)
-        return original_rows(data, sections, symbols, names)
+        return original_rows(data, sections, symbols, names, _checked_count)
 
     def observed_name(*args, **kwargs):
         fallbacks.append(kwargs["context"])
@@ -78,6 +83,7 @@ def test_staged_replays_share_one_canonical_name_tuple(tmp_path, monkeypatch):
     assert all(cache is caches[0] for cache in caches)
     assert len(count_caches) == len(view.sections())
     assert all(cache is caches[0] for cache in count_caches)
+    assert replay_counts == [count for count in checked_counts for _ in range(2)]
     # __eh_frame's shape validator does not consume its iterator: only the
     # counting and semantic passes fold each of its two SUBTRACTOR pairs.
     assert fallbacks.count("SUBTRACTOR relocation") == 4

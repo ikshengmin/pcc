@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -77,6 +76,8 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     # Whether a mapped frame's slots lie on this thread's walked stack.
     "pcc_gc_stackmap_roots_mode",
     "pcc_thread_stack_high",
+    "pcc_thread_no_park_enter",
+    "pcc_thread_no_park_exit",
     "pcc_thread_no_park_depth",
     "pcc_platform_abort",
 }
@@ -95,7 +96,7 @@ def _exported_symbols(source: str) -> set[str]:
     return set(re.findall(r'@c_abi_export\("([^"]+)"\)', source))
 
 
-def _compile_object(tmp_path: Path, emitter: str) -> Path:
+def _compile_object(tmp_path: Path, emitter: str, target_triple: str) -> Path:
     llvm_ir = tmp_path / ("freestanding_gc_frame_registry_" + emitter + ".ll")
     pipeline.compile_python(
         str(FRAME_SOURCE),
@@ -103,7 +104,7 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
         emit_llvm_only=True,
         libpython_mode="off",
         python_library=True,
-        target_triple=host_target_triple(),
+        target_triple=target_triple,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
     source = llvm_ir
@@ -210,9 +211,51 @@ def test_frame_registry_allocator_and_release_tails_are_outside_graph_lock():
             start = position + len(forbidden)
 
 
+def _assert_exact_raw_imports(undefined, *, target_triple, emitter):
+    expected = RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    darwin = target_triple.endswith("-apple-darwin")
+    if darwin:
+        expected = expected | {"tlv_bootstrap"}
+    zero_helpers = undefined & {"memset", "bzero"}
+    assert undefined - zero_helpers == expected - {"memset"}
+    if darwin and emitter == "llvm":
+        # Only the Darwin LLVM oracle may turn explicit zero-fill calls into
+        # bzero. Keep the rest of its imports exact; owned lowering and Linux
+        # still require memset, not an arbitrary libc helper.
+        assert zero_helpers in ({"memset"}, {"bzero"}, {"memset", "bzero"})
+    else:
+        assert zero_helpers == {"memset"}
+
+
+@pytest.mark.parametrize("target_triple", [
+    "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "arm64-apple-darwin",
+])
+@pytest.mark.parametrize("emitter", ["llvm", "self"])
+def test_frame_registry_raw_import_expectations_are_target_qualified(target_triple, emitter):
+    expected = RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    darwin = target_triple.endswith("-apple-darwin")
+    if darwin:
+        expected = expected | {"tlv_bootstrap"}
+    kwargs = dict(target_triple=target_triple, emitter=emitter)
+    _assert_exact_raw_imports(expected, **kwargs)
+    for zero_helpers in ({"bzero"}, {"memset", "bzero"}):
+        actual = (expected - {"memset"}) | zero_helpers
+        if darwin and emitter == "llvm":
+            _assert_exact_raw_imports(actual, **kwargs)
+        else:
+            with pytest.raises(AssertionError):
+                _assert_exact_raw_imports(actual, **kwargs)
+    for missing in ("memset", "pcc_thread_no_park_enter", "pcc_thread_no_park_exit"):
+        with pytest.raises(AssertionError):
+            _assert_exact_raw_imports(expected - {missing}, **kwargs)
+    with pytest.raises(AssertionError):
+        _assert_exact_raw_imports(expected | {"py_incref"}, **kwargs)
+
+
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
 def test_frame_registry_object_has_exact_raw_closure(tmp_path: Path, emitter: str):
-    obj = _compile_object(tmp_path, emitter)
+    target_triple = host_target_triple()
+    obj = _compile_object(tmp_path, emitter, target_triple)
     assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
     undefined_result = subprocess.run(
         ["nm", "-u", str(obj)], capture_output=True, text=True, timeout=30
@@ -225,10 +268,7 @@ def test_frame_registry_object_has_exact_raw_closure(tmp_path: Path, emitter: st
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    expected_undefined = RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
-    if sys.platform == "darwin":
-        expected_undefined = expected_undefined | {"tlv_bootstrap"}
-    assert undefined == expected_undefined
+    _assert_exact_raw_imports(undefined, target_triple=target_triple, emitter=emitter)
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30

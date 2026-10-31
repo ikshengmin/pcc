@@ -331,7 +331,7 @@ def test_macho_optional_clock_and_sink_faults_preserve_stub_output(monkeypatch):
 
 
 def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
-                   failure=None, error=None, selections=False):
+                   failure=None, error=None, selections=False, required_symbols=()):
     """Execute the real prepare body; only format/merge boundaries are stubs."""
     operations = []
     receipts = [] if selections else None
@@ -389,6 +389,9 @@ def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
         _external_symbol_state=state, read_archive=read, select_members=select,
         link_relocatable_native=merge,
     )
+    # Keep inventory admission real: it runs before the timed preparation
+    # boundaries and must not be replaced with an accept-all fixture stub.
+    _function("_validated_symbol_inventory", namespace, "pcc/backend/macho_exec.py")
     invoke = _function("prepare_executable_object", namespace, "pcc/backend/macho_exec.py")
 
     def run():
@@ -396,7 +399,7 @@ def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
         before = list(inputs)
         kwargs = dict(archives=archives, _consume_inputs=consume,
                       _source_view=consume, archive_selections=receipts,
-                      compact_budget=budget)
+                      compact_budget=budget, required_symbols=required_symbols)
         if timer is not None:
             kwargs["coordinator_timing"] = timer
         output = invoke(inputs, **kwargs)
@@ -405,6 +408,37 @@ def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
         return output
 
     return run, operations, receipts
+
+
+@pytest.mark.parametrize("symbols", [
+    "provided", {"provided"}, ("provided", "provided"), ("",), ("bad\0name",),
+])
+def test_macho_prepare_inventory_rejection_precedes_timing(symbols):
+    timer = Timer()
+    run, operations, _receipts = _prepare_owner(timer, required_symbols=symbols)
+
+    with pytest.raises(LinkError, match="required symbols"):
+        run()
+    assert operations == []
+    assert timer.events == []
+
+
+def test_macho_prepare_required_symbols_preserve_timing():
+    reference = None
+    for enabled in (False, True):
+        timer = Timer() if enabled else None
+        run, operations, _receipts = _prepare_owner(
+            timer, required_symbols=("provided",),
+        )
+        assert run() == b"unchanged merged payload"
+        if enabled:
+            assert operations == reference
+            assert [(event[0], event[1]) for event in timer.events] == [
+                (event, phase) for phase in PREPARE_PHASES
+                for event in ("begin", "complete")
+            ]
+        else:
+            reference = list(operations)
 
 
 def _prepare_success_contracts():

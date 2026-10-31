@@ -76,6 +76,18 @@ def test_cross_object_signature_literals_are_bounded_function_chunks() -> None:
     assert list(assembled) == list(FREESTANDING_GC_CROSS_OBJECT_SIGNATURES)
 
 
+def test_checked_frame_signature_starts_a_new_raw_chunk() -> None:
+    symbol = "pcc_gc_note_frame_enter_checked"
+    expected = (("c_ptr", "c_ptr"), "c_int64")
+    keys, _sizes = _chunk_keys("_cross_object_signatures_part_")
+
+    assert keys.count(symbol) == 1
+    assert symbol not in runtime_abi._cross_object_signatures_part_0()
+    assert runtime_abi._cross_object_signatures_part_11()[symbol] == expected
+    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[symbol] == expected
+    assert symbol not in RUNTIME_SIGNATURES
+
+
 @pytest.mark.parametrize(
     ("prefix", "signatures"),
     [

@@ -62,13 +62,15 @@ class Timer:
 
 @pytest.mark.parametrize("budget_enabled", (False, True))
 @pytest.mark.parametrize("timed", (False, True))
-def test_prepared_link_only_propagates_opted_in_timing(budget_enabled, timed):
+@pytest.mark.parametrize("exports", ((), ("_entry", "_extra")), ids=("default-exports", "exports"))
+def test_prepared_link_only_propagates_opted_in_timing(budget_enabled, timed, exports):
     merged, plan, callback, budget = object(), object(), object(), object()
     timer = object() if timed else None
     events = []
 
     def prepare(value, **kwargs):
         assert value is merged
+        assert kwargs["export_symbols"] is exports
         events.append(("prepare", kwargs))
         return plan
 
@@ -89,13 +91,15 @@ def test_prepared_link_only_propagates_opted_in_timing(budget_enabled, timed):
     })
     kwargs = {"entry": "_entry", "minos": (13, 2), "identifier": b"test-id",
               "phase_callback": callback}
+    if exports:
+        kwargs["export_symbols"] = exports
     if budget_enabled:
         kwargs["compact_budget"] = budget
     if timed:
         kwargs["coordinator_timing"] = timer
     assert link(merged, **kwargs) == b"unchanged-output"
     expected_prepare = {"entry": "_entry", "minos": (13, 2),
-                        "identifier": b"test-id"}
+                        "identifier": b"test-id", "export_symbols": exports}
     expected_finish = {}
     if budget_enabled:
         expected_prepare["compact_budget"] = budget

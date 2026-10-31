@@ -409,12 +409,42 @@ def test_defensive_section_target_overflow_retires_join_backing(tmp_path, monkey
     assert caught.value.__cause__ is not None
 
 
-def test_real_prepare_and_owned_output_keep_all_records_and_growth(tmp_path):
+@pytest.mark.parametrize("runtime_format", [None, "2"], ids=["default-v3", "v2"])
+def test_real_prepare_and_owned_output_keep_all_records_and_growth(
+    tmp_path, monkeypatch, runtime_format,
+):
+    if runtime_format is None:
+        monkeypatch.delenv(maps.PRECISE_STACKMAP_FORMAT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(maps.PRECISE_STACKMAP_FORMAT_ENV, runtime_format)
+    version = maps.RUNTIME_TABLE_VERSION if runtime_format is None else maps.VERSION
+    records = 3 * 1024
     paths = _stack_inputs(tmp_path, count=3, records=1024, data_bytes=65536)
     budget = _factory_budget()
-    image = output.link_owned_executable(host.prepare_executable_from_paths(paths, compact_budget=budget),
-                                         compact_budget=budget)
-    assert budget.record_visits == 3 * 3 * 1024
+    record_limit = budget.record_visit_limit
+    pending = [host.prepare_executable_from_paths(paths, compact_budget=budget)]
+    # Both formats rewrite each input record once. Only v2 then charges its
+    # structural and semantic validation passes to this counter; v3 uses a
+    # separately bounded runtime-summary scan, not absent validation.
+    assert budget.record_visits == records
+    validation_passes = 0 if version == maps.RUNTIME_TABLE_VERSION else 2
+    validated = []
+    original_validate = output.host_validation.validate_stack_map_payload
+
+    def observe_validation(payload, **kwargs):
+        assert kwargs["compact_budget"].budget is budget
+        before = budget.record_visits
+        result = original_validate(payload, **kwargs)
+        validated.append((maps._payload_version(payload), kwargs["expected_arch"],
+                          kwargs["final_image"], budget.record_visits - before))
+        return result
+
+    monkeypatch.setattr(output.host_validation, "validate_stack_map_payload", observe_validation)
+    image = output.link_owned_executable(pending.pop(), compact_budget=budget)
+    assert pending == []
+    assert validated == [(version, maps.ARCH_AARCH64, True, validation_passes * records)]
+    assert budget.record_visits == (1 + validation_passes) * records
+    assert budget.record_visit_limit == record_limit
     signature = codesign.parse_signature(image)
     output.check_signature_verification(image, signature, budget)
     with memoryview(image) as whole, whole[:signature.dataoff] as prefix:
@@ -424,8 +454,22 @@ def test_real_prepare_and_owned_output_keep_all_records_and_growth(tmp_path):
     parsed = spec.parse_object(image)
     stack = next(section for section in parsed.sections() if section["sectname_str"] == "__pcc_stackmaps")
     payload = image[stack["offset"]:stack["offset"] + stack["size"]]
-    decoded = maps.decode_stack_map(payload, final_image=True)
-    assert len(decoded.functions) == 3 and sum(len(fn.records) for fn in decoded.functions) == 3072
+    assert maps._payload_version(payload) == version
+    if version == maps.RUNTIME_TABLE_VERSION:
+        maps.validate_runtime_table(payload, expected_arch=maps.ARCH_AARCH64, final_image=True)
+        functions = maps.decode_runtime_table(payload, expected_arch=maps.ARCH_AARCH64)
+        assert tuple(fn[0] for fn in functions) == (1, 2, 3)
+        # The runtime format elides safepoint IDs and represents plain calls
+        # with kind zero. Preserve every PC, live root and rare-field default.
+        expected_records = tuple(
+            (index * 4, ((-8, False),) if index % 3 else (), 0, 0, maps.NO_OFFSET, 0)
+            for index in range(1024)
+        )
+        assert all(fn[2:] == (1024 * 4, 16, expected_records) for fn in functions)
+        assert sum(len(fn[4]) for fn in functions) == records
+    else:
+        decoded = maps.decode_stack_map(payload, final_image=True)
+        assert len(decoded.functions) == 3 and sum(len(fn.records) for fn in decoded.functions) == records
 
 
 def test_production_row_alias_tables_are_empty_before_consumption(tmp_path, monkeypatch):

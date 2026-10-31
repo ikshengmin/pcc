@@ -346,8 +346,35 @@ def test_native_ir_omits_host_only_none_slots_before_tuple_iteration():
     assert "@py_cpy_" not in body
     assert "@py_list_setitem" not in body
     assert "@py_list_clear" not in body
-    assert "@py_list_len" in body
-    assert "@py_list_get" in body
+    # Object-list iteration performs one live bounds/read operation. NULL is
+    # exhaustion, not a Python None value introduced by host-only retirement.
+    assert "@py_list_len" not in body
+    loop = re.search(r"(?m)^for\.lst\.cond\.\d+:\n((?:  [^\n]*\n)+)", body)
+    assert loop is not None
+    step = loop[1]
+    element = re.search(
+        r"(?P<value>%[-\w.]+) = call ptr \(ptr, i64\) @py_list_get\("
+        r"ptr (?P<source>%[-\w.]+), i64 (?P<index>%[-\w.]+)\)", step,
+    )
+    assert element is not None
+    assert re.search(
+        re.escape(element["source"]) + r" = call ptr \(ptr, ptr\) @pcc_gc_load_ptr\("
+        r"ptr null, ptr %for\.lst\.source[-\w.]+\)", step,
+    )
+    assert re.search(
+        re.escape(element["index"]) + r" = load i64, ptr %for\.idx\.addr[-\w.]+", step,
+    )
+    exhaust = re.search(
+        r"(?P<predicate>%[-\w.]+) = icmp ne ptr " + re.escape(element["value"]) + r", null\n"
+        r"  br i1 (?P=predicate), label %(?P<live>for\.lst\.body\.\d+), "
+        r"label %for\.lst\.end\.\d+", body,
+    )
+    assert exhaust is not None
+    assert re.search(
+        r"(?m)^" + re.escape(exhaust["live"]) + r":\n"
+        r"  call void \(ptr, ptr\) @pcc_gc_store_root_take\(ptr %[-\w.]+, ptr "
+        + re.escape(element["value"]) + r"\)", body,
+    )
     assert "@py_obj_add" in body
     assert "@py_obj_truthy" in body
 

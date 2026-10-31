@@ -433,20 +433,34 @@ def test_stack_map_inputs_are_never_layout_patched(tmp_path: Path, monkeypatch) 
 def test_exact_images_are_keyed_by_the_stack_map_format(tmp_path: Path, monkeypatch) -> None:
     from pcc.backend.precise_stackmap import RUNTIME_TABLE_VERSION, VERSION, validate_stack_map_payload
 
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("format-keyed exact-image hit reached linker work")
+
     images = {}
-    for setting, version in (("", VERSION), ("3", RUNTIME_TABLE_VERSION)):
-        monkeypatch.setenv("PCC_PRECISE_STACKMAP_FORMAT", setting)
+    for setting, version, hit in (
+        ("2", VERSION, 0),
+        (None, RUNTIME_TABLE_VERSION, 0),
+        ("3", RUNTIME_TABLE_VERSION, 1),
+        ("", RUNTIME_TABLE_VERSION, 1),
+        ("2", VERSION, 1),
+    ):
+        if setting is None:
+            monkeypatch.delenv("PCC_PRECISE_STACKMAP_FORMAT", raising=False)
+        else:
+            monkeypatch.setenv("PCC_PRECISE_STACKMAP_FORMAT", setting)
         linker = IncrementalMachOLinker(tmp_path / "cache", "test-link-source-v1")
         image = linker.link(
             [_stack_mapped_caller(), _helper(_NOP)],
-            prepare=prepare_executable_object,
-            finalize=link_prepared_executable,
+            prepare=unexpected if hit else prepare_executable_object,
+            finalize=unexpected if hit else link_prepared_executable,
             validate=_validate_linked_image,
         )
-        assert linker.stats.image_hits == 0
+        assert (linker.stats.image_hits, linker.stats.image_misses) == (hit, 1 - hit)
         assert image == link_executable([_stack_mapped_caller(), _helper(_NOP)])
         table = _image_stack_map(image)
         assert int.from_bytes(table[8:10], "little") == version
         validate_stack_map_payload(table, final_image=True)
-        images[setting] = image
-    assert len(_image_stack_map(images["3"])) < len(_image_stack_map(images[""]))
+        assert images.setdefault(version, image) == image
+    assert images[VERSION] != images[RUNTIME_TABLE_VERSION]
+    assert len(_image_stack_map(images[RUNTIME_TABLE_VERSION])) < len(_image_stack_map(images[VERSION]))
+    assert len(list((tmp_path / "cache" / "image").rglob("*.macho"))) == 2

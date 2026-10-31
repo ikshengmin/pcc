@@ -2153,7 +2153,6 @@ def _cross_object_signatures_part_0():
     "pcc_gc_frame_root_slot_count": ((), "c_int64"),
     "pcc_gc_coroutine_root_score": ((), "c_int64"),
     "pcc_gc_cycle_requested_store_release": (("c_int64",), "c_void"),
-    "pcc_gc_note_frame_enter_checked": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_frame_index_find": (("c_ptr",), "c_ptr"),
     "pcc_gc_frame_index_insert": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_frame_index_plan_capacity": (("c_int64",), "c_int64"),
@@ -2921,6 +2920,14 @@ def _cross_object_signatures_part_10():
     }
 
 
+def _cross_object_signatures_part_11():
+    # The frame-registry chunk is full. New raw ABIs start a new bounded
+    # literal instead of exceeding the native compiler's 50-entry limit.
+    return {
+    "pcc_gc_note_frame_enter_checked": (("c_ptr", "c_ptr"), "c_int64"),
+    }
+
+
 
 
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES: dict[
@@ -2936,6 +2943,7 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_7()
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_8())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_9())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_10())
+FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_11())
 
 
 def is_freestanding_gc_cross_object_runtime_import(
