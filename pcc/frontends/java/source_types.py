@@ -27,7 +27,7 @@ def conditional_type(yes, no, token):
     if yes.dtype == no.dtype:
         return yes.dtype
     if yes.dtype not in INTEGRAL or no.dtype not in INTEGRAL:
-        token.error("reference/boxing conditional operands require the shared Java runtime", True)
+        token.error("reference/boxing conditional operands require the shared Java runtime", code="java.unsupported.reference-conditional")
     if {yes.dtype, no.dtype} == {"byte", "short"}:
         return "short"
     bounds = {"byte": (-128, 127), "short": (-32768, 32767), "char": (0, 65535)}

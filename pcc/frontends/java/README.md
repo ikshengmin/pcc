@@ -123,3 +123,19 @@ collections/generics, BigInteger, class initialization and exception support;
 its original tests also require JUnit, annotations and lambda/stream support.
 Original sources/notices are inventoried outside this repository; no upstream
 implementation has been copied into the compiler.
+
+### Source diagnostic contract
+
+Every source capability boundary exposes an explicit stable
+`java.unsupported.*` value on `UnsupportedJava.code`, mapped in
+`specs/features/java.json`. The original diagnostic message, source location,
+`str(error)` and `error.args` are preserved. Invalid source remains `JavaError`
+with `code is None`; known malformed token/modifier/type starts are not counted
+as unimplemented features. Encountering an unavailable grammar prefix does not
+certify the rest of that input as valid Java. Resource limits and missing
+supplied dependencies have separate codes. The frozen class-file compatibility
+experiment retains its message-only errors and is not source acceptance.
+
+These codes do not change the object/runtime boundary: class analysis is a
+semantic model, final instance fields remain gated, and the unpublished blank
+final model/reference disagreement is not part of this source revision.

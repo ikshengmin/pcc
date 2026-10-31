@@ -70,7 +70,7 @@ class SourceAnalyzer:
 
     def declare_methods(self):
         if self.program.name == "java/lang/Object":
-            raise UnsupportedJava("bootstrap Object requires the shared runtime definition")
+            raise UnsupportedJava("bootstrap Object requires the shared runtime definition", code="java.unsupported.bootstrap-object")
         for method in self.program.methods:
             key = (method.token.text, method.parameter_types)
             if not method.parameters and method.token.text in {
@@ -93,7 +93,7 @@ class SourceAnalyzer:
         if state == "complete":
             return field.constant
         if state == "evaluating":
-            field.token.error("cyclic field initialization requires the shared Java initialization contract", True)
+            field.token.error("cyclic field initialization requires the shared Java initialization contract", code="java.unsupported.cyclic-initialization")
         self.field_states[field.token.text] = "evaluating"
         previous = self.current_field
         self.current_field = field
@@ -101,7 +101,7 @@ class SourceAnalyzer:
             self.expression(field.initializer, set())
             self.assignment_value(field.initializer, field.dtype)
             if field.initializer.constant is None:
-                field.token.error("nonconstant static initialization requires the shared Java initialization contract", True)
+                field.token.error("nonconstant static initialization requires the shared Java initialization contract", code="java.unsupported.static-initialization")
             field.constant = field.initializer.constant
             self.field_states[field.token.text] = "complete"
             return field.constant
@@ -129,7 +129,7 @@ class SourceAnalyzer:
         binding = Binding(token.text, len(self.method.locals), dtype, is_final)
         self.method.locals.append(binding)
         if len(self.method.locals) > 4096:
-            token.error("source method exceeds the local-variable budget", True)
+            token.error("source method exceeds the local-variable budget", code="java.unsupported.local-variable-limit")
         self.scopes[-1][token.text] = binding
         return binding
 
@@ -147,7 +147,7 @@ class SourceAnalyzer:
 
     def require_nonzero_constant_divisor(self, node):
         if node.constant is None or node.constant == 0:
-            node.token.error("nonconstant or zero integer divisor requires shared ArithmeticException support", True)
+            node.token.error("nonconstant or zero integer divisor requires shared ArithmeticException support", code="java.unsupported.arithmetic-exception")
 
     def assignment_value(self, node, target):
         if target == "boolean":

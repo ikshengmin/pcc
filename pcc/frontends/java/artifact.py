@@ -46,7 +46,7 @@ class JavaCompilation:
         )
 
         if self.entry[1] != "()I":
-            raise UnsupportedJava("executable entry must have descriptor ()I")
+            raise UnsupportedJava("executable entry must have descriptor ()I", code="java.unsupported.entry-descriptor")
         target = self.module.triple
         if is_x86_64_linux_triple(target):
             start = (".intel_syntax noprefix\n.text\n.globl _start\n_start:\n"
@@ -56,7 +56,7 @@ class JavaCompilation:
             start = (".text\n.globl _start\n_start:\n  bl " + self.entry_symbol
                      + "\n  mov x8, #93\n  svc #0\n")
         else:
-            raise UnsupportedJava("Java executable startup is currently limited to Linux ELF targets")
+            raise UnsupportedJava("Java executable startup is currently limited to Linux ELF targets", code="java.unsupported.executable-target")
         output = Path(output).absolute()
         with TemporaryDirectory(prefix="pcc-java-") as directory:
             obj = Path(directory) / "methods.o"

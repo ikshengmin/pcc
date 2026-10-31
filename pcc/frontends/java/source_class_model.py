@@ -52,14 +52,14 @@ class ClassAnalyzer(SourceAnalyzer):
 
     def declare_methods(self):
         if self.program.name == "java/lang/Object":
-            raise UnsupportedJava("bootstrap Object requires the shared runtime definition")
+            raise UnsupportedJava("bootstrap Object requires the shared runtime definition", code="java.unsupported.bootstrap-object")
         for method in self.program.methods:
             if "static" in method.modifiers:
                 continue
             if (not method.parameters and method.token.text in {
                     "hashCode", "getClass", "toString", "clone", "finalize", "notify", "notifyAll", "wait"}
                     or method.token.text == "wait" and method.parameter_types in (("long",), ("long", "int"))):
-                method.token.error("Object override/final/access semantics require the inherited-method domain", True)
+                method.token.error("Object override/final/access semantics require the inherited-method domain", code="java.unsupported.object-inherited-methods")
         # Instance overrides of Object were explicitly gated above. Reuse the
         # source owner's ordinary overload and static/inherited conflict checks.
         super().declare_methods()
@@ -295,9 +295,9 @@ def analyze_class_sources(sources):
     if any(not isinstance(name, str) or not isinstance(text, str) for name, text in sources.items()):
         raise JavaError("class source model names and contents must be text")
     if sum(len(text) for text in sources.values()) > 8_388_608:
-        raise UnsupportedJava("class source model exceeds the 8 MiB aggregate input limit")
+        raise UnsupportedJava("class source model exceeds the 8 MiB aggregate input limit", code="java.unsupported.project-size-limit")
     try:
         programs = [SourceParser(sources[name], name, class_model=True).parse() for name in sorted(sources)]
         return ClassModelProject(programs).analyze()
     except RecursionError as error:
-        raise UnsupportedJava("class source model exceeds the bounded parser/analysis nesting limit") from error
+        raise UnsupportedJava("class source model exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error

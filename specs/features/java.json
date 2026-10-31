@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": true,
     "features_complete": false,
-    "notes": "Initial partial atomic-feature map, not full Java/JDK conformance. Exact historical owned native source/objects/executables and same-original JDK results support the four bounded runtime rows. Unit/program rows intentionally refer to the same real compilation/execution assertion test and raw program outputs, never pytest aggregate stdout. Reproduction commands omit sandbox paths. JDK observers normalize return values to declared primitive raw lanes. Source model native gates stay explicit; current candidate reference disagreement is retained. Frozen class/JAR experiments are excluded from source acceptance. Many already implemented scalar/source-closure features still need normalized rows, not presumed absent. Four bounded runtime rows now also have NEW actual raw-process comparisons from c5; historical normalized observations remain separate and are not relabeled. The new lane selects an explicit existing JDK executable via PCC_JAVA_RAW_REFERENCE; actual gate used JDK21 and source/target21, not Mac JDK17. One executable assertion test supplies both unit and program evidence for each unchanged original, not fabricated compile-only outputs."
+    "notes": "Initial partial atomic-feature map, not full Java/JDK conformance. Exact historical owned native source/objects/executables and same-original JDK results support the four bounded runtime rows. Unit/program rows intentionally refer to the same real compilation/execution assertion test and raw program outputs, never pytest aggregate stdout. Reproduction commands omit sandbox paths. JDK observers normalize return values to declared primitive raw lanes. Source model native gates stay explicit; current candidate reference disagreement is retained. Frozen class/JAR experiments are excluded from source acceptance. Many already implemented scalar/source-closure features still need normalized rows, not presumed absent. Four bounded runtime rows now also have NEW actual raw-process comparisons from c5; historical normalized observations remain separate and are not relabeled. The new lane selects an explicit existing JDK executable via PCC_JAVA_RAW_REFERENCE; actual gate used JDK21 and source/target21, not Mac JDK17. One executable assertion test supplies both unit and program evidence for each unchanged original, not fabricated compile-only outputs. Stable source capability codes are inventoried separately from historical execution evidence; this metadata-only batch does not promote model-only or runtime features."
   },
   "chapters": [
     {
@@ -214,9 +214,14 @@
       "scope": "JLS 4.3.1,8.8,12.5,15.9. Native compile_source(s) rejects explicit instance features. Class-model API is not an allocator/GC/dispatch substitute.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_class_model.py::test_model_does_not_grant_native_object_compilation"
+        "tests/java/test_source_class_model.py::test_model_does_not_grant_native_object_compilation",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.bootstrap-object",
+        "java.unsupported.instance-methods",
+        "java.unsupported.object-expressions"
+      ],
       "evidence": []
     },
     {
@@ -226,12 +231,15 @@
         "JLS-10",
         "JLS-15"
       ],
-      "scope": "JLS 10,15.10. No Java array allocation, runtime length/bounds/store checks, roots or reference tracing. Dedicated feature-specific diagnostic mapping is also missing; generic unsupported token/expression errors are not counted as this feature diagnostic.",
-      "status": "missing",
+      "scope": "JLS 10,15.10. No Java array allocation, runtime length/bounds/store checks, roots or reference tracing. Recognized source prefixes now have stable explicit capability codes; this does not establish native runtime support or complete grammar validation.",
+      "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly"
+        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.array-storage"
+      ],
       "evidence": []
     },
     {
@@ -243,9 +251,12 @@
       "scope": "JLS 3.3. Input containing Unicode-escape translation is rejected, not preprocessed by javac.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly"
+        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.unicode-escapes"
+      ],
       "evidence": []
     },
     {
@@ -256,12 +267,15 @@
         "JLS-4",
         "JLS-15"
       ],
-      "scope": "JLS 3.10.5-6,4.3.3. No String allocation, interning, concatenation or text-block implementation. Dedicated feature-specific diagnostic mapping is also missing; generic unsupported token/expression errors are not counted as this feature diagnostic.",
-      "status": "missing",
+      "scope": "JLS 3.10.5-6,4.3.3. No String allocation, interning, concatenation or text-block implementation. Recognized source prefixes now have stable explicit capability codes; this does not establish native runtime support or complete grammar validation.",
+      "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly"
+        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.string-literals"
+      ],
       "evidence": []
     },
     {
@@ -274,9 +288,12 @@
       "scope": "JLS 15.17.2-3. Zero or nonconstant divisor explicitly rejected before IR; no trap substituted for Java exception.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_division.py::test_zero_and_dynamic_divisors_remain_explicit_before_lowering"
+        "tests/java/test_source_division.py::test_zero_and_dynamic_divisors_remain_explicit_before_lowering",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.arithmetic-exception"
+      ],
       "evidence": []
     },
     {
@@ -289,9 +306,13 @@
       "scope": "JLS 8.7,12.4. Mutable/static initializer/cyclic constant dependencies require shared initialization state and exceptions.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_constants.py::test_runtime_or_lexical_boundaries_do_not_drop_original_declarations"
+        "tests/java/test_source_constants.py::test_runtime_or_lexical_boundaries_do_not_drop_original_declarations",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.cyclic-initialization",
+        "java.unsupported.static-initialization"
+      ],
       "evidence": []
     },
     {
@@ -305,9 +326,12 @@
       "scope": "JLS 4.12.4,14.4,16. Initialized final locals exist; blank final local statements remain rejected.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_final_locals.py::test_blank_final_local_remains_explicit_until_definite_unassignment_is_implemented"
+        "tests/java/test_source_final_locals.py::test_blank_final_local_remains_explicit_until_definite_unassignment_is_implemented",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.blank-final-local"
+      ],
       "evidence": []
     },
     {
@@ -320,9 +344,13 @@
       "scope": "JLS 7.5.2-4. Single-type imports are a separate admitted slice; these forms explicitly rejected.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored"
+        "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.on-demand-imports",
+        "java.unsupported.static-imports"
+      ],
       "evidence": []
     },
     {
@@ -335,9 +363,12 @@
       "scope": "JLS 7.3,6.5. Unknown package-qualified roots rejected rather than guessing that absent standard classes are packages.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_project.py::test_missing_standard_implicit_type_cannot_be_reinterpreted_as_a_supplied_package"
+        "tests/java/test_source_project.py::test_missing_standard_implicit_type_cannot_be_reinterpreted_as_a_supplied_package",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.implicit-type-metadata"
+      ],
       "evidence": []
     },
     {
@@ -348,12 +379,16 @@
         "JLS-8",
         "JLS-18"
       ],
-      "scope": "JLS 8.1.2,8.1.4-5. No inheritance, generic instantiation, interface implementation or Object override conformance.",
+      "scope": "JLS 8.1.2,8.1.4-5. No inheritance, generic instantiation, interface implementation or Object override conformance. Generic method and constructor declaration prefixes are also explicitly gated before result-type classification.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_class_model.py::test_unimplemented_class_semantics_remain_explicit"
+        "tests/java/test_source_class_model.py::test_unimplemented_class_semantics_remain_explicit",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.class-supertypes-generics",
+        "java.unsupported.generic-declarations"
+      ],
       "evidence": []
     },
     {
@@ -365,9 +400,12 @@
       "scope": "JLS 8.5. Member type lookup explicitly rejected.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored"
+        "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.member-types"
+      ],
       "evidence": []
     },
     {
@@ -380,9 +418,12 @@
       "scope": "JLS 15.25. Reference/poly/boxing ?: operands require separate type and runtime domains.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_conditional.py::test_conditional_does_not_hide_an_unsupported_operand"
+        "tests/java/test_source_conditional.py::test_conditional_does_not_hide_an_unsupported_operand",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.reference-conditional"
+      ],
       "evidence": []
     },
     {
@@ -392,12 +433,15 @@
         "JLS-14",
         "JLS-15"
       ],
-      "scope": "JLS 15.28. Expression switch and null/reference/pattern selectors rejected, not rewritten to primitive statement switch. Dedicated feature-specific diagnostic mapping is also missing; generic unsupported token/expression errors are not counted as this feature diagnostic.",
-      "status": "missing",
+      "scope": "JLS 15.28. Expression switch and null/reference/pattern selectors rejected, not rewritten to primitive statement switch. Recognized source prefixes now have stable explicit capability codes; this does not establish native runtime support or complete grammar validation.",
+      "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_switch_do.py::test_switch_runtime_and_expression_dependencies_are_explicit"
+        "tests/java/test_source_switch_do.py::test_switch_runtime_and_expression_dependencies_are_explicit",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.switch-expressions"
+      ],
       "evidence": []
     },
     {
@@ -409,9 +453,14 @@
       "scope": "JLS 12.1. Tiny native startup requires ()I and Linux ELF; not main(String[]) or a platform Java launcher.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_frontend.py::test_source_target_admission_precedes_public_ir"
+        "tests/java/test_source_frontend.py::test_source_target_admission_precedes_public_ir",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.entry-descriptor",
+        "java.unsupported.executable-target",
+        "java.unsupported.target-abi"
+      ],
       "evidence": []
     },
     {
@@ -422,12 +471,17 @@
         "JLS-8",
         "JLS-14"
       ],
-      "scope": "byte/short/char locals/parameters/results and float/double are outside the current boolean/int/long/void source declaration slice.",
+      "scope": "Additional declared-type prefixes include byte/short/char locals/parameters/results, float/double, reference result/parameter types and var local inference outside the current boolean/int/long/void declaration slice. The stable historical feature ID is retained; these diagnostics do not claim reference runtime or inference support.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/java/test_source_scalars.py::test_invalid_scalar_source_never_reaches_lowering"
+        "tests/java/test_source_scalars.py::test_invalid_scalar_source_never_reaches_lowering",
+        "tests/java/test_source_diagnostics.py"
       ],
-      "diagnostics": [],
+      "diagnostics": [
+        "java.unsupported.declared-local-type",
+        "java.unsupported.declared-parameter-type",
+        "java.unsupported.declared-result-type"
+      ],
       "evidence": []
     },
     {
@@ -452,8 +506,12 @@
       ],
       "scope": "Candidate1eb has 69 focused and1111 whole PCC tests, but strict JDK21 comparison35positive/33negative/1disagreement. Unpublished; no native instance execution. JLS8.3.1.2,16.2.10-12,16.9.",
       "status": "missing",
-      "tests": [],
-      "diagnostics": [],
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.final-instance-fields"
+      ],
       "evidence": []
     },
     {
@@ -489,8 +547,12 @@
       ],
       "scope": "Not covered by current static-method source slice or a precise full-feature diagnostic taxonomy.",
       "status": "missing",
-      "tests": [],
-      "diagnostics": [],
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.annotations"
+      ],
       "evidence": []
     },
     {
@@ -516,353 +578,730 @@
       "tests": [],
       "diagnostics": [],
       "evidence": []
+    },
+    {
+      "id": "java.implementation-limits",
+      "title": "Implementation resource limits",
+      "chapter_ids": [
+        "JLS-2",
+        "JLS-3"
+      ],
+      "scope": "Parser nesting, supplied source size, token and local-variable budgets are explicit implementation limits, not Java language restrictions.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.local-variable-limit",
+        "java.unsupported.nesting-limit",
+        "java.unsupported.project-size-limit",
+        "java.unsupported.source-size-limit",
+        "java.unsupported.token-limit"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.object-inherited-methods",
+      "title": "Inherited Object instance-method rules",
+      "chapter_ids": [
+        "JLS-8"
+      ],
+      "scope": "Class-model declarations matching inherited Object instance methods require further override, final and access semantics; no native object claim.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.object-inherited-methods"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.source-dependencies",
+      "title": "Supplied source dependency closure",
+      "chapter_ids": [
+        "JLS-7"
+      ],
+      "scope": "An imported source class absent from the supplied closed-world mapping is an unavailable dependency, not an invalid Java import.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.source-dependency"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.unicode-tokens",
+      "title": "Unicode lexical token classification",
+      "chapter_ids": [
+        "JLS-3"
+      ],
+      "scope": "Non-ASCII tokens outside comments and admitted character literals are explicitly gated; this is not a claim every such character is a legal Java identifier.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.unicode-tokens"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.abstract-classes",
+      "title": "Abstract classes",
+      "chapter_ids": [
+        "JLS-8"
+      ],
+      "scope": "Abstract class declarations are explicitly gated; illegal top-level and conflicting abstract/final modifiers remain ordinary input errors.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.abstract-classes"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.special-methods",
+      "title": "Abstract, native and synchronized methods",
+      "chapter_ids": [
+        "JLS-8"
+      ],
+      "scope": "Recognized method-modifier domains remain unsupported; conflicting abstract-method modifiers are invalid input, not features.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.special-method-modifiers"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.runtime-statements",
+      "title": "Exception and synchronized statements",
+      "chapter_ids": [
+        "JLS-14"
+      ],
+      "scope": "throw/try/synchronized statement prefixes require shared exception/monitor execution; whole-input validity is not certified by the first boundary.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.runtime-statements"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.assert-statements",
+      "title": "Assert statements",
+      "chapter_ids": [
+        "JLS-14"
+      ],
+      "scope": "Assert statements need assertion status and failure semantics; currently explicitly gated.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.assert-statements"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.local-types",
+      "title": "Local type declarations",
+      "chapter_ids": [
+        "JLS-14"
+      ],
+      "scope": "Local class/interface/enum/record declarations in method bodies are explicitly gated; no local-type execution claim.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_diagnostics.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.local-types"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
     "inventory_complete": false,
-    "codes": [],
-    "message_only": [
+    "source_inventory_complete": true,
+    "codes": [
       {
-        "message": "executable entry must have descriptor ()I",
+        "code": "java.unsupported.abstract-classes",
+        "feature_id": "java.abstract-classes",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.annotations",
+        "feature_id": "java.interfaces-annotations",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.arithmetic-exception",
+        "feature_id": "java.division-dynamic-exception",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.array-storage",
+        "feature_id": "java.arrays-native",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.assert-statements",
+        "feature_id": "java.assert-statements",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.blank-final-local",
+        "feature_id": "java.blank-final-local",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.bootstrap-object",
+        "feature_id": "java.objects-native",
+        "source": {
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
+          },
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.class-supertypes-generics",
+        "feature_id": "java.inheritance-generics",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.cyclic-initialization",
+        "feature_id": "java.class-initialization",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.declared-local-type",
+        "feature_id": "java.other-declared-primitives",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.declared-parameter-type",
+        "feature_id": "java.other-declared-primitives",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.declared-result-type",
+        "feature_id": "java.other-declared-primitives",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.entry-descriptor",
+        "feature_id": "java.source-target-startup",
         "source": {
           "path": "pcc/frontends/java/artifact.py",
-          "sha256": "5c71fc4e43262e89dd0c9ee03e98b766af97acb77fbdef4ddebc8fb64c41e692"
+          "sha256": "bb8d7aca9dbf68573be2645747f5590a32e3a1e4e2b2ca31614bf3dce1007290"
         },
-        "reason": "Message-only diagnostic at line 49; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.source-target-startup"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/artifact.py",
+            "sha256": "bb8d7aca9dbf68573be2645747f5590a32e3a1e4e2b2ca31614bf3dce1007290"
+          }
+        ]
       },
       {
-        "message": "Java executable startup is currently limited to Linux ELF targets",
+        "code": "java.unsupported.executable-target",
+        "feature_id": "java.source-target-startup",
         "source": {
           "path": "pcc/frontends/java/artifact.py",
-          "sha256": "5c71fc4e43262e89dd0c9ee03e98b766af97acb77fbdef4ddebc8fb64c41e692"
+          "sha256": "bb8d7aca9dbf68573be2645747f5590a32e3a1e4e2b2ca31614bf3dce1007290"
         },
-        "reason": "Message-only diagnostic at line 59; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.source-target-startup"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/artifact.py",
+            "sha256": "bb8d7aca9dbf68573be2645747f5590a32e3a1e4e2b2ca31614bf3dce1007290"
+          }
+        ]
       },
       {
-        "message": "f'unsupported Java source target/ABI {target!r}; require an owned LP64 Linux or arm64 Darwin target'",
+        "code": "java.unsupported.final-instance-fields",
+        "feature_id": "java.blank-final-instance-model",
         "source": {
-          "path": "pcc/frontends/java/source.py",
-          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
         },
-        "reason": "Message-only diagnostic at line 28; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.source-target-startup"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
       },
       {
-        "message": "Java source exceeds the bounded parser/analysis nesting limit",
+        "code": "java.unsupported.generic-declarations",
+        "feature_id": "java.inheritance-generics",
         "source": {
-          "path": "pcc/frontends/java/source.py",
-          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
         },
-        "reason": "Message-only diagnostic at line 55; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
       },
       {
-        "message": "source project exceeds the 8 MiB aggregate input limit",
-        "source": {
-          "path": "pcc/frontends/java/source.py",
-          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
-        },
-        "reason": "Message-only diagnostic at line 77; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "Java source exceeds the bounded parser/analysis nesting limit",
-        "source": {
-          "path": "pcc/frontends/java/source.py",
-          "sha256": "0c60b9c8878f1e00e36c0ced8359ac5ba709aea241b26ef0a5970cd22de62bd1"
-        },
-        "reason": "Message-only diagnostic at line 81; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "class source model exceeds the 8 MiB aggregate input limit",
-        "source": {
-          "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
-        },
-        "reason": "Message-only diagnostic at line 400; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "bootstrap Object requires the shared runtime definition",
-        "source": {
-          "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
-        },
-        "reason": "Message-only diagnostic at line 106; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.objects-native"
-      },
-      {
-        "message": "class source model exceeds the bounded parser/analysis nesting limit",
-        "source": {
-          "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
-        },
-        "reason": "Message-only diagnostic at line 405; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "Object override/final/access semantics require the inherited-method domain",
-        "source": {
-          "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "d272c58d4d2cecff8732caa6dffce1199406038d8bc299ba315be27f7ffaae55"
-        },
-        "reason": "Message-only diagnostic at line 113; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.inheritance-generics"
-      },
-      {
-        "message": "member types require the nested-class source domain",
+        "code": "java.unsupported.implicit-type-metadata",
+        "feature_id": "java.implicit-type-directory",
         "source": {
           "path": "pcc/frontends/java/source_project.py",
-          "sha256": "4ad5da62632798b88fbdb61489e16dbdd31e39c5d18f300a3791a102bdc7d973"
+          "sha256": "b9fb63d793b201fe982e6a1a9c58341adbcdad7bab2e81cb25403998c161c1ed"
         },
-        "reason": "Message-only diagnostic at line 111; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.nested-classes"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_project.py",
+            "sha256": "b9fb63d793b201fe982e6a1a9c58341adbcdad7bab2e81cb25403998c161c1ed"
+          }
+        ]
       },
       {
-        "message": "package-qualified calls require complete implicit-type metadata; supply a single-type import and a resolved class qualifier",
+        "code": "java.unsupported.instance-methods",
+        "feature_id": "java.objects-native",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.local-types",
+        "feature_id": "java.local-types",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.local-variable-limit",
+        "feature_id": "java.implementation-limits",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.member-types",
+        "feature_id": "java.nested-classes",
         "source": {
           "path": "pcc/frontends/java/source_project.py",
-          "sha256": "4ad5da62632798b88fbdb61489e16dbdd31e39c5d18f300a3791a102bdc7d973"
+          "sha256": "b9fb63d793b201fe982e6a1a9c58341adbcdad7bab2e81cb25403998c161c1ed"
         },
-        "reason": "Message-only diagnostic at line 120; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.implicit-type-directory"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_project.py",
+            "sha256": "b9fb63d793b201fe982e6a1a9c58341adbcdad7bab2e81cb25403998c161c1ed"
+          },
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
       },
       {
-        "message": "'source-project dependency resolution requires supplied source for ' + name.replace('/', '.')",
+        "code": "java.unsupported.nesting-limit",
+        "feature_id": "java.implementation-limits",
         "source": {
-          "path": "pcc/frontends/java/source_project.py",
-          "sha256": "4ad5da62632798b88fbdb61489e16dbdd31e39c5d18f300a3791a102bdc7d973"
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
         },
-        "reason": "Message-only diagnostic at line 35; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
+          },
+          {
+            "path": "pcc/frontends/java/source.py",
+            "sha256": "b7dbdb7f5e7b78018a03d3539a4c332fdf1c5c6cbbdfc177ddce3fe359c91a36"
+          }
+        ]
       },
       {
-        "message": "bootstrap Object requires the shared runtime definition",
-        "source": {
-          "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
-        },
-        "reason": "Message-only diagnostic at line 73; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.objects-native"
-      },
-      {
-        "message": "cyclic field initialization requires the shared Java initialization contract",
-        "source": {
-          "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
-        },
-        "reason": "Message-only diagnostic at line 96; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.class-initialization"
-      },
-      {
-        "message": "source method exceeds the local-variable budget",
-        "source": {
-          "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
-        },
-        "reason": "Message-only diagnostic at line 132; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "nonconstant or zero integer divisor requires shared ArithmeticException support",
-        "source": {
-          "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
-        },
-        "reason": "Message-only diagnostic at line 150; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.division-dynamic-exception"
-      },
-      {
-        "message": "nonconstant static initialization requires the shared Java initialization contract",
-        "source": {
-          "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "239133b7e01d60944f1fedf84d8d00dca3e215aac99d6cef128927172fad2b7f"
-        },
-        "reason": "Message-only diagnostic at line 104; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.class-initialization"
-      },
-      {
-        "message": "Java source exceeds the initial 1 MiB input limit",
+        "code": "java.unsupported.object-expressions",
+        "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
         },
-        "reason": "Message-only diagnostic at line 111; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
       },
       {
-        "message": "Java Unicode-escape translation is not implemented",
+        "code": "java.unsupported.object-inherited-methods",
+        "feature_id": "java.object-inherited-methods",
+        "source": {
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.on-demand-imports",
+        "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
         },
-        "reason": "Message-only diagnostic at line 113; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.unicode-translation"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
       },
       {
-        "message": "unsupported top-level class modifiers",
+        "code": "java.unsupported.project-size-limit",
+        "feature_id": "java.implementation-limits",
         "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
+          "path": "pcc/frontends/java/source_class_model.py",
+          "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
         },
-        "reason": "Message-only diagnostic at line 212; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "39a73a45b00719bf8168f604de112510bec95dc43f8ce813cd9906e8c317924b"
+          },
+          {
+            "path": "pcc/frontends/java/source.py",
+            "sha256": "b7dbdb7f5e7b78018a03d3539a4c332fdf1c5c6cbbdfc177ddce3fe359c91a36"
+          }
+        ]
       },
       {
-        "message": "inheritance, generics and interfaces require the shared Java runtime",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 219; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.inheritance-generics"
-      },
-      {
-        "message": "final local declarations require boolean, int or long",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 434; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.other-declared-primitives"
-      },
-      {
-        "message": "static imports require the next source-project lookup domain",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 200; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.imports-expanded"
-      },
-      {
-        "message": "only ordinary static source methods are implemented",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 248; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.objects-native"
-      },
-      {
-        "message": "source method results currently require boolean, int, long or void",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 251; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.other-declared-primitives"
-      },
-      {
-        "message": "array fields require shared Java storage and class initialization",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 253; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.class-initialization"
-      },
-      {
-        "message": "source method results currently require boolean, int, long or void",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 280; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.other-declared-primitives"
-      },
-      {
-        "message": "blank final locals require the definite-unassignment source domain",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 431; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.blank-final-local"
-      },
-      {
-        "message": "on-demand imports require the next source-project lookup domain",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 204; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.imports-expanded"
-      },
-      {
-        "message": "static initializer execution requires shared Java class initialization",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 228; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.class-initialization"
-      },
-      {
-        "message": "mutable static fields require shared Java class initialization",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 262; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.class-initialization"
-      },
-      {
-        "message": "source parameters require boolean, int or long",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 299; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.other-declared-primitives"
-      },
-      {
-        "message": "unsupported Java source token",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 134; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "Java source exceeds the initial token budget",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 138; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "initialized final instance fields require constant-variable semantics",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 266; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.blank-final-instance-model"
-      },
-      {
-        "message": "blank final fields require shared Java class initialization",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 268; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.class-initialization"
-      },
-      {
-        "message": "unsupported Java expression or statement",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "55929111b64ae3b56c06ceb5cf712ac0dee28a9a17d353b052f9a3612d946b3b"
-        },
-        "reason": "Message-only diagnostic at line 488; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings."
-      },
-      {
-        "message": "reference/boxing conditional operands require the shared Java runtime",
+        "code": "java.unsupported.reference-conditional",
+        "feature_id": "java.conditional-reference",
         "source": {
           "path": "pcc/frontends/java/source_types.py",
-          "sha256": "a556614202abd4176ab9d894116fd0dd47b2a1b1862fc042207fa50d1e2f6683"
+          "sha256": "f8be87890daa9f72cb7f782cd65fc87a91ad43346ce2cbe04015553aa2fb4b52"
         },
-        "reason": "Message-only diagnostic at line 30; no stable code exists. Dynamic message expressions are shown as source templates, not claimed emitted strings.",
-        "feature_id": "java.conditional-reference"
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_types.py",
+            "sha256": "f8be87890daa9f72cb7f782cd65fc87a91ad43346ce2cbe04015553aa2fb4b52"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.runtime-statements",
+        "feature_id": "java.runtime-statements",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.source-dependency",
+        "feature_id": "java.source-dependencies",
+        "source": {
+          "path": "pcc/frontends/java/source_project.py",
+          "sha256": "b9fb63d793b201fe982e6a1a9c58341adbcdad7bab2e81cb25403998c161c1ed"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_project.py",
+            "sha256": "b9fb63d793b201fe982e6a1a9c58341adbcdad7bab2e81cb25403998c161c1ed"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.source-size-limit",
+        "feature_id": "java.implementation-limits",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.special-method-modifiers",
+        "feature_id": "java.special-methods",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.static-imports",
+        "feature_id": "java.imports-expanded",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.static-initialization",
+        "feature_id": "java.class-initialization",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "06b5400159ceeb134e70f401b9c1883db4f67baf5c33be13437ca2109f9a6496"
+          },
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.string-literals",
+        "feature_id": "java.string-runtime",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.switch-expressions",
+        "feature_id": "java.switch-expressions",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.target-abi",
+        "feature_id": "java.source-target-startup",
+        "source": {
+          "path": "pcc/frontends/java/source.py",
+          "sha256": "b7dbdb7f5e7b78018a03d3539a4c332fdf1c5c6cbbdfc177ddce3fe359c91a36"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source.py",
+            "sha256": "b7dbdb7f5e7b78018a03d3539a4c332fdf1c5c6cbbdfc177ddce3fe359c91a36"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.token-limit",
+        "feature_id": "java.implementation-limits",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.unicode-escapes",
+        "feature_id": "java.unicode-translation",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.unicode-tokens",
+        "feature_id": "java.unicode-tokens",
+        "source": {
+          "path": "pcc/frontends/java/source_syntax.py",
+          "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "7c1001650e29be2dc11770e3a7e5dc0e0b95e15d787ab0e119b30a84578ab415"
+          }
+        ]
       }
     ],
-    "notes": "AST inventory of direct UnsupportedJava calls and Token.error(...,True) in source/frontend artifact modules at candidate1eb6ee31. Compatibility decoders, dynamic/general parse errors and budget-vs-language taxonomy need separate completion. No stable Java diagnostic codes currently exist; this is a real code-coverage gap."
+    "message_only": [],
+    "notes": "Every current SOURCE UnsupportedJava call and Token capability site has an explicit stable code. Dynamic helper forwarding carries an explicit caller code, never message-text inference. Codes preserve existing str(error) and args; malformed token/modifier/type starts remain JavaError with code=None. Frozen class-file compatibility remains message-only and outside this source acceptance inventory; therefore whole-frontend inventory_complete stays false. Current source-site hashes bind qualified971/c5 plus diagnostic metadata changes, not unpublished1eb. Implementation limits and missing supplied dependencies are distinguished from native language/runtime gaps. A capability diagnostic identifies the first unavailable domain, not proof the remainder of input is valid."
   },
   "evidence": [
     {

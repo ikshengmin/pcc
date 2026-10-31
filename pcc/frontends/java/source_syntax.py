@@ -36,9 +36,11 @@ class Token:
     line: int
     column: int
 
-    def error(self, message, unsupported=False):
-        kind = UnsupportedJava if unsupported else JavaError
-        raise kind(f"{self.filename}:{self.line}:{self.column}: {message}")
+    def error(self, message, *, code=None):
+        diagnostic = f"{self.filename}:{self.line}:{self.column}: {message}"
+        if code is not None:
+            raise UnsupportedJava(diagnostic, code=code)
+        raise JavaError(diagnostic)
 
 
 @dataclass
@@ -108,9 +110,9 @@ def tokenize(source, filename):
     if not isinstance(source, str):
         raise JavaError("Java source input must be text")
     if len(source) > 1_048_576:
-        raise UnsupportedJava("Java source exceeds the initial 1 MiB input limit")
+        raise UnsupportedJava("Java source exceeds the initial 1 MiB input limit", code="java.unsupported.source-size-limit")
     if "\\u" in source:
-        raise UnsupportedJava("Java Unicode-escape translation is not implemented")
+        raise UnsupportedJava("Java Unicode-escape translation is not implemented", code="java.unsupported.unicode-escapes")
     tokens, pos, line, column = [], 0, 1, 1
     while pos < len(source):
         start, at_line, at_column = pos, line, column
@@ -131,11 +133,18 @@ def tokenize(source, filename):
             if not match:
                 if source[pos] == "'":
                     Token("'", filename, line, column).error("invalid Java character literal")
-                Token(source[pos], filename, line, column).error("unsupported Java source token", True)
+                token = Token(source[pos], filename, line, column)
+                if source[pos] == '"':
+                    token.error("unsupported Java source token", code="java.unsupported.string-literals")
+                if source[pos] == "@":
+                    token.error("unsupported Java source token", code="java.unsupported.annotations")
+                if not source[pos].isascii():
+                    token.error("unsupported Java source token", code="java.unsupported.unicode-tokens")
+                token.error("unsupported Java source token")
             pos = match.end()
             tokens.append(Token(match.group(), filename, line, column))
             if len(tokens) > 100_000:
-                raise UnsupportedJava("Java source exceeds the initial token budget")
+                raise UnsupportedJava("Java source exceeds the initial token budget", code="java.unsupported.token-limit")
         fragment = source[start:pos].replace("\r\n", "\n").replace("\r", "\n")
         if "\n" in fragment:
             line += fragment.count("\n")
@@ -176,6 +185,15 @@ class SourceParser:
             token.error("expected a non-keyword Java identifier")
         return token
 
+    @staticmethod
+    def type_boundary(token, message, *, code, location=None):
+        location = token if location is None else location
+        if (token.text in {"byte", "short", "char", "float", "double"}
+                or re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text)
+                and token.text not in KEYWORDS):
+            location.error(message, code=code)
+        location.error(message)
+
     def modifiers(self):
         result = set()
         while self.peek().text in MODIFIERS:
@@ -197,35 +215,44 @@ class SourceParser:
         imports = []
         while self.accept("import"):
             if self.peek().text == "static":
-                self.peek().error("static imports require the next source-project lookup domain", True)
+                self.peek().error("static imports require the next source-project lookup domain", code="java.unsupported.static-imports")
             imported = [self.identifier()]
             while self.accept("."):
                 if self.peek().text == "*":
-                    self.peek().error("on-demand imports require the next source-project lookup domain", True)
+                    self.peek().error("on-demand imports require the next source-project lookup domain", code="java.unsupported.on-demand-imports")
                 imported.append(self.identifier())
             self.expect(";")
             if len(imported) < 2:
                 imported[0].error("cannot import a type from the unnamed package")
             imports.append(tuple(imported))
         mods = self.modifiers()
-        if mods - {"public", "final", "strictfp"}:
-            self.peek().error("unsupported top-level class modifiers", True)
+        # JLS 8.1.1: unsupported abstract classes differ from illegal
+        # top-level private/protected/static or method-only modifiers.
+        if mods - {"public", "final", "strictfp", "abstract"} or {"abstract", "final"} <= mods:
+            self.peek().error("unsupported top-level class modifiers")
+        if "abstract" in mods:
+            self.peek().error("unsupported top-level class modifiers", code="java.unsupported.abstract-classes")
         self.expect("class")
         class_token = self.identifier()
         name = class_token.text
         class_modifiers = frozenset(mods)
         owner = "/".join(package + [name])
+        if self.peek().text in {"extends", "implements", "<", "permits"}:
+            self.peek().error("inheritance, generics and interfaces require the shared Java runtime", code="java.unsupported.class-supertypes-generics")
         if self.peek().text != "{":
-            self.peek().error("inheritance, generics and interfaces require the shared Java runtime", True)
+            self.peek().error("inheritance, generics and interfaces require the shared Java runtime")
         self.expect("{")
         methods, fields, constructors, initializers, initialization_steps = [], [], [], [], []
         while not self.accept("}"):
             if self.accept(";"):
                 continue
             mods = self.modifiers()
+            if not self.class_model and mods == {"static"} and self.peek().text == "{":
+                self.peek().error("source method results currently require boolean, int, long or void",
+                                  code="java.unsupported.static-initialization")
             if self.class_model and self.peek().text == "{":
                 if mods == {"static"}:
-                    self.peek().error("static initializer execution requires shared Java class initialization", True)
+                    self.peek().error("static initializer execution requires shared Java class initialization", code="java.unsupported.static-initialization")
                 if mods:
                     self.peek().error("invalid instance initializer modifier")
                 initializer = self.block()
@@ -244,13 +271,24 @@ class SourceParser:
                                                  parameter_types=parameter_types, parameter_final=parameter_final,
                                                  is_constructor=True))
                 continue
-            if (not self.class_model and "static" not in mods) or mods & {"abstract", "native", "synchronized"}:
-                self.peek().error("only ordinary static source methods are implemented", True)
+            if "abstract" in mods and mods & {"private", "static", "final", "native", "synchronized", "strictfp"}:
+                self.peek().error("only ordinary static source methods are implemented")
+            if mods & {"abstract", "native", "synchronized"}:
+                self.peek().error("only ordinary static source methods are implemented", code="java.unsupported.special-method-modifiers")
+            if not self.class_model and "static" not in mods:
+                self.peek().error("only ordinary static source methods are implemented", code="java.unsupported.instance-methods")
+            if self.peek().text == "<":
+                self.peek().error("source method results currently require boolean, int, long or void",
+                                  code="java.unsupported.generic-declarations")
+            if self.peek().text in {"class", "interface", "enum", "record"}:
+                self.peek().error("source method results currently require boolean, int, long or void",
+                                  code="java.unsupported.member-types")
             result = self.take()
             if result.text not in DECLARED | {"void", "byte", "short", "char"}:
-                result.error("source method results currently require boolean, int, long or void", True)
+                self.type_boundary(result, "source method results currently require boolean, int, long or void",
+                                   code="java.unsupported.declared-result-type")
             if self.peek().text == "[":
-                self.peek().error("array fields require shared Java storage and class initialization", True)
+                self.peek().error("array fields require shared Java storage and class initialization", code="java.unsupported.array-storage")
             method_name = self.identifier()
             if self.peek().text != "(":
                 if result.text == "void":
@@ -259,13 +297,13 @@ class SourceParser:
                     result.error("invalid constant-field modifier")
                 instance = self.class_model and "static" not in mods
                 if instance and "final" in mods:
-                    result.error("final instance fields require constructor definite-unassignment semantics", True)
+                    result.error("final instance fields require constructor definite-unassignment semantics", code="java.unsupported.final-instance-fields")
                 if not instance and "final" not in mods:
-                    result.error("mutable static fields require shared Java class initialization", True)
+                    result.error("mutable static fields require shared Java class initialization", code="java.unsupported.static-initialization")
                 while True:
                     initialized = bool(self.accept("="))
                     if not initialized and not instance:
-                        method_name.error("blank final fields require shared Java class initialization", True)
+                        method_name.error("blank final fields require shared Java class initialization", code="java.unsupported.static-initialization")
                     initializer = self.expression() if initialized else None
                     field = SourceField(method_name, result.text, initializer, frozenset(mods), owner, len(fields))
                     fields.append(field)
@@ -277,7 +315,8 @@ class SourceParser:
                 self.expect(";")
                 continue
             if result.text not in DECLARED | {"void"}:
-                result.error("source method results currently require boolean, int, long or void", True)
+                self.type_boundary(result, "source method results currently require boolean, int, long or void",
+                                   code="java.unsupported.declared-result-type")
             parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
             methods.append(SourceMethod(method_name, result.text, parameters, self.block(),
                                         owner=owner, modifiers=frozenset(mods), parameter_types=parameter_types,
@@ -296,7 +335,8 @@ class SourceParser:
                     self.peek().error("duplicate final parameter modifier")
                 dtype = self.take()
                 if dtype.text not in DECLARED:
-                    dtype.error("source parameters require boolean, int or long", True)
+                    self.type_boundary(dtype, "source parameters require boolean, int or long",
+                                       code="java.unsupported.declared-parameter-type")
                 types.append(dtype.text)
                 parameters.append(self.identifier())
                 if not self.accept(","):
@@ -428,10 +468,14 @@ class SourceParser:
             name = self.identifier()
             children = [self.expression()] if self.accept("=") else []
             if is_final and not children:
-                name.error("blank final locals require the definite-unassignment source domain", True)
+                name.error("blank final locals require the definite-unassignment source domain", code="java.unsupported.blank-final-local")
             return Node("var", name, dtype, children, is_final=is_final)
+        if is_final and self.peek().text == "var":
+            token.error("final local declarations require boolean, int or long",
+                        code="java.unsupported.declared-local-type")
         if is_final:
-            token.error("final local declarations require boolean, int or long", True)
+            self.type_boundary(self.peek(), "final local declarations require boolean, int or long",
+                               code="java.unsupported.declared-local-type", location=token)
         if self.peek(1).text in ASSIGNMENTS | {"++", "--"}:
             name = self.identifier()
             operation = self.take().text
@@ -485,7 +529,21 @@ class SourceParser:
             else:
                 node = Node("name", token, ".".join(parts))
         else:
-            token.error("unsupported Java expression or statement", True)
+            # An unimplemented grammar prefix is not proof the whole input is
+            # valid. Known malformed expression starts remain ordinary errors.
+            if token.text in {"new", "this", "super", "null"}:
+                token.error("unsupported Java expression or statement", code="java.unsupported.object-expressions")
+            if token.text == "switch":
+                token.error("unsupported Java expression or statement", code="java.unsupported.switch-expressions")
+            if token.text in {"throw", "try", "synchronized"}:
+                token.error("unsupported Java expression or statement", code="java.unsupported.runtime-statements")
+            if token.text == "assert":
+                token.error("unsupported Java expression or statement", code="java.unsupported.assert-statements")
+            if token.text in {"byte", "short", "char", "float", "double", "var"}:
+                token.error("unsupported Java expression or statement", code="java.unsupported.declared-local-type")
+            if token.text in {"class", "interface", "enum", "record"}:
+                token.error("unsupported Java expression or statement", code="java.unsupported.local-types")
+            token.error("unsupported Java expression or statement")
         while PRECEDENCE.get(self.peek().text, 0) >= minimum:
             operator = self.take()
             node = Node("binary", operator, operator.text,

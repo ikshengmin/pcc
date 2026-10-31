@@ -33,7 +33,7 @@ class SourceProject:
                 target = self.classes.get(name)
                 if target is None:
                     raise UnsupportedJava("source-project dependency resolution requires supplied source for "
-                                          + name.replace("/", "."))
+                                          + name.replace("/", "."), code="java.unsupported.source-dependency")
                 self.require_class_access(program, target, tokens[0])
                 simple = tokens[-1].text
                 if (simple in imported and imported[simple] is not target or
@@ -108,7 +108,7 @@ class SourceProject:
         qualifier = pieces[:-1]
         if first is not None:
             if len(qualifier) != 1:
-                node.token.error("member types require the nested-class source domain", True)
+                node.token.error("member types require the nested-class source domain", code="java.unsupported.member-types")
             target = first
         else:
             # The full bootstrap java.lang public-type directory is not yet
@@ -118,7 +118,7 @@ class SourceProject:
             # silently reinterpret that unknown name as a package.
             if len(qualifier) > 1:
                 node.token.error("package-qualified calls require complete implicit-type metadata; "
-                                 "supply a single-type import and a resolved class qualifier", True)
+                                 "supply a single-type import and a resolved class qualifier", code="java.unsupported.implicit-type-metadata")
             node.token.error("unresolved source class qualifier " + ".".join(qualifier))
         self.require_class_access(caller, target, node.token)
         return target
