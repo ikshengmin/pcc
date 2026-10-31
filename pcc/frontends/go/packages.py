@@ -36,7 +36,8 @@ def parse_package(units, *, require_main):
     program = Program(programs[0].token,
                       [function for item in programs for function in item.functions],
                       [constant for item in programs for constant in item.constants],
-                      [imported for item in programs for imported in item.imports])
+                      [imported for item in programs for imported in item.imports],
+                      [variable for item in programs for variable in item.variables])
     return program
 
 
@@ -79,5 +80,6 @@ def compile_packages(packages, *, main_package, target_triple):
     main = visit(main_package).program
     if not supported_target(target_triple):
         raise GoDiagnostic(main.token, "Go scalar frontend requires a supported 64-bit target")
-    linked = Program(main.token, [function for program in order for function in program.functions], [])
+    linked = Program(main.token, [function for program in order for function in program.functions], [],
+                     variables=[variable for program in order for variable in program.variables])
     return Lowerer(linked, target_triple, main.token.filename).lower()

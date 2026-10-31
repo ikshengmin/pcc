@@ -33,8 +33,25 @@ external compiler fallback, independent collector, or scheduler.
   before IR shifting; large shifts follow Go semantics rather than an instruction
   mask. Nonconstant untyped shift operands acquire the enclosing Go context type.
 
-Go predeclared-name shadowing, package variables/initializers, grouped
-const/var declarations, floating/complex types, aggregate/reference types,
+- Fixed arrays of scalar integers/bools, explicit constant lengths and `[...]`
+  composite literals, positional/keyed elements, zero-filled holes, ordinary
+  indexing and mutable package/local storage. Arrays retain value-copy semantics
+  in assignment, parameters and returns through the private PCC Go ABI (not a C
+  ABI claim). Array lengths are limited to 4096 elements; nested arrays and array
+  equality are explicit gaps. Assignment evaluates index operands and right-hand
+  values before stores; compound assignment evaluates its target only once.
+- Package variables with zero initialization or statically evaluable scalar/array
+  initializers. Variables are storage, not constants. Initializers that read
+  variables or invoke runtime functions are rejected until the shared package
+  initialization protocol is available; `init` is still unsupported.
+- Array indexing checks constant indices and admits dynamic indices only with a
+  conservative generic bound from an unsigned type, a nonnegative constant mask,
+  or an unsigned right shift by a constant. Unproved bounds fail with the missing
+  shared-runtime bounds-panic contract; no unchecked access, abort-as-panic, or
+  package-name/table-specific rule substitutes for that contract.
+
+Go predeclared-name shadowing, dynamic package initialization, grouped
+const/var declarations, floating/complex types, other aggregate/reference types,
 methods/interfaces/generics, closures, multiple results, strings, I/O, panic,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
@@ -61,5 +78,16 @@ The unmodified Go 1.27.3 `test/ken/for.go` and `src/math/bits/bits.go`, includin
 BSD-3-Clause license and per-file hashes, are in `tests/go/upstream`. They are
 frontier tests, **not successful upstream-program qualification**: the former
 requires shared-runtime panic support; the latter now reaches its original
-package-level lookup tables and still requires arrays/package state. No token removal makes these
-programs pass.
+named function results after its package-level array tables and index syntax.
+The remaining package closure also needs original generated tables, multiple
+results and shared panic support. This is a parser frontier, not a successful
+compile/run of `math/bits`. No token removal makes these programs pass.
+
+Array and assignment semantics follow the official specification's
+[array types](https://go.dev/ref/spec#Array_types),
+[index expressions](https://go.dev/ref/spec#Index_expressions),
+[assignments](https://go.dev/ref/spec#Assignments), and
+[package initialization](https://go.dev/ref/spec#Package_initialization).
+The authored `arrays.go` is an unchanged complete program, exercised through
+its own main and independent full-width native observers; the optional official
+Go oracle receives those same bytes. Darwin object emission is cross-only.

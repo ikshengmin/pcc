@@ -7,7 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
-from pcc.frontends.go.types import integer_bits, integer_signed
+from pcc.frontends.go.types import ArrayType, integer_bits, integer_signed
 
 
 def function_symbol(name, package_path=None):
@@ -20,6 +20,8 @@ GO_MAIN_SYMBOL = function_symbol("main")
 
 
 def ir_type(dtype):
+    if isinstance(dtype, ArrayType):
+        return ir.ArrayType(ir_type(dtype.element), dtype.count)
     if dtype == "void":
         return ir.VoidType()
     if dtype in ("bool", "untyped bool"):
@@ -34,11 +36,24 @@ class Lowerer:
         self.module.triple = target_triple
         self.functions = {}
         self.slots = {}
+        self.globals = {}
+        self.temps = {}
+        self.saved_values = {}
         self.loops = []
         self.builder = None
         self.function = None
 
     def lower(self):
+        for declaration in self.program.variables:
+            for symbol in declaration.symbols:
+                storage = ir.GlobalVariable(self.module, ir_type(symbol.type), symbol.abi_symbol)
+                value = symbol.initializer
+                if value is None and not isinstance(symbol.type, ArrayType):
+                    value = 0
+                if isinstance(symbol.type, ArrayType) and value is not None:
+                    value = [ir.Constant(ir_type(symbol.type.element), int(item)) for item in value]
+                storage.initializer = ir.Constant(ir_type(symbol.type), value)
+                self.globals[symbol] = storage
         for source in self.program.functions:
             ftype = ir.FunctionType(ir_type(source.result), [ir_type(dtype) for _, dtype in source.params])
             self.functions[source.abi_symbol] = ir.Function(self.module, ftype, source.abi_symbol)
@@ -46,7 +61,11 @@ class Lowerer:
             self.function = self.functions[source.abi_symbol]
             entry = self.function.append_basic_block("entry")
             self.builder = ir.IRBuilder(entry)
-            self.slots = {}
+            self.slots = dict(self.globals)
+            self.temps = {}
+            for index, expr in enumerate(source.temporaries):
+                if id(expr) not in self.temps:
+                    self.temps[id(expr)] = self.builder.alloca(ir_type(expr.type), name="array_temp_" + str(index))
             for index, symbol in enumerate(source.locals):
                 self.slots[symbol] = self.builder.alloca(ir_type(symbol.type), name="local_" + str(index))
             for symbol, argument in zip(source.parameters, self.function.args):
@@ -71,12 +90,30 @@ class Lowerer:
         kind = statement.kind
         if kind == "const":
             return
-        if kind in ("var", ":=", "=", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&^=", "<<=", ">>="):
-            # Go evaluates all right-hand sides before performing any stores.
+        if kind == "=":
+            # Phase one evaluates LHS index operands and every RHS, left to
+            # right; phase two commits stores left to right. Array SSA loads
+            # are value snapshots, never an implicit pointer/decay alias.
+            targets = [None if target.kind == "name" and target.value == "_" else self.address(target)
+                       for target in statement.targets]
+            values = [self.expression(expr) for expr in statement.exprs]
+            for target, value in zip(targets, values):
+                if target is not None:
+                    self.builder.store(value, target)
+            return
+        if kind in ("++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&^=", "<<=", ">>="):
+            target = statement.targets[0]
+            address = self.address(target)
+            self.saved_values[id(target)] = self.builder.load(address)
+            value = self.expression(statement.exprs[0])
+            del self.saved_values[id(target)]
+            self.builder.store(value, address)
+            return
+        if kind in ("var", ":="):
             values = [self.expression(expr) for expr in statement.exprs]
             for index, symbol in enumerate(statement.symbols):
                 if symbol is not None and symbol.token.text != "_":
-                    value = values[index] if values else ir.Constant(ir_type(symbol.type), 0)
+                    value = values[index] if values else ir.Constant(ir_type(symbol.type), None if isinstance(symbol.type, ArrayType) else 0)
                     self.builder.store(value, self.slots[symbol])
             return
         if kind == "expression":
@@ -147,11 +184,41 @@ class Lowerer:
             return
         raise AssertionError("unlowered typed statement: " + kind)
 
+    def address(self, expr):
+        if expr.kind in ("name", "selector"):
+            return self.slots[expr.symbol]
+        if expr.kind == "index":
+            base, index = expr.args
+            if base.addressable:
+                storage = self.address(base)
+            else:
+                value = self.expression(base)
+                storage = self.temps[id(base)]
+                self.builder.store(value, storage)
+            # Sema either checked a constant or proved a type/range bound;
+            # unchecked runtime indices never reach this GEP.
+            offset = self.expression(index)
+            if offset.type.width < 64:
+                extend = self.builder.sext if integer_signed(index.type) else self.builder.zext
+                offset = extend(offset, ir.IntType(64))
+            return self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), offset])
+        raise AssertionError("unlowered address: " + expr.kind)
+
     def expression(self, expr):
+        if id(expr) in self.saved_values:
+            return self.saved_values[id(expr)]
+        if expr.kind == "array":
+            values = [self.expression(item) for item in expr.args]
+            storage = self.temps[id(expr)]
+            self.builder.store(ir.Constant(ir_type(expr.type), None), storage)
+            for index, value in zip(expr.indices, values):
+                element = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(64), index)])
+                self.builder.store(value, element)
+            return self.builder.load(storage)
         if expr.constant is not None:
             return ir.Constant(ir_type(expr.type), int(expr.constant))
-        if expr.kind == "name":
-            return self.builder.load(self.slots[expr.symbol])
+        if expr.kind in ("name", "selector", "index"):
+            return self.builder.load(self.address(expr))
         if expr.kind == "call":
             arguments = [self.expression(arg) for arg in expr.args]
             if expr.symbol is None:

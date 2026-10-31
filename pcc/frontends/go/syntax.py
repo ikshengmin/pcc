@@ -144,6 +144,13 @@ def scan(source, filename="<go>"):
 
 
 @dataclass
+class ArraySyntax:
+    token: Token
+    length: object
+    element: object
+
+
+@dataclass
 class Expr:
     kind: str
     token: Token
@@ -154,6 +161,9 @@ class Expr:
     symbol: object = None
     qualifier: str | None = None
     parenthesized: bool = False
+    keys: list = field(default_factory=list)
+    indices: list = field(default_factory=list)
+    addressable: bool = False
 
 
 @dataclass
@@ -169,6 +179,7 @@ class Stmt:
     post: object = None
     symbols: list = field(default_factory=list)
     terminates: bool = False
+    targets: list = field(default_factory=list)
 
 
 @dataclass
@@ -180,6 +191,7 @@ class Function:
     locals: list = field(default_factory=list)
     parameters: list = field(default_factory=list)
     abi_symbol: str = ""
+    temporaries: list = field(default_factory=list)
 
 
 @dataclass
@@ -195,6 +207,7 @@ class Program:
     functions: list
     constants: list
     imports: list = field(default_factory=list)
+    variables: list = field(default_factory=list)
 
 
 BINARY_PRECEDENCE = {
@@ -216,22 +229,24 @@ class GoParser:
         self.take(";")
         if package.text == "_":
             self.fail(package, "package name cannot be blank")
-        functions, constants, imports = [], [], []
+        functions, constants, imports, variables = [], [], [], []
         while not self.at("eof"):
             if self.accept(";"):
                 continue
             if self.at("import"):
-                if functions or constants:
+                if functions or constants or variables:
                     self.fail(self.current, "imports must precede package declarations")
                 imports.extend(self.import_declaration())
             elif self.at("func"):
                 functions.append(self.function())
             elif self.at("const"):
                 constants.append(self.declaration())
+            elif self.at("var"):
+                variables.append(self.declaration())
             else:
-                self.fail(self.current, "unsupported package declaration; expected func or const")
+                self.fail(self.current, "unsupported package declaration; expected func, const or var")
             self.end_statement()
-        return Program(package, functions, constants, imports)
+        return Program(package, functions, constants, imports, variables)
 
     @property
     def current(self):
@@ -284,7 +299,20 @@ class GoParser:
                 self.fail(self.current, "expected import separator")
         return imports
 
-    def datatype(self):
+    def datatype(self, *, literal=False):
+        if self.at("["):
+            token = self.take("[")
+            if self.at("]"):
+                self.fail(token, "slice types require shared-runtime backing storage support")
+            if self.accept("..."):
+                if not literal:
+                    self.fail(token, "inferred array length is only valid in a composite literal")
+                length = None
+            else:
+                length = self.expression()
+            self.take("]")
+            element = self.datatype()
+            return ArraySyntax(token, length, element)
         token = self.take("name")
         if token.text not in TYPE_NAMES:
             self.fail(token, f"unsupported type {token.text!r}; available: fixed-width integers, int, uint, uintptr, bool")
@@ -304,7 +332,9 @@ class GoParser:
             if not self.accept(","):
                 break
         self.take(")")
-        result = self.datatype() if self.at("name") else "void"
+        if self.at("("):
+            self.fail(self.current, "named or multiple function results are not implemented")
+        result = self.datatype() if self.at("name") or self.at("[") else "void"
         return Function(name, params, result, self.block())
 
     def block(self):
@@ -326,7 +356,7 @@ class GoParser:
         names = [self.take("name")]
         while self.accept(","):
             names.append(self.take("name"))
-        dtype = self.datatype() if self.at("name") else None
+        dtype = self.datatype() if self.at("name") or self.at("[") else None
         exprs = self.expression_list() if self.accept("=") else []
         if not exprs and (token.kind == "const" or dtype is None):
             self.fail(token, "declaration requires a type or initializer (const requires initializer)")
@@ -385,15 +415,15 @@ class GoParser:
         token = self.current
         if token.kind in ("=", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&^=", "<<=", ">>="):
             self.index += 1
-            if any(expr.kind != "name" for expr in left):
-                self.fail(token, "assignment requires variable names; aggregate lvalues are unsupported")
+            if token.kind == ":=" and any(expr.kind != "name" for expr in left):
+                self.fail(token, "short declaration requires identifiers")
             if token.kind == ":=" and any(expr.parenthesized for expr in left):
                 self.fail(token, "short declaration requires unparenthesized identifiers")
-            return Stmt(token.kind, token, names=[expr.token for expr in left], exprs=self.expression_list())
+            return Stmt(token.kind, token, names=[expr.token for expr in left], exprs=self.expression_list(), targets=left)
         if self.accept("++") or self.accept("--"):
-            if len(left) != 1 or first.kind != "name":
+            if len(left) != 1:
                 self.fail(token, "increment/decrement requires one variable")
-            return Stmt(token.kind, token, names=[first.token])
+            return Stmt(token.kind, token, names=[first.token], targets=left)
         if len(left) != 1:
             self.fail(token, "expression statement must contain one function call")
         return Stmt("expression", first.token, exprs=left)
@@ -415,6 +445,19 @@ class GoParser:
             left = self.expression()
             self.take(")")
             left.parenthesized = True
+        elif self.at("["):
+            dtype = self.datatype(literal=True)
+            self.take("{")
+            args, keys = [], []
+            while not self.at("}"):
+                item = self.expression()
+                key = item if self.accept(":") else None
+                args.append(self.expression() if key is not None else item)
+                keys.append(key)
+                if not self.accept(","):
+                    break
+            self.take("}")
+            left = Expr("array", token, dtype, args, keys=keys)
         elif self.accept("integer"):
             left = Expr("integer", token, token.text)
         elif self.accept("name"):
@@ -433,6 +476,10 @@ class GoParser:
             self.take(")")
             qualifier = left.args[0].value if left.kind == "selector" else None
             left = Expr("call", left.token, left.value, args, qualifier=qualifier)
+        while self.accept("["):
+            index = self.expression()
+            self.take("]")
+            left = Expr("index", index.token, args=[left, index])
         while BINARY_PRECEDENCE.get(self.current.kind, 0) >= minimum:
             operator = self.current
             self.index += 1

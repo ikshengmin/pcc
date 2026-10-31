@@ -5,6 +5,18 @@ Fixed-width types never depend on a host C data model; byte/rune are aliases,
 while int, int64 and uintptr remain distinct named Go types.
 """
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ArrayType:
+    count: int
+    element: str
+
+    def __str__(self):
+        return f"[{self.count}]{self.element}"
+
+
 INTEGER_TYPES = {
     "int8": (8, True), "int16": (16, True), "int32": (32, True), "int64": (64, True),
     "uint8": (8, False), "uint16": (16, False), "uint32": (32, False), "uint64": (64, False),
@@ -29,7 +41,7 @@ def integer_bounds(dtype):
 
 
 def is_integer(dtype):
-    return dtype == "untyped int" or dtype in INTEGER_TYPES
+    return isinstance(dtype, str) and (dtype == "untyped int" or dtype in INTEGER_TYPES)
 
 
 def supported_target(triple):

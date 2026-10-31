@@ -103,7 +103,7 @@ def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(litera
     ("go f()", "func f() {}", "unsupported statement"),
     ("defer f()", "func f() {}", "unsupported statement"),
     ("var x string", "", "unsupported type"),
-    ("var x []int", "", "requires a type"),
+    ("var x []int", "", "slice types require"),
     ("switch {}", "", "unsupported statement"),
     ("var true bool", "", "shadowing predeclared"),
 ])
@@ -117,7 +117,7 @@ def test_go_rejects_invalid_or_unimplemented_semantics(body, helpers, message):
 @pytest.mark.parametrize("text,message", [
     ("package x\nfunc main() {}", "requires package main"),
     ("package main\nimport \"fmt\"\nfunc main() {}", "import source unavailable"),
-    ("package main\nvar x int\nfunc main() {}", "unsupported package declaration"),
+    ("package main\nvar x = f()\nfunc f() int {return 1}\nfunc main() {}", "shared-runtime initialization"),
     ("package main\nfunc main(x int) {}", "main must have no"),
     ("package main\nfunc main() int {return 0}", "main must have no"),
     ("package main\nfunc f() {}", "requires func main"),
