@@ -74,7 +74,7 @@ from .x86_64_frame_registers import (
     CALLEE_SAVED_AREA_SIZE,
     keep_frame_slots_in_registers,
 )
-from .x86_64_register_copies import forward_register_copies
+from .x86_64_register_copies import forward_register_copies, retarget_scratch_definitions
 
 _WINDOWS_ABI = False
 _WINDOWS_SCRATCH_BASE = 0
@@ -1722,6 +1722,45 @@ def _emit_indexed_pointer_add(func: ParsedFunction, index_value: str, elem_size:
     return lines
 
 
+def _gep_constant_byte_offset(
+    base_type: TypeDesc,
+    indices: tuple[tuple[TypeDesc, str], ...],
+) -> int | None:
+    """Total byte offset of a GEP whose every index is a constant, or None.
+
+    Walks the indices as _emit_gep_instruction does; index constants are
+    sign-extended to pointer width, so only i32-range spellings fold, and
+    the total must fit lea's signed 32-bit displacement.
+    """
+    total = 0
+    current = base_type
+    position = 0
+    for _index_type, index_value in indices:
+        if len(index_value) > 11:
+            return None
+        value = const_int_from_value(index_value)
+        if value is None or value < -2147483648 or value > 2147483647:
+            return None
+        if position == 0:
+            total += value * current.slot_size
+        elif current.is_array:
+            if current.elem is None:
+                return None
+            current = current.elem
+            total += value * current.slot_size
+        elif current.is_struct:
+            if value < 0:
+                return None
+            total += current.field_offset(value)
+            current = current.field_type(value)
+        else:
+            return None
+        position += 1
+    if not indices or total < -2147483648 or total > 2147483647:
+        return None
+    return total
+
+
 def _emit_gep_instruction(
     func: ParsedFunction,
     dest: str,
@@ -1735,6 +1774,13 @@ def _emit_gep_instruction(
         raise BackendUnavailable("x86_64 self backend getelementptr requires at least one index")
     ptr_type = func.value_types.get(ptr_name, TypeDesc("ptr", pointee=base_type))
     lines = _materialize_value(func, ptr_name, ptr_type, "r11")
+    constant_offset = _gep_constant_byte_offset(base_type, indices)
+    if constant_offset is not None:
+        # Every index is a constant: one lea of the total byte offset.
+        lines.extend(_emit_add_immediate_to_r11(constant_offset))
+        dest_type = func.value_types.get(dest, TypeDesc("ptr"))
+        lines.extend(_store_reg_to_slot("r11", func.value_slots[dest].offset, dest_type))
+        return lines
     current = base_type
     lines.extend(_emit_indexed_pointer_add(func, indices[0][1], current.slot_size))
     for _index_type, index_value in indices[1:]:
@@ -3468,7 +3514,7 @@ def _emit_function(
         # A second round drops the jumps the first one left falling into
         # their own target.
         lines = _thread_x86_jumps(_thread_x86_jumps(lines))
-        lines = forward_register_copies(lines)
+        lines = forward_register_copies(retarget_scratch_definitions(lines))
     lines.append(stack_map_plan.end_label + ":")
     lines.append(f".size {symbol}, .-{symbol}")
     if _WINDOWS_ABI:

@@ -287,6 +287,110 @@ def _droppable(mnemonic: str, first_text: str, second_text: str, count: int) -> 
     return "[" not in second_text and " PTR " not in second_text and ":" not in second_text
 
 
+_SCRATCH_DEFINITIONS = frozenset({"mov", "movzx", "movsx", "movsxd", "lea"})
+_EFFECT_MASK = (1 << _WRITES_SHIFT) - 1
+
+
+def _parse_two_operands(line: str):
+    """(mnemonic, first, second) of an instruction line with exactly two
+    operands, or None."""
+    if not line.startswith("  ") or line.startswith("  ."):
+        return None
+    space = line.find(" ", 2)
+    if space < 0:
+        return None
+    comma = line.find(", ", space + 1)
+    if comma < 0 or line.find(", ", comma + 2) >= 0:
+        return None
+    return line[2:space], line[space + 1:comma], line[comma + 2:]
+
+
+def _scratch_dead_from(lines: list[str], start: int, scratch_mask: int) -> bool:
+    """Whether the scratch register is written before any read from
+    ``start`` to the end of its block. A label, a jump or an unmodeled
+    instruction ends the scan as live; a return ends it as dead (r10 and
+    r11 are dead at a return under SysV and Win64)."""
+    index = start
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith("  "):
+            return False
+        if line.startswith("  ."):
+            index += 1
+            continue
+        space = line.find(" ", 2)
+        if space < 0:
+            mnemonic = line[2:]
+            first_text = ""
+            second_text = ""
+            operands = 0
+        else:
+            mnemonic = line[2:space]
+            comma = line.find(", ", space + 1)
+            if comma < 0:
+                first_text = line[space + 1:]
+                second_text = ""
+                operands = 1
+            else:
+                first_text = line[space + 1:comma]
+                after = line.find(", ", comma + 2)
+                second_text = line[comma + 2:] if after < 0 else line[comma + 2:after]
+                operands = 2 if after < 0 else 3
+        if mnemonic == "ret":
+            return True
+        if mnemonic == "jmp" or mnemonic in _CONDITIONAL_JUMPS:
+            return False
+        packed = _effects(mnemonic, first_text, second_text, operands)
+        if packed < 0:
+            return False
+        if packed & _EFFECT_MASK & scratch_mask:
+            return False
+        if (packed >> _WRITES_SHIFT) & _EFFECT_MASK & scratch_mask:
+            return True
+        index += 1
+    return False
+
+
+def retarget_scratch_definitions(lines: list[str]) -> list[str]:
+    """``op r10, src`` + ``mov reg, r10`` -> ``op reg, src`` when r10 is dead.
+
+    The instruction selector computes a load, extension or address into the
+    r10/r11 scratch register and then copies it to the value's register.
+    For a full 64-bit write (mov, movzx, movsx, movsxd, lea) the first
+    instruction reads its source before writing, so it may write the
+    copy's destination directly when nothing reads the scratch register
+    again before it is rewritten (forward_register_copies would instead
+    forward later reads of the copy to the scratch register).
+    """
+    out: list[str] = []
+    index = 0
+    count = len(lines)
+    while index < count:
+        line = lines[index]
+        if index + 1 < count:
+            definition = _parse_two_operands(line)
+            if (
+                definition is not None
+                and definition[0] in _SCRATCH_DEFINITIONS
+                and (definition[1] == "r10" or definition[1] == "r11")
+            ):
+                copy = _parse_two_operands(lines[index + 1])
+                if (
+                    copy is not None
+                    and copy[0] == "mov"
+                    and copy[2] == definition[1]
+                    and _REG_WIDTH.get(copy[1], 0) == 8
+                    and copy[1] not in ("rsp", "rbp")
+                    and _scratch_dead_from(lines, index + 2, 1 << _REG_BASE[definition[1]])
+                ):
+                    out.append("  " + definition[0] + " " + copy[1] + ", " + definition[2])
+                    index += 2
+                    continue
+        out.append(line)
+        index += 1
+    return out
+
+
 def forward_register_copies(lines: list[str]) -> list[str]:
     """Forward register copies inside blocks, then drop dead register moves.
 
