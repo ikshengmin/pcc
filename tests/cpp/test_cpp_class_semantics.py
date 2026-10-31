@@ -186,7 +186,7 @@ CLASS_UNIMPLEMENTED_CASES = (
     "class P{int value;};int f(){const P p{};return 0;}",
     "namespace {struct S{};}int f(S *);",
     "struct S;int f(S *p){*p;return 0;}",
-    "struct S{using T=int;};S::T f();",
+    # Original member-alias source moved verbatim to test_cpp_class_enums.
     "union S{int value;};",
     "struct S{S();};",
     "struct S{~S();};",

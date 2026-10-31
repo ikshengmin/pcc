@@ -8,8 +8,8 @@ not a host compiler query; short-enum and MSVC policies are not inferred.
 
 This module shares Scope/Symbol and the typed constant-fact owner. It neither
 rewrites enum declarations into source text nor invokes a C parser/evaluator.
-Local, anonymous, class-member and dependent enum declarations remain explicit
-capability boundaries; namespace named enums need no C storage declaration.
+Local, anonymous and dependent enum declarations remain explicit capability
+boundaries. Named namespace/class enums need no C storage declaration.
 """
 
 from pcc.backend.self_backend_target_match import (
@@ -90,6 +90,7 @@ class EnumType:
         self.underlying = unqualified(underlying) if underlying is not None else ("int" if scoped else None)
         self.fixed = self.underlying is not None
         self.declaration_scope = declaration_scope
+        self.enclosing_class = getattr(declaration_scope, "class_type", None)
         self.internal_linkage = internal_linkage
         self.scope = Scope(declaration_scope, kind="enum", name=name)
         self.enumerators = []
@@ -142,6 +143,9 @@ class EnumType:
             raise ValueError("enumerators require an active enum definition")
         if name in self.scope.names:
             raise CppDiagnostic("cpp.redeclaration", "duplicate enumerator '" + name + "'", coord)
+        if not self.scoped and self.enclosing_class is not None and name == self.enclosing_class.name:
+            raise CppDiagnostic("cpp.class-name-member",
+                                "an enumerator cannot have its enclosing class name", coord)
         if fact is not None:
             source, value = self._initializer(fact, types, coord)
         elif self.enumerators:
@@ -184,6 +188,9 @@ class EnumType:
             parent = self.declaration_scope
             if parent is None:
                 raise ValueError("unscoped enumerator requires its declaration scope")
+            if self.enclosing_class is not None:
+                symbol.class_owner = self.enclosing_class
+                symbol.access = self.enclosing_class.definition.access
             previous = parent.names.get(name)
             if previous is not None and previous.kind == "type" and (
                     getattr(previous, "class_declaration", False)
@@ -250,12 +257,18 @@ def enum_promotion_type(dtype, types):
 
 
 def parse_enum(parser):
-    """Consume a named namespace declaration; no runtime declaration is needed."""
+    """Consume a named namespace/class declaration without runtime storage."""
     keyword = parser._expect("enum")
     if parser.parsing_template or parser.template_function is not None:
         raise CppDiagnostic("cpp.unsupported.enum-templates", "dependent enum declarations are not implemented", keyword.coord)
-    if parser.scope.kind != "namespace":
-        raise CppDiagnostic("cpp.unsupported.enum-scope", "local and class-member enum declarations are not implemented", keyword.coord)
+    if parser.scope.kind not in ("namespace", "class"):
+        raise CppDiagnostic("cpp.unsupported.enum-scope", "local enum declarations are not implemented", keyword.coord)
+    if parser.scope.kind == "class":
+        owner = getattr(parser.scope, "class_type", None)
+        definition = getattr(owner, "definition", None)
+        if definition is None or definition.scope is not parser.scope:
+            raise CppDiagnostic("cpp.unsupported.enum-scope",
+                                "class enum declaration requires its enclosing nominal class scope", keyword.coord)
     scoped = False
     if parser._peek().value in ("class", "struct"):
         parser.cursor.take()
@@ -276,6 +289,10 @@ def parse_enum(parser):
     if not scoped and underlying is None and parser._peek().value == ";":
         raise CppDiagnostic("cpp.unsupported.enum-elaborated-declaration", "unfixed forward or elaborated enum declarations are not implemented", name.coord)
     parent = parser.scope
+    enclosing_class = getattr(parent, "class_type", None)
+    if enclosing_class is not None and name.value == enclosing_class.name:
+        raise CppDiagnostic("cpp.class-name-member",
+                            "a member enum cannot have its enclosing class name", name.coord)
     previous = parent.names.get(name.value)
     if previous is not None:
         if not getattr(previous, "enum_declaration", False):
@@ -287,12 +304,23 @@ def parse_enum(parser):
             raise CppDiagnostic("cpp.enum-redeclaration", "enum scopedness or fixed-underlying status differs", name.coord)
         if dtype.fixed and dtype.underlying != underlying:
             raise CppDiagnostic("cpp.enum-underlying-mismatch", "enum underlying type differs from its prior declaration", name.coord)
+        if enclosing_class is not None:
+            if previous.access != enclosing_class.definition.access:
+                raise CppDiagnostic("cpp.enum-access-redeclaration",
+                                    "member enum redeclared with different access", name.coord)
+            if parser._peek().value == ";":
+                raise CppDiagnostic("cpp.redeclaration",
+                                    "a member enum cannot be declared twice without a definition", name.coord)
     else:
-        dtype = EnumType(name.value, parent.namespace_path() + (name.value,), name.coord,
+        owner_name = enclosing_class.qualified_name if enclosing_class is not None else parent.namespace_path()
+        dtype = EnumType(name.value, owner_name + (name.value,), name.coord,
                          scoped=scoped, underlying=underlying, declaration_scope=parent,
                          internal_linkage=parent.namespace().internal_linkage, types=parser.types)
         previous = parent.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
         previous.enum_declaration = True
+        if enclosing_class is not None:
+            previous.class_owner = enclosing_class
+            previous.access = enclosing_class.definition.access
     if parser._accept(";"):
         if not dtype.fixed:
             raise CppDiagnostic("cpp.unsupported.enum-elaborated-declaration", "unfixed enum requires a definition; elaborated enum declarations are not implemented", name.coord)

@@ -399,7 +399,10 @@ def test_parser_diagnostics_do_not_silently_flatten_unsupported_shapes(source, c
 
 
 @pytest.mark.parametrize("kind", ("block", "class"))
-def test_local_and_class_member_enums_remain_explicit_capability_boundaries(kind):
+def test_local_and_unbound_class_scopes_do_not_invent_enum_identity(kind):
+    # A bare class-kind Scope has no ClassDefinition/nominal owner. It must not
+    # project the enum into its parent namespace just because the kind matches.
+    # Actual bound class scopes are exercised by test_cpp_class_enums.
     scope = Scope(Scope(), kind=kind, name="Owner")
     parser = parser_for("enum E { A };", scope=scope)
     with pytest.raises(CppDiagnostic, match="cpp.unsupported.enum-scope"):

@@ -85,6 +85,7 @@ class ClassDefinition:
             )
         self.dtype = dtype
         self.scope = Scope(parent, kind="class", name=dtype.name)
+        self.scope.class_type = dtype
         self.class_key = class_key
         self.access = "private" if class_key == "class" else "public"
         self.members = []
@@ -255,7 +256,8 @@ def parse_class(parser):
                     if (alias_index >= len(parser.cursor.tokens)
                             or parser.cursor.tokens[alias_index].value != "="):
                         _unsupported(token, "class using-declaration member/base lookup is not implemented")
-                member_count = len(definition.scope.names)
+                prior_names = set(definition.scope.names)
+                member_count = len(prior_names)
                 parser._alias()
                 class_name = definition.scope.names.get(dtype.name)
                 if class_name is not None and class_name.kind == "type":
@@ -276,14 +278,17 @@ def parse_class(parser):
                         "cpp.redeclaration", "a member type alias cannot be redeclared in its class",
                         token.coord,
                     )
+                for added in set(definition.scope.names) - prior_names:
+                    alias = definition.scope.names[added]
+                    alias.access, alias.class_owner = definition.access, dtype
                 continue
             if token.value in ("class", "struct", "union", "friend", "static", "virtual", "~",
                                "template", "constexpr", "explicit", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":
-                raise CppDiagnostic("cpp.unsupported.enum-class-scope",
-                                    "class-member enums require class-qualified lookup and access semantics",
-                                    token.coord)
+                from pcc.frontends.cpp.enums import parse_enum
+                parse_enum(parser)
+                continue
             if (token.value == dtype.name
                     and parser.cursor.tokens[parser.cursor.position + 1].value == "("):
                 _unsupported(token, "user-declared constructor semantics are not implemented")
@@ -324,13 +329,12 @@ def member_access(parser, expression, operator, member):
     symbol = definition.scope.names.get(member.value)
     if symbol is None:
         raise CppDiagnostic("cpp.no-member", "class '" + owner.name + "' has no member '" + member.value + "'", member.coord)
+    parser.scope.check_member_access(symbol, member.coord)
+    if symbol.kind == "enumerator":
+        raise CppDiagnostic("cpp.unsupported.object-enumerator-access",
+                            "object enumerator access requires base-expression sequencing", member.coord)
     if symbol.kind != "member":
         raise CppDiagnostic("cpp.member-not-value", "member '" + member.value + "' is not a data member", member.coord)
-    context = parser.scope
-    while context is not None and context is not definition.scope:
-        context = context.parent
-    if symbol.access != "public" and context is None:
-        raise CppDiagnostic("cpp.member-access", "'" + member.value + "' is a " + symbol.access + " member", member.coord)
     if not expression.lvalue and operator == ".":
         _unsupported(member, "class temporary materialization and xvalue members are not implemented")
     result_type = symbol.dtype

@@ -180,13 +180,19 @@ class Scope:
             kinds = final_kinds if index == len(name.parts) - 1 else qualifier_kinds
             symbol = (scope.lookup(part, name.coord, kinds) if index == 0 and not name.global_scope
                       else scope.lookup_qualified(part, name.coord, kinds))
+            self.check_member_access(symbol, name.coord)
             if index != len(name.parts) - 1:
                 if symbol is not None and symbol.kind == "template-type":
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
                                         "dependent qualified lookup requires template/class semantics", name.coord)
-                if symbol is not None and getattr(symbol.dtype, "cpp_class_type", False):
-                    raise CppDiagnostic("cpp.unsupported.class-qualified-lookup",
-                                        "class-qualified lookup requires member/access semantics", name.coord)
+                if (symbol is not None and symbol.kind == "type"
+                        and getattr(unqualified(symbol.dtype), "cpp_class_type", False)):
+                    definition = unqualified(symbol.dtype).definition
+                    if definition is None:
+                        raise CppDiagnostic("cpp.incomplete-class",
+                                            "class-qualified lookup requires a class definition", name.coord)
+                    scope = definition.scope
+                    continue
                 if symbol is not None and symbol.kind == "type" and is_enum_type(symbol.dtype):
                     scope = unqualified(symbol.dtype).scope
                     continue
@@ -194,6 +200,26 @@ class Scope:
                     raise CppDiagnostic("cpp.not-a-namespace", "'" + part + "' does not name a namespace", name.coord)
                 scope = symbol.namespace_scope
         return symbol
+
+    def check_member_access(self, symbol, coord):
+        """Check the selected declaration, not a nominal type's alias history.
+
+        Bases, friends and member functions are not admitted yet. A lexically
+        enclosing class grants access while its own declarations are parsed;
+        an unrelated scope may name only public declarations.
+        """
+        if symbol is None or getattr(symbol, "access", "public") == "public":
+            return
+        owner = getattr(symbol, "class_owner", None)
+        if owner is None:
+            return
+        context = self
+        while context is not None:
+            if getattr(context, "class_type", None) is owner:
+                return
+            context = context.parent
+        raise CppDiagnostic("cpp.member-access",
+                            "'" + symbol.name + "' is a " + symbol.access + " member", coord)
 
     def is_type_name(self, name):
         symbol = self.lookup(name)
@@ -234,6 +260,9 @@ class Scope:
     def add_using_declaration(self, symbol, coord):
         if symbol.kind in ("namespace", "namespace-alias"):
             raise CppDiagnostic("cpp.using-namespace-name", "using-declaration cannot name a namespace", coord)
+        if getattr(symbol, "class_owner", None) is not None:
+            raise CppDiagnostic("cpp.using-class-member",
+                                "a class member using-declaration requires a derived class scope", coord)
         if symbol.kind == "enumerator" and symbol.enum_type.scoped:
             raise CppDiagnostic("cpp.using-scoped-enumerator",
                                 "C++17 using-declarations cannot name a scoped enumerator", coord)
@@ -342,7 +371,10 @@ def argument_dependent_lookup(name, arguments, ordinary, coord):
             if namespace is None:
                 raise CppDiagnostic("cpp.unsupported.associated-lookup",
                                     "nominal type has no recorded declaring namespace for ADL", coord)
-            namespaces.append(namespace)
+            # Member enums associate the enclosing class and its namespace.
+            # No hidden friends, bases or class templates are admitted, so
+            # there are no additional associated class candidates to inspect.
+            namespaces.append(namespace.namespace())
     candidates = [] if ordinary is None else [ordinary]
     visited = set()
     while namespaces:

@@ -1181,6 +1181,9 @@ class CppParser:
             raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
         if symbol.kind == "enumerator":
             return self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
+        if symbol.kind == "member":
+            raise CppDiagnostic("cpp.nonstatic-member-without-object",
+                                "a non-static data member value requires an object", token.coord)
         if self.template_function is not None:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)

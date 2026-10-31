@@ -169,7 +169,7 @@ INVALID_ENUM_CASES = (
 
 UNIMPLEMENTED_ENUM_CASES = (
     ("local-enum-identity", "int f(){enum E{A};return A;}"),
-    ("class-member-enum-and-qualified-access", "struct S{enum E{A};};int f(){return S::A;}"),
+    # Original class-member source moved verbatim to test_cpp_class_enums.
     ("anonymous-enum-identity", "enum{A=42};int f(){return A;}"),
     ("enum-template-deduction",
      "enum E{A};template<class T>T id(T x){return x;}int f(){id(A);return 0;}"),

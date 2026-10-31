@@ -107,22 +107,30 @@ def _mangle_class(dtype, substitutions):
     parts = dtype.qualified_name
     name = str(len(parts[-1])) + parts[-1]
     namespaces = parts[:-1]
+    enclosing_class = getattr(dtype, "enclosing_class", None)
+    # For a member enum the last prefix is a nominal class type, not a
+    # namespace with the same spelling. It shares the substitution entry
+    # subsequently used by that enclosing class as a parameter/pointee type.
+    def prefix_key(count):
+        if enclosing_class is not None and count == len(namespaces):
+            return enclosing_class
+        return ("namespace-prefix", namespaces[:count])
     if not namespaces:
         return name
-    if namespaces == ("std",):
+    if namespaces == ("std",) and enclosing_class is None:
         return "St" + name
     prefix, start = "", 0
     for count in range(len(namespaces), 0, -1):
-        key = ("namespace-prefix", namespaces[:count])
+        key = prefix_key(count)
         if key in substitutions:
             prefix, start = _substitution(substitutions.index(key)), count
             break
-    if not prefix and namespaces[0] == "std":
+    if not prefix and namespaces[0] == "std" and (len(namespaces) > 1 or enclosing_class is None):
         prefix, start = "St", 1
     for index in range(start, len(namespaces)):
         part = namespaces[index]
         prefix += str(len(part)) + part
-        key = ("namespace-prefix", namespaces[:index + 1])
+        key = prefix_key(index + 1)
         if key not in substitutions:
             substitutions.append(key)
     return "N" + prefix + name + "E"
