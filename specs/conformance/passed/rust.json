@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "suite_id": "pcc-regression-rust",
+      "suite_version": "original-input-sha256:e69bd93b9337f7828e2094b965e60c11da06a38ca600c940dbd5646fc2906c83",
+      "suite_source_sha256": "e69bd93b9337f7828e2094b965e60c11da06a38ca600c940dbd5646fc2906c83",
+      "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "input_sha256": "e69bd93b9337f7828e2094b965e60c11da06a38ca600c940dbd5646fc2906c83",
+      "expectation": "run",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+        "actual_receipt_sha256": "095012f2701bf5d81fc6d231d7c58025c20a7f0d56fd562cac2602aa6a3f45ce",
+        "reference_receipt_sha256": "e948167b5a4852f612969f2cfa1e9a5301510c04a7009737e63293e180082057",
+        "test_source_sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-rust",
+      "suite_version": "original-input-sha256:b2f1ab83ff34891b240f6bec5fd19e95dd8ec5e6fa968be69fa1c03a247849b8",
+      "suite_source_sha256": "b2f1ab83ff34891b240f6bec5fd19e95dd8ec5e6fa968be69fa1c03a247849b8",
+      "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "input_sha256": "b2f1ab83ff34891b240f6bec5fd19e95dd8ec5e6fa968be69fa1c03a247849b8",
+      "expectation": "run",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+        "actual_receipt_sha256": "205928c0f8978f170655a913f943c48bb153b4e4bf61ffbf28322dca0c66168c",
+        "reference_receipt_sha256": "08aa7300d16eaf5d7a5752f904c9e6e0c5f4d5a5eddee8b4c4472140e3cd4f8b",
+        "test_source_sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-rust",
+      "suite_version": "original-input-sha256:076c5d7749c718a17abbf13d4d245b399afb7bc392e15ba395e845ea26d0a503",
+      "suite_source_sha256": "076c5d7749c718a17abbf13d4d245b399afb7bc392e15ba395e845ea26d0a503",
+      "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "input_sha256": "076c5d7749c718a17abbf13d4d245b399afb7bc392e15ba395e845ea26d0a503",
+      "expectation": "run",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+        "actual_receipt_sha256": "e314f36b2897b92a84085f09482002f543399c5953ca922e4b735ae6040c68e1",
+        "reference_receipt_sha256": "7f579a457e0f634addb75d2f90ab6a1fa7b56f45ed4c877a36fa213f587fa0d7",
+        "test_source_sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-rust",
+      "suite_version": "original-input-sha256:6d5934aec3105848dc921453d762bbaf692873463bac9f8c52acc51a744a314b",
+      "suite_source_sha256": "6d5934aec3105848dc921453d762bbaf692873463bac9f8c52acc51a744a314b",
+      "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "input_sha256": "6d5934aec3105848dc921453d762bbaf692873463bac9f8c52acc51a744a314b",
+      "expectation": "run",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+        "actual_receipt_sha256": "7cd52b4aaada56afbf4efd3520d640df8516ee8670abdbd16f9e28f19155c796",
+        "reference_receipt_sha256": "388290f94727b5b5cb471b7fe4a9689179c7427c96fec149c501cd40715c6e8f",
+        "test_source_sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-rust",
+      "suite_version": "original-input-sha256:714affefbcf5762c671e8cab0205ccc5291d6990f60cef3874ab97b78798798b",
+      "suite_source_sha256": "714affefbcf5762c671e8cab0205ccc5291d6990f60cef3874ab97b78798798b",
+      "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "input_sha256": "714affefbcf5762c671e8cab0205ccc5291d6990f60cef3874ab97b78798798b",
+      "expectation": "run",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+        "actual_receipt_sha256": "24bb429814bb6bf54539ecc9b0cc93c9a5760d2324d3164509e3a06eecb67811",
+        "reference_receipt_sha256": "d29befc22a8c419dc100900f9cd820d7cdb0be849e0ba128f2f933c3b87417f0",
+        "test_source_sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-rust",
+      "suite_version": "original-input-sha256:0b3420e3bae0b021d0e40720e47ca84ee09fef48c383cf026001df31dc5a158a",
+      "suite_source_sha256": "0b3420e3bae0b021d0e40720e47ca84ee09fef48c383cf026001df31dc5a158a",
+      "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/rust/test_rust_method_reference.py::test_unchanged_inherent_programs_match_actual_rustc_native_execution",
+      "input_sha256": "0b3420e3bae0b021d0e40720e47ca84ee09fef48c383cf026001df31dc5a158a",
+      "expectation": "run",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bd7d58a476ea32ab5c771360da4eccc5131a59e5",
+        "actual_receipt_sha256": "5da703a7dd254be908bd257376e9fa20609f0b36421f8b703dc536f24aa525a0",
+        "reference_receipt_sha256": "e429a4a8925acfe1f995adca4dfc7bd2c29b1118d1645a50f05459ba3434d51f",
+        "test_source_sha256": "cc4d45757e8838f76b77eeebc6177221ff18151401edcca4b3da0a21e237e57c"
+      }
+    }
+  ]
+}

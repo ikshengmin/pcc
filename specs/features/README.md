@@ -107,9 +107,8 @@ reference identity and platform/owner provenance.
 
 ## Explicit limits
 
-No complete official suite was downloaded or run by this change. Individually
-verified passed-ID baselines are retained locally and are not included in this
-publication. The checker/export commands remain available; no checked-in
-baseline dataset or whole-language suite coverage is claimed. Existing aggregate PASS counts are not expanded into
+No complete official suite was downloaded or run by this change. The checked-in
+passed-ID baselines contain 35 individually verified historical native identities:
+23 C++, 2 Go, 6 Rust and 4 Java. They do not claim whole-language suite coverage. Existing aggregate PASS counts are not expanded into
 invented IDs. pcc1 and user-Mac results are absent unless separately measured.
 CPython Lib/test remains inventory scope; no Python debt cleanup is started.

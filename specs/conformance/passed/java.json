@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "suite_id": "pcc-regression-java",
+      "suite_version": "original-input-sha256:be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "suite_source_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "expectation": "run",
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+        "actual_receipt_sha256": "e92dd3f44598af6e51e19e94144f22f28337e978a72d078e2034bdb8e7abb180",
+        "reference_receipt_sha256": "f12de21952e6317348de1db386421d98601bd9758cf120c48241c99fd8579dde",
+        "test_source_sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-java",
+      "suite_version": "original-input-sha256:1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "suite_source_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "expectation": "run",
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+        "actual_receipt_sha256": "aa91facee5a6722fd6a15d573163662478b485a9778cd5011548ad52100a0e1e",
+        "reference_receipt_sha256": "6a3014e95e67b54f45746f9b04df9441979b15fc001ac32c240ba1f71f1a8fe3",
+        "test_source_sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-java",
+      "suite_version": "original-input-sha256:ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "suite_source_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "expectation": "run",
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+        "actual_receipt_sha256": "ee396c451ebd90fc0945ff22a7a7573440f870811a79d4a6b37237f2e295f888",
+        "reference_receipt_sha256": "850d4413afdb58be0c3219ff11160926fff4014f072ef7ca67fee9a2cafaab2b",
+        "test_source_sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-java",
+      "suite_version": "original-input-sha256:367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "suite_source_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit",
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "expectation": "run",
+      "reference": {
+        "name": "OpenJDK jdk.compiler and JVM, separate binary-output observer",
+        "version": "21.0.12.1+1-1-deb13u1-Debian; source21/target21 current platform",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "c5fe85e15cab85bdf57845ab3a748863885f3fba",
+        "actual_receipt_sha256": "61d44ebe0a947885e9a7dc1f31d908155b81f8373d6b2c35d1298911c06aa392",
+        "reference_receipt_sha256": "42c32330ab95b21af98a32c5936421ba68085feb787a58d52824628065845355",
+        "test_source_sha256": "e81742d00a1097804c73ef33887d086f6d63295a1a7e09355244b2b1fc0dc0bc"
+      }
+    }
+  ]
+}

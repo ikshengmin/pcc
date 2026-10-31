@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "suite_id": "pcc-regression-go",
+      "suite_version": "original-input-sha256:a0b3d2ff4ff5b426739403c6c2c84cb86907adf9982ebecc7de1f41acd7641b2",
+      "suite_source_sha256": "a0b3d2ff4ff5b426739403c6c2c84cb86907adf9982ebecc7de1f41acd7641b2",
+      "compiler_revision": "ce17a2b50048ed636c6f1c7a5ab77da850de95be",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/go/test_array_range.py::test_official_go_receives_identical_original_array_range_program",
+      "input_sha256": "a0b3d2ff4ff5b426739403c6c2c84cb86907adf9982ebecc7de1f41acd7641b2",
+      "expectation": "run",
+      "reference": {
+        "name": "official Go gc toolchain",
+        "version": "go1.27.3",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "ce17a2b50048ed636c6f1c7a5ab77da850de95be",
+        "actual_receipt_sha256": "4a281d7141bc6bf989d701ae60f46327ae8e8cfb1558cd8a7637179e4f0f8423",
+        "reference_receipt_sha256": "c2d73ea598102acb2647b986d24341bed109e99bd78db0cbe8b1cd7bfb404c85",
+        "test_source_sha256": "a0b3d2ff4ff5b426739403c6c2c84cb86907adf9982ebecc7de1f41acd7641b2"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-go",
+      "suite_version": "original-input-sha256:9f46cd5a69f1cc97c362b1ee85a12b0c929b47a6678c61b767ca17cc87b414c6",
+      "suite_source_sha256": "9f46cd5a69f1cc97c362b1ee85a12b0c929b47a6678c61b767ca17cc87b414c6",
+      "compiler_revision": "775b9408d14cc04740d8a4b1e4feae2522893e44",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/go/test_switches.py::test_official_go_receives_identical_original_switch_program",
+      "input_sha256": "9f46cd5a69f1cc97c362b1ee85a12b0c929b47a6678c61b767ca17cc87b414c6",
+      "expectation": "run",
+      "reference": {
+        "name": "official Go gc toolchain",
+        "version": "go1.27.3",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "775b9408d14cc04740d8a4b1e4feae2522893e44",
+        "actual_receipt_sha256": "ada2f5bdc2aac3f8e148efe093a94e805b0ddfd9cb6d07d62e5753ccf48aeb72",
+        "reference_receipt_sha256": "7ea1bb6d5817f01786183e5430afc7bbd8560f4246e20bdcb7a9f6a3e547197c",
+        "test_source_sha256": "9f46cd5a69f1cc97c362b1ee85a12b0c929b47a6678c61b767ca17cc87b414c6"
+      }
+    }
+  ]
+}
