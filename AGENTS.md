@@ -32,9 +32,10 @@ over any procedure in this file, including its gates and checks.
    Resume parent work after the subtask unless the user stops or replaces it.
    Record new actionable work in the relevant issue. Keep [current status](docs/status.md)
    up to date with source identity, unfinished goals, blockers and repro commands.
-   Preserve detailed run receipts and historical handoffs in a durable recovery
-   archive outside the working repository; link its location from current status.
-   Do not create another dated in-repository handoff.
+   Keep raw logs, detailed receipts, recovery materials and credentials outside
+   Git. Fixed source-oriented entrypoints contain public source/test identities,
+   result boundaries and reproducible commands, never machine-specific recovery
+   paths or rejected payloads. Do not create another dated in-repository handoff.
 
 ## Project contracts
 
@@ -52,13 +53,21 @@ These are required outcomes, not assertions that migration is complete. See
 - `pcc`, `python -m pcc` and `pcc1` share public command semantics. Python script
   and `-m` execution must compile/run native code. CPython `import pcc` APIs
   must execute real capabilities; import-only stubs are not implementation.
-  Current implementation priority is the C++, Rust, Java and Go frontends and
-  shared infrastructure needed to compile and run unmodified real projects.
+  Current implementation priority is the C++, Rust, Java and Go source
+  frontends (owned parse/Sema -> PCC IR) and shared infrastructure needed to
+  compile and run unmodified real projects. Java class-file/JAR compatibility
+  is frozen historical work, excluded from source-language acceptance. The
+  owned NumPy extension chain is second priority, Linux first.
   Native self-host, all five GC backends and public CLI parity remain mandatory
   non-regression contracts, but legacy bootstrap/CI cleanup must not displace
-  this frontend work. Each change includes focused tests and bounded local
-  validation. Shared runtime/backend/linker/GC changes require maintainer
-  validation; never weaken correctness or resource limits to obtain a pass.
+  this frontend work. Small source/code/test work continues independently;
+  serialize only heavy gates and shared runtime/backend publication. Each
+  change includes focused tests and whole affected-language validation before
+  push. After a shared runtime/backend batch, wait for the user's relayed Mac
+  QPS assessment before another. Do not access or run on the user's Mac.
+  User-reported Mac results are external evidence; separately authorized cloud
+  macOS CI is a distinct, source-labeled lane, not permission for device access.
+  Never weaken correctness or resource limits to obtain a pass.
 - Preserve ordinary Python/C semantics, arbitrary-precision Python integers,
   identity, exceptions, finalizers, weakrefs and resurrection. Value layouts
   and fixed-width machine types are explicit. No package-specific shortcuts.
@@ -85,11 +94,14 @@ These are required outcomes, not assertions that migration is complete. See
   pull/rebase/integration. Trust conflict-free peers' committed validation;
   check our changes and actual conflict resolutions without repeating their
   suites merely because upstream changed.
-- Commit order for collaboration (user-directed, 2026-10-22): commit first,
-  then test, then commit the fixes. Once a code change runs on its own repro
-  and its new test, commit and push it at once so other agents see it; run the
-  focused suites after the push; land each test fix or follow-up fix as its
-  own commit and push.
+- Commit local source/test batches promptly, then test and commit fixes.
+  Latest user direction supersedes the older push-before-suite procedure:
+  before every future push, finish all tests for each affected language on
+  the final candidate, separating ordinary, integration and reference lanes.
+  Focused/new tests alone do not authorize a push. Record failures, missing
+  prerequisites and unfinished nodes; never summarize a mixed result as green.
+  One designated publisher integrates complete remote trees and exact path
+  preimages/modes, preserves peers' work, and publishes reviewed batches.
 - Preserve other work. Re-read targets before narrow edits; no destructive
   restore/reset/revert/stash/clean or discarding branch switches without explicit
   user direction. Do not commit/push unless authorized in the current session.
@@ -162,7 +174,11 @@ These are required outcomes, not assertions that migration is complete. See
   Do not clear `LC_ALL` by default; use
   [locale troubleshooting](docs/developer-reference.md#locale-troubleshooting)
   only for a diagnosed locale or encoding error.
-- Every pytest invocation needs `-x`. Use `-n0 -vv --tb=short` for diagnosis.
+- Every pytest invocation needs `-x`. Only complete bounded whole-language
+  enumeration may use `-x --maxfail=0` to retain all failure outcomes; other
+  invocations remain fail-fast. Retain the default six workers and original
+  90-second/1-GiB language-gate guards; do not remove xdist, widen limits or
+  silently exclude failures to obtain a pass.
   Long runs need durable live node/failure logs and a process-group watchdog;
   stop/clean up only your own children after timeout. Never report dots as green.
 - First run the smallest regression, then the original integration scenario and
@@ -178,7 +194,8 @@ These are required outcomes, not assertions that migration is complete. See
 - Heavy builds and performance runs share `build/.pcc-performance.lock` and
   require a tree-RSS cap, frozen inputs and isolated outputs. Do not edit their
   input closure or run contending bootstrap/runtime builds during measurement.
-- Broad suites/five-GC bootstrap are final qualification after focused checks
+- Whole affected-language suites run before publication. Whole-project
+  legacy sweeps/five-GC bootstrap are final qualification after focused checks
   and source stability, not diagnosis. Build dependent stages in order and stop
   at the first failure. Do not repeatedly widen timeouts to hide a regression.
 - Critical parser/frontend/codegen/runtime/bootstrap changes need the relevant
@@ -187,6 +204,9 @@ These are required outcomes, not assertions that migration is complete. See
   gate -- run bootstrap/fallback baseline checks. An ordinary user-requested
   commit is not gated by this line. Baseline JSON files are recorded receipts:
   validate their identity, not just their label.
+- Do not change CI/workflows or take over old C/legacy-CI cleanup during the
+  active frontend task. Keep the user's external Mac results source-labeled;
+  cloud Linux execution and Darwin cross-objects do not renew Mac evidence.
 - See [validation-workflow.md](docs/validation-workflow.md) for scoped gates,
   watchdogs and correctness invariants before those operations. A full GC gate
   must explicitly select integration tests, for example:

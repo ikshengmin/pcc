@@ -7,11 +7,11 @@ The project remains PCC; unrelated repositories are outside this work.
 ## Outcome and priority
 
 1. The C++, Rust, Java and Go frontends and their required shared infrastructure are the current highest implementation priority. C++17 remains general; NumPy is one consumer, not its specification.
-2. Build and import unmodified NumPy 2.4.4 with the owned PCC toolchain. Close the pure-C extension chain first on Linux; macOS arm64 remains a required validation platform.
+2. Second priority: build and import unmodified NumPy 2.4.4 with the owned PCC toolchain. Close the pure-C extension chain first on Linux; macOS arm64 remains required. User-reported Mac results are external evidence; separately authorized cloud macOS CI is a distinct source-labeled lane. Do not access or run on the user's Mac.
 3. Develop Go, Java and Rust frontends in parallel toward the same conformance and real-project standard as C. Initial subsets are milestones, not completion.
 4. Common infrastructure and correctness work must support these outcomes. Do not replace language implementation with unrelated cleanup or benchmark tuning.
 
-Each language owns parsing, name lookup, typing and language-specific semantics under `pcc/frontends/`. All reuse public IR, the self backend and owned object/link/archive/sign machinery. External compilers are explicitly labeled development oracles, never fallback implementations.
+All four language mainlines compile source through owned parsing/Sema to PCC IR. Each owns parsing, name lookup, typing and language-specific semantics under `pcc/frontends/`. All reuse public IR, the self backend and owned object/link/archive/sign machinery. External compilers are explicitly labeled development oracles, never fallback implementations.
 
 ## Convergence contracts
 
@@ -52,7 +52,7 @@ Accept against official go/test, standard-package tests and a pinned project lad
 
 Compile Java **source** through an owned parser, name/type analysis and direct lowering to public PCC IR. Libraries are built from verified sources; inspect source archives and licenses rather than assuming every artifact has a usable sources JAR. Do not introduce JVM bytecode, javac or another compiler's IR as a required production stage.
 
-The existing class-file/JAR reader and static-bytecode AOT work is retained as an independent compatibility experiment, not the implementation mainline. Stop extending that track for its own sake. Reuse its verified integer wrap, shift and narrowing semantics in source-independent IR emission helpers; do not force Java source through a JVM operand-stack representation.
+The existing class-file/JAR reader and static-bytecode AOT work is frozen historical compatibility, excluded from source-language acceptance and not the implementation mainline. Do not extend that track. Reuse its verified integer wrap, shift and narrowing semantics in source-independent IR emission helpers; do not force Java source through a JVM operand-stack representation.
 
 Implement source classes, objects, strings and arrays, then the runtime contracts they require: class initialization, monitors, platform/virtual thread distinctions, configured reflection and native interfaces. Runtime-bound Object/Class/Thread/String internals and native operations are owned pcc-Python implementations over the shared allocator/GC/scheduler. Other class-library functionality must come from suitable original sources or independent implementations. OpenJDK behavior/specifications may be studied, but GPL implementation code is not translated into PCC.
 
@@ -67,6 +67,29 @@ Compile original core/alloc and later std with owned intrinsics/lang items and p
 Rust-owned Box/Vec/Rc memory uses ordinary allocation and language Drop rules. GC interop needs rooted handles, scoped borrows, pinning for exposed raw pointers, write barriers, native/managed thread transitions and explicit finalizer/Drop behavior. Document cross-runtime cycles; test all five collectors and multithreading.
 
 Use rustc run-pass/UI subsets and unmodified crate projects. Keep arithmetic profile and panic strategy explicit. Research such as Flow Typing can suggest analysis invariants and counterexamples; it is not a replacement for Rust semantics or borrow checking.
+
+## Immediate source dependencies
+
+The current published/candidate boundary and exact tests live in the fixed
+[status page](multilanguage-status.md), not in dated plans. Continue actual
+frontend code independently of legacy cleanup; only heavy gates and shared
+runtime/backend publication are serialized.
+
+- C++: close the original TinyXML2 owned-header/class frontier; continue
+  generic lookup, construction/destruction, lifetime and template semantics.
+  External G++ running TinyXML2 is not a PCC project pass.
+- Rust: land the locally validated fix for published whole-enum rematch after a partial move, then
+  extend shared instantiation into generic functions and close original
+  core/alloc dependencies without claiming a borrow checker.
+- Java: progress source class/object/member semantics, distinguishing
+  model/typecheck evidence from actual allocated-object native execution.
+- Go: extend published value records with methods and source control flow; the unchanged original
+  math/bits closure still needs error/panic/linkname support. Its table component
+  alone is not the complete package or upstream tests.
+- Common raw storage: the first experimental batch is published; production
+  archive integration, managed objects, five-GC, EH and concurrency are not
+  established. Further shared runtime/backend batches, including CFI/C-API,
+  wait for the user's Mac QPS assessment.
 
 ## NumPy chain
 
@@ -91,10 +114,10 @@ Pin upstream repository, commit, path, file hash and actual license/notice for e
 ## Validation and release discipline
 
 - Root publisher alone updates master; integrate fresh complete remote tree and exact path preimages/modes. Never overwrite peers, force-push, rewrite history or create empty progress commits.
-- Save independently reviewable real code/test batches promptly with a subject, blank line and accurate body. Until the maintainer installs the separate fast language CI channel, retain `[skip ci]` to avoid triggering the legacy slow suite on every push. After the split, code uses the fast channel and pure documentation keeps `[skip ci]`. Report observed failures and unrun gates.
+- Save independently reviewable real code/test batches promptly with a subject, blank line and accurate body. Before every future push, finish the complete affected-language tests on the final candidate, with ordinary, integration and reference results separate. Focused checks alone are insufficient; known failures, unavailable prerequisites and unfinished work stay visible. Retain `[skip ci]`; do not change CI/workflows or perform old C/legacy-CI cleanup in this task.
 - Shared runtime/backend/codegen batches are serialized: after the root publisher publishes the selected validated batch, wait for the user's relayed Mac QPS assessment before stacking another shared batch. Independent frontend work, including frontend-specific IR lowering, and tests continue. Preserve candidates; do not revert correct behavior for a score.
-- Preserve original time/memory limits, default six-worker pytest execution and thread/five-GC requirements. Use actual shared performance locks; no fake lock-held claims or retries that conceal resource failures.
-- Include focused tests for every changed contract and run bounded minute-scale local validation. The latest work split leaves legacy CI/bootstrap/full-suite cleanup to the maintainer; do not let it displace frontend implementation. Preserve earlier full-group results and failures honestly. Shared runtime/backend/linker/GC changes are handed to the maintainer for platform validation. Separate host checks, AST/IR, cross objects, native execution and full bootstrap.
+- Preserve the original 90-second/1-GiB language-gate limits, default six-worker pytest execution and thread/five-GC requirements. Only complete bounded whole-language enumeration may use `-x --maxfail=0` to retain all failure outcomes; other pytest invocations remain fail-fast with `-x`. Use actual shared performance locks; no fake lock-held claims or retries that conceal resource failures.
+- Include focused tests for every changed contract and finish whole affected-language validation before push. The latest work split leaves legacy CI/bootstrap/whole-project cleanup to the maintainer; do not let it displace frontend implementation. Preserve earlier full-group results and failures honestly. Shared runtime/backend/linker/GC changes are handed to the maintainer for platform validation. Separate host checks, AST/IR, cross objects, native execution and full bootstrap.
 - Missing prerequisites are not selected under the existing collection policy, not pytest.skip or simulated success. Genuine unsupported semantics remain visible failures. Existing failures need fixes or explicit issue tracking.
-- macOS arm64 is required, as are Linux x86-64/arm64 results. No access to the user's Mac/M2 is authorized. The maintainer owns the new path-triggered language CI workflow and old CI repairs. Do not modify workflows or start repeated legacy runs; existing manually authorized validation does not authorize user-device access.
+- macOS arm64 is required, as are Linux x86-64/arm64 results. Access to and execution on the user's Mac are forbidden. Existing user-reported Mac results are external; separately authorized cloud macOS arm64 CI remains a distinct source-labeled lane, currently unrun here. This does not revoke its existing authorization or permit workflow changes, which remain maintainer-owned. Cloud Linux or Darwin cross-object results cannot substitute for Mac execution or qualify a later source snapshot.
 - Keep raw logs, receipts, recovery materials and credentials outside Git. These pages contain source-oriented status and reproducible commands, not machine-specific recovery inventories.
