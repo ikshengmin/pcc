@@ -314,7 +314,8 @@ class Lowerer:
         if expr.kind in ("name", "selector", "index"):
             return self.builder.load(self.address(expr))
         if expr.kind == "call":
-            arguments = self.values(expr.args)
+            receiver = [self.expression(expr.receiver)] if expr.receiver is not None else []
+            arguments = receiver + self.values(expr.args)
             if expr.symbol is None:
                 value = arguments[0]
                 target = ir_type(expr.type)

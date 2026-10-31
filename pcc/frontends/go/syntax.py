@@ -182,6 +182,8 @@ class Expr:
     constant: object = None
     symbol: object = None
     qualifier: str | None = None
+    callee: object = None
+    receiver: object = None
     parenthesized: bool = False
     keys: list = field(default_factory=list)
     indices: list = field(default_factory=list)
@@ -217,6 +219,7 @@ class Function:
     temporaries: list = field(default_factory=list)
     result_names: list = field(default_factory=list)
     result_symbols: list = field(default_factory=list)
+    receiver: object = None
 
 
 @dataclass
@@ -421,15 +424,27 @@ class GoParser:
 
     def function(self):
         self.take("func")
-        if self.at("("):
-            self.fail(self.current, "methods require receiver and method-set support")
+        receiver = None
+        if self.accept("("):
+            # Pointer receivers cannot be represented by value-copy lowering.
+            for token in self.tokens[self.index:]:
+                if token.kind == ")":
+                    break
+                if token.kind == "*":
+                    self.fail(token, "pointer receivers require nonescaping-pointer and method-set support")
+            receiver_types, receiver_names = self.parameter_list()
+            if len(receiver_types) != 1:
+                self.fail(self.current, "method receiver must be exactly one non-variadic parameter")
+            receiver = (receiver_names[0], receiver_types[0])
         name = self.take("name")
         self.take("(")
         types, names = self.parameter_list()
-        params = [(token or Token("name", "_", name.filename, name.line, name.column), dtype)
-                  for token, dtype in zip(names, types)]
+        blank = Token("name", "_", name.filename, name.line, name.column)
+        params = [(token or blank, dtype) for token, dtype in zip(names, types)]
+        if receiver is not None:
+            receiver = (receiver[0] or blank, receiver[1])
         result, result_names = self.function_results()
-        return Function(name, params, result, self.block(), result_names=result_names)
+        return Function(name, params, result, self.block(), result_names=result_names, receiver=receiver)
 
     def function_results(self):
         if not self.accept("("):
@@ -619,14 +634,12 @@ class GoParser:
             elif self.accept("("):
                 if left.kind not in ("name", "selector"):
                     self.fail(token, "only named function calls/conversions are supported")
-                if left.kind == "selector" and (left.args[0].kind != "name" or left.args[0].parenthesized):
-                    self.fail(left.token, "method calls and parenthesized package qualifiers are not implemented")
                 previous, self.named_literals = self.named_literals, True
                 args = [] if self.at(")") else self.expression_list(terminator=")")
                 self.take(")")
                 self.named_literals = previous
-                qualifier = left.args[0].value if left.kind == "selector" else None
-                left = Expr("call", left.token, left.value, args, qualifier=qualifier)
+                qualifier = left.args[0].value if left.kind == "selector" and left.args[0].kind == "name" else None
+                left = Expr("call", left.token, left.value, args, qualifier=qualifier, callee=left)
             elif self.accept("["):
                 index = self.expression()
                 self.take("]")

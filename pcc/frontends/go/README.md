@@ -205,7 +205,7 @@ accept these types without converting them into variables or first-class tuples.
 
 This private PCC Go aggregate ABI is neither the official Go ABI nor an assertion
 of cross-language C compatibility. Local type declarations, struct tags, embedded
-fields, blank fields, methods, pointers, recursive layouts, struct comparison and
+fields, blank fields, pointers, recursive layouts, struct comparison and
 arrays of records remain explicit boundaries. Array bounds still require the
 existing static proof; no abort replaces a missing recoverable panic. Types have
 32 declaration-expansion levels, 256 fields and 4096 expanded scalar slots as
@@ -217,3 +217,28 @@ Rules: [type declarations](https://go.dev/ref/spec#Type_declarations),
 [assignability](https://go.dev/ref/spec#Assignability),
 [composite literals](https://go.dev/ref/spec#Composite_literals),
 [selectors](https://go.dev/ref/spec#Selectors).
+
+### Direct value-receiver methods
+
+Local defined types (and non-generic aliases of those types) may declare ordinary
+value-receiver methods. Method identity is the receiver's defining type plus its
+name, not the underlying machine layout. New defined types do not inherit the
+methods of their underlying type; aliases do. Method/field conflicts, duplicate
+methods, receiver scope and imported unexported methods are checked before IR.
+
+Direct calls `value.Method(args)` evaluate the receiver expression once and pass
+a value copy. Calls inside receiver and argument expressions keep Go's lexical
+evaluation order; no particular ordering of unrelated ordinary variable reads
+is asserted by the fixtures.
+Direct method expressions `Type.Method(receiver, args)` use the same existing
+function-call lowering. Receivers may be scalar, static-string descriptors or
+value records; aggregate receiver mutation affects only the local value copy.
+Sole multiple-result argument calls remain expandable after the implicit receiver,
+without treating Go multiple values as first-class tuples. There is no interface
+or virtual dispatch and no new calling convention. Stored method values or method
+expressions, pointer receivers, generic receiver declarations and escaping bound
+receivers remain explicit capability diagnostics pending their shared mechanisms.
+
+[Method declarations](https://go.dev/ref/spec#Method_declarations),
+[method sets](https://go.dev/ref/spec#Method_sets), and
+[method expressions](https://go.dev/ref/spec#Method_expressions) define these rules.

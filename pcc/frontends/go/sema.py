@@ -133,6 +133,8 @@ class Analyzer:
                 raise GoDiagnostic(declaration.token, "duplicate package declaration " + name)
             self.types[name] = declaration
         for function in self.program.functions:
+            if function.receiver is not None:
+                continue
             self.check_name(function.token)
             function.abi_symbol = function_symbol(function.token.text, self.package_path)
             name = function.token.text
@@ -177,6 +179,23 @@ class Analyzer:
         for function in self.program.functions:
             function.params = [(token, self.resolve_type(dtype)) for token, dtype in function.params]
             function.result = self.resolve_type(function.result)
+            if function.receiver is not None:
+                token, syntax = function.receiver
+                dtype = self.resolve_type(syntax)
+                if not isinstance(dtype, DefinedType) or dtype.package != (self.package_path or ""):
+                    raise GoDiagnostic(token, "method receiver base must be a defined type in the same package")
+                name = function.token.text
+                if name == "_":
+                    raise GoDiagnostic(function.token, "blank method declarations are not implemented")
+                if name in dtype.methods:
+                    raise GoDiagnostic(function.token, "duplicate method " + name)
+                base = underlying(dtype)
+                if isinstance(base, StructType) and any(field.name == name for field in base.fields):
+                    raise GoDiagnostic(function.token, "method name conflicts with struct field " + name)
+                dtype.methods[name] = function
+                function.receiver = (token, dtype)
+                function.params.insert(0, (token, dtype))
+                function.abi_symbol = function_symbol(dtype.name + "." + name, self.package_path)
         for symbol in self.globals.values():
             self.resolve_constant(symbol)
         main = self.functions.get("main")
@@ -713,7 +732,12 @@ class Analyzer:
             if (base.kind == "name" and not local and base.value not in self.globals
                     and base.value not in self.types):
                 raise GoDiagnostic(base.token, "undefined imported package " + base.value)
+            type_operand = self.type_operand(base)
+            if isinstance(type_operand, DefinedType) and expr.value in type_operand.methods:
+                raise GoDiagnostic(expr.token, "first-class method expressions require function-value support")
             self.expression(base)
+            if isinstance(base.type, DefinedType) and expr.value in base.type.methods:
+                raise GoDiagnostic(expr.token, "stored method values require shared closure and bound-receiver support")
             dtype = underlying(base.type)
             if not isinstance(dtype, StructType):
                 raise GoDiagnostic(expr.token, "field selector requires a struct value")
@@ -728,15 +752,37 @@ class Analyzer:
             return
         if kind == "call":
             name = expr.value
-            if expr.qualifier is not None:
-                owner = self.imported(expr.qualifier, expr.token)
-                if name in owner.types:
-                    self.conversion(expr, owner.resolve_type_declaration(owner.types[name]))
+            callee = expr.callee
+            if callee is not None and callee.kind == "selector":
+                base = callee.args[0]
+                binding = (self.imports.get(expr.token.filename, {}).get(base.value)
+                           if base.kind == "name" else None)
+                shadowed = base.kind == "name" and any(base.value in scope for scope in self.scopes)
+                if binding is not None and not shadowed:
+                    if base.parenthesized:
+                        raise GoDiagnostic(base.token, "selector requires an unparenthesized imported package name")
+                    owner = self.imported(base.value, expr.token)
+                    if name in owner.types:
+                        self.conversion(expr, owner.resolve_type_declaration(owner.types[name]))
+                        return
+                    function = owner.functions.get(name)
+                    if function is None:
+                        raise GoDiagnostic(expr.token, "undefined imported function " + name)
+                    self.call(expr, function)
                     return
-                function = owner.functions.get(name)
-                if function is None:
-                    raise GoDiagnostic(expr.token, "undefined imported function " + name)
-                self.call(expr, function)
+                dtype = self.type_operand(base)
+                method_expression = dtype is not None
+                if not method_expression:
+                    self.expression(base)
+                    dtype = base.type
+                method = dtype.methods.get(name) if isinstance(dtype, DefinedType) else None
+                if method is None:
+                    if binding is not None and shadowed:
+                        raise GoDiagnostic(expr.token, "package selector is shadowed by local variable " + base.value)
+                    raise GoDiagnostic(expr.token, "no method " + name + " on " + str(dtype))
+                if unicodedata.category(name[0]) != "Lu" and dtype.package != (self.package_path or ""):
+                    raise GoDiagnostic(expr.token, "cannot access unexported method " + name)
+                self.call(expr, method, receiver=None if method_expression else base)
                 return
             if name == "len":
                 if len(expr.args) != 1:
@@ -784,6 +830,24 @@ class Analyzer:
             return
         raise GoDiagnostic(expr.token, "unsupported expression " + kind)
 
+    def type_operand(self, expr):
+        if expr.kind == "name":
+            if any(expr.value in scope for scope in self.scopes) or expr.value in self.globals:
+                return None
+            if expr.value in self.types:
+                return self.resolve_type_declaration(self.types[expr.value])
+            return TYPE_NAMES.get(expr.value)
+        if expr.kind == "selector":
+            base = expr.args[0]
+            if (base.kind == "name" and base.value in self.imports.get(expr.token.filename, {})
+                    and not any(base.value in scope for scope in self.scopes)):
+                if base.parenthesized:
+                    raise GoDiagnostic(base.token, "selector requires an unparenthesized imported package name")
+                owner = self.imported(base.value, expr.token)
+                declaration = owner.types.get(expr.value)
+                return owner.resolve_type_declaration(declaration) if declaration else None
+        return None
+
     def field_access(self, field, token):
         if field.package and field.package != (self.package_path or "<main>"):
             raise GoDiagnostic(token, "cannot access unexported struct field " + field.name)
@@ -811,13 +875,16 @@ class Analyzer:
         expr.type, expr.constant = target, arg.constant
         check_representable(expr)
 
-    def call(self, expr, function):
+    def call(self, expr, function, *, receiver=None):
         values = self.values(expr.args)
-        if len(values) != len(function.params):
+        parameters = function.params[1:] if receiver is not None else function.params
+        if len(values) != len(parameters):
             raise GoDiagnostic(expr.token, "argument count mismatch for " + expr.value)
-        for arg, (_, dtype) in zip(values, function.params):
+        if receiver is not None:
+            coerce(receiver, function.params[0][1])
+        for arg, (_, dtype) in zip(values, parameters):
             coerce(arg, dtype)
-        expr.type, expr.symbol = function.result, function
+        expr.type, expr.symbol, expr.receiver = function.result, function, receiver
 
     def binary(self, expr):
         left, right = expr.args

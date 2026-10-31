@@ -3,7 +3,7 @@
 A defined type gets declaration identity, not identity from its representation.
 Aliases reuse the resolved type object. No runtime class/GC layout is introduced.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(eq=False)
@@ -11,6 +11,7 @@ class DefinedType:
     name: str
     package: str
     underlying: object = None
+    methods: dict = field(default_factory=dict)
 
     def __str__(self):
         return self.package + "." + self.name if self.package else self.name

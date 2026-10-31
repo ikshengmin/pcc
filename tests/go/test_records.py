@@ -47,7 +47,6 @@ INVALID = [
     ("type A struct{_ int}", "", "blank struct fields"),
     ("type A struct{int}", "", "embedded fields"),
     ('type A struct{X int `json:"x"`}', "", "struct tags"),
-    ("type A int;func(a A) F(){}", "", "methods require"),
     ("", "type A int", "local type declarations"),
     ("type A struct{X int}", "var a [2]A;_=a", "aggregate elements"),
     ("type A [2]int", "var a A;var i int;_=a[i]", "bounds-panic"),
