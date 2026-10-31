@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .syntax import Expr, Function, Record, RustError, Token
+from .syntax import Enumeration, Expr, Function, Record, RustError, Token
 from .types import SharedReference, TupleType
 
 INTEGERS = {"i32", "i64", "u32", "u64"}
@@ -89,13 +89,19 @@ def cast_constant(value: int, ty: str) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function], records: list[Record] = ()):
+    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = ()):
         self.functions = functions
         self.records: dict[str, Record] = {}
         for record in records:
             if record.token.text in self.records or record.token.text in INTEGERS | {"bool"}:
                 raise record.token.error("duplicate or reserved struct type")
             self.records[record.token.text] = record
+        self.enums: dict[str, Enumeration] = {}
+        for enum in enums:
+            name = enum.token.text
+            if name in self.records or name in self.enums or name in INTEGERS | {"bool"}:
+                raise enum.token.error("duplicate or reserved enum type")
+            self.enums[name] = enum
         self.names: dict[str, Function] = {}
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
@@ -135,7 +141,7 @@ class Checker:
         return ty in INTEGERS | {"bool", "()"}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
-        if ty in INTEGERS | {"bool", "()"}:
+        if ty in INTEGERS | {"bool", "()"} or ty in self.enums:
             return
         if isinstance(ty, SharedReference):
             if not allow_reference:
@@ -181,6 +187,9 @@ class Checker:
         return False
 
     def check(self) -> None:
+        from .patterns import check_enums
+
+        check_enums(self)
         for name, record in self.records.items():
             self.valid_type(name, record.token)
         for fn in self.functions:
@@ -224,6 +233,13 @@ class Checker:
             ty = self.expression(children[0])
         elif kind == "bool":
             ty = "bool"
+        elif kind == "variant":
+            enum_name, variant = expr.value
+            enum = self.enums.get(enum_name)
+            if enum is None or variant not in enum.discriminants:
+                raise expr.token.error("unknown enum variant")
+            expr.value = enum.discriminants[variant]
+            ty = enum_name
         elif kind in {"unit", "let", "discard", "statement"}:
             ty = "()"
             if kind == "let":
@@ -364,6 +380,16 @@ class Checker:
             yes = self.expression(children[1])
             no = self.expression(children[2]) if len(children) == 3 else "()"
             ty = unify(yes, no, expr.token)
+        elif kind == "match":
+            from .patterns import check_pattern
+
+            scrutinee_ty = self.expression(children[0])
+            ty = NEVER
+            for pattern, arm in zip(expr.value, children[1:]):
+                check_pattern(self, pattern, scrutinee_ty)
+                # Each arm expression owns its lexical block scopes normally;
+                # patterns in this slice bind no locals.
+                ty = unify(ty, self.expression(arm), arm.token)
         elif kind == "while":
             unify("bool", self.expression(children[0]), children[0].token)
             self.loops += 1
@@ -391,6 +417,12 @@ class Checker:
         if isinstance(expr.binding, Binding):
             expr.binding.ty = resolve(expr.binding.ty)
         kind, op = expr.kind, expr.value
+        if kind == "match":
+            from .patterns import validate_match
+
+            validate_match(self, expr)
+        if kind == "variant":
+            return expr.value
         if kind == "group":
             return values[0]
         if kind == "bool":
@@ -418,8 +450,8 @@ class Checker:
             if op == "!" and values[0] is not None:
                 return not values[0] if expr.ty == "bool" else cast_constant(~values[0], expr.ty)
         if kind == "cast":
-            if expr.ty not in INTEGERS or expr.children[0].ty not in INTEGERS | {"bool"}:
-                raise expr.token.error("supported casts are integer-to-integer and bool-to-integer")
+            if expr.ty not in INTEGERS or (expr.children[0].ty not in INTEGERS | {"bool"} and expr.children[0].ty not in self.enums):
+                raise expr.token.error("supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer")
             if values[0] is not None:
                 return cast_constant(int(values[0]), expr.ty)
         if kind == "binary":

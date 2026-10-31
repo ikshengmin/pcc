@@ -221,3 +221,35 @@ separate mixed-width repr(C) reference fixture observes all 8 result bytes.
 Darwin is cross-object/relocation evidence only. This does not compile the whole
 Meson shared-library/malloc/free project, or core/alloc. See the upstream test
 provenance rather than treating a library-shaped fixture as project completion.
+
+### Unit-only enums and binding-free match
+
+Unit-only nominal enums admit qualified `Type::Variant` constructors, checked
+explicit/incrementing discriminants, and integer casts. Explicit integer repr
+supports i32/i64/u32/u64; default logical discriminants use the admitted targets'
+64-bit isize range but only unsuffixed constant expressions are accepted until
+isize is a source type. Default storage is a PCC-private i64 tag, **not rustc's
+repr(Rust) layout**. Enum values are not automatically Copy or PartialEq. All
+foreign enum parameters/results remain rejected, even with integer repr.
+
+`match` supports bool/integer/unit-only-enum/unit and nested tuple scrutinees;
+literal, qualified variant, wildcard, tuple/grouped and or-patterns. Pattern
+coverage uses typed constructors, integer literal partitions and an other-value
+class, rather than assuming a final arm is a default. Matrix rows/coverage work
+have explicit implementation limits. The scrutinee is evaluated once and arms
+are selected in source order. Binding-free place inspection does not move the
+place; value expressions still consume their non-Copy operands. Live arm exits
+join move states, including loop backedges, break/continue and early returns.
+The conservative initialized-place rule can reject a match whose wildcard never
+inspects an already partially moved place; it does not silently read such data.
+
+Payload/empty enums, pattern bindings/ref/match ergonomics, guards/ranges,
+trait-derived Copy, macros and general const evaluation remain explicit gaps.
+No enum code imports a runtime, allocator or unwinder. The unchanged official
+Rust sources in `tests/rust/upstream/` remain frontier inputs, not core/alloc or
+upstream-project qualification. Caller attestation and missing borrow-checker
+limitations are unchanged. Darwin is still cross-object emission only.
+
+Specification references: [enums](https://doc.rust-lang.org/reference/items/enumerations.html),
+[match](https://doc.rust-lang.org/reference/expressions/match-expr.html),
+[patterns](https://doc.rust-lang.org/reference/patterns.html).

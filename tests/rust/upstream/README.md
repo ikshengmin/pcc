@@ -27,3 +27,32 @@ This is **not the whole Meson project**: the original adder.c/addertest.c also
 require malloc/free, shared-library construction and the project's build graph.
 Those remain a separate shared-runtime/linker qualification, not a new private
 Rust allocator. No original source was changed to pass the frontend.
+
+## Rust 1.90.0 unchanged frontier sources
+
+The files under `rust-1.90.0/` were read from the official `rust-lang/rust`
+release tag **1.90.0** through authorized source access, before implementing the
+pattern domain. Each complete file is pinned independently by Git blob and
+SHA-256 (no extraction, token removal, or macro replacement):
+
+| Local file / original path | Git blob | SHA-256 |
+| --- | --- | --- |
+| `core_cmp.rs` / `library/core/src/cmp.rs` | `1b9af10a6fda55e5e4ebe07a2a5d83c8a7c032e5` | `c48745bb89c4d3ef361923ac72346133f81a64c112f7bfc625f4beced52016c1` |
+| `exhaustive-bool-match-sanity.rs` / `tests/ui/binding/exhaustive-bool-match-sanity.rs` | `9bdab3ad02c86a817135421f04b86d87bf3e7128` | `43a9442c59cf2640ef85947545c0a01954bcd5697f993183d688501fb57f80fb` |
+| `LICENSE-APACHE` | `1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d` | `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a` |
+| `LICENSE-MIT` | `a2070c4be7acd5316f8d0357ca3c12419a2f3c62` | `b71bd43a069ca0641a9ecfe585ca7b3c53b5cc1608f8b68321168698e28b5ea1` |
+
+Rust is dual MIT/Apache-2.0 licensed; both original license texts accompany these
+files. Source URLs:
+[core cmp](https://github.com/rust-lang/rust/blob/1.90.0/library/core/src/cmp.rs),
+[match test](https://github.com/rust-lang/rust/blob/1.90.0/tests/ui/binding/exhaustive-bool-match-sanity.rs).
+
+The complete `cmp.rs` first fails at documentation attributes and additionally
+needs imports, traits/derives, generics, impl/methods, `repr(i8)`, language items
+and owned intrinsics. Its `Ordering` declaration (lines 384–400) and `reverse`
+match (562–568) identify actual enum/match prerequisites; they are not extracted
+into a substitute core. The complete official test now parses its bool-tuple
+match and still fails at original `assert_eq!` macro calls. Its own `main` has
+not run. Expected capability-diagnostic tests are **not upstream execution
+success**. PCC's separately authored enum/match programs are specification
+fixtures, not these upstream programs or an implementation of core/alloc.

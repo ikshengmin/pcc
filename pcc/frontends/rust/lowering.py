@@ -45,6 +45,8 @@ class Lowerer:
                 ir.LiteralStructType([]) if item == "()" else self.type(item)
                 for item in self.checker.fields(ty)
             ])
+        if ty in self.checker.enums:
+            return ir_type(self.checker.enums[ty].representation or "i64")
         return ir_type(ty)
 
     def place_pointer(self, expr):
@@ -107,7 +109,7 @@ class Lowerer:
         kind, children = expr.kind, expr.children
         if kind in {"group", "unsafe"}:
             return self.expression(children[0])
-        if kind == "integer":
+        if kind in {"integer", "variant"}:
             return ir.Constant(self.type(expr.ty), expr.value)
         if kind == "bool":
             return ir.Constant(ir.IntType(1), int(expr.value))
@@ -196,7 +198,12 @@ class Lowerer:
                 return value
             if before > after:
                 return self.builder.trunc(value, self.type(expr.ty))
-            return (self.builder.sext if children[0].ty.startswith("i") else self.builder.zext)(value, self.type(expr.ty))
+            source_ty = children[0].ty
+            if source_ty in self.checker.enums:
+                source_ty = self.checker.enums[source_ty].representation or "i64"
+            return (self.builder.sext if source_ty.startswith("i") else self.builder.zext)(value, self.type(expr.ty))
+        if kind == "match":
+            return self.match(expr)
         if kind == "if":
             return self.conditional(expr)
         if kind == "while":
@@ -288,4 +295,56 @@ class Lowerer:
         result = self.builder.phi(self.type(expr.ty))
         for value, block in incoming:
             result.add_incoming(value, block)
+        return result
+
+    def pattern_test(self, pattern, value):
+        true = ir.Constant(ir.IntType(1), 1)
+        if pattern.kind in {"wildcard", "unit"}:
+            return true
+        if pattern.kind in {"literal", "variant"}:
+            return self.builder.icmp_unsigned("==", value, ir.Constant(self.type(pattern.ty), int(pattern.value)))
+        if pattern.kind == "or":
+            result = ir.Constant(ir.IntType(1), 0)
+            for option in pattern.children:
+                result = self.builder.or_(result, self.pattern_test(option, value))
+            return result
+        result = true
+        for index, child in enumerate(pattern.children):
+            if child.kind in {"wildcard", "unit"}:
+                continue
+            field = self.builder.extract_value(value, index)
+            result = self.builder.and_(result, self.pattern_test(child, field))
+        return result
+
+    def match(self, expr):
+        # Exactly one scrutinee evaluation; test arms in source order. Patterns
+        # in this slice never bind/move a place. Value-expression operands still
+        # have their ordinary Rust move semantics, checked before lowering.
+        value = self.expression(expr.children[0])
+        if self.builder.block.is_terminated:
+            return None
+        done = self.function.append_basic_block("match.end")
+        incoming = []
+        for pattern, arm in zip(expr.value, expr.children[1:]):
+            selected = self.function.append_basic_block("match.arm")
+            following = self.function.append_basic_block("match.next")
+            self.builder.cbranch(self.pattern_test(pattern, value), selected, following)
+            self.builder.position_at_end(selected)
+            result = self.expression(arm)
+            if not self.builder.block.is_terminated:
+                incoming.append((result, self.builder.block))
+                self.builder.branch(done)
+            self.builder.position_at_end(following)
+        # Coverage is established over the typed constructor matrix; no panic
+        # or external runtime is smuggled in for the impossible residual edge.
+        self.builder.unreachable()
+        self.builder.position_at_end(done)
+        if not incoming:
+            self.builder.unreachable()
+            return None
+        if expr.ty in {"()", NEVER}:
+            return None
+        result = self.builder.phi(self.type(expr.ty))
+        for item, block in incoming:
+            result.add_incoming(item, block)
         return result

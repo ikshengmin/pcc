@@ -24,7 +24,7 @@ class Token:
 # Rust uses Unicode Pattern_White_Space, not Python str.isspace().
 _WHITESPACE = "\t\n\v\f\r \u0085\u200e\u200f\u2028\u2029"
 _KEYWORDS = set("as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while yield abstract become box do final macro override priv typeof unsized virtual try union".split())
-_OPERATORS = ("<<=", ">>=", "->", "::", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "..=", "..")
+_OPERATORS = ("<<=", ">>=", "->", "=>", "::", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "..=", "..")
 
 
 def lex(source: str) -> list[Token]:
@@ -137,6 +137,23 @@ class Record:
     repr_c: bool = False
 
 
+@dataclass
+class Enumeration:
+    token: Token
+    variants: list[tuple[Token, Expr | None]]
+    representation: str | None = None
+    discriminants: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class Pattern:
+    kind: str
+    token: Token
+    value: object = None
+    children: list[Pattern] = field(default_factory=list)
+    ty: object = None
+
+
 _TYPES = {"i32", "i64", "u32", "u64", "bool", "()"}
 _PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "||": 2, "&&": 3, "|": 4, "^": 5, "&": 6, "==": 7, "!=": 7, "<": 7, "<=": 7, ">": 7, ">=": 7, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
@@ -147,6 +164,7 @@ class Parser:
         self.tokens = lex(source)
         self.pos = 0
         self.records: list[Record] = []
+        self.enums: list[Enumeration] = []
 
     @property
     def token(self) -> Token:
@@ -222,20 +240,33 @@ class Parser:
             self.expect("]")
         while self.token.kind != "eof":
             repr_c = no_mangle = False
+            enum_repr = None
             while self.accept("#"):
                 self.expect("[")
                 attribute = self.take()
-                if attribute.text == "repr" and not repr_c:
+                if attribute.text == "repr" and not repr_c and enum_repr is None:
                     self.expect("(")
-                    self.expect("C")
+                    representation = self.take()
+                    if representation.text == "C":
+                        repr_c = True
+                    elif representation.text in {"i32", "i64", "u32", "u64"}:
+                        enum_repr = representation.text
+                    else:
+                        raise representation.error("unsupported representation; enum repr supports i32/i64/u32/u64")
                     self.expect(")")
-                    repr_c = True
                 elif attribute.text == "no_mangle" and not no_mangle:
                     no_mangle = True
                 else:
                     raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                 self.expect("]")
             public = self.accept("pub")
+            if self.accept("enum"):
+                if repr_c or no_mangle:
+                    raise self.token.error("enum repr(C) and no_mangle are not supported")
+                self.enumeration(enum_repr)
+                continue
+            if enum_repr is not None:
+                raise self.token.error("integer repr applies only to an enum")
             if self.accept("struct"):
                 if no_mangle:
                     raise self.token.error("no_mangle is supported only on extern C function definitions")
@@ -313,7 +344,7 @@ class Parser:
             elif self.token.text == "}":
                 tail = expr
                 break
-            elif expr.kind in {"if", "block", "while", "unsafe"}:
+            elif expr.kind in {"if", "block", "while", "unsafe", "match"}:
                 statements.append(Expr("statement", expr.token, children=[expr]))
             else:
                 raise self.token.error("expected ';' or end of block")
@@ -358,6 +389,22 @@ class Parser:
         elif text == "while":
             condition = self.expression(allow_struct=False)
             expr = Expr("while", token, children=[condition, self.block()])
+        elif text == "match":
+            scrutinee = self.expression(allow_struct=False)
+            self.expect("{")
+            patterns, arms = [], []
+            while not self.accept("}"):
+                patterns.append(self.pattern())
+                if self.token.text == "if":
+                    raise self.token.error("match guards require additional effect and binding analysis, which is not implemented")
+                self.expect("=>")
+                arm = self.expression()
+                arms.append(arm)
+                if self.accept("}"):
+                    break
+                if not self.accept(",") and arm.kind not in {"if", "block", "while", "unsafe", "match"}:
+                    raise self.token.error("expected ',' between match arms")
+            expr = Expr("match", token, patterns, [scrutinee] + arms)
         elif text in {"return", "break", "continue"}:
             children = []
             if self.token.text not in {";", "}", ")", ","}:
@@ -368,7 +415,10 @@ class Parser:
         elif text in {"-", "!"}:
             expr = Expr("unary", token, text, [self.expression(12, allow_struct=allow_struct)])
         elif token.kind == "name" and text != "_":
-            expr = Expr("name", token, text)
+            if self.accept("::"):
+                expr = Expr("variant", token, (text, self.name().text))
+            else:
+                expr = Expr("name", token, text)
         else:
             raise token.error(f"unsupported expression {text!r}; borrowing, heap, macros and panic are not implemented")
         while True:
@@ -417,3 +467,69 @@ class Parser:
             right = self.expression(level if level == 1 else level + 1, allow_struct=allow_struct)
             expr = Expr("assign" if level == 1 else "binary", operator, op, [expr, right])
         return expr
+
+    def enumeration(self, representation) -> None:
+        name = self.name()
+        self.expect("{")
+        variants = []
+        while not self.accept("}"):
+            variant = self.name()
+            if self.token.text in {"(", "{"}:
+                raise self.token.error("enum payload variants require tagged aggregate layout and pattern bindings, which are not implemented")
+            value = self.expression() if self.accept("=") else None
+            variants.append((variant, value))
+            if self.accept("}"):
+                break
+            self.expect(",")
+        if not variants:
+            raise name.error("empty enums require uninhabited-type analysis, which is not implemented")
+        self.enums.append(Enumeration(name, variants, representation))
+
+    def pattern(self, *, alternatives=True) -> Pattern:
+        if alternatives:
+            self.accept("|")
+        token = self.take()
+        if token.text == "_":
+            result = Pattern("wildcard", token)
+        elif token.text == "(":
+            if self.accept(")"):
+                result = Pattern("unit", token)
+            else:
+                first = self.pattern()
+                if self.accept(")"):
+                    result = first
+                else:
+                    self.expect(",")
+                    children = [first]
+                    while not self.accept(")"):
+                        children.append(self.pattern())
+                        if self.accept(")"):
+                            break
+                        self.expect(",")
+                    result = Pattern("tuple", token, children=children)
+        elif token.kind == "integer" or token.text in {"-", "true", "false"}:
+            self.pos -= 1
+            # A literal pattern is not an arbitrary constant expression.
+            if token.text == "-":
+                self.take()
+                literal = self.take()
+                if literal.kind != "integer":
+                    raise literal.error("negative literal pattern requires an integer")
+                value = Expr("unary", token, "-", [Expr("integer", literal, literal.text)])
+            elif token.kind == "integer":
+                literal = self.take()
+                value = Expr("integer", literal, literal.text)
+            else:
+                self.take()
+                value = Expr("bool", token, token.text == "true")
+            result = Pattern("literal", token, value)
+        elif token.kind == "name" and self.accept("::"):
+            result = Pattern("variant", token, (token.text, self.name().text))
+        else:
+            raise token.error("pattern bindings, references, ranges and payload patterns are not implemented")
+        if alternatives and self.accept("|"):
+            options = [result, self.pattern(alternatives=False)]
+            while self.accept("|"):
+                options.append(self.pattern(alternatives=False))
+            result = Pattern("or", token, children=options)
+        return result

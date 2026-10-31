@@ -63,7 +63,7 @@ class MoveChecker:
 
     def expression(self, expr: Expr, state: State) -> State | None:
         kind, children = expr.kind, expr.children
-        if kind in {"integer", "bool", "unit"}:
+        if kind in {"integer", "bool", "unit", "variant"}:
             return state
         if kind in {"name", "field", "group"}:
             if self.checker.place(expr) is not None:
@@ -102,6 +102,17 @@ class MoveChecker:
             # subplaces available again. Sibling partial moves remain marked.
             result[binding.serial] = {item for item in moved if not prefix(path, item)}
             return result
+        if kind == "match":
+            scrutinee = children[0]
+            if self.checker.place(scrutinee) is not None:
+                self.read_place(scrutinee, state, consume=False)
+                after = state
+            else:
+                after = self.expression(scrutinee, state)
+            if after is None:
+                return None
+            exits = [self.expression(arm, clone(after)) for arm in children[1:]]
+            return join([item for item in exits if item is not None])
         if kind == "if":
             after_condition = self.expression(children[0], state)
             if after_condition is None:
