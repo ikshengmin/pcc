@@ -1,6 +1,6 @@
 # Multi-language implementation status
 
-Published source boundary: `117476b8206a1f99356da415e4692432fab7278f` (2026-10-31). Unpublished work below is **not included in this published boundary**. A later master needs a fresh source/evidence reconciliation; none of these counts certifies an untested merged tree.
+Publication facts checked through `1d314a207b036753c91421af8e889796207a7a3f` (2026-10-31). Historical implementation entries and test counts retain their named source boundaries; this page is not an exhaustive list of intervening commits or a qualification of the merged tree. Unpublished work remains separate.
 
 This fixed, source-oriented entrypoint distinguishes published code, candidates, failures, unrun stages and next dependencies. Read [AGENTS.md](../AGENTS.md) and [the roadmap](multilanguage-roadmap.md), then the actual implementation and tests. It is not a running log, recovery inventory or language-completion score.
 
@@ -47,6 +47,8 @@ Source: `pcc/frontends/go/`; tests: `tests/go/`. Published source covers scalar/
 
 `117476b8` also publishes ordered expression switches and fixed value-array range. **776 whole-Go PASS**, including **61 official-reference nodes**, with **200 full-width native observations**. The original invalid switch source remains a rejection obligation; the valid observation program is separate. Array snapshots, iteration assignment and constant-length evaluation rules are bounded source semantics, not slices, general range, runtime bounds panics or managed allocation.
 
+`a896b91b2d8f02ea4edabdb456c4ce694a66b1d7` publishes the five-file [bounded official-Go adapter](../specs/conformance/README.md), including its pinned original-source manifest and strict directive checks. The final overlay passed **125 metadata tests** against the then-current published feature maps; no compiler or official shard was rerun. The earlier `ce17a2b50048ed636c6f1c7a5ab77da850de95be` host-pcc0/self/Linux five-original-source shard remains **3 PASS / 2 FAIL** (unsupported panic and print), with only one PCC original program executed. This is not full-suite, standard-library, pcc1, Mac or GC qualification. Required-check suites cannot export passed baselines until assertion-proof replay exists.
+
 The table component plus authored observer is not the whole original `math/bits` package or its tests. The unchanged `bits_errors.go` still fails with `unsupported type error`; error/panic/linkname semantics remain required. Earlier failed declaration/string runs remain historical failures, not retroactively green results.
 
 Next: remaining source control flow and method/type forms, followed by the original package dependencies and runtime-backed strings/slices/interfaces/maps/channels/goroutines. No heap-string, shared-GC, standard external Go aggregate ABI, Mac or native-pcc1 qualification is established.
@@ -90,6 +92,10 @@ The published correction and generic-function batch passed **607 tests = 556 non
 
 Next priority remains the user's basic source forms: references, arrays, for loops and broader generics, extending the bounded impl-method support rather than claiming it complete. Private enum storage does not promise stable Rust/C aggregate ABI; full borrow checking, core/alloc, Drop, heap/destructors, shared GC, Mac execution and native pcc1 remain open.
 
+## Published shared source analysis
+
+`1d314a207b036753c91421af8e889796207a7a3f` publishes seven files extracting [structural places](../pcc/analysis/ownership/places.py) and [forward may-path/structured-loop flow](../pcc/analysis/ownership/flow.py), with an actual [Rust move-checker consumer](../pcc/frontends/rust/moves.py). Rust retains move, Copy, reinitialization, evaluation-order and bounded shared-loan policy. The retained candidate gates passed **26 focused / 748 whole-domain tests**; the parent comparison preserved **52 byte-identical Linux IR/object/symbol fixtures and 14 exact diagnostics**. These are historical candidate results, not a new merged-head run. This extraction adds no language admission, general CFG/alias/borrow proof, last-use or release insertion, Python optimization or runtime qualification.
+
 ## Unpublished work
 
 The bounded C++ pointer members, Rust inherent methods, Go switch/array range and Java semantic-model/raw-reference work named above are published. Later successors remain separate local candidates; no focused/model-only result certifies unexecuted source forms, allocated objects or whole projects. In particular, do not turn the older 503-pass Rust gate into retroactive rustc certification or the Java model into native-instance support.
@@ -100,9 +106,11 @@ The C++/Rust shared-core files were integrated once with both real consumers in 
 
 `117476b8` publishes `scripts/language_feature_ledger.py`, `scripts/conformance_ledger.py`, 59 checker tests, four language feature maps under `specs/features/` and their README. This is a **partial specification inventory**, not a complete language specification, complete official suite or new suite execution. C++ has 101 diagnostic codes mapped by actual frontend AST audit; other stable-code inventories still have explicit gaps.
 
-Each new feature needs specification-chapter-linked unit tests, an actual executable program and an actual same-original-source reference comparison before its ledger status is updated. The only states are `supported`, `explicitly_unimplemented` and `missing`; every unimplemented diagnostic code maps to a feature. The published ledger requires matching revision/mode/platform/backend/GC evidence and raw stdout/stderr/exit for supported runtime behavior; typecheck or normalized-value comparisons do not substitute. Host pcc0 and native pcc1 stay separate, and missing reference tools remain visibly unrun.
+Each new feature needs specification-chapter-linked unit tests, an actual executable program and an actual same-original-source reference comparison before its ledger status is updated. The published schema 1 states are `supported`, `explicitly_unimplemented` and `missing`; every unimplemented diagnostic code maps to a feature. The published ledger requires matching revision/mode/platform/backend/GC evidence and raw stdout/stderr/exit for supported runtime behavior; typecheck or normalized-value comparisons do not substitute. Host pcc0 and native pcc1 stay separate, and missing reference tools remain visibly unrun.
 
-Verified baseline exports remain local; the baseline files are **not published**. Metadata/checker passes do not establish full-spec coverage or official-suite success, and aggregate PASS counts must not be expanded into invented test identities.
+`1ae1049ca957997b0fb6fce2b61d0303f1c478d5` published all four [passed-baseline files](../specs/conformance/passed/): 23 C++, 2 Go, 4 Java and 6 Rust identities, **35 individually verified historical identities** in total. Their original source/version/platform/compiler-mode boundaries remain unchanged; they are not whole-language or official-suite coverage. Metadata/checker passes do not establish full-spec coverage or official-suite success, and aggregate PASS counts must not be expanded into invented test identities.
+
+The schema 2 implementation/acceptance split and four-language migration remain **tested but unpublished**: 145 metadata tests plus one Go registry/schema-compatibility node passed locally. Those results do not change the public schema 1 contract or establish a new compiler/runtime qualification.
 
 ## Common runtime and interoperability
 
