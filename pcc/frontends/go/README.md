@@ -184,3 +184,36 @@ semicolon or empty ImportSpec is rejected, while block EmptyStmt and empty
 unit-source constructors omit a separator only when their optional declaration
 list is absent; the previously invalid double-semicolon input is retained as a
 negative test and is not relabeled as a successful source program.
+
+### Type declarations and value records
+
+Package-scope defined types retain declaration identity even when their public-IR
+representations are identical. Aliases reuse type identity. Assignment permits
+identical types or identical underlying types with at least one unnamed type;
+explicit integer/bool/string and same-underlying aggregate conversions preserve
+Go's separate conversion rules. Constant representability still uses the actual
+Go type and target word model, not host Python integers.
+
+Ordinary named fields, keyed/unkeyed literals, zero initialization, nested value
+records, scalar-array fields, string fields, package static initializers, field
+loads/stores and aggregate parameters/results use the existing public IR. Copies
+are values, not C-style pointer decay. Literal operands retain source evaluation
+order, parallel assignment captures addresses and RHS values before stores, and
+compound field/index targets are evaluated once. Unexported fields carry their
+originating package identity. Unnamed function parameters and result type lists
+accept these types without converting them into variables or first-class tuples.
+
+This private PCC Go aggregate ABI is neither the official Go ABI nor an assertion
+of cross-language C compatibility. Local type declarations, struct tags, embedded
+fields, blank fields, methods, pointers, recursive layouts, struct comparison and
+arrays of records remain explicit boundaries. Array bounds still require the
+existing static proof; no abort replaces a missing recoverable panic. Types have
+32 declaration-expansion levels, 256 fields and 4096 expanded scalar slots as
+explicit implementation limits. No runtime allocation/GC/initialization mechanism
+is added. Complete original math/bits inputs retain their existing shared `error`
+frontier; authored record fixtures are not a whole-package success claim.
+
+Rules: [type declarations](https://go.dev/ref/spec#Type_declarations),
+[assignability](https://go.dev/ref/spec#Assignability),
+[composite literals](https://go.dev/ref/spec#Composite_literals),
+[selectors](https://go.dev/ref/spec#Selectors).

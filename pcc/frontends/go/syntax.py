@@ -152,6 +152,27 @@ class ArraySyntax:
 
 
 @dataclass
+class TypeName:
+    token: Token
+    qualifier: str | None = None
+
+
+@dataclass
+class StructSyntax:
+    token: Token
+    fields: list
+
+
+@dataclass
+class TypeDeclaration:
+    token: Token
+    type: object
+    alias: bool = False
+    resolved: object = None
+    resolving: bool = False
+
+
+@dataclass
 class Expr:
     kind: str
     token: Token
@@ -212,6 +233,7 @@ class Program:
     constants: list
     imports: list = field(default_factory=list)
     variables: list = field(default_factory=list)
+    types: list = field(default_factory=list)
 
 
 BINARY_PRECEDENCE = {
@@ -226,6 +248,7 @@ class GoParser:
     def parse(self, source, filename="<go>", *, require_main=True):
         self.tokens = scan(source, filename)
         self.index = 0
+        self.named_literals = True
         self.take("package")
         package = self.take("name")
         if require_main and package.text != "main":
@@ -233,12 +256,15 @@ class GoParser:
         self.take(";")
         if package.text == "_":
             self.fail(package, "package name cannot be blank")
-        functions, constants, imports, variables = [], [], [], []
+        functions, constants, imports, variables, types = [], [], [], [], []
+        declarations_seen = False
         while not self.at("eof"):
             if self.at(";"):
                 self.fail(self.current, "empty package declarations are not permitted")
+            if not self.at("import"):
+                declarations_seen = True
             if self.at("import"):
-                if functions or constants or variables:
+                if declarations_seen:
                     self.fail(self.current, "imports must precede package declarations")
                 imports.extend(self.import_declaration())
             elif self.at("func"):
@@ -247,10 +273,12 @@ class GoParser:
                 constants.extend(self.declarations())
             elif self.at("var"):
                 variables.extend(self.declarations())
+            elif self.at("type"):
+                types.extend(self.type_declarations())
             else:
                 self.fail(self.current, "unsupported package declaration; expected func, const or var")
             self.end_statement()
-        return Program(package, functions, constants, imports, variables)
+        return Program(package, functions, constants, imports, variables, types)
 
     @property
     def current(self):
@@ -317,35 +345,62 @@ class GoParser:
             self.take("]")
             element = self.datatype()
             return ArraySyntax(token, length, element)
+        if self.at("struct"):
+            token = self.take("struct")
+            self.take("{")
+            fields = []
+            while not self.at("}"):
+                names = [self.take("name")]
+                while self.accept(","):
+                    names.append(self.take("name"))
+                if self.at(";") or self.at("}") or self.at("."):
+                    self.fail(names[0], "embedded fields require method/promotion support")
+                dtype = self.datatype()
+                if self.at("string"):
+                    self.fail(self.current, "struct tags are not implemented")
+                fields.extend((name, dtype) for name in names)
+                self.end_statement()
+            self.take("}")
+            return StructSyntax(token, fields)
         token = self.take("name")
-        if token.text not in TYPE_NAMES:
-            self.fail(token, f"unsupported type {token.text!r}; available: fixed-width integers, int, uint, uintptr, bool, string")
-        return TYPE_NAMES[token.text]
+        if self.accept("."):
+            return TypeName(self.take("name"), token.text)
+        if token.text in TYPE_NAMES:
+            return TYPE_NAMES[token.text]
+        if token.text in ("error", "any", "comparable", "float32", "float64", "complex64", "complex128"):
+            self.fail(token, f"unsupported type {token.text!r}; shared runtime or numeric support is missing")
+        return TypeName(token)
 
-    def function(self):
-        self.take("func")
-        name = self.take("name")
-        self.take("(")
-        params = []
-        while not self.at(")"):
-            names = [self.take("name")]
-            while self.accept(","):
-                names.append(self.take("name"))
-            dtype = self.datatype()
-            params.extend((token, dtype) for token in names)
-            if not self.accept(","):
+    def type_declarations(self):
+        self.take("type")
+        grouped = bool(self.accept("("))
+        declarations = []
+        while not grouped or not self.accept(")"):
+            name = self.take("name")
+            alias = bool(self.accept("="))
+            declarations.append(TypeDeclaration(name, self.datatype(), alias))
+            if not grouped:
                 break
-        self.take(")")
-        result, result_names = self.function_results()
-        return Function(name, params, result, self.block(), result_names=result_names)
+            if not self.accept(";") and not self.at(")"):
+                self.fail(self.current, "expected type declaration separator")
+        return declarations
 
-    def function_results(self):
-        if not self.accept("("):
-            if self.at("name") or self.at("["):
-                return self.datatype(), [None]
-            return "void", []
+    def named_parameters(self):
+        # Identifier lists need a following type. A comma-separated list ending
+        # directly in ')' is instead a list of unnamed result/parameter types.
+        index = self.index
+        while self.tokens[index].kind == "name":
+            index += 1
+            if self.tokens[index].kind in ("name", "[", "struct"):
+                return True
+            if self.tokens[index].kind != ",":
+                return False
+            index += 1
+        return False
+
+    def parameter_list(self):
         types, names = [], []
-        named = self.at("name") and self.current.text not in TYPE_NAMES
+        named = self.named_parameters()
         while not self.at(")"):
             if named:
                 group = [self.take("name")]
@@ -358,10 +413,30 @@ class GoParser:
                 types.append(self.datatype())
                 names.append(None)
             if len(types) > 256:
-                self.fail(self.current, "function exceeds implementation limit (256 results)")
+                self.fail(self.current, "function exceeds implementation limit (256 results/parameters)")
             if not self.accept(","):
                 break
         self.take(")")
+        return types, names
+
+    def function(self):
+        self.take("func")
+        if self.at("("):
+            self.fail(self.current, "methods require receiver and method-set support")
+        name = self.take("name")
+        self.take("(")
+        types, names = self.parameter_list()
+        params = [(token or Token("name", "_", name.filename, name.line, name.column), dtype)
+                  for token, dtype in zip(names, types)]
+        result, result_names = self.function_results()
+        return Function(name, params, result, self.block(), result_names=result_names)
+
+    def function_results(self):
+        if not self.accept("("):
+            if self.at("name") or self.at("[") or self.at("struct"):
+                return self.datatype(), [None]
+            return "void", []
+        types, names = self.parameter_list()
         return (Results(tuple(types)) if len(types) > 1 else types[0] if types else "void"), names
 
     def block(self):
@@ -391,7 +466,7 @@ class GoParser:
             names = [self.take("name")]
             while self.accept(","):
                 names.append(self.take("name"))
-            dtype = self.datatype() if self.at("name") or self.at("[") else None
+            dtype = self.datatype() if self.at("name") or self.at("[") or self.at("struct") else None
             exprs = self.expression_list() if self.accept("=") else []
             if token.kind == "const" and not exprs:
                 if not grouped or previous is None or dtype is not None:
@@ -425,6 +500,7 @@ class GoParser:
         if self.accept("break") or self.accept("continue"):
             return Stmt(token.kind, token)
         if self.accept("if"):
+            previous_literals, self.named_literals = self.named_literals, False
             first = self.simple()
             init = None
             if self.accept(";"):
@@ -433,11 +509,13 @@ class GoParser:
                 condition = first.exprs[0]
             else:
                 self.fail(token, "if requires a boolean condition")
+            self.named_literals = previous_literals
             body, otherwise = self.block(), None
             if self.accept("else"):
                 otherwise = [self.statement()] if self.at("if") else self.block()
             return Stmt("if", token, exprs=[condition], body=body, otherwise=otherwise, init=init)
         if self.accept("for"):
+            previous_literals, self.named_literals = self.named_literals, False
             init, condition, post = None, None, None
             if not self.at("{"):
                 first = None if self.at(";") else self.simple()
@@ -452,8 +530,11 @@ class GoParser:
                     condition = first.exprs[0]
                 else:
                     self.fail(token, "unsupported for clause (range is not implemented)")
+            self.named_literals = previous_literals
             return Stmt("for", token, exprs=[] if condition is None else [condition],
                         body=self.block(), init=init, post=post)
+        if token.kind == "type":
+            self.fail(token, "function-local type declarations are not implemented")
         if token.kind in KEYWORDS:
             self.fail(token, f"unsupported statement {token.text!r}")
         return self.simple()
@@ -487,28 +568,34 @@ class GoParser:
             result.append(self.expression())
         return result
 
+    def composite_literal(self, token, dtype):
+        self.take("{")
+        previous, self.named_literals = self.named_literals, True
+        args, keys = [], []
+        while not self.at("}"):
+            item = self.expression()
+            key = item if self.accept(":") else None
+            args.append(self.expression() if key is not None else item)
+            keys.append(key)
+            if not self.accept(","):
+                break
+        self.take("}")
+        self.named_literals = previous
+        return Expr("array" if isinstance(dtype, ArraySyntax) else "composite", token, dtype, args, keys=keys)
+
     def expression(self, minimum=1):
         token = self.current
         if token.kind in ("+", "-", "!", "^"):
             self.index += 1
             left = Expr("unary", token, token.kind, [self.expression(6)])
         elif self.accept("("):
+            previous, self.named_literals = self.named_literals, True
             left = self.expression()
             self.take(")")
+            self.named_literals = previous
             left.parenthesized = True
-        elif self.at("["):
-            dtype = self.datatype(literal=True)
-            self.take("{")
-            args, keys = [], []
-            while not self.at("}"):
-                item = self.expression()
-                key = item if self.accept(":") else None
-                args.append(self.expression() if key is not None else item)
-                keys.append(key)
-                if not self.accept(","):
-                    break
-            self.take("}")
-            left = Expr("array", token, dtype, args, keys=keys)
+        elif self.at("[") or self.at("struct"):
+            left = self.composite_literal(token, self.datatype(literal=True))
         elif self.accept("integer"):
             left = Expr("integer", token, token.text)
         elif self.accept("string"):
@@ -517,22 +604,35 @@ class GoParser:
             left = Expr("name", token, token.text)
         else:
             self.fail(token, f"unsupported expression token {token.text!r}")
-        if self.accept("."):
-            if left.kind != "name" or left.parenthesized:
-                self.fail(token, "only unparenthesized imported package selectors are supported")
-            member = self.take("name")
-            left = Expr("selector", member, member.text, [left])
-        if self.accept("("):
-            if left.kind not in ("name", "selector"):
-                self.fail(token, "only named function calls/conversions are supported")
-            args = [] if self.at(")") else self.expression_list(terminator=")")
-            self.take(")")
-            qualifier = left.args[0].value if left.kind == "selector" else None
-            left = Expr("call", left.token, left.value, args, qualifier=qualifier)
-        while self.accept("["):
-            index = self.expression()
-            self.take("]")
-            left = Expr("index", index.token, args=[left, index])
+        while True:
+            if self.accept("."):
+                member = self.take("name")
+                left = Expr("selector", member, member.text, [left])
+            elif self.named_literals and self.at("{") and left.kind in ("name", "selector") and not left.parenthesized:
+                if left.kind == "selector":
+                    if left.args[0].kind != "name" or left.args[0].parenthesized:
+                        self.fail(left.token, "composite literal requires an unparenthesized type name")
+                    dtype = TypeName(left.token, left.args[0].value)
+                else:
+                    dtype = TypeName(left.token)
+                left = self.composite_literal(left.token, dtype)
+            elif self.accept("("):
+                if left.kind not in ("name", "selector"):
+                    self.fail(token, "only named function calls/conversions are supported")
+                if left.kind == "selector" and (left.args[0].kind != "name" or left.args[0].parenthesized):
+                    self.fail(left.token, "method calls and parenthesized package qualifiers are not implemented")
+                previous, self.named_literals = self.named_literals, True
+                args = [] if self.at(")") else self.expression_list(terminator=")")
+                self.take(")")
+                self.named_literals = previous
+                qualifier = left.args[0].value if left.kind == "selector" else None
+                left = Expr("call", left.token, left.value, args, qualifier=qualifier)
+            elif self.accept("["):
+                index = self.expression()
+                self.take("]")
+                left = Expr("index", index.token, args=[left, index])
+            else:
+                break
         while BINARY_PRECEDENCE.get(self.current.kind, 0) >= minimum:
             operator = self.current
             self.index += 1

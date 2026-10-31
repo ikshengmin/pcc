@@ -37,7 +37,8 @@ def parse_package(units, *, require_main):
                       [function for item in programs for function in item.functions],
                       [constant for item in programs for constant in item.constants],
                       [imported for item in programs for imported in item.imports],
-                      [variable for item in programs for variable in item.variables])
+                      [variable for item in programs for variable in item.variables],
+                      [dtype for item in programs for dtype in item.types])
     return program
 
 

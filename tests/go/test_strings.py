@@ -58,7 +58,7 @@ def test_invalid_original_string_spelling_fails_located(spelling,message):
     ('_=string(true)',"","invalid conversion"), ('_=uint64("a")',"","invalid conversion"),
     ('_="a"-"b"',"","unsupported string operator"), ('_="a"+1',"","mismatched string"),
     ('_=len(1)',"","len currently supports strings"), ('_=len()',"","requires one argument"),
-    ('_=[1]string{"a"}',"","string-element arrays"), ('_=[...]string{"a"}',"","string-element arrays"),
+    ('_=[1]string{"a"}',"","string-element arrays"), ('_=[...]string{"a"}',"","non-scalar array elements"),
     ('', 'var S=Identity("a");func Identity(s string)string{return s}', "shared-runtime initialization"),
 ])
 def test_string_unsupported_operations_never_reach_ir(body,declarations,message,monkeypatch):

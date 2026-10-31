@@ -45,7 +45,7 @@ PAIR = "func pair()(int64,int64){return 3,4}"
     (PAIR+";func f()(int64,int64,int64){return 1,pair()}", "", "single-value context"),
     (PAIR+";func f()(int64,uint64){return pair()}", "", "cannot use int64 as uint64"),
     ("func f()(x int64){x=1}", "", "missing return"),
-    ("func f()(int64,x int64){return 1,2}", "", "unsupported type"),
+    ("func f()(int64,x int64){return 1,2}", "", "shadowing predeclared"),
     ("func f()(x int64,int64){return 1,2}", "", "expected 'name'"),
 ])
 def test_result_lists_reject_invalid_value_and_scope_rules(declarations, body, message):

@@ -6,12 +6,13 @@ while int, int64 and uintptr remain distinct named Go types.
 """
 
 from dataclasses import dataclass
+from pcc.frontends.go.records import underlying
 
 
 @dataclass(frozen=True)
 class ArrayType:
     count: int
-    element: str
+    element: object
 
     def __str__(self):
         return f"[{self.count}]{self.element}"
@@ -41,23 +42,26 @@ TYPES = frozenset(TYPE_NAMES.values())
 
 
 def is_string(dtype):
-    return dtype in ("string", "untyped string")
+    return underlying(dtype) in ("string", "untyped string")
 
 
 def integer_bits(dtype):
+    dtype = underlying(dtype)
     return 64 if dtype == "untyped int" else INTEGER_TYPES[dtype][0]
 
 
 def integer_signed(dtype):
+    dtype = underlying(dtype)
     return True if dtype == "untyped int" else INTEGER_TYPES[dtype][1]
 
 
 def integer_bounds(dtype):
-    bits, signed = INTEGER_TYPES[dtype]
+    bits, signed = INTEGER_TYPES[underlying(dtype)]
     return (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if signed else (0, (1 << bits) - 1)
 
 
 def is_integer(dtype):
+    dtype = underlying(dtype)
     return isinstance(dtype, str) and (dtype == "untyped int" or dtype in INTEGER_TYPES)
 
 

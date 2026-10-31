@@ -9,7 +9,8 @@ from dataclasses import dataclass
 import re
 import unicodedata
 
-from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic
+from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic, StructSyntax, TypeName
+from pcc.frontends.go.records import DefinedType, Field, StructType, underlying, is_named, same_underlying
 from pcc.frontends.go.types import (
     ArrayType, Results, TYPE_NAMES, TYPES, result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
 )
@@ -17,7 +18,7 @@ from pcc.frontends.go.types import (
 
 PREDECLARED = frozenset(
     "true false nil iota append cap clear close complex copy "
-    "delete imag len make max min new panic print println real recover".split()
+    "delete imag len make max min new panic print println real recover error any comparable float32 float64 complex64 complex128".split()
 ) | frozenset(TYPE_NAMES)
 MAX_SHIFT_COUNT = (1 << 64) - 1
 MAX_CONSTANT_BITS = 4096
@@ -63,7 +64,7 @@ def integer_literal(expr):
 
 
 def is_boolean(dtype):
-    return dtype in ("bool", "untyped bool")
+    return underlying(dtype) in ("bool", "untyped bool")
 
 
 def default_type(dtype):
@@ -99,6 +100,9 @@ def coerce(expr, dtype):
                     coerce(argument, dtype)
         check_representable(expr)
         return
+    if same_underlying(expr.type, dtype) and not (is_named(expr.type) and is_named(dtype)):
+        expr.type = dtype
+        return
     raise GoDiagnostic(expr.token, f"cannot use {expr.type} as {dtype}")
 
 
@@ -109,22 +113,32 @@ class Analyzer:
         self.require_main = require_main
         self.package_path = package_path
         self.functions = {}
+        self.types = {}
         self.globals = {}
         self.scopes = []
         self.function = None
         self.loop_depth = 0
         self.iota = None
+        self.type_depth = 0
 
     def analyze(self):
         from pcc.frontends.go.lowering import function_symbol
 
+        for declaration in self.program.types:
+            self.check_name(declaration.token)
+            name = declaration.token.text
+            if name in ("_", "init"):
+                raise GoDiagnostic(declaration.token, "blank or init package type declarations are not implemented")
+            if name in self.types:
+                raise GoDiagnostic(declaration.token, "duplicate package declaration " + name)
+            self.types[name] = declaration
         for function in self.program.functions:
             self.check_name(function.token)
             function.abi_symbol = function_symbol(function.token.text, self.package_path)
             name = function.token.text
             if name == "_":
                 raise GoDiagnostic(function.token, "blank function declarations are not supported")
-            if name in self.functions:
+            if name in self.functions or name in self.types:
                 raise GoDiagnostic(function.token, "duplicate package declaration " + name)
             if name == "init":
                 raise GoDiagnostic(function.token, "init functions require shared-runtime initialization support")
@@ -139,7 +153,7 @@ class Analyzer:
                     raise GoDiagnostic(token, "blank package variables are not supported")
                 if token.text == "init":
                     raise GoDiagnostic(token, "package name init is reserved for init function declarations")
-                if token.text in self.globals or token.text in self.functions:
+                if token.text in self.globals or token.text in self.functions or token.text in self.types:
                     raise GoDiagnostic(token, "duplicate package declaration " + token.text)
                 symbol = Symbol(token, declaration.type, declaration=expr, resolved=False,
                                 package_variable=declaration.kind == "var",
@@ -150,11 +164,13 @@ class Analyzer:
         # The package block spans every source file. An import's file-block
         # name may not collide with any package declaration, including one in
         # a sibling file (Go specification: Declarations and scope).
-        package_names = set(self.functions) | set(self.globals)
+        package_names = set(self.functions) | set(self.globals) | set(self.types)
         for file_imports in self.imports.values():
             for alias, binding in file_imports.items():
                 if alias in package_names:
                     raise GoDiagnostic(binding.token, "import name conflicts with package declaration: " + alias)
+        for declaration in self.program.types:
+            self.resolve_type_declaration(declaration)
         for declaration in self.program.constants:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
@@ -192,19 +208,87 @@ class Analyzer:
         if token.text in PREDECLARED:
             raise GoDiagnostic(token, "shadowing predeclared names is not implemented: " + token.text)
 
+    def resolve_type_declaration(self, declaration):
+        if declaration.resolved is not None:
+            return declaration.resolved
+        if declaration.resolving:
+            raise GoDiagnostic(declaration.token, "invalid recursive type or alias cycle")
+        if self.type_depth >= 32:
+            raise GoDiagnostic(declaration.token, "type declaration expansion exceeds implementation limit (32 levels)")
+        declaration.resolving = True
+        self.type_depth += 1
+        try:
+            dtype = self.resolve_type(declaration.type)
+            declaration.resolved = (dtype if declaration.alias else
+                                    DefinedType(declaration.token.text, self.package_path or "", underlying(dtype)))
+        finally:
+            declaration.resolving = False
+            self.type_depth -= 1
+        return declaration.resolved
+
     def resolve_type(self, dtype):
         if isinstance(dtype, Results):
             return Results(tuple(self.resolve_type(item) for item in dtype.elements))
+        if isinstance(dtype, TypeName):
+            if dtype.qualifier is not None:
+                owner = self.imported(dtype.qualifier, dtype.token)
+            else:
+                if any(dtype.token.text in scope for scope in self.scopes):
+                    raise GoDiagnostic(dtype.token, "identifier is not a type: " + dtype.token.text)
+                owner = self
+            declaration = owner.types.get(dtype.token.text)
+            if declaration is None:
+                raise GoDiagnostic(dtype.token, "undefined type " + dtype.token.text)
+            return owner.resolve_type_declaration(declaration)
+        if isinstance(dtype, StructSyntax):
+            if len(dtype.fields) > 256:
+                raise GoDiagnostic(dtype.token, "struct exceeds implementation limit (256 fields)")
+            fields, names = [], set()
+            for token, field_type in dtype.fields:
+                if token.text == "_":
+                    raise GoDiagnostic(token, "blank struct fields are not implemented")
+                if token.text in names:
+                    raise GoDiagnostic(token, "duplicate struct field " + token.text)
+                names.add(token.text)
+                package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
+                fields.append(Field(token.text, self.resolve_type(field_type), package))
+            result = StructType(tuple(fields))
+            pending, count = [result], 0
+            while pending:
+                item = underlying(pending.pop())
+                count += item.count if isinstance(item, ArrayType) else 1
+                if count > 4096:
+                    raise GoDiagnostic(dtype.token, "record layout exceeds implementation limit (4096 scalar slots)")
+                if isinstance(item, StructType):
+                    pending.extend(field.type for field in item.fields)
+            return result
         if not isinstance(dtype, ArraySyntax):
             return dtype
-        if isinstance(dtype.element, ArraySyntax) or is_string(dtype.element):
+        element = self.resolve_type(dtype.element)
+        if isinstance(underlying(element), ArrayType) or is_string(element):
             raise GoDiagnostic(dtype.token, "nested arrays and string-element arrays are not implemented")
+        if not is_integer(element) and not is_boolean(element):
+            raise GoDiagnostic(dtype.token, "arrays of aggregate elements are not implemented")
         if dtype.length is None:
             raise GoDiagnostic(dtype.token, "array length inference requires a composite literal")
         count = self.array_index_constant(dtype.length, "array length")
         if count > 4096:
             raise GoDiagnostic(dtype.token, "array exceeds implementation limit (4096 elements)")
-        return ArrayType(count, dtype.element)
+        return ArrayType(count, element)
+
+    def static_initializer(self, expr):
+        if expr.constant is not None:
+            return expr.constant
+        if expr.kind in ("array", "struct"):
+            dtype = underlying(expr.type)
+            count = dtype.count if isinstance(dtype, ArrayType) else len(dtype.fields)
+            values = [None] * count
+            for index, item in zip(expr.indices, expr.args):
+                values[index] = self.static_initializer(item)
+            return tuple(values)
+        if expr.kind == "call" and expr.symbol is None and same_underlying(expr.type, expr.args[0].type):
+            return self.static_initializer(expr.args[0])
+        raise GoDiagnostic(expr.token, "nonconstant package initializer requires shared-runtime initialization support")
 
     def array_index_constant(self, expr, label):
         self.expression(expr)
@@ -236,15 +320,7 @@ class Analyzer:
             coerce(expr, dtype)
             symbol.type = dtype
             if symbol.package_variable:
-                if expr.constant is not None:
-                    symbol.initializer = expr.constant
-                elif expr.kind == "array" and all(item.constant is not None for item in expr.args):
-                    values = [0] * expr.type.count
-                    for index, item in zip(expr.indices, expr.args):
-                        values[index] = item.constant
-                    symbol.initializer = tuple(values)
-                else:
-                    raise GoDiagnostic(symbol.token, "nonconstant package initializer requires shared-runtime initialization support")
+                symbol.initializer = self.static_initializer(expr)
             else:
                 if expr.constant is None:
                     raise GoDiagnostic(symbol.token, "const initializer is not a constant")
@@ -316,7 +392,8 @@ class Analyzer:
         self.expression(expr)
         if not is_boolean(expr.type):
             raise GoDiagnostic(expr.token, "condition must be bool (Go has no integer truth conversion)")
-        coerce(expr, "bool")
+        if expr.type == "untyped bool":
+            coerce(expr, "bool")
 
     def values(self, expressions):
         for expr in expressions:
@@ -495,31 +572,64 @@ class Analyzer:
         if expr.type is not None:
             return
         kind = expr.kind
-        if kind == "array":
-            indices, next_index, used = [], 0, set()
-            for key, item in zip(expr.keys, expr.args):
-                index = next_index if key is None else self.array_index_constant(key, "array literal index")
-                if index in used:
-                    raise GoDiagnostic(item.token, "duplicate array literal index")
-                used.add(index)
-                indices.append(index)
-                next_index = index + 1
+        if kind in ("array", "composite"):
             syntax = expr.value
-            if syntax.length is None:
-                if isinstance(syntax.element, ArraySyntax) or is_string(syntax.element):
-                    raise GoDiagnostic(syntax.token, "nested arrays and string-element arrays are not implemented")
-                count = max(indices, default=-1) + 1
-                if count > 4096:
-                    raise GoDiagnostic(syntax.token, "array exceeds implementation limit (4096 elements)")
-                expr.type = ArrayType(count, syntax.element)
+            if isinstance(syntax, ArraySyntax) and syntax.length is None:
+                element = self.resolve_type(syntax.element)
+                if not is_integer(element) and not is_boolean(element):
+                    raise GoDiagnostic(syntax.token, "nested arrays and non-scalar array elements are not implemented")
+                dtype = None
             else:
                 expr.type = self.resolve_type(syntax)
-            expr.indices = indices
-            for index, item in zip(indices, expr.args):
-                if index >= expr.type.count:
-                    raise GoDiagnostic(item.token, "array literal index out of bounds")
-                self.expression(item)
-                coerce(item, expr.type.element)
+                dtype = underlying(expr.type)
+            if isinstance(dtype, StructType):
+                expr.kind = "struct"
+                keyed = any(key is not None for key in expr.keys)
+                if keyed and any(key is None for key in expr.keys):
+                    raise GoDiagnostic(expr.token, "cannot mix keyed and unkeyed struct elements")
+                if not keyed and expr.args and len(expr.args) != len(dtype.fields):
+                    raise GoDiagnostic(expr.token, "unkeyed struct literal requires one value for every field")
+                indices, used = [], set()
+                names = [field.name for field in dtype.fields]
+                for position, (key, item) in enumerate(zip(expr.keys, expr.args)):
+                    if key is not None:
+                        if key.kind != "name" or key.parenthesized or key.value not in names:
+                            raise GoDiagnostic(key.token, "unknown or invalid struct literal field")
+                        index = names.index(key.value)
+                    else:
+                        index = position
+                    if index in used:
+                        raise GoDiagnostic(item.token, "duplicate struct literal field")
+                    used.add(index)
+                    field = dtype.fields[index]
+                    self.field_access(field, item.token)
+                    self.expression(item)
+                    coerce(item, field.type)
+                    indices.append(index)
+                expr.indices = indices
+            else:
+                if dtype is not None and not isinstance(dtype, ArrayType):
+                    raise GoDiagnostic(expr.token, "composite literal requires an array or struct type")
+                expr.kind = "array"
+                indices, next_index, used = [], 0, set()
+                for key, item in zip(expr.keys, expr.args):
+                    index = next_index if key is None else self.array_index_constant(key, "array literal index")
+                    if index in used:
+                        raise GoDiagnostic(item.token, "duplicate array literal index")
+                    used.add(index)
+                    indices.append(index)
+                    next_index = index + 1
+                if dtype is None:
+                    count = max(indices, default=-1) + 1
+                    if count > 4096:
+                        raise GoDiagnostic(syntax.token, "array exceeds implementation limit (4096 elements)")
+                    expr.type = dtype = ArrayType(count, element)
+                expr.indices = indices
+                for index, item in zip(indices, expr.args):
+                    if index >= dtype.count:
+                        raise GoDiagnostic(item.token, "array literal index out of bounds")
+                    self.expression(item)
+                    coerce(item, dtype.element)
             if self.function is not None:
                 self.function.temporaries.append(expr)
             return
@@ -547,20 +657,21 @@ class Analyzer:
                 # expression even when both operands happen to be constant.
                 expr.type = "uint8"
                 return
-            if not isinstance(base.type, ArrayType):
+            array_type = underlying(base.type)
+            if not isinstance(array_type, ArrayType):
                 raise GoDiagnostic(expr.token, "indexing requires an array or string (slices/maps are not implemented)")
             if not is_integer(index.type):
                 raise GoDiagnostic(index.token, "array index must be an integer")
             if index.constant is not None:
                 value = self.array_index_constant(index, "array index")
-                if value >= base.type.count:
+                if value >= array_type.count:
                     raise GoDiagnostic(index.token, "array index out of bounds")
             else:
                 upper = self.index_upper_bound(index)
-                if upper is None or upper >= base.type.count:
+                if upper is None or upper >= array_type.count:
                     raise GoDiagnostic(index.token, "unproven array bounds require shared-runtime bounds-panic support")
             coerce(index, default_type(index.type))
-            expr.type, expr.addressable = base.type.element, base.addressable
+            expr.type, expr.addressable = array_type.element, base.addressable
             if not base.addressable and self.function is not None:
                 self.function.temporaries.append(base)
             return
@@ -585,17 +696,44 @@ class Analyzer:
                 expr.addressable = symbol.constant is None
             return
         if kind == "selector":
-            imported = self.imported(expr.args[0].value, expr.token)
-            symbol = imported.globals.get(expr.value)
-            if symbol is None:
-                raise GoDiagnostic(expr.token, "undefined imported constant or variable " + expr.value)
-            expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
-            expr.addressable = symbol.constant is None
+            base = expr.args[0]
+            bindings = self.imports.get(expr.token.filename, {})
+            local = base.kind == "name" and any(base.value in scope for scope in self.scopes)
+            if base.kind == "name" and base.value in bindings and not local:
+                if base.parenthesized:
+                    raise GoDiagnostic(base.token, "selector requires an unparenthesized imported package name")
+                imported = self.imported(base.value, expr.token)
+                symbol = imported.globals.get(expr.value)
+                if symbol is None:
+                    raise GoDiagnostic(expr.token, "undefined imported constant or variable " + expr.value)
+                imported.resolve_constant(symbol)
+                expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
+                expr.addressable = symbol.constant is None
+                return
+            if (base.kind == "name" and not local and base.value not in self.globals
+                    and base.value not in self.types):
+                raise GoDiagnostic(base.token, "undefined imported package " + base.value)
+            self.expression(base)
+            dtype = underlying(base.type)
+            if not isinstance(dtype, StructType):
+                raise GoDiagnostic(expr.token, "field selector requires a struct value")
+            names = [field.name for field in dtype.fields]
+            if expr.value not in names:
+                raise GoDiagnostic(expr.token, "unknown struct field " + expr.value)
+            index = names.index(expr.value)
+            field = dtype.fields[index]
+            self.field_access(field, expr.token)
+            expr.kind, expr.indices = "field", [index]
+            expr.type, expr.addressable = field.type, base.addressable
             return
         if kind == "call":
             name = expr.value
             if expr.qualifier is not None:
-                function = self.imported(expr.qualifier, expr.token).functions.get(name)
+                owner = self.imported(expr.qualifier, expr.token)
+                if name in owner.types:
+                    self.conversion(expr, owner.resolve_type_declaration(owner.types[name]))
+                    return
+                function = owner.functions.get(name)
                 if function is None:
                     raise GoDiagnostic(expr.token, "undefined imported function " + name)
                 self.call(expr, function)
@@ -611,33 +749,13 @@ class Analyzer:
                 expr.type = "int"  # len is typed int even when its value is constant.
                 expr.constant = len(arg.constant) if arg.constant is not None else None
                 return
-            if name in TYPE_NAMES:
-                name = TYPE_NAMES[name]
-                if len(expr.args) != 1:
-                    raise GoDiagnostic(expr.token, "conversion requires one argument")
-                arg = expr.args[0]
-                self.expression(arg)
-                if name == "string" and is_integer(arg.type):
-                    if arg.constant is None:
-                        raise GoDiagnostic(expr.token, "integer-to-string conversion requires shared-runtime allocation support")
-                    codepoint = arg.constant
-                    if codepoint < 0 or codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
-                        codepoint = 0xfffd
-                    expr.type, expr.constant = "string", chr(codepoint).encode("utf-8")
-                    return
-                if not ((is_integer(name) and is_integer(arg.type)) or
-                        (is_boolean(name) and is_boolean(arg.type)) or
-                        (is_string(name) and is_string(arg.type))):
-                    raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {name}")
-                if arg.constant is None and arg.type == "untyped int":
-                    coerce(arg, name)
-                expr.type, expr.constant = name, arg.constant
-                check_representable(expr)
-                return
-            # Lexical variables/constants shadow package functions. They are not
-            # callable: first-class function values are not in this slice.
+            # Values in a lexical scope shadow package type/function names.
             if any(name in scope for scope in self.scopes) or name in self.globals:
                 raise GoDiagnostic(expr.token, "cannot call non-function " + name)
+            if name in TYPE_NAMES or name in self.types:
+                target = TYPE_NAMES[name] if name in TYPE_NAMES else self.resolve_type_declaration(self.types[name])
+                self.conversion(expr, target)
+                return
             function = self.functions.get(name)
             if function is None:
                 label = "unsupported builtin " if name in PREDECLARED else "undefined function "
@@ -666,6 +784,33 @@ class Analyzer:
             return
         raise GoDiagnostic(expr.token, "unsupported expression " + kind)
 
+    def field_access(self, field, token):
+        if field.package and field.package != (self.package_path or "<main>"):
+            raise GoDiagnostic(token, "cannot access unexported struct field " + field.name)
+
+    def conversion(self, expr, target):
+        if len(expr.args) != 1:
+            raise GoDiagnostic(expr.token, "conversion requires one argument")
+        arg = expr.args[0]
+        self.expression(arg)
+        if is_string(target) and is_integer(arg.type):
+            if arg.constant is None:
+                raise GoDiagnostic(expr.token, "integer-to-string conversion requires shared-runtime allocation support")
+            codepoint = arg.constant
+            if codepoint < 0 or codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
+                codepoint = 0xfffd
+            expr.type, expr.constant = target, chr(codepoint).encode("utf-8")
+            return
+        if not (same_underlying(target, arg.type) or
+                is_integer(target) and is_integer(arg.type) or
+                is_boolean(target) and is_boolean(arg.type) or
+                is_string(target) and is_string(arg.type)):
+            raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {target}")
+        if arg.constant is None and arg.type == "untyped int":
+            coerce(arg, target)
+        expr.type, expr.constant = target, arg.constant
+        check_representable(expr)
+
     def call(self, expr, function):
         values = self.values(expr.args)
         if len(values) != len(function.params):
@@ -681,7 +826,12 @@ class Analyzer:
             if not (is_string(left.type) and is_string(right.type)):
                 raise GoDiagnostic(expr.token, "mismatched string operand types")
             if left.type != right.type:
-                coerce(left if left.type == "untyped string" else right, "string")
+                if left.type == "untyped string":
+                    coerce(left, right.type)
+                elif right.type == "untyped string":
+                    coerce(right, left.type)
+                else:
+                    raise GoDiagnostic(expr.token, "mismatched string operand types")
             if op not in ("+", "==", "!=", "<", "<=", ">", ">="):
                 raise GoDiagnostic(expr.token, "unsupported string operator " + op)
             if left.constant is None or right.constant is None:

@@ -7,6 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
+from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import ArrayType, Results, result_types, integer_bits, integer_signed, is_string
 
 
@@ -20,6 +21,9 @@ GO_MAIN_SYMBOL = function_symbol("main")
 
 
 def ir_type(dtype):
+    dtype = underlying(dtype)
+    if isinstance(dtype, StructType):
+        return ir.LiteralStructType([ir_type(field.type) for field in dtype.fields])
     if isinstance(dtype, Results):
         return ir.LiteralStructType([ir_type(item) for item in dtype.elements])
     if isinstance(dtype, ArrayType):
@@ -78,22 +82,27 @@ class Lowerer:
         return self.builder.load(self.string_descriptors[data])
 
     def zero(self, dtype):
-        return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if isinstance(dtype, ArrayType) else 0)
+        aggregate = isinstance(underlying(dtype), (ArrayType, StructType))
+        return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if aggregate else 0)
+
+    def static_initializer(self, dtype, value):
+        if value is None:
+            return self.zero(dtype)
+        base = underlying(dtype)
+        if is_string(dtype):
+            return self.string_constant(value)
+        if isinstance(base, ArrayType):
+            return ir.Constant(ir_type(dtype), [self.static_initializer(base.element, item) for item in value])
+        if isinstance(base, StructType):
+            return ir.Constant(ir_type(dtype), [self.static_initializer(field.type, item)
+                                                for field, item in zip(base.fields, value)])
+        return ir.Constant(ir_type(dtype), int(value))
 
     def lower(self):
         for declaration in self.program.variables:
             for symbol in declaration.symbols:
                 storage = ir.GlobalVariable(self.module, ir_type(symbol.type), symbol.abi_symbol)
-                value = symbol.initializer
-                if is_string(symbol.type):
-                    storage.initializer = self.string_constant(value or b"")
-                    self.globals[symbol] = storage
-                    continue
-                if value is None and not isinstance(symbol.type, ArrayType):
-                    value = 0
-                if isinstance(symbol.type, ArrayType) and value is not None:
-                    value = [ir.Constant(ir_type(symbol.type.element), int(item)) for item in value]
-                storage.initializer = ir.Constant(ir_type(symbol.type), value)
+                storage.initializer = self.static_initializer(symbol.type, symbol.initializer)
                 self.globals[symbol] = storage
         for source in self.program.functions:
             ftype = ir.FunctionType(ir_type(source.result), [ir_type(dtype) for _, dtype in source.params])
@@ -251,6 +260,9 @@ class Lowerer:
     def address(self, expr):
         if expr.kind in ("name", "selector"):
             return self.slots[expr.symbol]
+        if expr.kind == "field":
+            return self.builder.gep(self.address(expr.args[0]),
+                                    [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), expr.indices[0])])
         if expr.kind == "index":
             base, index = expr.args
             if base.addressable:
@@ -271,12 +283,13 @@ class Lowerer:
     def expression(self, expr):
         if id(expr) in self.saved_values:
             return self.saved_values[id(expr)]
-        if expr.kind == "array":
+        if expr.kind in ("array", "struct"):
             values = [self.expression(item) for item in expr.args]
             storage = self.temps[id(expr)]
             self.builder.store(ir.Constant(ir_type(expr.type), None), storage)
             for index, value in zip(expr.indices, values):
-                element = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(64), index)])
+                index_type = ir.IntType(32 if expr.kind == "struct" else 64)
+                element = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(index_type, index)])
                 self.builder.store(value, element)
             return self.builder.load(storage)
         if expr.constant is not None:
@@ -294,6 +307,10 @@ class Lowerer:
                 extend = self.builder.sext if integer_signed(index.type) else self.builder.zext
                 offset = extend(offset, ir.IntType(64))
             return self.builder.load(self.builder.gep(pointer, [offset]))
+        if expr.kind == "field":
+            if expr.addressable:
+                return self.builder.load(self.address(expr))
+            return self.builder.extract_value(self.expression(expr.args[0]), expr.indices[0])
         if expr.kind in ("name", "selector", "index"):
             return self.builder.load(self.address(expr))
         if expr.kind == "call":
@@ -301,7 +318,7 @@ class Lowerer:
             if expr.symbol is None:
                 value = arguments[0]
                 target = ir_type(expr.type)
-                if is_string(expr.type):
+                if value.type == target:
                     return value
                 if value.type.width > target.width:
                     return self.builder.trunc(value, target)
@@ -326,7 +343,7 @@ class Lowerer:
                 return self.shift(expr, left)
             right = self.expression(expr.args[1])
             if op in ("==", "!=", "<", "<=", ">", ">="):
-                compare = self.builder.icmp_signed if expr.args[0].type in ("bool", "untyped bool") or integer_signed(expr.args[0].type) else self.builder.icmp_unsigned
+                compare = self.builder.icmp_signed if underlying(expr.args[0].type) in ("bool", "untyped bool") or integer_signed(expr.args[0].type) else self.builder.icmp_unsigned
                 return compare(op, left, right)
             if op in ("/", "%") and expr.args[1].constant == -1:
                 # Go defines MIN_INT / -1 == MIN_INT, unlike LLVM sdiv.
