@@ -194,6 +194,74 @@ def emit_gep_offset(
     return lines
 
 
+def gep_constant_byte_offset_indexed(
+    kernel: IndexedFunctionKernel,
+    record_id: int,
+) -> int | None:
+    """The total byte offset of a GEP whose every index is a constant, or None.
+
+    Array and leading indices scale by the element size and struct indices
+    add the field offset, exactly as emit_gep_offset_indexed walks them.
+    Index constants are sign-extended to pointer width, so only spellings
+    within the i32 range are folded; anything else keeps the general path.
+    """
+    header: CompilerInt4 = kernel.gep_header(record_id)
+    span: CompilerInt4 = kernel.gep_span(record_id)
+    if span.first <= 0:
+        return None
+    total = 0
+    current_type_id = header.first
+    index = 0
+    while index < span.first:
+        raw: CompilerInt2 = kernel.gep_index(header.fourth + index)
+        if raw.second >= 0:
+            return None
+        token = kernel.call_texts[-raw.second - 1]
+        if len(token) > 11:
+            return None
+        value = const_int_from_value(token)
+        if value is None or value < -2147483648 or value > 2147483647:
+            return None
+        if index == 0:
+            total += value * kernel.type_span(current_type_id).third
+            index += 1
+            continue
+        current_header: CompilerInt4 = kernel.type_header(current_type_id)
+        if current_header.first == TYPE_KIND_ARRAY:
+            if current_header.fourth < 0:
+                return None
+            current_type_id = current_header.fourth
+            total += value * kernel.type_span(current_type_id).third
+        elif current_header.first == TYPE_KIND_STRUCT:
+            current_span: CompilerInt4 = kernel.type_span(current_type_id)
+            if value < 0 or value >= current_span.second:
+                return None
+            field_offset = 0
+            cursor = 0
+            field_type_id = -1
+            while cursor <= value:
+                candidate_type_id = kernel.type_field_ids.get_unchecked(
+                    current_span.first + cursor
+                )
+                candidate_span: CompilerInt4 = kernel.type_span(candidate_type_id)
+                field_offset = (
+                    (field_offset + candidate_span.fourth - 1)
+                    // candidate_span.fourth
+                    * candidate_span.fourth
+                )
+                if cursor == value:
+                    field_type_id = candidate_type_id
+                    break
+                field_offset += candidate_span.third
+                cursor += 1
+            current_type_id = field_type_id
+            total += field_offset
+        else:
+            return None
+        index += 1
+    return total
+
+
 def emit_gep_offset_indexed(
     func: ParsedFunction,
     kernel: IndexedFunctionKernel,

@@ -10,6 +10,7 @@ from .self_backend_aarch64_darwin_abi import (
 from .self_backend_aarch64_darwin_addr import (
     emit_gep_offset,
     emit_gep_offset_indexed,
+    gep_constant_byte_offset_indexed,
 )
 from .self_backend_aarch64_darwin_calls import (
     emit_call_instruction,
@@ -55,6 +56,7 @@ from .self_backend_aarch64_darwin_regalloc import (
     callee_saved_registers_enabled,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
+    frame_slot_sp_offset,
 )
 from .self_backend_aarch64_darwin_slots import (
     copy_address_to_address,
@@ -283,6 +285,21 @@ def _commit_or_spill_scalar_result_indexed(
         op = "stur"
     offset = kernel.slot_offset(slot_id)
     if offset > 255:
+        # A compute result is committed at top level, never inside a call
+        # or phi-copy sequence, so the fixed sp - x29 relation holds.
+        access_bytes = 8
+        if header.first == TYPE_KIND_INT and header.second <= 8:
+            access_bytes = 1
+        elif header.first == TYPE_KIND_INT and header.second <= 16:
+            access_bytes = 2
+        elif header.first == TYPE_KIND_INT and header.second <= 32:
+            access_bytes = 4
+        elif header.first == TYPE_KIND_FP:
+            access_bytes = header.second // 8 if header.second in (32, 64) else 0
+        position = frame_slot_sp_offset(func, offset, access_bytes)
+        if position >= 0:
+            scaled_op = {"sturb": "strb", "sturh": "strh"}.get(op, "str")
+            return [emitted_memory_instruction_line(scaled_op, source_reg, "sp", position)]
         lines = emit_slot_base_address_parts(offset, "x15")
         lines.append(emitted_memory_instruction_line(op, source_reg, "x15"))
         return lines
@@ -2009,6 +2026,72 @@ def emit_compute_instruction_by_id(
                         gep_span.second, "x9",
                     ))
                 return lines
+            constant_offset = gep_constant_byte_offset_indexed(indexed_kernel, data)
+            if constant_offset is not None and -4095 <= constant_offset <= 4095:
+                # A constant-offset address is one add/sub from the base's
+                # home into the result's home; only a missing assignment
+                # stages through x9 (operand) or x11 (spilled result).
+                base_register = allocated_scalar_register_indexed(
+                    indexed_kernel, gep_header.third, gep_header.second,
+                )
+                result_register = allocated_scalar_register_indexed(
+                    indexed_kernel, indexed_dest_id, gep_span.second,
+                )
+                lines = []
+                base_name = "x" + str(base_register)
+                if base_register < 0:
+                    base_name = "x9"
+                    lines.extend(materialize_scalar_value_indexed(
+                        func, indexed_kernel, ptr_value, gep_header.second, 9,
+                        module_symbols, value_id=gep_header.third,
+                    ))
+                result_name = "x" + str(result_register) if result_register >= 0 else "x11"
+                lines.extend(emit_add_offset(result_name, base_name, constant_offset))
+                if result_register < 0:
+                    lines.extend(_commit_or_spill_scalar_result_indexed(
+                        func, indexed_kernel, indexed_dest_id, gep_span.second, "x11",
+                    ))
+                return lines
+            if gep_span.first == 1:
+                # One 64-bit register index over a power-of-two element:
+                # ``add result, base, index, lsl #k`` straight between homes.
+                index_ref: CompilerInt2 = indexed_kernel.gep_index(gep_header.fourth)
+                element_size = indexed_kernel.type_span(gep_header.first).third
+                index_header: CompilerInt4 = indexed_kernel.type_header(index_ref.first)
+                index_register = -1
+                if (
+                    index_ref.second >= 0
+                    and element_size in (1, 2, 4, 8, 16)
+                    and index_header.first == TYPE_KIND_INT
+                    and index_header.second == 64
+                ):
+                    index_register = allocated_scalar_register_indexed(
+                        indexed_kernel, index_ref.second, index_ref.first,
+                    )
+                if index_register >= 0:
+                    base_register = allocated_scalar_register_indexed(
+                        indexed_kernel, gep_header.third, gep_header.second,
+                    )
+                    result_register = allocated_scalar_register_indexed(
+                        indexed_kernel, indexed_dest_id, gep_span.second,
+                    )
+                    lines = []
+                    base_name = "x" + str(base_register)
+                    if base_register < 0:
+                        base_name = "x9"
+                        lines.extend(materialize_scalar_value_indexed(
+                            func, indexed_kernel, ptr_value, gep_header.second, 9,
+                            module_symbols, value_id=gep_header.third,
+                        ))
+                    result_name = "x" + str(result_register) if result_register >= 0 else "x11"
+                    shift = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}[element_size]
+                    suffix = "" if shift == 0 else f", lsl #{shift}"
+                    lines.append(f"  add {result_name}, {base_name}, x{index_register}{suffix}")
+                    if result_register < 0:
+                        lines.extend(_commit_or_spill_scalar_result_indexed(
+                            func, indexed_kernel, indexed_dest_id, gep_span.second, "x11",
+                        ))
+                    return lines
             lines = materialize_scalar_value_indexed(
                 func,
                 indexed_kernel,
