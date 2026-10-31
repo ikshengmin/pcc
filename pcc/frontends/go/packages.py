@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pcc.frontends.go.lowering import Lowerer
 from pcc.frontends.go.sema import Analyzer, PREDECLARED
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser, Program
+from pcc.frontends.go.types import supported_target
 
 
 @dataclass
@@ -76,7 +77,7 @@ def compile_packages(packages, *, main_package, target_triple):
         return analyzer
 
     main = visit(main_package).program
-    if target_triple.split("-", 1)[0] not in ("x86_64", "aarch64", "arm64"):
+    if not supported_target(target_triple):
         raise GoDiagnostic(main.token, "Go scalar frontend requires a supported 64-bit target")
     linked = Program(main.token, [function for program in order for function in program.functions], [])
     return Lowerer(linked, target_triple, main.token.filename).lower()

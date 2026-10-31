@@ -19,6 +19,7 @@ from tests.go.owned_execution import (
 FIXTURES = Path(__file__).parent / "fixtures"
 CASES = [
     (("scalars.go",), -40499999856),
+    (("integers.go",), -1),
     (("control.go",), 21440),
     (("multi_main.go", "multi_helper.go"), 409),
 ]
@@ -87,3 +88,12 @@ def test_go_explicit_official_compiler_oracle_receives_identical_program(tmp_pat
     assert run(owned) == run(reference) == Execution(0, b"", b"")
     for filename, text in original:
         assert (reference.parent / filename).read_bytes() == text.encode("utf-8")
+
+
+def test_source_filename_cannot_inject_public_ir_module_text(monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    filename = 'unit"\nsource_filename = "injected.go'
+    artifact = compile_owned(((filename, "package main; func main(){}"),))
+    assert artifact.ir.splitlines()[0] == '; ModuleID = "go_' + filename.encode().hex() + '"'
+    assert '\nsource_filename = "injected.go"' not in artifact.ir
+    assert artifact.object[:4] == b"\x7fELF"

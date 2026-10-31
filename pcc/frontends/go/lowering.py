@@ -7,6 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
+from pcc.frontends.go.types import integer_bits, integer_signed
 
 
 def function_symbol(name, package_path=None):
@@ -23,13 +24,13 @@ def ir_type(dtype):
         return ir.VoidType()
     if dtype in ("bool", "untyped bool"):
         return ir.IntType(1)
-    return ir.IntType(64)
+    return ir.IntType(integer_bits(dtype))
 
 
 class Lowerer:
     def __init__(self, program, target_triple, module_name):
         self.program = program
-        self.module = ir.Module(name=module_name)
+        self.module = ir.Module(name="go_" + module_name.encode("utf-8", "surrogatepass").hex())
         self.module.triple = target_triple
         self.functions = {}
         self.slots = {}
@@ -153,8 +154,15 @@ class Lowerer:
             return self.builder.load(self.slots[expr.symbol])
         if expr.kind == "call":
             arguments = [self.expression(arg) for arg in expr.args]
-            if expr.symbol is None:  # an admitted same-width scalar conversion
-                return arguments[0]
+            if expr.symbol is None:
+                value = arguments[0]
+                target = ir_type(expr.type)
+                if value.type.width > target.width:
+                    return self.builder.trunc(value, target)
+                if value.type.width < target.width:
+                    extend = self.builder.sext if integer_signed(expr.args[0].type) else self.builder.zext
+                    return extend(value, target)
+                return value
             return self.builder.call(self.functions[expr.symbol.abi_symbol], arguments)
         if expr.kind == "unary":
             value = self.expression(expr.args[0])
@@ -169,28 +177,55 @@ class Lowerer:
                 return self.short_circuit(expr)
             left = self.expression(expr.args[0])
             if op in ("<<", ">>"):
-                count = expr.args[1].constant
-                if count >= 64:
-                    if op == "<<":
-                        return ir.Constant(left.type, 0)
-                    return self.builder.ashr(left, ir.Constant(left.type, 63))
-                amount = ir.Constant(left.type, count)
-                return self.builder.shl(left, amount) if op == "<<" else self.builder.ashr(left, amount)
+                return self.shift(expr, left)
             right = self.expression(expr.args[1])
             if op in ("==", "!=", "<", "<=", ">", ">="):
-                return self.builder.icmp_signed(op, left, right)
+                compare = self.builder.icmp_signed if expr.args[0].type in ("bool", "untyped bool") or integer_signed(expr.args[0].type) else self.builder.icmp_unsigned
+                return compare(op, left, right)
             if op in ("/", "%") and expr.args[1].constant == -1:
                 # Go defines MIN_INT / -1 == MIN_INT, unlike LLVM sdiv.
                 return self.builder.neg(left) if op == "/" else ir.Constant(left.type, 0)
             if op == "&^":
                 return self.builder.and_(left, self.builder.not_(right))
+            # The shared machine emitter's scalar multiply/divide lane is at
+            # least i32. Widen narrow operands according to their Go type, then
+            # truncate the result; this preserves Go's narrow wrap/remainder
+            # semantics without changing the semantic type or shared backend.
+            narrow = op in ("*", "/", "%") and integer_bits(expr.type) < 32
+            if narrow:
+                extend = self.builder.sext if integer_signed(expr.type) else self.builder.zext
+                left = extend(left, ir.IntType(32))
+                right = extend(right, ir.IntType(32))
             methods = {
                 "+": self.builder.add, "-": self.builder.sub, "*": self.builder.mul,
-                "/": self.builder.sdiv, "%": self.builder.srem,
+                "/": self.builder.sdiv if integer_signed(expr.type) else self.builder.udiv,
+                "%": self.builder.srem if integer_signed(expr.type) else self.builder.urem,
                 "&": self.builder.and_, "|": self.builder.or_, "^": self.builder.xor,
             }
-            return methods[op](left, right)
+            value = methods[op](left, right)
+            return self.builder.trunc(value, ir_type(expr.type)) if narrow else value
         raise AssertionError("unlowered typed expression: " + expr.kind)
+
+    def shift(self, expr, left):
+        width = integer_bits(expr.type)
+        signed = integer_signed(expr.type)
+        emitter = self.builder.shl if expr.value == "<<" else self.builder.ashr if signed else self.builder.lshr
+        overflow = (self.builder.ashr(left, ir.Constant(left.type, width - 1))
+                    if expr.value == ">>" and signed else ir.Constant(left.type, 0))
+        count = expr.args[1].constant
+        if count is not None:
+            return overflow if count >= width else emitter(left, ir.Constant(left.type, count))
+        # A dynamic unsigned count cannot panic. Clamp *before* emitting a
+        # shift so neither the in-range nor out-of-range path creates poison.
+        amount = self.expression(expr.args[1])
+        in_range = self.builder.icmp_unsigned("<", amount, ir.Constant(amount.type, width))
+        safe = self.builder.select(in_range, amount, ir.Constant(amount.type, 0))
+        if safe.type.width < width:
+            safe = self.builder.zext(safe, left.type)
+        elif safe.type.width > width:
+            safe = self.builder.trunc(safe, left.type)
+        value = emitter(left, safe)
+        return self.builder.select(in_range, value, overflow)
 
     def short_circuit(self, expr):
         left = self.expression(expr.args[0])

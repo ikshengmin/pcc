@@ -96,7 +96,7 @@ def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(litera
     ("_ = bool(1)", "", "invalid conversion"),
     ("_ = int64()", "", "one argument"),
     ("_ = f(2, 0)", "func f(x, y int) int { return x/y }", "dynamic division"),
-    ("_ = f(2, 0)", "func f(x, y int) int { return x<<y }", "dynamic shift"),
+    ("_ = f(2, 0)", "func f(x, y int) int { return x<<y }", "dynamic signed shift"),
     ("_ = 3/0", "", "division by zero"),
     ("_ = 1 << -1", "", "negative shift"),
     ("panic(1)", "", "unsupported builtin panic"),

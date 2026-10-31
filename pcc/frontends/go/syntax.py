@@ -8,6 +8,8 @@ used. Unsupported grammar fails with a source location, never discarded tokens.
 from dataclasses import dataclass, field
 import unicodedata
 
+from pcc.frontends.go.types import TYPE_NAMES
+
 
 class GoDiagnostic(ValueError):
     """A rejected Go program or an explicit unimplemented language boundary."""
@@ -284,9 +286,9 @@ class GoParser:
 
     def datatype(self):
         token = self.take("name")
-        if token.text not in ("int", "int64", "bool"):
-            self.fail(token, f"unsupported type {token.text!r}; available: int, int64, bool")
-        return token.text
+        if token.text not in TYPE_NAMES:
+            self.fail(token, f"unsupported type {token.text!r}; available: fixed-width integers, int, uint, uintptr, bool")
+        return TYPE_NAMES[token.text]
 
     def function(self):
         self.take("func")

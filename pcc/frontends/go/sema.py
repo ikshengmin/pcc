@@ -10,14 +10,16 @@ import re
 import unicodedata
 
 from pcc.frontends.go.syntax import Expr, GoDiagnostic
-
-
-TYPES = frozenset(("int", "int64", "bool"))
-PREDECLARED = frozenset(
-    "int int64 bool true false nil iota append cap clear close complex copy "
-    "delete imag len make max min new panic print println real recover".split()
+from pcc.frontends.go.types import (
+    TYPE_NAMES, TYPES, integer_bits, integer_bounds, integer_signed, is_integer,
 )
-MIN_INT, MAX_INT = -(1 << 63), (1 << 63) - 1
+
+
+PREDECLARED = frozenset(
+    "true false nil iota append cap clear close complex copy "
+    "delete imag len make max min new panic print println real recover".split()
+) | frozenset(TYPE_NAMES)
+MAX_SHIFT_COUNT = (1 << 64) - 1
 MAX_CONSTANT_BITS = 4096
 
 
@@ -44,15 +46,16 @@ def integer_literal(expr):
     )
     for pattern, base in patterns:
         if re.fullmatch(pattern, text):
-            value = int(text.replace("_", ""), base)
-            if value.bit_length() > MAX_CONSTANT_BITS:
-                raise GoDiagnostic(expr.token, "integer constant exceeds implementation precision limit (4096 bits)")
+            digits = text.replace("_", "")
+            if base in (2, 16) or (base == 8 and digits[:2].lower() == "0o"):
+                digits = digits[2:]
+            value = 0
+            for char in digits:
+                value = value * base + int(char, base)
+                if value.bit_length() > MAX_CONSTANT_BITS:
+                    raise GoDiagnostic(expr.token, "integer constant exceeds implementation precision limit (4096 bits)")
             return value
     raise GoDiagnostic(expr.token, "invalid or unsupported integer literal " + repr(text))
-
-
-def is_integer(dtype):
-    return dtype in ("int", "int64", "untyped int")
 
 
 def is_boolean(dtype):
@@ -69,8 +72,10 @@ def check_representable(expr):
     if is_integer(expr.type):
         if abs(expr.constant).bit_length() > MAX_CONSTANT_BITS:
             raise GoDiagnostic(expr.token, "constant exceeds implementation precision limit (4096 bits)")
-        if expr.type != "untyped int" and not MIN_INT <= expr.constant <= MAX_INT:
-            raise GoDiagnostic(expr.token, f"constant overflows {expr.type}")
+        if expr.type != "untyped int":
+            minimum, maximum = integer_bounds(expr.type)
+            if not minimum <= expr.constant <= maximum:
+                raise GoDiagnostic(expr.token, f"constant overflows {expr.type}")
 
 
 def coerce(expr, dtype):
@@ -80,6 +85,13 @@ def coerce(expr, dtype):
     if ((expr.type == "untyped int" and is_integer(dtype)) or
             (expr.type == "untyped bool" and is_boolean(dtype))):
         expr.type = dtype
+        # Nonconstant shifts with an untyped left operand acquire their type
+        # from the surrounding assignment/conversion/expression, before shift.
+        if expr.constant is None and is_integer(dtype) and expr.kind in ("unary", "binary"):
+            arguments = expr.args[:1] if expr.value in ("<<", ">>") else expr.args
+            for argument in arguments:
+                if argument.type == "untyped int":
+                    coerce(argument, dtype)
         check_representable(expr)
         return
     raise GoDiagnostic(expr.token, f"cannot use {expr.type} as {dtype}")
@@ -379,7 +391,8 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "undefined imported function " + name)
                 self.call(expr, function)
                 return
-            if name in TYPES:
+            if name in TYPE_NAMES:
+                name = TYPE_NAMES[name]
                 if len(expr.args) != 1:
                     raise GoDiagnostic(expr.token, "conversion requires one argument")
                 arg = expr.args[0]
@@ -387,6 +400,8 @@ class Analyzer:
                 if not ((is_integer(name) and is_integer(arg.type)) or
                         (is_boolean(name) and is_boolean(arg.type))):
                     raise GoDiagnostic(expr.token, "invalid conversion from " + arg.type + " to " + name)
+                if arg.constant is None and arg.type == "untyped int":
+                    coerce(arg, name)
                 expr.type, expr.constant = name, arg.constant
                 check_representable(expr)
                 return
@@ -412,8 +427,9 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "integer unary operation requires integer")
             if arg.constant is not None:
                 value = arg.constant
+                mask = -1 if not is_integer(arg.type) or integer_signed(arg.type) else (1 << integer_bits(arg.type)) - 1
                 expr.constant = {"+": lambda: value, "-": lambda: -value,
-                                 "^": lambda: ~value, "!": lambda: not value}[expr.value]()
+                                 "^": lambda: value ^ mask, "!": lambda: not value}[expr.value]()
             check_representable(expr)
             return
         if kind == "binary":
@@ -436,11 +452,12 @@ class Analyzer:
             if not is_integer(left.type) or not is_integer(right.type):
                 raise GoDiagnostic(expr.token, "shifts require integer operands")
             if right.constant is None:
-                raise GoDiagnostic(expr.token, "dynamic shift counts require shared-runtime negative-count panic support")
-            if right.constant < 0:
+                if integer_signed(right.type):
+                    raise GoDiagnostic(expr.token, "dynamic signed shift counts require shared-runtime negative-count panic support")
+            elif right.constant < 0:
                 raise GoDiagnostic(expr.token, "negative shift count")
-            if right.constant > MAX_INT:
-                raise GoDiagnostic(expr.token, "shift count overflows uint64-supported count range")
+            elif right.constant > MAX_SHIFT_COUNT:
+                raise GoDiagnostic(expr.token, "shift count overflows uint64")
             expr.type = left.type
         else:
             if left.type.startswith("untyped ") and not right.type.startswith("untyped "):
@@ -450,6 +467,10 @@ class Analyzer:
             if left.type != right.type:
                 raise GoDiagnostic(expr.token, f"mismatched operand types {left.type} and {right.type}")
             expr.type = left.type
+            if op in ("==", "!=", "<", "<=", ">", ">=") and (left.constant is None or right.constant is None):
+                if left.type == "untyped int":
+                    coerce(left, "int")
+                    coerce(right, "int")
             if op in ("&&", "||"):
                 if not is_boolean(left.type):
                     raise GoDiagnostic(expr.token, "logical operators require bool")

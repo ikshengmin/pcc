@@ -95,7 +95,9 @@ def test_original_standard_package_now_reaches_its_real_type_frontier():
         "main": [("main.go", 'package main; import "math/bits"; func main(){_ = bits.LeadingZeros(1)}')],
         "math/bits": [("bits.go", bits.read_text())],
     }
-    with pytest.raises(GoDiagnostic, match="unsupported type 'uint'"):
+    with pytest.raises(GoDiagnostic, match="unsupported package declaration"):
+        # Original math/bits now gets past uint signatures and constants; its
+        # first remaining boundary is the unmodified package-level table var.
         compile_go_packages(inputs)
 
 
