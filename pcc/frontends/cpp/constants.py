@@ -13,7 +13,7 @@ than raising a source diagnostic: an enclosing logical operator may not
 evaluate that operation at all.
 """
 
-from pcc.frontends.cpp.types import unqualified
+from pcc.frontends.cpp.types import is_enum_type, unqualified
 
 
 KNOWN = "KNOWN"
@@ -73,13 +73,28 @@ def _propagate(fact, dtype, coord):
     return unmodeled(dtype, "invalid constant fact state", origin)
 
 
-def converted_fact(fact, destination, types, coord=None):
+def converted_fact(fact, destination, types, coord=None, allow_scoped=False):
     """Evaluate an already-selected integral conversion; do not rank it."""
     destination = unqualified(destination)
     if fact is None:
         return unmodeled(destination, "constant facts are unavailable", coord)
     if coord is None:
         coord = fact.coord
+    if is_enum_type(fact.dtype):
+        source = unqualified(fact.dtype)
+        if not source.complete:
+            return unmodeled(destination, "incomplete enum constant type", coord)
+        if destination is source:
+            storage = ConstantFact(fact.status, source.underlying, fact.value, fact.reason, fact.coord)
+            checked = converted_fact(storage, source.underlying, types, coord)
+            return ConstantFact(checked.status, source, checked.value, checked.reason, checked.coord)
+        if source.scoped and not allow_scoped:
+            return unmodeled(destination, "scoped enum needs an explicit conversion context", coord)
+        # Sema selected an enum promotion/conversion, or an explicit scoped
+        # enum conversion. Keep the original expression/nominal type unchanged.
+        fact = ConstantFact(fact.status, source.underlying, fact.value, fact.reason, fact.coord)
+    if is_enum_type(destination):
+        return unmodeled(destination, "integer-to-enum constant casts are not implemented", coord)
     if not types.integral(fact.dtype) or not types.integral(destination):
         return unmodeled(destination, "non-integral constant conversion is not implemented", coord)
     if fact.status != KNOWN:

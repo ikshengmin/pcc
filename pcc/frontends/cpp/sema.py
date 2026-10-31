@@ -6,7 +6,9 @@ misparse C++ declaration/expression ambiguities.
 """
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
-from pcc.frontends.cpp.types import mangle_function, pointer_type, unqualified
+from pcc.frontends.cpp.types import (
+    is_enum_type, mangle_function, pointer_type, unqualified,
+)
 from pcc.frontends.cpp.templates import (
     deduce, mangle_instance, same_type, signature_key, substitute,
 )
@@ -185,6 +187,9 @@ class Scope:
                 if symbol is not None and getattr(symbol.dtype, "cpp_class_type", False):
                     raise CppDiagnostic("cpp.unsupported.class-qualified-lookup",
                                         "class-qualified lookup requires member/access semantics", name.coord)
+                if symbol is not None and symbol.kind == "type" and is_enum_type(symbol.dtype):
+                    scope = unqualified(symbol.dtype).scope
+                    continue
                 if symbol is None or symbol.namespace_scope is None:
                     raise CppDiagnostic("cpp.not-a-namespace", "'" + part + "' does not name a namespace", name.coord)
                 scope = symbol.namespace_scope
@@ -229,6 +234,9 @@ class Scope:
     def add_using_declaration(self, symbol, coord):
         if symbol.kind in ("namespace", "namespace-alias"):
             raise CppDiagnostic("cpp.using-namespace-name", "using-declaration cannot name a namespace", coord)
+        if symbol.kind == "enumerator" and symbol.enum_type.scoped:
+            raise CppDiagnostic("cpp.using-scoped-enumerator",
+                                "C++17 using-declarations cannot name a scoped enumerator", coord)
         hidden = self.lookup_lexical(symbol.name)
         if hidden is not None and hidden.kind == "template-type":
             raise CppDiagnostic("cpp.template-parameter-shadowing",
@@ -329,11 +337,11 @@ def argument_dependent_lookup(name, arguments, ordinary, coord):
         dtype = unqualified(dtype)
         if pointer_type(dtype):
             dtype = unqualified(dtype.pointee)
-        if getattr(dtype, "cpp_class_type", False):
+        if getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):
             namespace = dtype.declaration_scope
             if namespace is None:
                 raise CppDiagnostic("cpp.unsupported.associated-lookup",
-                                    "class has no recorded declaring namespace for ADL", coord)
+                                    "nominal type has no recorded declaring namespace for ADL", coord)
             namespaces.append(namespace)
     candidates = [] if ordinary is None else [ordinary]
     visited = set()

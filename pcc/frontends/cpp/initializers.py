@@ -19,7 +19,7 @@ from pcc.frontends.cpp.classes import (
 )
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.constants import KNOWN, NOT_CONSTANT
-from pcc.frontends.cpp.types import PointerType, unqualified
+from pcc.frontends.cpp.types import PointerType, is_enum_type, unqualified
 
 
 _FLOAT_RANKS = {"float": 1, "double": 2, "long double": 3}
@@ -62,6 +62,8 @@ def parse_initializer_list(parser):
 
 
 def _integral_range(dtype, types):
+    if is_enum_type(dtype):
+        return unqualified(dtype).value_range
     if dtype == "bool":
         return (0, 1)
     width = types.width(dtype)
@@ -95,7 +97,8 @@ def check_list_conversion(expression, dtype, types, coord):
     # exists, but does not make its use in a list non-narrowing.
     if isinstance(source, PointerType) and destination == "bool":
         raise CppDiagnostic("cpp.narrowing-conversion", "pointer-to-bool list conversion narrows", coord)
-    source_integral, destination_integral = types.integral(source), types.integral(destination)
+    source_integral = types.integral_operand(source)
+    destination_integral = types.integral(destination)
     if source in _FLOAT_RANKS and destination_integral:
         raise CppDiagnostic("cpp.narrowing-conversion", "floating-to-integral list conversion narrows", coord)
     needs_constant = False

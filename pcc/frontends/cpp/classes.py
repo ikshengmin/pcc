@@ -280,6 +280,10 @@ def parse_class(parser):
             if token.value in ("class", "struct", "union", "friend", "static", "virtual", "~",
                                "template", "constexpr", "explicit", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
+            if token.value == "enum":
+                raise CppDiagnostic("cpp.unsupported.enum-class-scope",
+                                    "class-member enums require class-qualified lookup and access semantics",
+                                    token.coord)
             if (token.value == dtype.name
                     and parser.cursor.tokens[parser.cursor.position + 1].value == "("):
                 _unsupported(token, "user-declared constructor semantics are not implemented")

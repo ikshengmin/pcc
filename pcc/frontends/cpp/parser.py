@@ -27,9 +27,10 @@ from pcc.frontends.cpp.initializers import (
 from pcc.frontends.cpp.constants import (
     binary_fact, converted_fact, known, not_constant, unary_fact, unmodeled,
 )
+from pcc.frontends.cpp.enums import parse_enum
 from pcc.frontends.cpp.types import (
     ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
-    pointer_type, qualify_const, unqualified,
+    is_enum_type, pointer_type, qualify_const, unqualified,
 )
 from pcc.frontends.cpp.templates import (
     Pattern, TypeParameter, dependent, same_type, substitute,
@@ -125,12 +126,14 @@ class Expression:
 class CppParser:
     def __init__(self, target_triple=None):
         self.types = ArithmeticTypes(target_triple)
+        self.instantiating_template = False
 
     def parse(self, text, filename=""):
         self.scope = Scope()
         self.return_type = None
         self.template_function = None
         self.parsing_template = False
+        self.instantiating_template = False
         self.pending_instances = []
         self.loop_depth = 0
         self.assignment_index = 0
@@ -166,6 +169,8 @@ class CppParser:
                 declarations.extend(self._namespace())
             elif value in ("class", "struct", "union"):
                 declarations.append(parse_class(self))
+            elif value == "enum":
+                parse_enum(self)
             elif value in ("using", "typedef"):
                 self._alias()
             elif value == "template":
@@ -277,6 +282,11 @@ class CppParser:
         return False
 
     def _check_value_type(self, dtype, token):
+        plain = unqualified(dtype)
+        nominal = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
+        if self.parsing_template and is_enum_type(nominal):
+            raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                "enum-related template semantics are not implemented", token.coord)
         if self.parsing_template and (pointer_type(dtype) or isinstance(dtype, ConstType)):
             raise CppDiagnostic("cpp.unsupported.pointer-templates",
                                 "pointer/cv template types are not implemented", token.coord)
@@ -451,7 +461,14 @@ class CppParser:
                 return expression.node
             return Pattern("cast", coord, dtype, [expression])
         nullptr_bool = expression.dtype == "nullptr" and dtype == "bool" and (force or contextual)
-        if self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None and not nullptr_bool:
+        enum_explicit = (force and is_enum_type(expression.dtype)
+                         and self.types.arithmetic_operand(dtype) and not is_enum_type(dtype))
+        if (force and is_enum_type(dtype)
+                and unqualified(expression.dtype) is not dtype):
+            raise CppDiagnostic("cpp.unsupported.enum-casts",
+                                "casts to a distinct enum require range/conversion semantics", coord)
+        if (self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None
+                and not nullptr_bool and not enum_explicit):
             raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
         if expression.dtype == dtype and not force:
             return expression.node
@@ -547,6 +564,9 @@ class CppParser:
             if isinstance(pointee, ClassType) and pointee.internal_linkage:
                 raise CppDiagnostic("cpp.unsupported.class-linkage",
                                     "function signatures involving internal-linkage class types are not implemented", name.coord)
+            if is_enum_type(pointee) and pointee.internal_linkage:
+                raise CppDiagnostic("cpp.unsupported.enum-linkage",
+                                    "function signatures involving internal-linkage enum types are not implemented", name.coord)
         definition = self._peek().value == "{"
         if name.value == "main" and not parent.namespace_path() and params:
             self._unsupported(name, "main parameters are not implemented")
@@ -625,6 +645,9 @@ class CppParser:
 
     def _statement(self):
         token = self._peek()
+        if token.value == "enum":
+            raise CppDiagnostic("cpp.unsupported.enum-local-scope",
+                                "local enum identity and ABI naming are not implemented", token.coord)
         if token.value == "namespace" or token.value == "inline":
             self._namespace()
             return None
@@ -697,6 +720,9 @@ class CppParser:
                 self._expect(";")
                 return self._decl(name.value, dtype, name.coord, init)
             if self._accept("="):
+                if is_enum_type(dtype) and self._peek().value == "{":
+                    raise CppDiagnostic("cpp.unsupported.enum-list-initialization",
+                                        "enum copy-list initialization is not implemented", self._peek().coord)
                 expression = self._expression()
                 self._require_value(expression)
                 init = self._convert(expression, dtype, name.coord)
@@ -709,13 +735,16 @@ class CppParser:
                 init = self._convert(expression, dtype, name.coord, contextual=True)
                 initializer = expression
                 self._expect(")")
+            elif is_enum_type(dtype) and self._peek().value == "{":
+                raise CppDiagnostic("cpp.unsupported.enum-list-initialization",
+                                    "enum direct-list initialization requires context-sensitive rules", self._peek().coord)
             if isinstance(dtype, ConstType) and initializer is None:
                 raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", name.coord)
             self._expect(";")
             if self.template_function is not None:
                 return Pattern("decl", name.coord, symbol,
                                [] if initializer is None else [initializer])
-            if (isinstance(dtype, ConstType) and self.types.integral(dtype)
+            if (isinstance(dtype, ConstType) and (self.types.integral(dtype) or is_enum_type(dtype))
                     and initializer is not None):
                 symbol.constant_fact = converted_fact(
                     self._constant_fact(initializer), dtype, self.types, name.coord,
@@ -750,7 +779,8 @@ class CppParser:
     def _symbol_constant_fact(self, symbol, coord):
         # Snapshot the already-resolved declaration now. In particular, a read
         # during its own initializer must not acquire a proof retroactively.
-        if self.template_function is not None or not self.types.integral(symbol.dtype):
+        if (self.template_function is not None
+                or not (self.types.integral(symbol.dtype) or is_enum_type(symbol.dtype))):
             return unmodeled(unqualified(symbol.dtype), "dependent or non-integral object", coord)
         if not isinstance(symbol.dtype, ConstType):
             return not_constant(unqualified(symbol.dtype), "read of a non-const integral object", coord)
@@ -776,6 +806,8 @@ class CppParser:
 
     def _check_object_type(self, dtype, coord):
         require_complete(dtype, coord)
+        if is_enum_type(dtype) and not unqualified(dtype).complete:
+            raise CppDiagnostic("cpp.incomplete-enum", "an object requires a complete enum type", coord)
         if unqualified(dtype) == "void":
             raise CppDiagnostic("cpp.invalid-object-type", "an object cannot have type void", coord)
 
@@ -872,6 +904,20 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.class-operators", "class operator lookup/conversion is not implemented", coord)
         self._require_value(lhs)
         self._require_value(rhs)
+        left, right = unqualified(lhs.dtype), unqualified(rhs.dtype)
+        if any(is_enum_type(t) and t.scoped for t in (left, right)):
+            if left is not right or operator not in _COMPARISONS:
+                raise CppDiagnostic("cpp.invalid-operands",
+                                    "scoped enums require same-type comparison operands", coord)
+            node = c_ast.BinaryOp(operator, lhs.node, rhs.node, coord)
+            node = self._convert(Expression(node, "int"), "bool", coord)
+            a = converted_fact(self._constant_fact(lhs), left.underlying, self.types,
+                               coord, allow_scoped=True)
+            b = converted_fact(self._constant_fact(rhs), left.underlying, self.types,
+                               coord, allow_scoped=True)
+            return Expression(node, "bool", constant_fact=binary_fact(
+                operator, a, b, left.underlying, left.underlying, "bool", self.types, coord,
+            ))
         operand_type = None
         dtype = None
         logical = operator in ("&&", "||")
@@ -888,7 +934,7 @@ class CppParser:
             return Expression(self._convert(Expression(node, "int"), "bool", coord), "bool")
         if not dependent(lhs.dtype) and not dependent(rhs.dtype):
             if operator in ("%", "&", "|", "^", "<<", ">>") and not (
-                    self.types.integral(lhs.dtype) and self.types.integral(rhs.dtype)):
+                    self.types.integral_operand(lhs.dtype) and self.types.integral_operand(rhs.dtype)):
                 raise CppDiagnostic("cpp.invalid-operands", "operator requires integral operands", coord)
             if logical:
                 operand_type = "bool"
@@ -967,11 +1013,13 @@ class CppParser:
             return Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*")
         if is_class_type(expression.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class unary operator lookup/conversion is not implemented", coord)
+        if is_enum_type(expression.dtype) and unqualified(expression.dtype).scoped:
+            raise CppDiagnostic("cpp.invalid-operands", "scoped enum has no builtin unary arithmetic conversion", coord)
         dtype = None
         if not dependent(expression.dtype):
             if (pointer_type(expression.dtype) or expression.dtype == "nullptr") and operator != "!":
                 raise CppDiagnostic("cpp.unsupported.pointer-operators", "unary pointer operator is not implemented", coord)
-            if operator == "~" and not self.types.integral(expression.dtype):
+            if operator == "~" and not self.types.integral_operand(expression.dtype):
                 raise CppDiagnostic("cpp.invalid-operands", "operator requires an integral operand", coord)
             dtype = "bool" if operator == "!" else self.types.promote(expression.dtype)
         if self.template_function is not None:
@@ -994,6 +1042,15 @@ class CppParser:
                           null_pointer=null_pointer, constant_fact=fact)
 
     def _call_expression(self, group, arguments, coord):
+        enum_arguments = []
+        for argument in arguments:
+            dtype = unqualified(argument.dtype)
+            enum_arguments.append(unqualified(dtype.pointee) if isinstance(dtype, PointerType) else dtype)
+        if any(is_enum_type(dtype) for dtype in enum_arguments):
+            if (self.template_function is not None or self.instantiating_template
+                    or any(candidate.template_parameters for candidate in group.overloads)):
+                raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                    "enum-related template deduction is not implemented", coord)
         if any(is_class_type(arg.dtype) for arg in arguments):
             raise CppDiagnostic("cpp.unsupported.class-value-abi", "class argument ABI/ADL is not implemented", coord)
         if any(pointer_type(arg.dtype) and is_class_type(unqualified(arg.dtype).pointee) for arg in arguments):
@@ -1011,6 +1068,11 @@ class CppParser:
             dtype = None
             if not any(dependent(t) for t in argument_types):
                 dtype = resolve_overload(snapshot, argument_types, self.types, coord, null_constants).dtype
+                result = unqualified(dtype)
+                nominal = unqualified(result.pointee) if isinstance(result, PointerType) else result
+                if is_enum_type(nominal):
+                    raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                        "enum results in template definitions require dependent lookup", coord)
             return Expression(Pattern("call", coord, snapshot, arguments), dtype)
         selected = resolve_overload(group, argument_types, self.types, coord, null_constants)
         if selected.template_origin is not None:
@@ -1024,6 +1086,10 @@ class CppParser:
         converted = [self._convert(arg, dtype, coord)
                      for arg, dtype in zip(arguments, selected.parameters)]
         dtype = unqualified(selected.dtype)
+        nominal = unqualified(dtype.pointee) if isinstance(dtype, PointerType) else dtype
+        if self.instantiating_template and is_enum_type(nominal):
+            raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                "enum results in template instantiation require dependent lookup", coord)
         return Expression(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
                                           c_ast.ExprList(converted, coord), coord), dtype,
                           constant_fact=not_constant(dtype, "call to a non-constexpr function", coord))
@@ -1074,15 +1140,17 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.class-initialization", "class temporary materialization is not implemented", token.coord)
             self._expect("(")
             if self._accept(")"):
+                if is_enum_type(dtype):
+                    return self._enum_constant_expression(dtype, 0, token.coord)
                 zero = self._literal("int", "0", "int", token.coord, 0)
                 return Expression(self._convert(zero, dtype, token.coord, force=True), dtype,
                                   constant_fact=converted_fact(self._constant_fact(zero), dtype,
-                                                               self.types, token.coord))
+                                                               self.types, token.coord, allow_scoped=True))
             expression = self._expression()
             self._expect(")")
             return Expression(self._convert(expression, dtype, token.coord, force=True), dtype,
                               constant_fact=converted_fact(self._constant_fact(expression), dtype,
-                                                           self.types, token.coord))
+                                                           self.types, token.coord, allow_scoped=True))
         if symbol is not None and symbol.kind in ("namespace", "namespace-alias"):
             raise CppDiagnostic("cpp.not-a-value", "namespace name does not denote a value", token.coord)
         if (symbol is not None and symbol.kind == "function" and symbol.name == "main"
@@ -1111,12 +1179,31 @@ class CppParser:
             return self._call_expression(symbol, arguments, token.coord)
         if symbol is None:
             raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
+        if symbol.kind == "enumerator":
+            return self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
         if self.template_function is not None:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
         return Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
                           symbol.kind == "value", symbol,
                           constant_fact=self._symbol_constant_fact(symbol, token.coord))
+
+    def _enum_constant_expression(self, dtype, value, coord):
+        # Enumerator values have no storage. Project their already-checked
+        # value, but preserve the nominal type and never mark zero as a null
+        # pointer literal. Definition-body enumerators still have integer type.
+        if self.template_function is not None or self.instantiating_template:
+            raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                "enum expressions in templates require dependent lookup", coord)
+        if is_enum_type(dtype) and not unqualified(dtype).complete:
+            raise CppDiagnostic("cpp.incomplete-enum", "enum value initialization requires a complete type", coord)
+        scalar = unqualified(dtype).underlying if is_enum_type(dtype) else unqualified(dtype)
+        suffix = {"unsigned int": "u", "long": "l", "unsigned long": "ul",
+                  "long long": "ll", "unsigned long long": "ull"}.get(scalar, "")
+        node = c_ast.Constant("int", str(value) + suffix, coord)
+        typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
+        return Expression(c_ast.Cast(typename, node, coord), dtype,
+                          constant_fact=known(dtype, value, coord))
 
     def _instantiate_expression(self, expression, bindings, environment):
         pattern = expression.node if isinstance(expression, Expression) else expression
@@ -1196,7 +1283,9 @@ class CppParser:
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(parameters, origin.coord),
                                           declaration.type, origin.coord)
         previous_return = self.return_type
+        previous_instantiating = self.instantiating_template
         self.return_type = instance.dtype
+        self.instantiating_template = True
         try:
             body = self._instantiate_statement(origin.pattern, instance.template_arguments, environment)
         except CppDiagnostic as error:
@@ -1204,4 +1293,5 @@ class CppParser:
                                 + " requested at " + str(request_coord) + ")", error.coord)
         finally:
             self.return_type = previous_return
+            self.instantiating_template = previous_instantiating
         return c_ast.FuncDef(declaration, None, body, origin.coord)

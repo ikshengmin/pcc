@@ -46,6 +46,8 @@ def canonical_type(words):
 
 
 def c_type_names(name):
+    if is_enum_type(name):
+        name = unqualified(name).underlying
     return ["_Bool"] if name == "bool" else name.split()
 
 
@@ -83,6 +85,10 @@ def qualify_const(dtype):
 
 def pointer_type(dtype):
     return isinstance(unqualified(dtype), PointerType)
+
+
+def is_enum_type(dtype):
+    return bool(getattr(unqualified(dtype), "cpp_enum_type", False))
 
 
 def _substitution(index):
@@ -129,7 +135,7 @@ def _mangle_type(dtype, substitutions):
         encoded = "K" + _mangle_type(dtype.base, substitutions)
     elif isinstance(dtype, PointerType):
         encoded = "P" + _mangle_type(dtype.pointee, substitutions)
-    elif getattr(dtype, "cpp_class_type", False):
+    elif getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):
         encoded = _mangle_class(dtype, substitutions)
     else:
         return _CODES[dtype]
@@ -180,6 +186,15 @@ class ArithmeticTypes:
     def integral(self, name):
         return unqualified(name) in _RANKS
 
+    def integral_operand(self, name):
+        name = unqualified(name)
+        return self.integral(name) or is_enum_type(name) and not name.scoped
+
+    def arithmetic_operand(self, name):
+        name = unqualified(name)
+        return (name in _CODES and name != "void"
+                or is_enum_type(name) and not name.scoped)
+
     def value_lowering_supported(self, name):
         # The owned backend has extended-float storage, not value/call ABI
         # lowering. Do not pretend those C++ operations lower to binary64.
@@ -188,6 +203,8 @@ class ArithmeticTypes:
 
     def promote(self, name):
         name = unqualified(name)
+        if is_enum_type(name):
+            return name.promotion_type(self)
         if self.integral(name) and _RANKS[name] < _RANKS["int"]:
             if self.width(name) < self.width("int") or not self.unsigned(name):
                 return "int"
@@ -216,6 +233,12 @@ class ArithmeticTypes:
             return None
         if isinstance(source, PointerType):
             return 2 if destination == "bool" else None
+        if is_enum_type(destination):
+            return None
+        if is_enum_type(source):
+            if source.scoped or destination not in _CODES:
+                return None
+            return 1 if destination in source.promotion_types(self) else 2
         if source not in _CODES or destination not in _CODES:
             return None
         if (self.integral(source) and self.promote(source) == destination
@@ -235,6 +258,13 @@ class ArithmeticTypes:
         if a != b:
             return -1 if a < b else 1
         source, first, second = map(unqualified, (source, first, second))
+        if is_enum_type(source) and source.fixed and not source.scoped:
+            promotions = source.promotion_types(self)
+            if first in promotions and second in promotions:
+                if first == source.underlying and second != source.underlying:
+                    return -1
+                if second == source.underlying and first != source.underlying:
+                    return 1
         if isinstance(source, PointerType):
             if (first == "bool") != (second == "bool"):
                 return 1 if first == "bool" else -1
@@ -248,6 +278,10 @@ class ArithmeticTypes:
     def common(self, lhs, rhs):
         """Usual arithmetic conversions, preserving type rank and signedness."""
         lhs, rhs = unqualified(lhs), unqualified(rhs)
+        if is_enum_type(lhs):
+            lhs = self.promote(lhs)
+        if is_enum_type(rhs):
+            rhs = self.promote(rhs)
         if lhs in _FLOAT_RANKS or rhs in _FLOAT_RANKS:
             return lhs if _FLOAT_RANKS.get(lhs, 0) >= _FLOAT_RANKS.get(rhs, 0) else rhs
         lhs, rhs = self.promote(lhs), self.promote(rhs)
