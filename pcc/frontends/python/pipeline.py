@@ -4268,62 +4268,65 @@ def compile_python_multi(
         _remove_direct_native_object_dir(direct_native_object_dir)
         direct_native_object_dir = ""
     if module_direct_artifacts is not None:
-        if emit_llvm_only:
-            raise PyPipelineError(
-                "direct indexed artifact mode cannot satisfy emit_llvm_only"
-            )
-        if native_backend != "self":
-            raise PyPipelineError(
-                "direct indexed artifact mode requires the self backend"
-            )
-        if libpython_mode != "off" or any_needs_libpython:
-            raise PyPipelineError(
-                "direct indexed artifact mode requires no-libpython"
-            )
-        _reject_mixed_extension_object_models(
-            needs_libpython=False,
-            needs_native_extension_exports=any_needs_native_extension_exports,
-        )
-        runtime_started = 0
-        if coordinator_timing is not None:
-            runtime_started = coordinator_timing.begin("runtime_verify")
-        if runtime_archive is not None:
-            runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
-        elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
-            runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
-        else:
-            runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
-        if coordinator_timing is not None:
-            coordinator_timing.complete("runtime_verify", runtime_started)
-        _validate_stage1_checkpoint_link(
-            module_direct_artifacts, runtime, any_needs_libpython,
-            any_needs_native_extension_exports, total_ir_bytes_before_passes,
-        )
-        assembly_count = 0
-        native_count = 0
-        assembly_bytes = 0
-        native_bytes = 0
-        for _module_name, kind, artifact_path in module_direct_artifacts:
-            if kind == "ASM":
-                assembly_count += 1
-                assembly_bytes += os.path.getsize(artifact_path)
-            elif kind == "PCO":
-                native_count += 1
-                native_bytes += os.path.getsize(artifact_path)
-            else:
-                raise PyPipelineError(
-                    "unknown direct indexed artifact kind: " + str(kind)
-                )
-        _profile_counter(profile, "multi_direct_assembly_modules", assembly_count)
-        _profile_counter(profile, "multi_direct_assembly_bytes", assembly_bytes)
-        _profile_counter(profile, "multi_direct_native_object_modules", native_count)
-        _profile_counter(profile, "multi_direct_native_object_bytes", native_bytes)
-        _profile_counter(
-            profile,
-            "multi_direct_ir_text_bytes",
-            sum(len(ir_text) for _module_name, ir_text in module_ir_texts),
-        )
+        # A deferred-link request transfers these inputs only after the
+        # publisher returns; validation/runtime failures still own cleanup.
+        direct_link_completed = False
         try:
+            if emit_llvm_only:
+                raise PyPipelineError(
+                    "direct indexed artifact mode cannot satisfy emit_llvm_only"
+                )
+            if native_backend != "self":
+                raise PyPipelineError(
+                    "direct indexed artifact mode requires the self backend"
+                )
+            if libpython_mode != "off" or any_needs_libpython:
+                raise PyPipelineError(
+                    "direct indexed artifact mode requires no-libpython"
+                )
+            _reject_mixed_extension_object_models(
+                needs_libpython=False,
+                needs_native_extension_exports=any_needs_native_extension_exports,
+            )
+            runtime_started = 0
+            if coordinator_timing is not None:
+                runtime_started = coordinator_timing.begin("runtime_verify")
+            if runtime_archive is not None:
+                runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
+            elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
+                runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
+            else:
+                runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
+            if coordinator_timing is not None:
+                coordinator_timing.complete("runtime_verify", runtime_started)
+            _validate_stage1_checkpoint_link(
+                module_direct_artifacts, runtime, any_needs_libpython,
+                any_needs_native_extension_exports, total_ir_bytes_before_passes,
+            )
+            assembly_count = 0
+            native_count = 0
+            assembly_bytes = 0
+            native_bytes = 0
+            for _module_name, kind, artifact_path in module_direct_artifacts:
+                if kind == "ASM":
+                    assembly_count += 1
+                    assembly_bytes += os.path.getsize(artifact_path)
+                elif kind == "PCO":
+                    native_count += 1
+                    native_bytes += os.path.getsize(artifact_path)
+                else:
+                    raise PyPipelineError(
+                        "unknown direct indexed artifact kind: " + str(kind)
+                    )
+            _profile_counter(profile, "multi_direct_assembly_modules", assembly_count)
+            _profile_counter(profile, "multi_direct_assembly_bytes", assembly_bytes)
+            _profile_counter(profile, "multi_direct_native_object_modules", native_count)
+            _profile_counter(profile, "multi_direct_native_object_bytes", native_bytes)
+            _profile_counter(
+                profile,
+                "multi_direct_ir_text_bytes",
+                sum(len(ir_text) for _module_name, ir_text in module_ir_texts),
+            )
             link_started = 0
             if coordinator_timing is not None:
                 link_started = coordinator_timing.begin("artifact_link")
@@ -4358,10 +4361,11 @@ def compile_python_multi(
                     coordinator_timing=coordinator_timing,
                     target_triple=target_triple,
                 )
+            direct_link_completed = True
             if coordinator_timing is not None:
                 coordinator_timing.complete("artifact_link", link_started)
         finally:
-            if not str(
+            if not direct_link_completed or not str(
                 os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
             ).strip():
                 cleanup_started = 0
@@ -4373,47 +4377,49 @@ def compile_python_multi(
         _profile_end(profile, "compile_python_multi_total", total_start)
         return
     if module_native_object_paths is not None:
-        if emit_llvm_only:
-            raise PyPipelineError(
-                "direct indexed native-object mode cannot satisfy emit_llvm_only"
-            )
-        if native_backend != "self":
-            raise PyPipelineError(
-                "direct indexed native-object mode requires the self backend"
-            )
-        if libpython_mode != "off" or any_needs_libpython:
-            raise PyPipelineError(
-                "direct indexed native-object mode requires no-libpython"
-            )
-        _reject_mixed_extension_object_models(
-            needs_libpython=False,
-            needs_native_extension_exports=any_needs_native_extension_exports,
-        )
-        if runtime_archive is not None:
-            runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
-        elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
-            runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
-        else:
-            runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
-        _profile_counter(
-            profile,
-            "multi_direct_native_object_modules",
-            len(module_native_object_paths),
-        )
-        _profile_counter(
-            profile,
-            "multi_direct_ir_text_bytes",
-            sum(len(ir_text) for _module_name, ir_text in module_ir_texts),
-        )
-        native_object_bytes = 0
-        for _module_name, native_object_path in module_native_object_paths:
-            native_object_bytes += os.path.getsize(native_object_path)
-        _profile_counter(
-            profile,
-            "multi_direct_native_object_bytes",
-            native_object_bytes,
-        )
+        # The legacy object route delegates to the same deferred publisher.
+        direct_link_completed = False
         try:
+            if emit_llvm_only:
+                raise PyPipelineError(
+                    "direct indexed native-object mode cannot satisfy emit_llvm_only"
+                )
+            if native_backend != "self":
+                raise PyPipelineError(
+                    "direct indexed native-object mode requires the self backend"
+                )
+            if libpython_mode != "off" or any_needs_libpython:
+                raise PyPipelineError(
+                    "direct indexed native-object mode requires no-libpython"
+                )
+            _reject_mixed_extension_object_models(
+                needs_libpython=False,
+                needs_native_extension_exports=any_needs_native_extension_exports,
+            )
+            if runtime_archive is not None:
+                runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
+            elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
+                runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
+            else:
+                runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
+            _profile_counter(
+                profile,
+                "multi_direct_native_object_modules",
+                len(module_native_object_paths),
+            )
+            _profile_counter(
+                profile,
+                "multi_direct_ir_text_bytes",
+                sum(len(ir_text) for _module_name, ir_text in module_ir_texts),
+            )
+            native_object_bytes = 0
+            for _module_name, native_object_path in module_native_object_paths:
+                native_object_bytes += os.path.getsize(native_object_path)
+            _profile_counter(
+                profile,
+                "multi_direct_native_object_bytes",
+                native_object_bytes,
+            )
             _link_with_self_backend_native_objects(
                 module_native_object_paths,
                 out_path,
@@ -4428,8 +4434,12 @@ def compile_python_multi(
                 profile=profile,
                 target_triple=target_triple,
             )
+            direct_link_completed = True
         finally:
-            _remove_direct_native_object_dir(direct_native_object_dir)
+            if not direct_link_completed or not str(
+                os.environ.get("PCC_DEFER_SELF_LINK_PLAN", "") or ""
+            ).strip():
+                _remove_direct_native_object_dir(direct_native_object_dir)
         _profile_end(profile, "compile_python_multi_total", total_start)
         return
     if module_assembly_texts is not None:

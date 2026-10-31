@@ -137,6 +137,23 @@ def test_real_prebuilt_bundle_is_reused_while_provisioning_is_disabled(tmp_path,
     assert _inventory(tmp_path) == before
 
 
+@pytest.mark.parametrize("reserved_runtime", ["environment", "file"], indirect=True)
+def test_real_ir_only_compile_is_allowed_while_provisioning_is_disabled(tmp_path, reserved_runtime):
+    source = tmp_path / "user.py"
+    source.write_text("def answer() -> int:\n    return 42\n")
+    output = tmp_path / "user.ll"
+    before = _inventory(tmp_path)
+    pipeline.compile_python(
+        str(source), str(output), backend="self", emit_llvm_only=True,
+        libpython_mode="off", ir_scaffold_mode="on",
+    )
+    ir = output.read_text()
+    assert "define " in ir and "answer" in ir
+    expected = dict(before)
+    expected["user.ll"] = output.read_bytes()
+    assert _inventory(tmp_path) == expected
+
+
 @pytest.mark.parametrize("helper", _HELPERS)
 def test_helper_invalid_explicit_archive_fails_before_source_output(tmp_path, monkeypatch, helper):
     archive = tmp_path / "libpy_runtime_pcc_py.a"

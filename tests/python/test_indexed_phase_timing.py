@@ -1021,7 +1021,8 @@ def test_mock_elf_tail_keeps_operation_and_cleanup_error_precedence(
 
 @pytest.mark.parametrize("enabled", (False, True))
 @pytest.mark.parametrize("failure,secondary", (
-    (None, None), ("runtime", None), ("link", None), ("cleanup", None), ("link", "cleanup"),
+    (None, None), ("runtime", None), ("link", None), ("cleanup", None),
+    ("runtime", "cleanup"), ("link", "cleanup"),
 ))
 @pytest.mark.parametrize("error_type", (ValueError, DiagnosticAbort))
 @pytest.mark.parametrize("sink_failure", (False, True))
@@ -1088,7 +1089,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
         with pytest.raises(error_type) as caught:
             invoke()
         assert caught.value is (secondary_error if secondary else error)
-    expected_operations = ["runtime"] if failure == "runtime" else ["runtime", "link", "cleanup"]
+    expected_operations = ["runtime", "cleanup"] if failure == "runtime" else ["runtime", "link", "cleanup"]
     assert operations == expected_operations
     expected_events = []
     if enabled:
@@ -1097,9 +1098,9 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
             expected_events += [("runtime_verify", "complete"), ("artifact_link", "begin")]
             if failure != "link":
                 expected_events.append(("artifact_link", "complete"))
-            expected_events.append(("artifact_cleanup", "begin"))
-            if failure != "cleanup" and secondary != "cleanup":
-                expected_events.append(("artifact_cleanup", "complete"))
+        expected_events.append(("artifact_cleanup", "begin"))
+        if failure != "cleanup" and secondary != "cleanup":
+            expected_events.append(("artifact_cleanup", "complete"))
     assert [(row["phase"], row["event"]) for row in _events(sink)] == expected_events
     assert len(ticks) == len(expected_events)
 
