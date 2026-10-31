@@ -188,6 +188,12 @@ These are required outcomes, not assertions that migration is complete. See
   A successful compile, archive build or link proves none of these. For pcc1
   that means native emitted execution (include a function, compile with `-o`,
   then run).
+- Every new feature needs specification-chapter-linked unit tests, at least one
+  actually executed program and an actual reference comparison, then a ledger
+  update. Use only `supported`, `explicitly_unimplemented` or `missing`;
+  every unimplemented diagnostic code maps to a ledger feature. Missing tools
+  must leave reference checks visibly unrun, never silently waived or used to
+  claim support. Record host pcc0 and native pcc1 results separately.
 - A green suite is evidence only for the shapes its corpus executes. Name the
   test that runs the changed shape; if none exists, add it before claiming
   green. Green without it is a false green, not a pass.

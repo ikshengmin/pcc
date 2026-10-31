@@ -75,17 +75,19 @@ The current published/candidate boundary and exact tests live in the fixed
 frontend code independently of legacy cleanup; only heavy gates and shared
 runtime/backend publication are serialized.
 
-- C++: close the original TinyXML2 owned-header/class frontier; continue
-  generic lookup, construction/destruction, lifetime and template semantics.
+- C++: pointer/implicit-this members are published; dot-receiver calls and
+  construction/destruction remain open. Close the original TinyXML2 header/class
+  frontier and continue generic lookup, lifetime and template semantics.
   External G++ running TinyXML2 is not a PCC project pass.
-- Rust: the partial-move correction and bounded generic functions are now
-  published. Prioritize the remaining basic source forms: impl methods,
-  references, arrays, for loops and broader generics, then core/alloc dependencies.
+- Rust: bounded inherent impl methods now join the published move correction
+  and generic functions. Prioritize references, arrays, for loops and broader
+  generics, extending impl coverage without implying complete methods or traits.
   Do not claim a complete borrow checker from these bounded checks.
-- Java: progress source class/object/member semantics, distinguishing
-  model/typecheck evidence from actual allocated-object native execution.
-- Go: value-receiver methods are now published; continue remaining source
-  control flow and method/type forms. The unchanged original math/bits closure
+- Java: class/initializer semantic models and raw static-source comparisons are
+  published; actual allocated-object/member execution remains open. Keep model,
+  typecheck and native-instance evidence distinct.
+- Go: value methods, expression switch and fixed-array range are published;
+  continue remaining source control flow, method/type and managed-value forms. The unchanged original math/bits closure
   still needs error/panic/linkname support. Its table component
   alone is not the complete package or upstream tests.
 - Common raw storage: the first experimental batch is published, but production
@@ -115,6 +117,21 @@ Later directions: local allocation buffers/generations, request arenas, checked 
 ## Source and license discipline
 
 Pin upstream repository, commit, path, file hash and actual license/notice for every adapted input. GraalVM is an architectural reference, not a blanket source license. Graal compiler/SubstrateVM/Espresso implementations are not ported into PCC; use papers/specifications for independent implementations. Audit GraalPy per file: UPL Java files and CPython-derived C files can differ. Retain notices for permitted adaptations. Do not copy Truffle AST-specialization/JIT structure into an AOT compiler merely because it exists upstream.
+
+## Specification inventory and feature acceptance
+
+The published feature/conformance checker and four language maps are the first
+partial inventory, not full-spec coverage or a complete official test suite.
+Every new feature needs specification-chapter-linked unit tests, at least one
+actually run program and an actual same-original-source reference comparison,
+then a ledger update. Use only supported, explicitly_unimplemented or missing;
+map each unimplemented diagnostic code to a feature. Missing tools stay visibly
+unrun, and host pcc0/native pcc1 evidence stays separate. Verified baseline
+exports are local only; their files are not published.
+
+Future fast-subset versus nightly CI selection is a separate implementation
+step, not a workflow change made here. Until that fast CI exists, the current
+whole-affected-language local pre-push gate remains in force.
 
 ## Validation and release discipline
 
