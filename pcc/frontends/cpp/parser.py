@@ -28,6 +28,7 @@ from pcc.frontends.cpp.constants import (
     binary_fact, converted_fact, known, not_constant, unary_fact, unmodeled,
 )
 from pcc.frontends.cpp.enums import parse_enum
+from pcc.frontends.cpp.objects import parse_namespace_object
 from pcc.frontends.cpp.types import (
     ArithmeticTypes, ConstType, PointerType, TYPE_WORDS, canonical_type, c_type_names,
     is_enum_type, pointer_type, qualify_const, unqualified,
@@ -114,7 +115,7 @@ class TentativeParse:
 class Expression:
     def __init__(self, node, dtype="int", lvalue=False, symbol=None, null_pointer=False,
                  assignment_result=False, constant_fact=None, discarded_known=False,
-                 discarded_node=None, discarded_fact=None):
+                 discarded_node=None, discarded_fact=None, static_address=None):
         self.node = node
         self.dtype = dtype
         self.lvalue = lvalue
@@ -128,6 +129,7 @@ class Expression:
         self.discarded_known = discarded_known
         self.discarded_node = discarded_node
         self.discarded_fact = discarded_fact
+        self.static_address = static_address
 
 
 class CppParser:
@@ -144,9 +146,14 @@ class CppParser:
         self.pending_instances = []
         self.loop_depth = 0
         self.assignment_index = 0
+        self.namespace_objects = []
         self.language_linkage = None
         self.cursor = TokenCursor(self._tokenize(text, filename))
         declarations = self._declarations()
+        for symbol in self.namespace_objects:
+            if symbol.internal_linkage and not symbol.defined:
+                raise CppDiagnostic("cpp.unsupported.internal-object-declaration",
+                                    "undefined internal objects need ODR-use tracking", symbol.coord)
         instances = []
         index = 0
         while index < len(self.pending_instances):
@@ -173,6 +180,9 @@ class CppParser:
             if self._accept(";"):
                 continue
             value = self._peek().value
+            if value == "inline" and self.cursor.tokens[self.cursor.position + 1].value != "namespace":
+                raise CppDiagnostic("cpp.unsupported.inline-declarations",
+                                    "inline object/function ODR emission is not implemented", self._peek().coord)
             if (value == "extern" and
                     self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
                 declarations.extend(self._linkage_specification())
@@ -187,7 +197,9 @@ class CppParser:
             elif value == "template":
                 self._template()
             else:
-                declarations.append(self._function())
+                declaration = self._function(implicit_extern=single)
+                if declaration is not None:
+                    declarations.append(declaration)
             if single:
                 break
         return declarations
@@ -339,7 +351,7 @@ class CppParser:
                                 token.coord)
         return dtype
 
-    def _type(self, check_lowering=True):
+    def _type(self, check_lowering=True, storage_specifiers=None):
         token = self._peek()
         if not self._is_type(token):
             if self.scope.lookup(token.value) is not None:
@@ -351,7 +363,12 @@ class CppParser:
         dtype = None
         while True:
             value = self._peek().value
-            if value in ("const", "volatile"):
+            if storage_specifiers is not None and value in ("extern", "static"):
+                if storage_specifiers:
+                    raise CppDiagnostic("cpp.invalid-storage-specifier",
+                                        "multiple storage class specifiers", self._peek().coord)
+                storage_specifiers.append(self.cursor.take())
+            elif value in ("const", "volatile"):
                 qualifier = self.cursor.take()
                 if value == "volatile":
                     raise CppDiagnostic("cpp.unsupported.volatile", "volatile access lowering is not implemented", qualifier.coord)
@@ -548,13 +565,22 @@ class CppParser:
             self.scope = parent
             self.parsing_template = False
 
-    def _function(self, template_parameters=(), declaration_scope=None):
-        # A storage-only extern is not a language linkage specification.
-        self._accept("extern")
-        if self._peek().value == "static":
-            raise CppDiagnostic("cpp.unsupported.function-storage",
-                                "static function name/type linkage is not implemented", self._peek().coord)
-        result_type = self._type()
+    def _function(self, template_parameters=(), declaration_scope=None, implicit_extern=False):
+        storage = None
+        if self._peek().value in ("extern", "static"):
+            storage = self.cursor.take()
+            if self._peek().value in ("extern", "static"):
+                raise CppDiagnostic("cpp.invalid-storage-specifier",
+                                    "multiple storage class specifiers", self._peek().coord)
+            if self._peek().kind == "STRING_LITERAL":
+                raise CppDiagnostic("cpp.unsupported.language-linkage",
+                                    "language linkage specifications are not implemented", storage.coord)
+        storage_specifiers = [] if storage is None else [storage]
+        result_type = self._type(storage_specifiers=storage_specifiers)
+        storage = storage_specifiers[0] if storage_specifiers else None
+        if implicit_extern and storage is not None:
+            raise CppDiagnostic("cpp.linkage-storage",
+                                "a directly contained linkage declaration cannot specify storage", storage.coord)
         params = []
         parameter_symbols = []
         parent = self.scope
@@ -598,9 +624,18 @@ class CppParser:
 
         try:
             declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause).parse()
-            name, result_type = self._apply_declarator(declarator, result_type, function=True)
+            is_function = any(chunk.kind == "function" for chunk in declarator.chunks)
+            name, result_type = self._apply_declarator(declarator, result_type, function=is_function)
         finally:
             self.scope = parent
+        if not is_function:
+            if template_parameters:
+                raise CppDiagnostic("cpp.unsupported.variable-templates",
+                                    "variable templates require instantiation and ODR semantics", name.coord)
+            return parse_namespace_object(self, name, result_type, storage, implicit_extern)
+        if storage is not None and (storage.value == "static" or template_parameters):
+            raise CppDiagnostic("cpp.unsupported.function-storage",
+                                "function storage specifiers require function linkage semantics", storage.coord)
         if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind == "template-type":
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 "function name shadows a template parameter", name.coord)
@@ -1194,7 +1229,10 @@ class CppParser:
             return Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*",
                               discarded_known=class_glvalue,
                               discarded_node=expression.node if class_glvalue else None,
-                              discarded_fact=self._constant_fact(expression) if class_glvalue else None)
+                              discarded_fact=self._constant_fact(expression) if class_glvalue else None,
+                              static_address=(expression.symbol if operator == "&"
+                                              and getattr(expression.symbol, "namespace_object", False)
+                                              else None))
         if is_class_type(expression.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class unary operator lookup/conversion is not implemented", coord)
         if is_enum_type(expression.dtype) and unqualified(expression.dtype).scoped:
@@ -1384,6 +1422,9 @@ class CppParser:
         if symbol.kind == "member":
             raise CppDiagnostic("cpp.nonstatic-member-without-object",
                                 "a non-static data member value requires an object", token.coord)
+        if self.template_function is not None and getattr(symbol, "namespace_object", False):
+            raise CppDiagnostic("cpp.unsupported.namespace-object-templates",
+                                "template namespace object bindings are not implemented", token.coord)
         if self.template_function is not None:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)

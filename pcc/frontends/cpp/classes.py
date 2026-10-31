@@ -206,6 +206,9 @@ def parse_class(parser):
         _unsupported(keyword, "local and nested class semantics are not implemented")
     name = parser._identifier()
     previous = parser.scope.names.get(name.value)
+    if getattr(previous, "namespace_object", False):
+        raise CppDiagnostic("cpp.unsupported.tag-hiding",
+                            "class/object dual name lookup is not implemented", name.coord)
     if previous is None:
         dtype = ClassType(
             name.value, parser.scope.namespace_path() + (name.value,), name.coord,

@@ -173,6 +173,26 @@ def mangle_function(name, parameters, namespace_path=()):
         "".join(_mangle_type(unqualified(p), substitutions) for p in parameters) or "v")
 
 
+
+def mangle_object(name, namespace_path=(), local_name=False):
+    """Itanium data encoding; externally linked global variables keep C names.
+
+    Internal names are TU-private. Use the conventional GNU local-source-name
+    'L' marker for explicit static/default-const objects, independently of an
+    unnamed namespace's internal linkage.
+    """
+    encoded = ("L" if local_name else "") + str(len(name)) + name
+    if not namespace_path:
+        return "_Z" + encoded if local_name else name
+    if namespace_path == ("std",):
+        return "_ZSt" + encoded
+    parts = namespace_path
+    prefix = ""
+    if parts[0] == "std":
+        prefix, parts = "St", parts[1:]
+    return "_ZN" + prefix + "".join(str(len(p)) + p for p in parts) + encoded + "E"
+
+
 def scalar_mangling_code(name):
     return _CODES[name]
 

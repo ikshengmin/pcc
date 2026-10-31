@@ -294,6 +294,9 @@ def parse_enum(parser):
         raise CppDiagnostic("cpp.class-name-member",
                             "a member enum cannot have its enclosing class name", name.coord)
     previous = parent.names.get(name.value)
+    if getattr(previous, "namespace_object", False):
+        raise CppDiagnostic("cpp.unsupported.tag-hiding",
+                            "enum/object dual name lookup is not implemented", name.coord)
     if previous is not None:
         if not getattr(previous, "enum_declaration", False):
             raise CppDiagnostic("cpp.redeclaration", "enum name conflicts with another declaration", name.coord)

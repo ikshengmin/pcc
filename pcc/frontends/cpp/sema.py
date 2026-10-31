@@ -7,7 +7,7 @@ misparse C++ declaration/expression ambiguities.
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    is_enum_type, mangle_function, pointer_type, unqualified,
+    ConstType, is_enum_type, mangle_function, mangle_object, pointer_type, unqualified,
 )
 from pcc.frontends.cpp.templates import (
     deduce, mangle_instance, same_type, signature_key, substitute,
@@ -323,6 +323,43 @@ class Scope:
         self.names[symbol.name] = symbol
         return symbol
 
+    def declare_namespace_object(self, symbol, definition, storage=None):
+        if (self.parent is None and symbol.name in self.c_linkage_functions):
+            raise CppDiagnostic("cpp.c-linkage-name-conflict",
+                                "a global object cannot share a C function's name", symbol.coord)
+        if self.kind != "namespace":
+            raise CppDiagnostic("cpp.unsupported.block-storage",
+                                "non-namespace object linkage is not implemented", symbol.coord)
+        previous = self.names.get(symbol.name)
+        if previous is not None:
+            if previous.owner is not self:
+                raise CppDiagnostic("cpp.using-declaration-conflict",
+                                    "object declaration conflicts with an imported entity", symbol.coord)
+            if not getattr(previous, "namespace_object", False):
+                if (previous.kind == "type" and
+                        (getattr(unqualified(previous.dtype), "cpp_class_type", False)
+                         or is_enum_type(previous.dtype))):
+                    raise CppDiagnostic("cpp.unsupported.tag-hiding",
+                                        "object/tag dual name lookup is not implemented", symbol.coord)
+                raise CppDiagnostic("cpp.redeclaration", "object name conflicts with a declaration", symbol.coord)
+            if not same_type(previous.dtype, symbol.dtype):
+                raise CppDiagnostic("cpp.conflicting-object-type",
+                                    "object redeclaration has a different type", symbol.coord)
+            if storage == "static" and not previous.internal_linkage:
+                raise CppDiagnostic("cpp.conflicting-linkage",
+                                    "static declaration follows an external object declaration", symbol.coord)
+            if definition and previous.defined:
+                raise CppDiagnostic("cpp.redefinition", "object has more than one definition", symbol.coord)
+            if definition:
+                previous.defined = True
+            return previous
+        symbol.namespace_object = True
+        symbol.defined = definition
+        local_name = storage == "static" or isinstance(symbol.dtype, ConstType) and storage != "extern"
+        symbol.internal_linkage = local_name or self.internal_linkage
+        symbol.c_name = mangle_object(symbol.name, self.namespace_path(), local_name)
+        return self.declare(symbol)
+
     def declare_function(self, symbol, definition):
         previous = self.names.get(symbol.name)
         if previous is not None:
@@ -360,6 +397,11 @@ class Scope:
                 return candidate
         symbol.language_linkage = symbol.requested_language_linkage or "C++"
         if symbol.language_linkage == "C":
+            global_object = self.global_scope().names.get(symbol.name)
+            if (getattr(global_object, "namespace_object", False)
+                    and global_object.owner is self.global_scope()):
+                raise CppDiagnostic("cpp.c-linkage-name-conflict",
+                                    "a C function cannot share a global object's name", symbol.coord)
             registry = self.global_scope().c_linkage_functions
             canonical = registry.get(symbol.name)
             if canonical is not None:
