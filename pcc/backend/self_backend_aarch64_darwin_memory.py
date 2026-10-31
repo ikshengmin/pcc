@@ -27,6 +27,7 @@ from .self_backend_aarch64_darwin_regalloc import (
     allocated_scalar_register_indexed,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
+    frame_slot_sp_offset,
 )
 from .self_backend_aarch64_darwin_slots import (
     copy_address_to_slot,
@@ -253,6 +254,19 @@ def _indexed_scalar_type(type_header: CompilerInt4) -> bool:
     return type_header.first in (TYPE_KIND_INT, TYPE_KIND_FP, TYPE_KIND_PTR)
 
 
+def _indexed_zero_store_register(type_header: CompilerInt4, value_ref: int, value: str) -> str:
+    """The zero register that stores constant ``value``, or "" when it is not zero."""
+    if value_ref >= 0 or type_header.first not in (TYPE_KIND_INT, TYPE_KIND_PTR):
+        return ""
+    if _scalar_access_bytes(type_header) == 0:
+        return ""
+    if value not in ("0", "null", "false", "zeroinitializer"):
+        return ""
+    if type_header.first == TYPE_KIND_PTR or type_header.second > 32:
+        return "xzr"
+    return "wzr"
+
+
 def _indexed_scalar_slot_access(
     kernel: IndexedFunctionKernel,
     type_id: int,
@@ -260,15 +274,25 @@ def _indexed_scalar_slot_access(
     reg_index: int,
     *,
     store: bool,
+    func: ParsedFunction | None = None,
+    reg_override: str = "",
 ) -> list[str]:
     type_header: CompilerInt4 = kernel.type_header(type_id)
-    reg = reg_name_indexed(kernel, type_id, reg_index)
+    reg = reg_override if reg_override else reg_name_indexed(kernel, type_id, reg_index)
     op = (
         _indexed_scalar_stack_store_op(type_header)
         if store
         else _indexed_scalar_stack_load_op(type_header)
     )
     if offset > 255:
+        position = frame_slot_sp_offset(func, offset, _scalar_access_bytes(type_header))
+        if position >= 0:
+            scaled_op = (
+                _indexed_scalar_mem_store_op(type_header)
+                if store
+                else _indexed_scalar_mem_load_op(type_header)
+            )
+            return [emitted_memory_instruction_line(scaled_op, reg, "sp", position)]
         lines = emit_slot_base_address_parts(offset, "x15")
         lines.append(emitted_memory_instruction_line(op, reg, "x15"))
         return lines
@@ -363,15 +387,31 @@ def emit_memory_instruction_by_id(
                         and value_type_header.first == TYPE_KIND_PTR
                     )
                 if storage_matches:
-                    lines = materialize_scalar_value_indexed(
-                        func,
-                        indexed_kernel,
-                        value,
-                        value_type_id,
-                        9,
-                        module_symbols,
-                        value_id=store_record.second,
+                    # Store a zero constant from the zero register and an
+                    # allocated value from its own register: neither needs a
+                    # scratch copy before the slot store.
+                    source_register = _indexed_zero_store_register(
+                        value_type_header, store_record.second, value,
                     )
+                    if not source_register and store_record.second >= 0:
+                        allocated_source = allocated_scalar_register_indexed(
+                            indexed_kernel, store_record.second, value_type_id,
+                        )
+                        if allocated_source >= 0:
+                            source_register = reg_name_indexed(
+                                indexed_kernel, value_type_id, allocated_source,
+                            )
+                    lines = []
+                    if not source_register:
+                        lines = materialize_scalar_value_indexed(
+                            func,
+                            indexed_kernel,
+                            value,
+                            value_type_id,
+                            9,
+                            module_symbols,
+                            value_id=store_record.second,
+                        )
                     lines.extend(
                         _indexed_scalar_slot_access(
                             indexed_kernel,
@@ -379,6 +419,8 @@ def emit_memory_instruction_by_id(
                             indexed_kernel.alloca_offset(store_record.fourth),
                             9,
                             store=True,
+                            func=func,
+                            reg_override=source_register,
                         )
                     )
                     return lines
@@ -779,6 +821,7 @@ def emit_memory_instruction_by_id(
                         indexed_kernel.alloca_offset(load_record.third),
                         load_register,
                         store=False,
+                        func=func,
                     )
                 else:
                     base_register = allocated_scalar_register_indexed(
@@ -826,6 +869,7 @@ def emit_memory_instruction_by_id(
                             indexed_kernel.slot_offset(slot_id),
                             10,
                             store=True,
+                            func=func,
                         )
                     )
                 return lines

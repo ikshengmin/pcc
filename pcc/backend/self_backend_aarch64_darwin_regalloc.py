@@ -2287,6 +2287,27 @@ def callee_saved_area_size(func: ParsedFunction) -> int:
     return (count * 8 + 15) // 16 * 16
 
 
+def frame_slot_sp_offset(func: ParsedFunction | None, offset: int, access_bytes: int) -> int:
+    """SP-relative scaled offset of the x29-relative slot at ``-offset``, or -1.
+
+    Between prologue and epilogue the frame is ``sp = x29 - total_frame``
+    (the prologue's own sum), so a slot below the 256-byte unscaled reach of
+    ``[x29, #-off]`` is one scaled ``[sp, #pos]`` access instead of an address
+    computation plus an access. Only a top-level instruction may ask: call
+    argument and phi-copy sequences move sp temporarily and keep x29. A
+    frameless function has no slots, and a dynamic alloca moves sp.
+    """
+    if func is None or func.aarch64_frameless or func.aarch64_dynamic_stack:
+        return -1
+    if access_bytes <= 0:
+        return -1
+    total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
+    position = total_frame - offset
+    if position < 0 or position % access_bytes != 0 or position // access_bytes > 4095:
+        return -1
+    return position
+
+
 def emit_callee_saved_stores(func: ParsedFunction) -> list[str]:
     lines: list[str] = []
     index = 0

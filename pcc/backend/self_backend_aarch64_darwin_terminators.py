@@ -403,6 +403,7 @@ def emit_inline_error_stub_indexed(
         kernel.alloca_offset(landing_slot),
         9,
         store=True,
+        func=func,
     ))
     lines.append(emitted_branch_line("b", block_label(func.name, target_name)))
     return lines
