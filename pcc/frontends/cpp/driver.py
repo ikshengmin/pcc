@@ -11,11 +11,20 @@ def is_cpp_path(path):
 
 def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
                    target_triple=None):
+    import os
+
+    from pcc.driver.paths import resolve_pcc_dir_from_environment
     from pcc.frontends.c.preprocessor import preprocess
 
     # The C compatibility headers are not C++ standard-library implementations.
-    # Explicit include paths remain available and missing headers fail closed.
-    arguments = ["-nostdinc", "-U__STDC__", "-U__STDC_VERSION__", "-D__cplusplus=201703L"]
+    # Select only the owned C++ headers, not host or fake-libc headers. They may
+    # declare runtime operations whose definitions are not yet available: an
+    # include is not a promise of a complete C++ library or successful linking.
+    # A caller's later -nostdinc still disables this default search directory.
+    headers = os.path.join(resolve_pcc_dir_from_environment(__file__),
+                           "frontends", "cpp", "include")
+    arguments = ["-nostdinc", "-isystem", headers, "-U__STDC__",
+                 "-U__STDC_VERSION__", "-D__cplusplus=201703L"]
     values = list(cpp_args or ())
     index = 0
     while index < len(values):

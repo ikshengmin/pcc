@@ -1,0 +1,42 @@
+// PCC-owned C++17 declaration surface; N4659 [cctype.syn].
+// This header does not implement character classification or case conversion.
+// Definitions must preserve the C library's EOF/unsigned-char input domain and
+// locale rules. In particular, no ASCII-only substitute is supplied here.
+#ifndef _PCC_CXX_CCTYPE
+#define _PCC_CXX_CCTYPE
+
+extern "C" {
+int isalnum(int);
+int isalpha(int);
+int isblank(int);
+int iscntrl(int);
+int isdigit(int);
+int isgraph(int);
+int islower(int);
+int isprint(int);
+int ispunct(int);
+int isspace(int);
+int isupper(int);
+int isxdigit(int);
+int tolower(int);
+int toupper(int);
+}
+
+namespace std {
+using ::isalnum;
+using ::isalpha;
+using ::isblank;
+using ::iscntrl;
+using ::isdigit;
+using ::isgraph;
+using ::islower;
+using ::isprint;
+using ::ispunct;
+using ::isspace;
+using ::isupper;
+using ::isxdigit;
+using ::tolower;
+using ::toupper;
+}
+
+#endif
