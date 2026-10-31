@@ -284,3 +284,22 @@ def test_valid_declared_disconnected_block_is_preserved():
 def test_method_visibility_flags_are_mutually_exclusive(flags):
     with pytest.raises(JavaError, match="mutually exclusive"):
         compile_class(one(b"\x03\xac", flags=flags))
+
+
+@pytest.mark.parametrize("name", ['Odd"\nsource_filename = "injected', "类名", "é", "e\u0301"])
+def test_classfile_name_cannot_inject_ir_through_module_label(name):
+    data = ClassBuilder(name).method("run", b"\x03\xac").build()
+    compilation = compile_class(data)
+    assert compilation.class_name == name
+    text = str(compilation.module)
+    assert text.splitlines()[0] == '; ModuleID = "java_' + name.encode().hex() + '"'
+    assert '\nsource_filename = "injected"' not in text
+    assert compilation.emit_object()[:4] == b"\x7fELF"
+
+
+def test_module_labels_and_symbols_keep_distinct_class_identities():
+    names = ["a_b", "a/b", "A", "41", "é", "e\u0301"]
+    results = [compile_class(ClassBuilder(name).method("run", b"\x03\xac").build()) for name in names]
+    assert [result.class_name for result in results] == names
+    assert len({result.module.name for result in results}) == len(names)
+    assert len({result.entry_symbol for result in results}) == len(names)

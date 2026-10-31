@@ -194,7 +194,10 @@ def compile_class(data: bytes, *, entry: str = "run", descriptor: str = "()I",
         result = verify_method(cls, methods[key])
         verified[key] = result
         queue.extend(call for call in result.calls if call not in verified)
-    module = ir.Module(name="java_" + cls.name)
+    # Class-file names are not Java source identifiers: quotes/newlines can
+    # occur. The text-first builder places ModuleID in a comment without
+    # escaping, so encode this label just like native symbols.
+    module = ir.Module(name="java_" + cls.name.encode("utf-8", "surrogatepass").hex())
     module.triple = target
     functions = {}
     for key in verified:
