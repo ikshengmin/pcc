@@ -31,6 +31,7 @@ from language_feature_ledger import (
 
 EXPECTATIONS = {"accept", "reject", "run"}
 PHASE_OUTCOMES = {"accepted", "rejected", "completed", "blocked", "not_run"}
+ADAPTER_CHECKS = {"go-test-directive-v1"}
 
 
 def validate_suite(suite, root=None):
@@ -49,6 +50,9 @@ def validate_suite(suite, root=None):
         source_identity(row, "suite test " + row["id"], root)
         require(row.get("expectation") in EXPECTATIONS, "suite test: invalid expectation")
         string_list(row.get("feature_ids"), "suite test.feature_ids")
+        string_list(row.get("required_checks", []), "suite test.required_checks")
+        require(set(row.get("required_checks", [])) <= ADAPTER_CHECKS,
+                "suite test: unknown required check")
     return suite
 
 
@@ -93,11 +97,22 @@ def validate_run(run, suite):
                         test_id + ": reference run without accepted compile")
         string_list(row.get("diagnostic_codes", []), test_id + ".diagnostic_codes")
         string_list(row.get("blocker_feature_ids", []), test_id + ".blocker_feature_ids")
+        checks = row.get("checks", {})
+        require(isinstance(checks, dict), test_id + ": checks object required")
+        for check, outcome in checks.items():
+            nonempty(check, test_id + ".check")
+            require(check in tests[test_id].get("required_checks", []),
+                    test_id + ": unknown or unrequested check")
+            require(outcome in ("passed", "failed", "unsupported", "not_run"),
+                    test_id + ": invalid check outcome")
     return run
 
 
 def test_passed(row, test):
     """No PASS imported from aggregate counts, skips, flags, or compile-only runs."""
+    if any(row.get("checks", {}).get(check) != "passed"
+           for check in test.get("required_checks", [])):
+        return False
     reference = row.get("reference")
     if reference is None:
         return False
@@ -141,6 +156,8 @@ def summarize_run(run, suite):
 
 def passed_allowlist(run, suite, receipt_index=None):
     validate_run(run, suite)
+    require(not any(test.get("required_checks") for test in suite["tests"]),
+            "baseline export denied: adapter-required assertion-proof replay is not supported")
     tests = {row["id"]: row for row in suite["tests"]}
     entries = []
     for row in run["results"]:
@@ -173,6 +190,8 @@ def passed_allowlist(run, suite, receipt_index=None):
                                        "compiler_revision", *AXES)},
             "test_id": row["test_id"], "input_sha256": row["input_sha256"],
             "expectation": tests[row["test_id"]]["expectation"],
+            **({"required_checks": tests[row["test_id"]]["required_checks"]}
+               if tests[row["test_id"]].get("required_checks") else {}),
             "reference": {key: reference[key] for key in ("name", "version", "platform", "role", "kind")},
             "outcome": "passed", "verification": verification,
         })

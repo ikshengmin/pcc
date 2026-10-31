@@ -1,0 +1,154 @@
+{
+  "adapter": "scripts/go_conformance.py",
+  "archive_sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+  "id": "go-official-test-representative",
+  "inventory_complete": false,
+  "inventory_scope": "five explicitly selected test/ driver sources; not full suite or stdlib",
+  "language": "go",
+  "license": "BSD-3-Clause",
+  "license_sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+  "schema_version": 1,
+  "scope": "official",
+  "source_revision": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+  "source_sha256": "d93ea3a141d1389db2ed66eb16e09bec4b3f59af50388cf83d222bb852e8a1f4",
+  "source_unchanged": true,
+  "source_url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+  "tests": [
+    {
+      "bytes": 237,
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "directive": {
+        "action": "run",
+        "errors": [],
+        "reasons": [],
+        "recipe": "run",
+        "supported": true
+      },
+      "expectation": "run",
+      "expected_output": {
+        "path": null,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "feature_ids": [],
+      "id": "test/fixedbugs/bug065.go",
+      "license": "BSD-3-Clause",
+      "license_path": "LICENSE",
+      "path": "test/fixedbugs/bug065.go",
+      "required_checks": [
+        "go-test-directive-v1"
+      ],
+      "sha256": "e3badb113c35ae4272e9a96c5016bce9f9b4a34522387962ad5a54bf00881ec6",
+      "source_url": "https://go.googlesource.com/go/+/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/test/fixedbugs/bug065.go"
+    },
+    {
+      "bytes": 255,
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "directive": {
+        "action": "compile",
+        "errors": [],
+        "reasons": [],
+        "recipe": "compile",
+        "supported": true
+      },
+      "expectation": "accept",
+      "expected_output": {
+        "path": null,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "feature_ids": [],
+      "id": "test/fixedbugs/bug115.go",
+      "license": "BSD-3-Clause",
+      "license_path": "LICENSE",
+      "path": "test/fixedbugs/bug115.go",
+      "required_checks": [
+        "go-test-directive-v1"
+      ],
+      "sha256": "131d874f1a97039ffcb1b21165f323a0f528d918a851e6335f2846619fec327d",
+      "source_url": "https://go.googlesource.com/go/+/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/test/fixedbugs/bug115.go"
+    },
+    {
+      "bytes": 248,
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "directive": {
+        "action": "errorcheck",
+        "errors": [
+          {
+            "line": 11,
+            "pattern": "x.*int|bool"
+          }
+        ],
+        "reasons": [],
+        "recipe": "errorcheck",
+        "supported": true
+      },
+      "expectation": "reject",
+      "expected_output": {
+        "path": null,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "feature_ids": [],
+      "id": "test/fixedbugs/bug182.go",
+      "license": "BSD-3-Clause",
+      "license_path": "LICENSE",
+      "path": "test/fixedbugs/bug182.go",
+      "required_checks": [
+        "go-test-directive-v1"
+      ],
+      "sha256": "86a6aeb0de2e1544904c9f07604379b4ebca92cd288ce87c6aa2be7dcca85890",
+      "source_url": "https://go.googlesource.com/go/+/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/test/fixedbugs/bug182.go"
+    },
+    {
+      "bytes": 308,
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "directive": {
+        "action": "run",
+        "errors": [],
+        "reasons": [],
+        "recipe": "run",
+        "supported": true
+      },
+      "expectation": "run",
+      "expected_output": {
+        "path": null,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "feature_ids": [],
+      "id": "test/ken/for.go",
+      "license": "BSD-3-Clause",
+      "license_path": "LICENSE",
+      "path": "test/ken/for.go",
+      "required_checks": [
+        "go-test-directive-v1"
+      ],
+      "sha256": "c7de70084214cdc33220b168d0d47f075c0d2a3dac641fd66b46394079f6400e",
+      "source_url": "https://go.googlesource.com/go/+/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/test/ken/for.go"
+    },
+    {
+      "bytes": 269,
+      "copyright": "Copyright 2009 The Go Authors. All rights reserved.",
+      "directive": {
+        "action": "run",
+        "errors": [],
+        "reasons": [],
+        "recipe": "run",
+        "supported": true
+      },
+      "expectation": "run",
+      "expected_output": {
+        "path": "test/helloworld.out",
+        "sha256": "853ff93762a06ddbf722c4ebe9ddd66d8f63ddaea97f521c3ecc20da7c976020"
+      },
+      "feature_ids": [],
+      "id": "test/helloworld.go",
+      "license": "BSD-3-Clause",
+      "license_path": "LICENSE",
+      "path": "test/helloworld.go",
+      "required_checks": [
+        "go-test-directive-v1"
+      ],
+      "sha256": "c60aab2915331f83129dd28ae3bfe9f960054120b11acdf0e235a481a6141051",
+      "source_url": "https://go.googlesource.com/go/+/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/test/helloworld.go"
+    }
+  ],
+  "version": "go1.27.3"
+}
