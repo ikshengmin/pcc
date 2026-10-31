@@ -113,7 +113,8 @@ class TentativeParse:
 
 class Expression:
     def __init__(self, node, dtype="int", lvalue=False, symbol=None, null_pointer=False,
-                 assignment_result=False, constant_fact=None):
+                 assignment_result=False, constant_fact=None, discarded_known=False,
+                 discarded_node=None, discarded_fact=None):
         self.node = node
         self.dtype = dtype
         self.lvalue = lvalue
@@ -121,6 +122,12 @@ class Expression:
         self.null_pointer = null_pointer
         self.assignment_result = assignment_result
         self.constant_fact = constant_fact
+        # Typed evaluation plan for discarding an admitted class glvalue,
+        # without an lvalue-to-rvalue conversion. None is a proven effect-free
+        # plan only when discarded_known is true; unknown plans fail closed.
+        self.discarded_known = discarded_known
+        self.discarded_node = discarded_node
+        self.discarded_fact = discarded_fact
 
 
 class CppParser:
@@ -1010,7 +1017,11 @@ class CppParser:
             # Do not emit a load through the pointee merely to take its address.
             if operator == "&" and isinstance(expression.node, c_ast.UnaryOp) and expression.node.op == "*":
                 return Expression(expression.node.expr, dtype)
-            return Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*")
+            class_glvalue = operator == "*" and is_class_type(dtype)
+            return Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*",
+                              discarded_known=class_glvalue,
+                              discarded_node=expression.node if class_glvalue else None,
+                              discarded_fact=self._constant_fact(expression) if class_glvalue else None)
         if is_class_type(expression.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class unary operator lookup/conversion is not implemented", coord)
         if is_enum_type(expression.dtype) and unqualified(expression.dtype).scoped:
@@ -1187,9 +1198,12 @@ class CppParser:
         if self.template_function is not None:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
+        fact = self._symbol_constant_fact(symbol, token.coord)
         return Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
                           symbol.kind == "value", symbol,
-                          constant_fact=self._symbol_constant_fact(symbol, token.coord))
+                          constant_fact=fact,
+                          discarded_known=symbol.kind == "value" and is_class_type(symbol.dtype),
+                          discarded_fact=fact)
 
     def _enum_constant_expression(self, dtype, value, coord):
         # Enumerator values have no storage. Project their already-checked

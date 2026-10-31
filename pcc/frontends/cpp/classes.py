@@ -19,6 +19,7 @@ PCC cases, not copied compiler-suite inputs.
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.constants import NOT_CONSTANT, not_constant, unmodeled
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.types import ConstType, PointerType, qualify_const, unqualified
 
@@ -331,8 +332,27 @@ def member_access(parser, expression, operator, member):
         raise CppDiagnostic("cpp.no-member", "class '" + owner.name + "' has no member '" + member.value + "'", member.coord)
     parser.scope.check_member_access(symbol, member.coord)
     if symbol.kind == "enumerator":
-        raise CppDiagnostic("cpp.unsupported.object-enumerator-access",
-                            "object enumerator access requires base-expression sequencing", member.coord)
+        if operator == ".":
+            if not expression.lvalue:
+                _unsupported(member, "class temporary materialization is not implemented")
+            if not expression.discarded_known:
+                raise CppDiagnostic("cpp.unsupported.discarded-class-expression",
+                                    "class glvalue discarded evaluation is not modeled", member.coord)
+            discarded, fact = expression.discarded_node, expression.discarded_fact
+        else:
+            discarded = expression.node
+            fact = parser._constant_fact(expression)
+        result = parser._enum_constant_expression(symbol.dtype, symbol.enum_value, member.coord)
+        if discarded is not None:
+            result.node = c_ast.ExprList([discarded, result.node], member.coord)
+        if fact is not None and fact.status == NOT_CONSTANT:
+            result.constant_fact = not_constant(result.dtype, fact.reason, fact.coord)
+        else:
+            # A known enumerator value does not prove the evaluated base is a
+            # core constant expression. Object/pointer constexpr analysis is a
+            # separate dependency; do not erase calls or invent such a proof.
+            result.constant_fact = unmodeled(result.dtype, "object enumerator base constant evaluation", member.coord)
+        return result
     if symbol.kind != "member":
         raise CppDiagnostic("cpp.member-not-value", "member '" + member.value + "' is not a data member", member.coord)
     if not expression.lvalue and operator == ".":
@@ -341,7 +361,16 @@ def member_access(parser, expression, operator, member):
     if isinstance(dtype, ConstType) and not symbol.mutable:
         result_type = qualify_const(result_type)
     node = c_ast.StructRef(expression.node, operator, c_ast.ID(symbol.c_name, member.coord), member.coord)
-    return type(expression)(node, result_type, lvalue=True)
+    result = type(expression)(node, result_type, lvalue=True)
+    if is_class_type(result_type):
+        # Selecting a class subobject as a glvalue does not load that object.
+        # Keep only evaluation required by its base, with the nominal/member
+        # checks already performed above. No C-AST pattern guessing is needed.
+        result.discarded_known = operator == "->" or expression.discarded_known
+        result.discarded_node = expression.node if operator == "->" else expression.discarded_node
+        result.discarded_fact = (parser._constant_fact(expression) if operator == "->"
+                                 else expression.discarded_fact)
+    return result
 
 
 def default_initialize(dtype, coord):

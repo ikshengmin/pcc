@@ -99,8 +99,7 @@ INVALID_CLASS_ENUM_CASES = (
 )
 
 UNIMPLEMENTED_CLASS_ENUM_CASES = (
-    "struct S{enum E{A};};int f(){S s;return s.A;}",
-    "struct S{enum E{A};};S*get();int f(){return get()->A;}",
+    # Original object/member cases moved verbatim to test_cpp_object_enumerators.
     "struct S{enum{A};};",
     "struct S{enum E:int;};enum S::E:int{A};",
     "struct S{enum E{A};};template<class T>int f(T x){return S::A;}",
