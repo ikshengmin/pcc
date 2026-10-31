@@ -149,7 +149,7 @@ def test_cpp_discovery_rejects_unsupported_semantics_without_regex_fallback(monk
     from pcc.driver.project import _has_main
     monkeypatch.setattr(c_evaluator.CEvaluator, '_system_cpp', lambda *a, **k: pytest.fail('external tool'))
     with pytest.raises(CppDiagnostic):
-        _has_main('namespace N{struct Guard{};} int main(){return 0;}', '/tmp/unit.cpp')
+        _has_main('namespace N{struct Guard{~Guard();};} int main(){return 0;}', '/tmp/unit.cpp')
 
 
 @pytest.mark.parametrize('expression,expected', [

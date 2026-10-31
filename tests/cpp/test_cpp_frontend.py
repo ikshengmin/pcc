@@ -138,7 +138,7 @@ class CppParserTests(unittest.TestCase):
 
     def test_preprocessor_and_unknown_trailing_source_do_not_disappear(self):
         self.diagnostic("#include <vector>\nint main(){}", "cpp.unsupported.preprocessor")
-        self.diagnostic("int main(){return 0;} namespace n{struct Guard{};}", "cpp.unsupported.classes")
+        self.diagnostic("int main(){return 0;} namespace n{struct Guard{~Guard();};}", "cpp.unsupported.classes")
 
     def test_reusing_parser_does_not_retain_prior_names(self):
         parser = CppParser()

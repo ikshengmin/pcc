@@ -5,7 +5,6 @@ import struct
 from collections import ChainMap
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from itertools import count
 # Route C frontend codegen through compat.ir_c. pcc.ir is the default;
 # Both frontends use the owned IR builder.
 from pcc.ir.compat import ir_c as ir
@@ -99,7 +98,6 @@ from pcc.frontends.c.ast import c_ast as c_ast
 _logger = logging.getLogger("pcc.frontends.c.codegen")
 
 struct_types = {}
-_aggregate_namespace_counter = count(1)
 _LARGE_AGGREGATE_COPY_BYTES = 128
 
 
@@ -308,9 +306,16 @@ class CCodeGenerator(
         )
         self._global_compound_literal_cache = {}
         self._switch_contexts = []
-        base_namespace = self.translation_unit_name or "pcc"
+        # Each translation unit already has its own IR Context. A process-wide
+        # serial here cannot add isolation, but makes identical compilations
+        # produce different named-type IR. Local scope/anonymous counters still
+        # distinguish tags within this module. Encode the original spelling,
+        # not the lossy symbol-name sanitization: a-b.c and a_b.c must remain
+        # distinct in the public multi-TU IR dump. Code-point delimiters make
+        # this stable identity injective even for non-ASCII input names.
         self._aggregate_namespace = (
-            f"{base_namespace}_{next(_aggregate_namespace_counter)}"
+            "tu_" + "_".join(str(ord(char)) for char in translation_unit_name)
+            if translation_unit_name is not None else "pcc"
         )
         self._scope_id_counter = 0
         self._current_scope_id = 0

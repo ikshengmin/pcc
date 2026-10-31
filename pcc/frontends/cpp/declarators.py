@@ -90,7 +90,12 @@ def parse_qualified_name(cursor, parse_identifier, reject_template_ids=True):
         if cursor.peek().value == "template":
             _unsupported("dependent-template-names", cursor.peek())
         tokens.append(parse_identifier())
-    if cursor.peek().value == ":":
+    # A single colon belongs to the enclosing grammar (for example a
+    # bit-field width), not to a malformed scope operator. Only diagnose a
+    # separated pair here; never consume or reinterpret the punctuation.
+    index = cursor.position + 1
+    if (cursor.peek().value == ":" and index < len(cursor.tokens)
+            and cursor.tokens[index].value == ":"):
         raise CppDiagnostic(
             "cpp.invalid-qualified-name", "expected an adjacent '::' token",
             cursor.peek().coord,

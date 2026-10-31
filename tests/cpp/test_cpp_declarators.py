@@ -115,6 +115,14 @@ def test_qualified_names_retain_components_without_performing_lookup(source, par
     assert parser.cursor.peek().kind == "EOF"
 
 
+def test_single_colon_remains_owned_by_enclosing_declaration():
+    parser = reader("value:3")
+    declaration = DeclaratorParser(parser.cursor, parser._identifier).parse()
+    assert declaration.name.parts == ("value",)
+    assert parser.cursor.peek().value == ":"
+    assert parser.cursor.peek().coord.column == 6
+
+
 @pytest.mark.parametrize("source", ("Outer: :value", "Outer:\n:value"))
 def test_separate_colon_tokens_do_not_become_scope_operator(source):
     with pytest.raises(CppDiagnostic) as error:

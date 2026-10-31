@@ -178,6 +178,9 @@ class Scope:
                 if symbol is not None and symbol.kind == "template-type":
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
                                         "dependent qualified lookup requires template/class semantics", name.coord)
+                if symbol is not None and getattr(symbol.dtype, "cpp_class_type", False):
+                    raise CppDiagnostic("cpp.unsupported.class-qualified-lookup",
+                                        "class-qualified lookup requires member/access semantics", name.coord)
                 if symbol is None or symbol.namespace_scope is None:
                     raise CppDiagnostic("cpp.not-a-namespace", "'" + part + "' does not name a namespace", name.coord)
                 scope = symbol.namespace_scope
@@ -306,6 +309,43 @@ class Scope:
         if definition:
             symbol.defined = True
         return symbol
+
+
+def argument_dependent_lookup(name, arguments, ordinary, coord):
+    """ADL for the admitted non-template, non-nested, base-free class types.
+
+    The class parser rejects bases, nested classes, friends and class templates
+    rather than pretending their associated entities are empty. Fundamental
+    types add nothing; aliases do not add the alias's declaring namespace.
+    """
+    if ordinary is not None and ordinary.kind != "function":
+        return ordinary
+    namespaces = []
+    for dtype in arguments:
+        dtype = unqualified(dtype)
+        if pointer_type(dtype):
+            dtype = unqualified(dtype.pointee)
+        if getattr(dtype, "cpp_class_type", False):
+            namespace = dtype.declaration_scope
+            if namespace is None:
+                raise CppDiagnostic("cpp.unsupported.associated-lookup",
+                                    "class has no recorded declaring namespace for ADL", coord)
+            namespaces.append(namespace)
+    candidates = [] if ordinary is None else [ordinary]
+    visited = set()
+    while namespaces:
+        namespace = namespaces.pop()
+        if namespace in visited:
+            continue
+        visited.add(namespace)
+        symbol = namespace.names.get(name)
+        if symbol is not None and symbol.kind == "function":
+            candidates.append(symbol)
+        # Unlike ordinary qualified lookup, ADL ignores using-directives.
+        namespaces.extend(namespace.inline_namespaces)
+        if namespace.inline and namespace.parent is not None:
+            namespaces.append(namespace.parent)
+    return Scope._merge(candidates, name, coord)
 
 
 def resolve_overload(group, arguments, types, coord, null_constants=None):

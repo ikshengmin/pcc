@@ -85,22 +85,52 @@ def pointer_type(dtype):
     return isinstance(unqualified(dtype), PointerType)
 
 
+def _substitution(index):
+    if index == 0:
+        return "S_"
+    digits, number = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", ""
+    index -= 1
+    while True:
+        number = digits[index % 36] + number
+        index //= 36
+        if index == 0:
+            return "S" + number + "_"
+
+
+def _mangle_class(dtype, substitutions):
+    parts = dtype.qualified_name
+    name = str(len(parts[-1])) + parts[-1]
+    namespaces = parts[:-1]
+    if not namespaces:
+        return name
+    if namespaces == ("std",):
+        return "St" + name
+    prefix, start = "", 0
+    for count in range(len(namespaces), 0, -1):
+        key = ("namespace-prefix", namespaces[:count])
+        if key in substitutions:
+            prefix, start = _substitution(substitutions.index(key)), count
+            break
+    if not prefix and namespaces[0] == "std":
+        prefix, start = "St", 1
+    for index in range(start, len(namespaces)):
+        part = namespaces[index]
+        prefix += str(len(part)) + part
+        key = ("namespace-prefix", namespaces[:index + 1])
+        if key not in substitutions:
+            substitutions.append(key)
+    return "N" + prefix + name + "E"
+
+
 def _mangle_type(dtype, substitutions):
     if dtype in substitutions:
-        index = substitutions.index(dtype)
-        if index == 0:
-            return "S_"
-        digits, number = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", ""
-        index -= 1
-        while True:
-            number = digits[index % 36] + number
-            index //= 36
-            if index == 0:
-                return "S" + number + "_"
+        return _substitution(substitutions.index(dtype))
     if isinstance(dtype, ConstType):
         encoded = "K" + _mangle_type(dtype.base, substitutions)
     elif isinstance(dtype, PointerType):
         encoded = "P" + _mangle_type(dtype.pointee, substitutions)
+    elif getattr(dtype, "cpp_class_type", False):
+        encoded = _mangle_class(dtype, substitutions)
     else:
         return _CODES[dtype]
     substitutions.append(dtype)

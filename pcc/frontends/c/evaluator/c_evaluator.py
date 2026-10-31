@@ -1624,6 +1624,16 @@ class CEvaluator(object):
             asm_text = self._self_backend_asm_text(prepared_units)
 
         if emit_llvm:
+            # Separate objects may legitimately come from same-named inputs,
+            # but this public combined-text boundary cannot distinguish their
+            # nominal types without a real module/type merger. Fail before
+            # opening the destination instead of writing conflicting records.
+            unit_names = [unit[0] for unit in prepared_units]
+            if len(set(unit_names)) != len(unit_names):
+                raise BackendUnavailable(
+                    "combined C IR emission requires distinct translation-unit names; "
+                    "same-name module merging is not implemented"
+                )
             with open(emit_llvm, "w") as f:
                 f.write("\n\n".join(ir_texts))
 

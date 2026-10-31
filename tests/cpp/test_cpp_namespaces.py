@@ -156,7 +156,7 @@ NEGATIVE_CASES = (
     ("namespace A {int f(int);}int g(){ {using A::f;}return f(1);}", "cpp.undeclared"),
     ("namespace A {template<class T>T f(T x){return x;}}", "cpp.unsupported.namespace-templates"),
     ("template<class T>int f(T x){return T::g(x);}", "cpp.unsupported.dependent-lookup"),
-    ("namespace A {struct S {int x;};}", "cpp.unsupported.classes"),
+    ("namespace A {struct S {~S();};}", "cpp.unsupported.classes"),
     ("namespace A {int f();}int A::f(){return 1;}", "cpp.unsupported.qualified-names"),
     ("namespace A {int f(){return 1;}}int g(){return A : : f();}", "cpp.invalid-qualified-name"),
 )
