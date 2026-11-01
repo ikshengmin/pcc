@@ -20,6 +20,7 @@ from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.runtime.py.py_abi_constants import PCC_VTHREAD_CHANNEL_KIND_CORE, PCC_VTHREAD_CHANNEL_KIND_RECEIVER, PCC_VTHREAD_CHANNEL_KIND_SENDER, PCC_VTHREAD_CHANNEL_MAX_CAPACITY, PCC_VTHREAD_CHANNEL_MODE_MPSC, PCC_VTHREAD_CHANNEL_MODE_ONESHOT, PCC_VTHREAD_CHANNEL_RECV_RECEIVER_CLOSED, PCC_VTHREAD_CHANNEL_RECV_SENDER_CLOSED, PCC_VTHREAD_CHANNEL_RECV_VALUE, PCC_VTHREAD_WAIT_CHANNEL_RECV, PCC_VTHREAD_WAIT_CHANNEL_SELECT2, PCC_VTHREAD_WAIT_CHANNEL_SEND, PY_TYPE_CONTINUATION, PY_TYPE_GEN, PY_TYPE_VTHREAD_CHANNEL, PY_TYPE_VIRTUAL_THREAD, PYVIRTUALTHREADOBJECT_IDENTITY_OFFSET, PYVIRTUALTHREADOBJECT_SIZE
 from pcc.unsafe import (
     atomic_cas_i64,
+    atomic_fence,
     atomic_load_i64,
     atomic_rmw_i64,
     atomic_store_i64,
@@ -109,6 +110,8 @@ define_global_i64_array(
 define_global_ptr_null("pcc_vthread_effect_buffer_py")
 define_global_i64("pcc_vthread_effect_count_py", 0)
 define_global_i64("pcc_vthread_effect_dropped_py", 0)
+# Set by py_virtual_thread_effect_reset: effects are recorded only after it.
+define_global_i32("pcc_vthread_effects_enabled_py", 0)
 define_thread_local_ptr_null("pcc_current_virtual_thread_py")
 # Source of PyVirtualThreadObject.identity; incremented atomically.
 define_global_i64("pcc_vthread_identity_counter_py", 0)
@@ -430,6 +433,11 @@ def _effect_buffer():
 
 
 def _effect(kind: int, detail: int, root_delta: int, state: int) -> None:
+    # An observation facility: py_virtual_thread_effect_reset turns it on.
+    # Until then a scheduler event touches no shared counter (each took one
+    # or two atomics on one cache line, from every carrier).
+    if load_i32(global_addr("pcc_vthread_effects_enabled_py"), 0) == 0:
+        return
     buffer = _effect_buffer()
     index = atomic_rmw_i64(
         "add", global_addr("pcc_vthread_effect_count_py"), 0, 1, "acq_rel"
@@ -459,6 +467,7 @@ def py_virtual_thread_effect_reset() -> int:
     _effect_buffer()
     _counter_set(global_addr("pcc_vthread_effect_count_py"), 0)
     _counter_set(global_addr("pcc_vthread_effect_dropped_py"), 0)
+    store_i32(global_addr("pcc_vthread_effects_enabled_py"), 0, 1)
     return 0
 
 
@@ -3037,11 +3046,8 @@ def py_virtual_thread_poll_ready():
 
 @c_abi_export("py_virtual_thread_ready_count")
 def py_virtual_thread_ready_count() -> int:
-    if _scheduler_lock() != 0:
-        return -1
-    count = _counter(global_addr("pcc_vthread_ready_count_py"))
-    _scheduler_unlock()
-    return count
+    # One atomic word: the lock around its load added only contention.
+    return _counter(global_addr("pcc_vthread_ready_count_py"))
 
 
 @c_abi_export("py_virtual_thread_node_pool_stat")
@@ -3771,7 +3777,13 @@ def py_virtual_thread_cancel(vthread) -> int:
             _scheduler_unlock()
             return -1
 
-    store_i64(vthread, 128, 1)
+    # A running thread can claim completion (3) without this lock, after the
+    # checks above; it then finishes with its result, as if first.
+    if atomic_cas_i64(vthread, 128, 0, 1, "acq_rel", "acquire") != 0:
+        if ptr_is_null(ready_node) == 0:
+            _ready_release(ready_node)
+        _scheduler_unlock()
+        return 0
     if ptr_is_null(channel_group) == 0:
         _ready_commit(vthread, channel_group)
         _effect(6, 4, 0, load_i64(vthread, 32))
@@ -3967,6 +3979,20 @@ def py_virtual_thread_join(vthread, target) -> int:
         pcc_gc_store_ptr(waiter, ptr_add(waiter, 112), null())
         _scheduler_unlock()
         return -1
+    # complete() may finish ``joined`` without this lock: it publishes
+    # FINISHED and then reads the waiter list, each behind a full fence.
+    # Behind ours, reread the state: if it finished meanwhile, it may not
+    # have seen this waiter, so leave the list and report it done.
+    atomic_fence("seq_cst")
+    if atomic_load_i64(joined, 32, "acquire") == 4:
+        node = _join_unlink_waiter(waiter)
+        if ptr_is_null(node) == 0:
+            _join_release(node)
+        pcc_gc_store_ptr(waiter, ptr_add(waiter, 112), joined)
+        store_i64(waiter, 32, 2)
+        store_i64(waiter, 120, 0)
+        _scheduler_unlock()
+        return 1
     _scheduler_unlock()
     return 0
 
@@ -4033,10 +4059,60 @@ def py_virtual_thread_state(vthread) -> int:
     return atomic_load_i64(vthread, 32, "acquire")
 
 
+def _complete_running_unlocked(vthread, result) -> int:
+    """Complete the thread this carrier runs without the scheduler lock.
+
+    1 when done, 0 when the locked path must run, -1 on failure. Only the
+    common case qualifies: running here (state 2, mark 2), no outcome yet,
+    no wait, timer, IO or own join registration. Those fields change only
+    under the lock and only while the thread waits, so this carrier owns
+    them. Cancellation is the one concurrent writer: 3 at offset 128 claims
+    completion against it, and a request already there keeps the locked
+    path, which publishes it. Joiners link themselves under the lock and
+    then reread the state; FINISHED is published before the waiter list is
+    read, each behind a full fence, so one side always sees the other.
+    """
+    if (load_i64(vthread, 32) != 2 or load_i64(vthread, 40) != 2
+            or load_i64(vthread, 80) != 0 or load_i64(vthread, 120) != 0
+            or ptr_is_null(load_ptr(vthread, 56)) == 0
+            or ptr_is_null(load_ptr(vthread, 64)) == 0
+            or ptr_is_null(load_ptr(vthread, 104)) == 0):
+        return 0
+    if atomic_cas_i64(vthread, 128, 0, 3, "acq_rel", "acquire") != 0:
+        return 0
+    if ptr_is_null(result):
+        result = global_load_ptr("py_None")
+    pcc_gc_store_ptr(vthread, ptr_add(vthread, 24), result)
+    pcc_gc_store_ptr(vthread, ptr_add(vthread, 72), null())
+    pcc_gc_store_ptr(vthread, ptr_add(vthread, 112), null())
+    _channel_task_clear(vthread, 1)
+    store_i64(vthread, 176, -1)
+    store_i64(vthread, 184, -1)
+    store_i64(vthread, 80, 1)
+    store_i64(vthread, 40, 0)
+    atomic_store_i64(vthread, 32, 4, "release")
+    atomic_store_i64(vthread, 128, 0, "release")
+    atomic_fence("seq_cst")
+    if atomic_load_i64(vthread, 88, "acquire") != 0:
+        if _scheduler_lock() != 0:
+            return -1
+        woke = _join_wake_all(vthread)
+        _scheduler_unlock()
+        if woke != 0:
+            return -1
+    _effect(14, 0, 0, 4)
+    return 1
+
+
 @c_abi_export("py_virtual_thread_complete")
 def py_virtual_thread_complete(vthread, result) -> int:
     vthread = _checked(vthread)
     if ptr_is_null(vthread):
+        return -1
+    unlocked: int = _complete_running_unlocked(vthread, result)
+    if unlocked > 0:
+        return 0
+    if unlocked < 0:
         return -1
     if _scheduler_lock() != 0:
         return -1
