@@ -2,7 +2,6 @@
 
 import ast
 from dataclasses import replace
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -18,24 +17,25 @@ from tests.python.test_precise_stackmap_abi import (
     _target_final_stackmap_ir,
 )
 from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
-from tests.stackmap_global_index_reference import (
-    BASELINE_NATIVE_AST_SHA256,
-    BASELINE_NATIVE_UNPARSE_SHA256,
-    without_shared_globals_index,
-)
+from tests.stackmap_global_index_reference import without_shared_globals_index
+
+
+def _native_planner_definition():
+    source = Path(planner.__file__).read_text()
+    return next(node for node in ast.parse(source).body
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "_build_function_stack_map_plan_native")
 
 
 def old_native_planner():
-    source = Path(planner.__file__).read_text()
-    function = next(node for node in ast.parse(source).body
-                    if isinstance(node, ast.FunctionDef)
-                    and node.name == "_build_function_stack_map_plan_native")
-    function = without_shared_globals_index(function)
-    assert (
-        hashlib.sha256(ast.dump(function).encode()).hexdigest() == BASELINE_NATIVE_AST_SHA256
-        or hashlib.sha256(ast.unparse(function).encode()).hexdigest()
-        == BASELINE_NATIVE_UNPARSE_SHA256
-    )
+    """The current planner without the shared globals index, as the control.
+
+    without_shared_globals_index matches the index change node by node and
+    replaces exactly it with the per-function name table, so the control
+    and the production planner differ only there. Every other edit to the
+    planner reaches both, which keeps this a control for the index alone.
+    """
+    function = without_shared_globals_index(_native_planner_definition())
     namespace = dict(vars(planner))
     module = ast.Module(body=[ast.ImportFrom(module="__future__",
         names=[ast.alias(name="annotations")], level=0), function], type_ignores=[])
@@ -77,7 +77,19 @@ def plan_values(plans):
                   plan.target) for plan in plans)
 
 
-def test_exact_2d8c889_native_algorithm_is_the_control():
+def test_control_differs_from_the_planner_only_by_the_globals_index():
+    production = _native_planner_definition()
+    control = without_shared_globals_index(production)
+    # The control drops the index parameter and its default, and replaces
+    # only the second statement; the remaining statements are unchanged.
+    assert [arg.arg for arg in control.args.args] == [arg.arg for arg in production.args.args[:-1]]
+    assert len(control.body) == len(production.body)
+    for index, (left, right) in enumerate(zip(control.body, production.body)):
+        if index != 1:
+            assert ast.dump(left) == ast.dump(right)
+    assert ast.unparse(control.body[1]) == (
+        "globals_by_name = {global_.name: global_ for global_ in globals_}"
+    )
     assert old_native_planner().__name__ == "_build_function_stack_map_plan_native"
 
 
