@@ -126,6 +126,9 @@ class Expr:
     children: list[Expr] = field(default_factory=list)
     ty: object = None
     binding: object = None
+    # Generic arguments on an associated/method path segment, distinct from
+    # the owner's type arguments and from a value field's spelling.
+    type_arguments: tuple[object, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,10 @@ class Function:
     receiver: bool = False
     lifetime_parameters: tuple[Token, ...] = ()
     explicit_receiver: bool = False
+
+    @property
+    def owner_parameter_count(self):
+        return len(self.implementation.type_parameters) if self.implementation else 0
 
     @property
     def declaration_name(self):
@@ -455,9 +462,9 @@ class Parser:
         parameters = self.generic_parameters(allow_lifetimes=True)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
         if implementation is not None:
-            if parameters:
-                raise name.error("method-local generic parameters require separate method inference and are not implemented")
-            parameters = implementation.type_parameters
+            # Keep one declaration-bound parameter vector for the shared
+            # function registry, with a fixed impl prefix and a method suffix.
+            parameters = implementation.type_parameters + parameters
         if parameters and (abi != "Rust" or no_mangle or declaration):
             raise name.error("generic function foreign/export ABI is not implemented")
         self.expect("(")
@@ -670,6 +677,16 @@ class Parser:
             if (complete_block and expr.kind in {"if", "block", "while", "for", "unsafe", "match"}
                     and self.token.text != "."):
                 break
+            if self.token.text == "::" and expr.kind in {"field", "variant"}:
+                separator = self.take()
+                if expr.kind == "field" and expr.token.kind != "name":
+                    raise separator.error("tuple fields do not have generic method arguments")
+                if expr.type_arguments is not None or self.token.text != "<":
+                    raise separator.error("expected one method type-argument list")
+                expr.type_arguments = self.type_arguments()
+                if self.token.text != "(":
+                    raise separator.error("generic associated items require a direct call; stored function values are not implemented")
+                continue
             if self.token.text == "{" and expr.kind == "name" and allow_struct:
                 self.take()
                 fields, values = [], []

@@ -445,7 +445,8 @@ solving remain explicit capability boundaries. All methods are type/move checked
 at declaration time, including unused generic methods; abstract `T` is non-Copy.
 Concrete receiver/qualified-owner types select complete impl arguments for the
 existing shared function registry. No second method monomorphization cache or
-runtime dispatcher is added. Method-local generic parameters remain unsupported. Result-context inference
+runtime dispatcher is added. Method-local generic parameters have a separately qualified bounded
+implementation below. Result-context inference
 for ordinary generic calls is described below; truly ambiguous calls still fail.
 
 The initial value-receiver domain is extended by the bounded `&self` loans
@@ -548,12 +549,46 @@ Seven complete unchanged originals passed actual eight-byte PCC/rustc1.91.1
 runtime comparisons. Divergent compile-only obligations are not executed; the
 separate runtime example takes terminating branches. Mutable-reference inputs
 still require actual same-source external checking before owned lowering.
-This does not add constructor inference, method-local generic parameters,
-trait solving, reference substitutions or unresolved method/pattern dispatch.
+This accepted result-context slice does not itself qualify method-local generics.
+Constructor inference, trait solving, reference substitutions and unresolved
+method/pattern dispatch remain outside its scope.
 
 Specification: [inferred types](https://doc.rust-lang.org/reference/types/inferred.html),
 [generic parameters](https://doc.rust-lang.org/reference/items/generics.html),
 [call expressions](https://doc.rust-lang.org/reference/expressions/call-expr.html).
+
+### Inherent method-local generic inference (qualified bounded slice)
+
+An inherent `impl<T> Cell<T>` may declare its own `fn method<U>`. The impl
+parameters form a fixed prefix determined by the known nominal receiver or
+qualified owner, including impl-parameter permutations. Only the method suffix
+is supplied by `value.method::<U>(...)` / `Cell::<T>::method::<U>(...)` or inferred
+from argument structure and the existing result/later-context constraints.
+The combined declaration-bound vector goes to the existing function registry;
+no second instance cache, trait solver, or runtime dispatcher is introduced.
+Unused abstract method bodies still check their non-Copy parameters. Receiver
+and argument expressions are checked and evaluated once in source order.
+
+Shared/mutable receiver programs still require a genuine same-input external
+rustc check before owned lowering; neither a caller flag nor the internal
+partial move model authorizes references. The eight runtime originals among
+`tests/rust/programs/method_generic_*.rs` cover owner/method identity, nominal
+results, terminating recursion, composite result constraints, operand exits,
+`&self` and `&mut self`. Diverging compile-only obligations are not executed.
+All eight runtime originals passed actual same-input rustc1.91.1/PCC raw-stream
+comparisons in the restored environment. The whole Rust selection passed1,038 ordinary tests plus23 shared-mechanism
+tests and9 separate integration nodes;15 Darwin target prerequisites remain unrun. The exact
+initial u16 original is retained as a rustc-valid/owned-unsupported control;
+a distinct u32 program supplies the runtime result-context case. This bounded
+feature is implemented and accepted, not full generic Rust support.
+
+Unknown nominal receivers, traits/bounds/where clauses, const/lifetime arguments,
+reference type substitutions, stored function values, and arbitrary autoderef
+remain explicit gaps. No core/alloc or full-Rust claim follows.
+
+Specification: [associated functions and methods](https://doc.rust-lang.org/reference/items/associated-items.html),
+[method calls](https://doc.rust-lang.org/reference/expressions/method-call-expr.html),
+[generic path segments](https://doc.rust-lang.org/reference/paths.html#paths.expr.turbofish).
 
 ### Fixed-size arrays and target-sized index types
 
@@ -670,30 +705,28 @@ feature ID;119 unaudited chapter gaps are not a completion denominator.
 Implemented-but-unverified scopes are not promoted to supported by suite totals.
 No common checker/schema2 migration is included.
 
-Final result-context source `f4327b8142a71dfc9c173387b34f8eb65b85a209` passed
-1,020 selected tests (997 Rust + 23 shared mechanisms). All six workers recorded
-1,032 collected identities: 12 Darwin target core/std prerequisites were
-explicitly unselected/unrun, not passes or skips. Its 73 unchanged-original
-full-eight-byte owned/rustc1.91.1 runtime pairs include 53 identities with actual
-metadata checks and 20 value-only pairs, which are not certification claims.
-The whole gate records 139 successful checks and 12 genuine rejections;
-redundant checks are counted rather than presented as unique programs. Every
-public reference-bearing input still requires a genuine source/options-bound
-token. Internal nonlowering mechanisms do not certify borrowing or executable IR.
+Fresh method-generic candidate `4bf47dc3fd6d79350d5b8fb85b02446af24ce73b`
+passed1,061 whole ordinary tests and9 complete integration nodes (1,070 total;
+1,047 Rust plus23 shared mechanism tests). All six workers observed1,085 pooled
+identities;15 Darwin core/std prerequisites remain explicitly unselected/unrun.
+The81 unchanged-original full-eight-byte native/rustc1.91.1 pairs include56
+metadata-matching reference-source identities and25 value-only pairs. Actual
+checker processes total143 successes and13 genuine rejections; repeated checks
+are not presented as unique programs. The initial90/2/116 focused outcome is
+preserved, with its exact valid-but-unsupported u16 original retained separately.
 
-The separately run common ABI domain on this same source observed 3 PASS and
-1 Darwin-target-unavailable/unrun. The original record source was actually
-checked before owned lowering and produced two 48-byte observations; scalar
-routes each produced two 32-byte observations. Scalar exit success remains
-bound to passed unchanged assertions, not invented per-run receipts. No Mac
-execution, managed runtime or broader foreign-aggregate ABI claim is made.
+No new common ABI gate was run: shared registry/ABI/IR/backend code and common
+fixtures are unchanged. Older common and feature results remain historical,
+not new environment qualification. No Mac execution or full Rust claim is made.
 
-All 141 published ba525 evidence records retain their original IDs and values;
-their test source hashes still match. Fifteen new f432 records qualify only the
-new result-context feature. Old failures and earlier qualifications remain
-historical, not relabeled. The unmodified public strict file checker must pass all four maps;
-the separate diagnostic audit covers Rust only. No archived evidence reader or historical-source
-fallback substitutes for current-file validation.
+Thirty fresh records renew the13-record impl cohort and add17 method-generic
+records;143 other historical active records remain unchanged. The retired13
+remain exact in prior Git/private history, not relabeled. The reset removed old
+private artifacts, so no historical raw-file revalidation is claimed. The
+unchanged private reader checks an explicitly scoped30-row/two-feature
+projection with14 current raw identities. The public strict file checker still
+verifies all four complete maps; diagnostic audit is Rust-only. No fallback or
+ignored current-file mismatch substitutes for those checks.
 
 ### Audited feature axes
 
@@ -791,7 +824,7 @@ fallback substitutes for current-file validation.
 | `rust.capability.bb5c218be67c` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.23e389b95dff` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.ef2051156beb` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
-| `rust.capability.d45b3de1ec8e` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.generics.inherent-method-inference` | implemented | accepted | Qualified bounded inherent method-local type parameters: a declaration-bound impl prefix is fixed from the known nominal receiver/qualified owner; a distinct method suffix uses complete turbofish or argument/result/later-context inference. One shared function instance registry, abstract non-Copy body checks, one-time receiver evaluation, and canonical Self/owner identities survive shadowing. Eight unchanged-original Linux x86-64 PCC/rustc1.91.1 raw runtime comparisons passed, including local shared/mutable receiver aliases with genuine same-input external checks. A separate unchanged u16 original is rustc-valid but explicitly unsupported by owned integer lowering; it is not an invalid Rust case. Traits, bounds, where clauses, const/lifetime arguments, inferred nominal owners, arbitrary autoderef, Drop and reference type substitutions remain gaps. Three method-reference Darwin target cases remain explicitly unrun because target core/std are absent. |
 | `rust.capability.75978ad8986b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.a0caa359be53` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.a8ca231e8795` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
@@ -990,3 +1023,4 @@ fallback substitutes for current-file validation.
 | `rust.chapter.21.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
 | `rust.chapter.21.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
 | `rust.chapter.21.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.capability.85368199e941` | explicitly_unimplemented | unverified | Explicit message-only capability boundary; enum-owner arguments remain available. No stable diagnostic code or complete taxonomy is claimed. |

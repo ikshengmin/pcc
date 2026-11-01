@@ -572,6 +572,8 @@ class Checker:
             while callee.kind == "group":
                 callee = callee.children[0]
             fn = None
+            fixed_arguments = ()
+            explicit_arguments = callee.type_arguments
             receiver_checked = False
             arguments_checked = False
             if callee.kind == "field":
@@ -580,13 +582,15 @@ class Checker:
                 receiver_type = partial(self.expression(receiver, place_context=True))
                 array_type = receiver_type.referent if isinstance(receiver_type, SharedReference) else receiver_type
                 if isinstance(array_type, FixedArrayType) and callee.value == "len":
+                    if explicit_arguments is not None:
+                        raise callee.token.error("array len is not a generic method")
                     if len(children) != 1:
                         raise callee.token.error("array len expects no arguments")
                     expr.kind, expr.value, expr.children, expr.ty = "array_len", array_type.length, [receiver], "usize"
                     return "usize"
                 if pending_integer(receiver_type):
                     raise receiver.token.error("method selection on an unresolved inferred receiver requires later constraint solving, which is not implemented")
-                fn = self.methods.select(receiver_type, callee.value, callee.token, receiver=True)
+                fn, fixed_arguments = self.methods.lookup(receiver_type, callee.value, callee.token, receiver=True)
                 if isinstance(fn.params[0][1], SharedReference) and not isinstance(receiver_type, SharedReference):
                     if self.through_array_index(receiver) and not self.externally_checked:
                         raise receiver.token.error("indexed receiver borrowing requires an actual external rustc check; legacy partial loans do not prove array disjointness")
@@ -605,8 +609,12 @@ class Checker:
                 receiver_checked = True
             elif callee.kind == "variant":
                 owner, associated_name = callee.value
-                fn = self.methods.select(owner, associated_name, callee.token)
+                selected = self.methods.lookup(owner, associated_name, callee.token)
+                if selected is not None:
+                    fn, fixed_arguments = selected
             if fn is None and callee.kind == "variant":
+                if explicit_arguments is not None:
+                    raise callee.token.error("type arguments on enum constructor segments are not implemented; supply them on the enum owner")
                 enum_name, variant = callee.value
                 if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self":
                     enum_name = self.generics.path_type(enum_name, callee.token)
@@ -632,25 +640,35 @@ class Checker:
                 fn = self.names.get(name)
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
-                if fn.type_parameters and not isinstance(path, TypeApplication):
-                    if fn.unsafe and not self.unsafe_depth:
-                        raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
-                    if len(children) - 1 != len(fn.params):
-                        raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
-                    from .call_inference import infer
-                    types = [self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
-                             for arg, (_, param_ty, _) in zip(children[1:], fn.params)]
-                    declaration = fn
-                    fn, arguments = infer(self, declaration, types, callee.token)
-                    self.inferred_calls.append((expr, declaration, arguments, callee.token))
-                    arguments_checked = True
-                else:
-                    fn = self.function_generics.select(
-                        fn, path.arguments if isinstance(path, TypeApplication) else None, callee.token)
+                explicit_arguments = path.arguments if isinstance(path, TypeApplication) else None
             if fn.unsafe and not self.unsafe_depth:
                 raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
             if len(children) - 1 != len(fn.params):
                 raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
+            assert len(fixed_arguments) == fn.owner_parameter_count
+            inferable_count = len(fn.type_parameters) - fn.owner_parameter_count
+            if explicit_arguments is not None and fn.implementation is not None:
+                if len(explicit_arguments) != inferable_count:
+                    raise callee.token.error("generic method argument count mismatch")
+            if inferable_count and explicit_arguments is None:
+                from .call_inference import infer
+                types = [arg.ty if receiver_checked and index == 0 else
+                         self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
+                         for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params))]
+                declaration = fn
+                fn, arguments = infer(self, declaration, types, callee.token,
+                                      fixed_arguments=fixed_arguments)
+                self.inferred_calls.append((expr, declaration, arguments, callee.token))
+                arguments_checked = True
+            else:
+                if fn.implementation is not None and fn.type_parameters:
+                    method_arguments = tuple(self.generics.normalize(ty, callee.token)
+                                             for ty in explicit_arguments or ())
+                    arguments = fixed_arguments + method_arguments
+                else:
+                    arguments = explicit_arguments
+                fn = self.function_generics.select(fn, arguments, callee.token,
+                                                   normalized=fn.implementation is not None)
             expr.binding = fn
             for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params)):
                 arg_ty = arg.ty if arguments_checked or receiver_checked and index == 0 else self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))

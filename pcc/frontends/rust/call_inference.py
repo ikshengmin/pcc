@@ -36,15 +36,16 @@ def pending_integer(ty):
     return False
 
 
-def infer(checker, function, arguments, token):
+def infer(checker, function, arguments, token, *, fixed_arguments=()):
     from .semantics import InferredType, NEVER, unify
     parameters = checker.function_generics.parameters[function.declaration_name]
     # Keep each call's unknowns shared with its substituted result/parameters.
     # Later annotations, return types and argument contexts constrain these
     # same variables before finish selects the concrete shared-registry entry.
-    bindings = {parameter: InferredType(
+    assert len(fixed_arguments) <= len(parameters)
+    bindings = {parameter: fixed_arguments[index] if index < len(fixed_arguments) else InferredType(
         token, description=f"generic parameter {parameter.name} (result-context inference)")
-        for parameter in parameters}
+        for index, parameter in enumerate(parameters)}
 
     def constrain(pattern, actual):
         actual = partial(actual)
@@ -83,4 +84,4 @@ def finish(checker, requests):
     from .semantics import resolve
     for expression, declaration, arguments, token in requests:
         concrete = tuple(resolve(argument) for argument in arguments)
-        expression.binding = checker.function_generics.select(declaration, concrete, token)
+        expression.binding = checker.function_generics.select(declaration, concrete, token, normalized=True)

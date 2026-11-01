@@ -48,7 +48,6 @@ def compile_source(source):
     ('fn f(self){}', 'inherent method'),
     ('struct R{x:i64} impl R{fn f(self:Self){}}', 'explicit receiver'),
     ('struct R{x:i64} impl R{fn f(&mut self){}}', 'mutable references require a matching external rustc check record'),
-    ('struct R{x:i64} impl R{fn f<T>(self,x:T){}}', 'method-local generic'),
     ('struct R{x:i64} impl Trait for R{}', 'trait impls'),
     ('struct R<T>{x:T} impl<T:Copy> R<T>{}', 'bounds'),
     ('struct R{x:i64} impl R{fn f(self){self.x=1;}}', 'immutable'),

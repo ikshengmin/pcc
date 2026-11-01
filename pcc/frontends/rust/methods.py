@@ -1,8 +1,9 @@
-"""Inherent nominal methods with value receivers; no trait/borrow dispatch.
+"""Inherent nominal method lookup; no trait or arbitrary autoderef dispatch.
 
 Impl parameters are inferred only by matching an already-known nominal owner.
 Bodies use the same abstract checker and shared function instance worklist as
-free functions. This is not general argument inference or a second mono cache.
+free functions. Method parameters are inferred later by the ordinary call
+checker; lookup must not prematurely materialize an owner-only instance.
 """
 from .generics import PRIMITIVES
 from .types import SharedReference, TypeApplication
@@ -51,11 +52,15 @@ class InherentMethods:
                 raise function.token.error('associated names colliding with enum variants are not implemented')
             self.declarations[key] = function
 
-    def select(self, owner, name, token, *, receiver=False):
+    def lookup(self, owner, name, token, *, receiver=False):
         through_reference = isinstance(owner, SharedReference)
         if isinstance(owner, SharedReference):
             owner = owner.referent
-        owner = self.checker.generics.normalize(owner, token)
+        # A receiver already has a checked semantic type. Only a qualified
+        # source path needs lexical resolution; method parameters may shadow
+        # its nominal owner's spelling without changing that type identity.
+        if not receiver:
+            owner = self.checker.generics.normalize(owner, token)
         self.checker.valid_type(owner, token)
         base = owner.name if isinstance(owner, TypeApplication) else owner
         function = self.declarations.get((base, name))
@@ -67,9 +72,9 @@ class InherentMethods:
             raise token.error('associated function has no self receiver; use its qualified type path')
         if through_reference and not isinstance(function.params[0][1], SharedReference):
             raise token.error('cannot move a value receiver out of a shared reference; general autoderef is not implemented')
-        arguments = None
-        if function.type_parameters:
+        arguments = ()
+        if function.implementation.type_parameters:
             pattern = function.implementation.owner
             bindings = dict(zip(pattern.arguments, owner.arguments))
-            arguments = tuple(bindings[p.text] for p in function.type_parameters)
-        return self.checker.function_generics.select(function, arguments, token)
+            arguments = tuple(bindings[p.text] for p in function.implementation.type_parameters)
+        return function, arguments

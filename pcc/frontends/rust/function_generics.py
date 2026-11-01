@@ -50,7 +50,8 @@ class GenericFunctions:
         if function.type_parameters:
             self.raw_bodies[function.declaration_name] = deepcopy(function.body)
         if function.implementation is not None:
-            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, scope)
+            owner_scope = {p.text: scope[p.text] for p in function.implementation.type_parameters}
+            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, owner_scope)
         return scope
 
     def scope(self, function, arguments=None):
@@ -58,10 +59,11 @@ class GenericFunctions:
         scope = {parameter.name: value for parameter, value in
                  zip(parameters, parameters if arguments is None else arguments)}
         if function.implementation is not None:
-            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, scope)
+            owner_scope = {p.text: scope[p.text] for p in function.implementation.type_parameters}
+            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, owner_scope)
         return scope
 
-    def select(self, function, arguments, token):
+    def select(self, function, arguments, token, *, normalized=False):
         if arguments is None:
             if function.type_parameters:
                 raise token.error('generic function requires explicit type arguments; argument inference is not implemented')
@@ -70,7 +72,11 @@ class GenericFunctions:
             raise token.error('type arguments supplied to a nongeneric function')
         if len(arguments) != len(function.type_parameters):
             raise token.error('generic function argument count mismatch')
-        arguments = tuple(self.checker.generics.normalize(ty, token) for ty in arguments)
+        # Explicit source paths need lexical resolution; inferred values and
+        # fixed impl arguments already carry their type identity. Resolving a
+        # nominal name twice could capture a shadowing method type parameter.
+        arguments = (tuple(arguments) if normalized else
+                     tuple(self.checker.generics.normalize(ty, token) for ty in arguments))
         bounded_type(TupleType(arguments), token)
         for argument in arguments:
             pending = [argument]
