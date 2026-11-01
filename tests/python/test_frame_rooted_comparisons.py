@@ -213,6 +213,9 @@ class Right:
 def equal(left, right):
     return left == right
 
+def strings(left: str, right: str):
+    return left == right, left < right
+
 def after_error(left, right):
     try:
         left == right
@@ -248,10 +251,13 @@ def generated(left, right):
 
 def main():
     for left, right in [(0, 1), (1.5, 2.5), (2 ** 100, 2 ** 100 + 1),
+                        (2 ** 53 + 1, float(2 ** 53)), (2 ** 100, float(2 ** 100)),
+                        (True, 1.0), (False, 0),
                         ("alpha", "beta"), ([1], [2]), ((2,), (3,)),
                         (math.nan, math.nan)]:
         print(compare(left, right))
     print(compare(Number(1), Number(2)))
+    print(strings("alpha", "alpha"), strings("prefix" * 1024 + "a", "prefix" * 1024 + "b"))
     same = Number(7)
     print(compare(same, same))
     after_error(Broken("left"), Broken("right"))

@@ -146,8 +146,11 @@ exception cleanup, reassignment, closure rebinding and a generator.
 The follow-up primitive entry reads caller slots and delegates exact numeric
 and string pairs to the existing comparison owners. Other types and extension
 tags stay on the counted-lease path. Runtime polls remain allowed; this is not
-a no-safepoint promise. Fifty-six focused IR/model checks pass, but this entry
-and the additional reflected-callback probe have not yet executed natively.
+a no-safepoint promise. Fifty-six focused IR/model checks pass. The primitive
+entry on frozen `b9cb1bdd8` also passes the expanded unchanged-source CPython
+comparison on GC0-4: exact int/float boundaries, booleans, typed-string equality
+and long-prefix ordering, and reflected NotImplemented callbacks that collect.
+These are host-pcc0/self executions; no QPS change is claimed for this increment.
 Leaf-call effects and the membership/arithmetic extensions remain open, as do
 whole-language and native-pcc1 gates.
 Static-method generation also exposes the pre-existing `_call_user` and
