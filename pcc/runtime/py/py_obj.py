@@ -999,12 +999,14 @@ def pcc_gc_store_ptr_plan_finish(plan) -> None:
 def pcc_gc_store_root(slot, value) -> None:
     if ptr_is_null(slot) != 0:
         return
-    # py_incref's gate (one thread on backend 0, no probe, no log): the new
-    # and old owners take py_incref/py_decref's own fast paths here instead
-    # of two calls that repeat this gate. Any other object, and a count that
-    # would reach zero, still goes through those functions.
+    # py_incref/py_decref's own gate (backend 0, no probe, no log, any number
+    # of threads): the new and old owners take their atomic fast paths here
+    # instead of two calls that repeat this gate, each entering a polled
+    # frame. (The single-thread non-atomic variant never ran: the runtime is
+    # always threaded.) Any other object, and a count that would reach zero,
+    # still goes through those functions.
     if (
-        load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0
+        load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
     ):
         fast_old = load_ptr(slot, 0)
@@ -1018,11 +1020,13 @@ def pcc_gc_store_root(slot, value) -> None:
                 or new_tag == PY_TYPE_CPY_HANDLE
                 or (new_tag >= PY_TYPE_USER and new_tag < PY_TYPE_CEXT_TAG_BASE)
             ):
-                if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                    new_rc: int = load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET)
-                    if new_rc >= 0:
-                        store_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, new_rc + 1)
-                        counted = 1
+                if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                    counted = 1
+                elif atomic_load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
+                    # The caller holds a reference: the count cannot reach
+                    # zero concurrently.
+                    atomic_rmw_i64("add", value, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
+                    counted = 1
             if counted == 0:
                 py_incref(value)
         store_ptr(slot, 0, value)
@@ -1034,11 +1038,21 @@ def pcc_gc_store_root(slot, value) -> None:
                 or old_tag == PY_TYPE_CPY_HANDLE
                 or (old_tag >= PY_TYPE_USER and old_tag < PY_TYPE_CEXT_TAG_BASE)
             ):
-                if (load_i32(fast_old, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
-                    old_rc: int = load_i64(fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET)
-                    if old_rc > 1:
-                        store_i64(fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET, old_rc - 1)
-                        released = 1
+                if (load_i32(fast_old, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                    released = 1
+                else:
+                    count: i64 = i64(atomic_load_i64(
+                        fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed"
+                    ))
+                    while count > 1 and released == 0:
+                        observed: i64 = i64(atomic_cas_i64(
+                            fast_old, PYOBJECTHEADER_REFCOUNT_OFFSET, count, count - 1,
+                            "release", "relaxed",
+                        ))
+                        if observed == count:
+                            released = 1
+                        else:
+                            count = observed
             if released == 0:
                 py_decref(fast_old)
         return
