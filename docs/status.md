@@ -1,6 +1,6 @@
 # PCC current status
 
-Updated 2026-11-01. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-02. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
@@ -118,7 +118,10 @@ early-return frames; target-feature-controlled LSE atomics; GC1-4 refcount
 removal (GC4 prototype first); conditional, measured GC0 biased refcounts;
 GC1-4 list-slice reads; dynamic bytes-method dispatch; removal of codegen
 `py_cpy_*` bridges; Linux four-language integration; and final affected-language
-ordinary/integration/reference checks plus one-/four-worker QPS comparison.
+ordinary/integration/reference checks plus one-/four-worker QPS exceeding
+CPython 3.15.0 asyncio in both configurations. The earlier instruction to
+stop even if throughput still fell short is superseded by this acceptance
+requirement.
 These items remain open; profile shares and design documents are hypotheses
 and historical evidence, not measured gains on this source.
 
@@ -128,10 +131,58 @@ replace the complete affected-language pre-push gate. Its focused command
 also uses `-x --maxfail=0` outside whole-language enumeration, and the shell
 continues after failed build/test steps; it must not be treated as a successful
 gate from its final log message. Pipeline B depends on A's qualified artifacts.
-Both Mac-native pipelines remain **UNRUN** at takeover. Linux Docker evidence
-must be labeled separately and cannot renew Darwin/AArch64 execution or Mac
-QPS. The current no-Mac-execution rule remains in force. No further shared
-runtime/backend batch is published before the required relayed Mac QPS review.
+Both Mac-native pipelines were **UNRUN** at takeover. The maintainer then
+removed the task's no-Mac-execution and relayed-QPS-wait restriction. Linux
+Docker evidence remains distinct from Darwin/AArch64 execution and Mac QPS.
+
+Pipeline A's frozen `0fbc8d977` tree has the same compiler/runtime source as
+`f11a3513d`. Its owned runtime build and ten emitted program executions
+(two programs, GC0-4) pass. The ordinary focused selection passes 350 cases;
+the six `test_stack_maps_alone_root_the_stack_frames_on_gc1_to_gc4` host
+compiler cases pass. The four-carrier instance-attribute race and the host
+`test_fresh_append_inside_with_runs_both_branches_all_collectors` case pass.
+The latter's native-pcc1 case errors because no current pcc1 is available.
+These are host pcc0/self/no-libpython Darwin-arm64 results, not a bootstrap
+or a native-pcc1 claim. The GC/thread selection is unfinished: the aggregate
+two-GiB guarded run encountered worker/compact-link budget failures and its
+RSS cap; six-worker file shards retain those outcomes and continue the
+selection without raising the cap. Pipeline B and new QPS results are unrun.
+
+The scoped selection also exposes the existing
+`test_gc_backend4_production.py::test_backend4_libpython_bridge_memoryview_base_uses_read_barrier`
+failure: it reads the already-removed `pcc/runtime/src/py_libpython.c`. This
+test is recorded, not repaired as part of the container or import correction.
+
+### Additional task: CPython Lib/test compatibility
+
+This task supplements the P0/performance scope. The historical `a5f673fd7`
+run passes 266 of 29,398 CPython-successful cases (0.90%); partial-module
+reruns must report their own denominator and their measured change, not a
+new whole-suite rate. Work starts with package/class binding (C), then
+Unicode/type-parameter/match/except-star/f-string parsing (B), import closure
+and stdlib gaps (A), slot-call producers (D), class keywords (E), foreign
+super initializers (F), other foreign bases (H), missing attributes (I), and
+unittest execution (J). Bridge removal (G) shares P0 item 19.
+
+The package-parent correction over `0fbc8d977` aligns both import prescans
+with runtime import binding: unaliased `import package.child` retains
+`package` for class-base metadata; explicit aliases still select the child.
+No unittest-specific dispatch is added. Nine ordinary cases in
+`tests/python/test_native_package_parent_class.py` pass, including same-named
+parent/child classes and nested-import predeclaration. Native execution,
+CPython program comparison, affected-module `--modules` reruns, whole Python
+validation and native-pcc1 qualification are pending for this correction.
+
+The nearby `test_live_import_namespace_rebinding.py` selection has the same
+six failures on the candidate and on frozen `0fbc8d977`: a local-import slot
+expectation, the `values.fetch(None)` direct-call expectation, the augmented
+assignment input-root expectation, and three in-place-set dispatch
+expectations. The combined focused run is 40 passed / 6 failed; the baseline
+without the seven initial new cases is 33 passed / the same 6 failed.
+Reproduce with `uv run pytest -x -vv --tb=short
+tests/python/test_owned_import_binding_roots.py
+tests/python/test_live_import_namespace_rebinding.py`. These failures remain
+recorded and are not repaired by this import-binding batch.
 
 Existing failures from the handoff, kept separate from newly observed results:
 

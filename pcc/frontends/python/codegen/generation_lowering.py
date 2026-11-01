@@ -673,7 +673,14 @@ class GenerationLoweringMixin:
                             if as_name is None and "." in mod_name
                             else as_name or mod_name
                         )
-                        self._register_native_module_alias(local_name, mod_name)
+                        alias_module = mod_name
+                        if as_name is None and "." in mod_name:
+                            top_module = mod_name.split(".")[0]
+                            if top_module in native_table:
+                                alias_module = top_module
+                        # Class bases are resolved before import execution.
+                        # Preserve the same parent binding as _emit_import.
+                        self._register_native_module_alias(local_name, alias_module)
                         continue
                     # Match _emit_import's binding convention: bind
                     # the top-level for ``import a.b`` (no alias) so

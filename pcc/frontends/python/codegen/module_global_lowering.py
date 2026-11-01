@@ -337,7 +337,12 @@ class ModuleGlobalLoweringMixin:
                     else:
                         local_name = as_name or mod_name
                     if mod_name in getattr(self, "_sibling_module_inits", ()):
-                        self._register_native_module_alias(local_name, mod_name)
+                        alias_module = mod_name
+                        if as_name is None and "." in mod_name:
+                            top_module = mod_name.split(".")[0]
+                            if top_module in (self._native_module_exports or {}):
+                                alias_module = top_module
+                        self._register_native_module_alias(local_name, alias_module)
                         gv = self._native_extension_module_global(local_name)
                         self._native_extension_modules()[local_name] = gv
                         continue
