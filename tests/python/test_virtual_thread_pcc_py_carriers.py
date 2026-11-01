@@ -34,7 +34,7 @@ def threaded_pcc_runtime_archive(threaded_pcc_runtime_archive: Path) -> Path:
 
 def test_pcc_python_runtime_owns_bounded_carrier_policy() -> None:
     source = RUNTIME_SOURCE.read_text(encoding="utf-8")
-    assert 'define_global_null_ptr_array("pcc_vthread_carrier_heads_py", 64)' in source
+    assert 'define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17408)' in source
     assert 'define_thread_local_i32("pcc_current_virtual_thread_carrier_py", -1)' in source
     assert 'function_addr("pcc_vthread_carrier_pool_worker_py")' in source
     assert 'function_addr("pcc_vthread_persistent_carrier_worker_py")' in source
@@ -50,8 +50,8 @@ def test_pcc_python_runtime_owns_bounded_carrier_policy() -> None:
     assert '_cstr_equals(requested, cstr("poll"))' in source
     assert '_cstr_equals(requested, cstr("kqueue"))' in source
     assert '_cstr_equals(requested, cstr("epoll"))' in source
-    assert "_effect(6, 1, 0, load_i64(vthread, 32))" in source
-    assert "_effect(6, 0, 0, load_i64(vthread, 32))" in source
+    assert '_effect(6, 1, 0, atomic_load_i64(vthread, 32, "acquire"))' in source
+    assert '_effect(6, 0, 0, atomic_load_i64(vthread, 32, "acquire"))' in source
     block_at = source.index("pcc_io_waitset_wait_block(")
     assert source.rfind("_scheduler_unlock()", 0, block_at) >= 0
     assert source.find("_scheduler_lock()", block_at) > block_at

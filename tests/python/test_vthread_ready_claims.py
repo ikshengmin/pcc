@@ -37,6 +37,7 @@ class Model:
         self.allocation_fails = False
         self.registration_fails = False
         self.freed = []
+        self.on_lock = None
         self.namespace = {
             "atomic_cas_i64": self.cas,
             "atomic_load_i64": lambda cell, offset, order: self.load(cell, offset),
@@ -65,7 +66,8 @@ class Model:
             "_effect": lambda *event: self.events.append(event),
             "PY_TYPE_VIRTUAL_THREAD": VTHREAD_TYPE,
         }
-        names = {"_enqueue", "_publish_ready_node", "_dequeue_from", "_step_finished"}
+        names = {"_enqueue", "_publish_ready_node", "_dequeue_from", "_step_finished",
+                 "_ready_node_take"}
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
         assert {node.name for node in nodes} == names
@@ -130,6 +132,9 @@ class Model:
 
     def lock(self):
         self.events.append(("lock",))
+        if self.on_lock:
+            callback, self.on_lock = self.on_lock, None
+            callback()
         return 0
 
     def publish(self, thread, node=None):
@@ -232,6 +237,35 @@ def test_completed_step_needs_no_scheduler_lock():
     model = Model()
     assert model.finish(model.thread(state=4, mark=0)) == 0
     assert model.events == []
+
+
+def test_local_stale_claim_consumes_a_wakeup_before_retiring_its_mark():
+    model = Model()
+    thread = model.thread(state=3, mark=1)
+    original, wakeup = model.node(thread), model.node(thread)
+    model.count.fields[0] = 1
+
+    def wake():
+        # The waker publishes READY while this consumer owns mark 2, so its
+        # spare root is retired. The consumer must recheck after locking.
+        thread.fields[STATE] = 1
+        model.publish(thread, wakeup)
+
+    model.on_lock = wake
+    assert model.namespace["_ready_node_take"](original, 0) is thread
+    assert thread.fields[STATE] == 2
+    assert thread.fields[RUN_MARK] == 2
+    assert model.count.fields[0] == 0
+    assert model.released == [original, wakeup]
+    assert model.events.count(("lock",)) == model.events.count(("unlock",)) == 1
+
+
+def test_successful_local_claim_does_not_take_the_scheduler_mutex():
+    model = Model()
+    thread = model.thread(state=1, mark=1)
+    model.count.fields[0] = 1
+    assert model.namespace["_ready_node_take"](model.node(thread), 0) is thread
+    assert ("lock",) not in model.events
 
 
 @pytest.mark.parametrize("failure", ["allocation_fails", "registration_fails"])

@@ -132,6 +132,19 @@ Pyperformance, micro timing and the generated README report are still pending.
 
 ### P0 takeover boundary: `f11a3513d`
 
+The deque increment over `b0a9d32e3` replaces carrier FIFOs with 256-node
+bounded deques. Local pops and FIFO stealing use one carrier lock, while
+external submissions and overflow retain the global FIFO. Periodic oldest-
+item and injection polling bound starvation. Fresh carrier-local starts use
+CAS publication; stale dequeue claims recheck wakeups under the scheduler
+mutex before retirement. Sleeper registration and publication use full
+fences, and a producer observing sleepers takes their mutex before signalling.
+Queue close drains rooted nodes under the global-to-local lock order.
+Fifty-eight focused ordinary/model/IR checks pass. New deterministic overflow
+and four-carrier child-spawn probes are added but their emitted execution is
+pending, along with whole affected-language lanes, bootstrap and paired QPS.
+The earlier native results below do not qualify this deque increment.
+
 The node-pool increment over `f1d8e65d3` gives ready, join and channel free
 lists separate cache-line-spaced no-park locks. Allocation, raw freeing and
 GC-root retirement stay outside these locks; all three caches are bounded

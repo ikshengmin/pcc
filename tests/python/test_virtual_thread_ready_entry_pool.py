@@ -5,6 +5,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 
@@ -27,6 +29,7 @@ def _compile(tmp_path: Path, source: str, runtime_archive: Path) -> Path:
             f"-I{RUNTIME_DIR / 'src'}",
             str(src),
             str(runtime_archive),
+            "-pthread",
             "-lm",
             "-o",
             str(exe),
@@ -111,3 +114,100 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
                               timeout=60)
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert proc.stdout.strip() == f"{backend}:1"
+
+
+@pytest.mark.integration
+def test_local_deque_overflow_and_queued_roots_on_five_collectors(
+    tmp_path: Path, threaded_pcc_runtime_archive: Path,
+) -> None:
+    """C-linked runtime probe: one carrier deterministically fills its deque."""
+    exe = _compile(tmp_path, r'''
+        #define _DEFAULT_SOURCE 1
+        #include "py_runtime.h"
+        #include <stdint.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <unistd.h>
+
+        extern int64_t py_virtual_thread_carrier_queue_depth(int64_t);
+        enum { JOBS = 600 };
+        static int seen[JOBS];
+        static int executed, parent_done, failure;
+        static int64_t parent_identity;
+
+        static void fail(int code) {
+            int expected = 0;
+            __atomic_compare_exchange_n(&failure, &expected, code, 0,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        }
+
+        static int start(void *resume) {
+            int32_t frame_map[1] = {0};
+            int result = -1;
+            /* Raw C temporaries stay immobile until their queued root owns
+               them; collection resumes after both local references retire. */
+            (void)pcc_current_thread_id();
+            pcc_thread_no_park_enter();
+            PyObject *continuation = py_continuation_new_typed(frame_map, NULL, resume);
+            if (continuation != NULL) {
+                PyObject *thread = py_virtual_thread_new(continuation);
+                py_decref(continuation);
+                if (thread != NULL) {
+                    result = (int)py_virtual_thread_start(thread);
+                    py_decref(thread);
+                }
+            }
+            pcc_thread_no_park_exit();
+            return result;
+        }
+
+        static int64_t child(PyObject *thread, PyObject *continuation) {
+            (void)continuation;
+            int64_t index = py_virtual_thread_current_identity() - parent_identity - 1;
+            if (index < 0 || index >= JOBS) fail(10);
+            else if (__atomic_exchange_n(&seen[index], 1, __ATOMIC_ACQ_REL)) fail(11);
+            __atomic_add_fetch(&executed, 1, __ATOMIC_ACQ_REL);
+            return py_virtual_thread_complete(thread, py_None);
+        }
+
+        static int64_t parent(PyObject *thread, PyObject *continuation) {
+            (void)continuation;
+            parent_identity = py_virtual_thread_current_identity();
+            for (int i = 0; i < JOBS; ++i) {
+                if (start((void *)&child) != 0) { fail(12); break; }
+            }
+            /* No other carrier exists; none of these children can run yet. */
+            if (py_virtual_thread_carrier_queue_depth(0) != 256) fail(13);
+            if (py_virtual_thread_ready_count() != JOBS) fail(14);
+            (void)pcc_gc_collect(0);
+            __atomic_store_n(&parent_done, 1, __ATOMIC_RELEASE);
+            return py_virtual_thread_complete(thread, py_None);
+        }
+
+        int main(int argc, char **argv) {
+            if (argc != 2 || pcc_gc_set_backend(atoll(argv[1])) != 0) return 2;
+            if (start((void *)&parent) != 0) return 3;
+            if (py_virtual_thread_carrier_pool_start(1) != 1) return 4;
+            for (int i = 0; i < 20000; ++i) {
+                if (__atomic_load_n(&failure, __ATOMIC_ACQUIRE)) break;
+                if (__atomic_load_n(&parent_done, __ATOMIC_ACQUIRE)
+                    && __atomic_load_n(&executed, __ATOMIC_ACQUIRE) == JOBS) break;
+                pcc_thread_safepoint();
+                usleep(100);
+            }
+            if (py_virtual_thread_carrier_pool_stop() != 1) return 5;
+            if (failure) return failure;
+            if (executed != JOBS || !parent_done) return 15;
+            for (int i = 0; i < JOBS; ++i) if (seen[i] != 1) return 16;
+            if (py_virtual_thread_ready_count() != 0) return 17;
+            if (pcc_gc_scheduler_root_count() != 0) return 18;
+            puts("deque-overflow-roots-ok");
+            return 0;
+        }
+    ''', threaded_pcc_runtime_archive)
+    for backend in range(5):
+        result = subprocess.run([str(exe), str(backend)], capture_output=True,
+                                text=True, timeout=30)
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, "deque-overflow-roots-ok\n", "",
+        ), (backend, result.stdout, result.stderr)

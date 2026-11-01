@@ -8,10 +8,11 @@ policy.
 
 The scheduler keeps a baseline carrier count of one for the calling thread,
 matching the C oracle ABI.  A native pool adds at most 64 carrier threads.
-Ready work is distributed over fixed per-carrier queues, and an empty carrier
-checks each peer at most once before consulting the injection queue.  The
-bounded scan makes work stealing observable without allowing an unbounded
-search under the scheduler mutex.
+Ready work uses bounded per-carrier deques with independently locked node
+pools. Local execution and stealing do not take the scheduler mutex in the
+ordinary case; external submissions, overflow, wait registrations and stale
+claim retirement retain it. Periodic oldest-item and injection polling keep
+local LIFO scheduling from starving older work.
 """
 
 __pcc_runtime_port__ = True
@@ -134,10 +135,12 @@ define_global_i64("pcc_vthread_scheduler_signal_pending_py", 0)
 # Three independently locked free lists: ready, join, and channel nodes.
 # Each lock owns 128 bytes so unrelated pool traffic does not share a line.
 define_global_null_ptr_array("pcc_vthread_node_pool_locks_py", 48)
-define_global_null_ptr_array("pcc_vthread_carrier_heads_py", 64)
-define_global_null_ptr_array("pcc_vthread_carrier_tails_py", 64)
+# 64 records, each a 128-byte header and 256 raw ready-node slots.
+# Nodes retain their separately registered GC roots while queued here.
+define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17408)
 define_global_i64("pcc_vthread_carrier_queue_count_py", 0)
-define_global_i64("pcc_vthread_next_carrier_enqueue_py", 0)
+define_thread_local_i32("pcc_vthread_local_poll_budget_py", 0)
+define_global_i64("pcc_vthread_sleepers_py", 0)
 define_global_i64("pcc_vthread_carrier_count_py", 1)
 define_global_i64("pcc_vthread_carrier_steal_count_py", 0)
 define_global_i64("pcc_vthread_carrier_failures_py", 0)
@@ -392,7 +395,7 @@ def _scheduler_unlock() -> None:
         # Do not erase ownership or let outer exit park after a failed unlock.
         pcc_platform_abort()
         return
-    if pending != 0:
+    if pending != 0 and _counter(global_addr("pcc_vthread_sleepers_py")) > 0:
         cond = _scheduler_cond()
         if ptr_is_null(cond) == 0:
             pcc_cond_signal(cond)
@@ -407,6 +410,20 @@ def _scheduler_unlock() -> None:
 def _scheduler_signal() -> None:
     """Request a carrier wakeup; the holder sends it after unlocking."""
     store_i64(global_addr("pcc_vthread_scheduler_signal_pending_py"), 0, 1)
+
+
+def _scheduler_signal_unlocked() -> None:
+    # Pair publication with the sleeper's registration-before-check fence.
+    # A condition signal alone could precede its actual wait: if a sleeper
+    # exists, acquire its mutex so wait and notification cannot cross.
+    atomic_fence("seq_cst")
+    if _counter(global_addr("pcc_vthread_sleepers_py")) == 0:
+        return
+    if _scheduler_lock() != 0:
+        pcc_platform_abort()
+        return
+    _scheduler_signal()
+    _scheduler_unlock()
 
 
 def _checked(vthread):
@@ -748,37 +765,94 @@ def _queue_push(head_slot, tail_slot, node) -> None:
     store_ptr(tail_slot, 0, node)
 
 
-def _carrier_head_slot(index: int):
-    return ptr_add(global_addr("pcc_vthread_carrier_heads_py"), index * 8)
+def _carrier_queue(index: int):
+    # CarrierDeque: lock@0, begin@8, length@16, owner_turn@24,
+    # padding through 128, then 256 raw ready-node pointers.
+    return ptr_add(global_addr("pcc_vthread_carrier_queues_py"), index * 2176)
 
 
-def _carrier_tail_slot(index: int):
-    return ptr_add(global_addr("pcc_vthread_carrier_tails_py"), index * 8)
+def _carrier_begin_slot(queue):
+    return ptr_add(queue, 8)
+
+
+def _carrier_length_slot(queue):
+    return ptr_add(queue, 16)
+
+
+def _carrier_turn_slot(queue):
+    return ptr_add(queue, 24)
+
+
+def _carrier_ring_slot(queue, index: int):
+    return ptr_add(queue, 128 + index * 8)
+
+
+def _carrier_push(index: int, node) -> int:
+    queue = _carrier_queue(index)
+    _raw_queue_lock(queue)
+    # Closing publishes zero before draining under the same queue locks.
+    # An outsider that sampled the old count cannot strand a late node.
+    active = _counter(global_addr("pcc_vthread_carrier_queue_count_py"))
+    length_slot = _carrier_length_slot(queue)
+    length = load_i64(length_slot, 0)
+    if index >= active or length >= 256:
+        _raw_queue_unlock(queue)
+        return 0
+    begin = load_i64(_carrier_begin_slot(queue), 0)
+    store_ptr(_carrier_ring_slot(queue, (begin + length) % 256), 0, node)
+    store_i64(length_slot, 0, length + 1)
+    _raw_queue_unlock(queue)
+    return 1
+
+
+def _carrier_pop_locked(queue, owner: int):
+    length_slot = _carrier_length_slot(queue)
+    length = load_i64(length_slot, 0)
+    if length == 0:
+        return null()
+    begin_slot = _carrier_begin_slot(queue)
+    begin = load_i64(begin_slot, 0)
+    take_front: int = 1
+    if owner != 0:
+        turn_slot = _carrier_turn_slot(queue)
+        turn = load_i64(turn_slot, 0)
+        # Local LIFO preserves locality. Periodically take the oldest item
+        # so a yielding task cannot indefinitely hide earlier local work.
+        take_front = 0
+        if turn % 16 == 15:
+            take_front = 1
+        store_i64(turn_slot, 0, (turn + 1) % 16)
+    index = begin
+    if take_front == 0:
+        index = (begin + length - 1) % 256
+    else:
+        store_i64(begin_slot, 0, (begin + 1) % 256)
+    slot = _carrier_ring_slot(queue, index)
+    node = load_ptr(slot, 0)
+    store_ptr(slot, 0, null())
+    store_i64(length_slot, 0, length - 1)
+    return node
+
+
+def _carrier_pop(index: int, owner: int):
+    queue = _carrier_queue(index)
+    _raw_queue_lock(queue)
+    node = null()
+    if index < _counter(global_addr("pcc_vthread_carrier_queue_count_py")):
+        node = _carrier_pop_locked(queue, owner)
+    _raw_queue_unlock(queue)
+    return node
 
 
 def _push_ready_node(node) -> None:
+    """Publish under the scheduler lock, acquiring at most one local lock."""
     carrier_count = _counter(
         global_addr("pcc_vthread_carrier_queue_count_py")
     )
-    if carrier_count > 0:
-        # A carrier keeps the work it readies: a child it spawned, a joiner
-        # its step woke and a timer it fired run on the core that just wrote
-        # their data, and an idle carrier steals from the head of the queue.
-        # Spreading every push round-robin moved each step to another core
-        # and put one shared counter on every push. Work injected from
-        # outside the pool is still spread round-robin.
-        index = load_i32(
-            global_addr("pcc_current_virtual_thread_carrier_py"), 0
-        )
-        if index < 0 or index >= carrier_count:
-            sequence = _counter_add(
-                global_addr("pcc_vthread_next_carrier_enqueue_py"), 1
-            ) - 1
-            index = sequence % carrier_count
-        _queue_push(
-            _carrier_head_slot(index), _carrier_tail_slot(index), node
-        )
-        return
+    index = load_i32(global_addr("pcc_current_virtual_thread_carrier_py"), 0)
+    if index >= 0 and index < carrier_count:
+        if _carrier_push(index, node) != 0:
+            return
     _queue_push(
         global_addr("pcc_vthread_ready_head_py"),
         global_addr("pcc_vthread_ready_tail_py"),
@@ -843,24 +917,19 @@ def _carrier_queues_open(carrier_count: int) -> int:
         return -1
     index = 0
     while index < carrier_count:
-        store_ptr(_carrier_head_slot(index), 0, null())
-        store_ptr(_carrier_tail_slot(index), 0, null())
+        queue = _carrier_queue(index)
+        _raw_queue_lock(queue)
+        if load_i64(_carrier_length_slot(queue), 0) != 0:
+            pcc_platform_abort()
+        store_i64(_carrier_begin_slot(queue), 0, 0)
+        store_i64(_carrier_turn_slot(queue), 0, 0)
+        _raw_queue_unlock(queue)
         index = index + 1
-    _counter_set(global_addr("pcc_vthread_next_carrier_enqueue_py"), 0)
     _counter_set(
         global_addr("pcc_vthread_carrier_queue_count_py"), carrier_count
     )
 
-    # Work may have been submitted before the carrier pool was opened. Move
-    # the injection queue into the same round-robin ownership policy without
-    # touching the live ready count or the node/root ownership.
-    node = global_load_ptr("pcc_vthread_ready_head_py")
-    global_store_ptr("pcc_vthread_ready_head_py", null())
-    global_store_ptr("pcc_vthread_ready_tail_py", null())
-    while ptr_is_null(node) == 0:
-        after = load_ptr(node, 8)
-        _push_ready_node(node)
-        node = after
+    # Previously injected work keeps its FIFO position and root ownership.
     return 0
 
 
@@ -868,24 +937,18 @@ def _carrier_queues_close() -> None:
     carrier_count = _counter(
         global_addr("pcc_vthread_carrier_queue_count_py")
     )
+    _counter_set(global_addr("pcc_vthread_carrier_queue_count_py"), 0)
     index = 0
     while index < carrier_count:
-        head_slot = _carrier_head_slot(index)
-        tail_slot = _carrier_tail_slot(index)
-        head = load_ptr(head_slot, 0)
-        tail = load_ptr(tail_slot, 0)
-        if ptr_is_null(head) == 0:
-            global_tail = global_load_ptr("pcc_vthread_ready_tail_py")
-            if ptr_is_null(global_tail):
-                global_store_ptr("pcc_vthread_ready_head_py", head)
-            else:
-                store_ptr(global_tail, 8, head)
-            global_store_ptr("pcc_vthread_ready_tail_py", tail)
-        store_ptr(head_slot, 0, null())
-        store_ptr(tail_slot, 0, null())
+        queue = _carrier_queue(index)
+        _raw_queue_lock(queue)
+        node = _carrier_pop_locked(queue, 0)
+        while ptr_is_null(node) == 0:
+            _queue_push(global_addr("pcc_vthread_ready_head_py"),
+                        global_addr("pcc_vthread_ready_tail_py"), node)
+            node = _carrier_pop_locked(queue, 0)
+        _raw_queue_unlock(queue)
         index = index + 1
-    _counter_set(global_addr("pcc_vthread_carrier_queue_count_py"), 0)
-    _counter_set(global_addr("pcc_vthread_next_carrier_enqueue_py"), 0)
 
 
 def _enqueue(vthread) -> int:
@@ -923,15 +986,22 @@ def _ready_reserve(vthread):
 
 def _ready_commit(vthread, node) -> None:
     """Publish a previously rooted ready or join node."""
-    store_i64(vthread, 32, 1)
     store_i64(vthread, 120, 0)
+    atomic_store_i64(vthread, 32, 1, "release")
     _publish_ready_node(vthread, node)
 
 
 def _make_ready(vthread) -> int:
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4:
+    if ptr_is_null(vthread):
         return 0
-    store_i64(vthread, 32, 1)
+    state = atomic_load_i64(vthread, 32, "acquire")
+    while state != 1:
+        if state == 4:
+            return 0
+        observed = atomic_cas_i64(vthread, 32, state, 1, "acq_rel", "acquire")
+        if observed == state:
+            break
+        state = observed
     return _enqueue(vthread)
 
 
@@ -954,9 +1024,7 @@ def _join_enqueue(target, waiter) -> int:
     store_ptr(target, 96, node)
     store_ptr(waiter, 104, node)
     store_i64(waiter, 120, 4)
-    if load_i64(waiter, 40) != 2:
-        store_i64(waiter, 40, 0)
-    store_i64(waiter, 32, 3)
+    atomic_store_i64(waiter, 32, 3, "release")
     _effect(5, 1, 0, 3)
     return 0
 
@@ -970,9 +1038,9 @@ def _join_wake_all(target) -> int:
             and is_tagged_int(waiter) == 0
             and load_i32(waiter, 8) == PY_TYPE_VIRTUAL_THREAD
             and ptr_eq(load_ptr(waiter, 104), node) != 0
-            and load_i64(waiter, 32) == 3
+            and atomic_load_i64(waiter, 32, "acquire") == 3
             # Not queued; 2 is a waiter whose carrier is still leaving it.
-            and load_i64(waiter, 40) != 1
+            and atomic_load_i64(waiter, 40, "acquire") != 1
         )
         if valid:
             after = load_ptr(node, 8)
@@ -981,9 +1049,9 @@ def _join_wake_all(target) -> int:
                 store_ptr(target, 96, null())
             store_ptr(waiter, 104, null())
             store_i64(waiter, 120, 0)
-            store_i64(waiter, 32, 1)
+            atomic_store_i64(waiter, 32, 1, "release")
             _publish_ready_node(waiter, node)
-            _effect(6, 1, 0, load_i64(waiter, 32))
+            _effect(6, 1, 0, atomic_load_i64(waiter, 32, "acquire"))
             continue
         after = load_ptr(node, 8)
         store_ptr(target, 88, after)
@@ -1517,7 +1585,7 @@ def _channel_current_running(vthread) -> int:
     current = pcc_gc_note_relocation_read(current)
     if ptr_is_null(current) or ptr_eq(current, vthread) == 0:
         return 0
-    if load_i64(vthread, 32) != 2 or load_i64(vthread, 120) != 0:
+    if atomic_load_i64(vthread, 32, "acquire") != 2 or load_i64(vthread, 120) != 0:
         return 0
     if ptr_is_null(load_ptr(vthread, 152)) == 0:
         return 0
@@ -1649,9 +1717,7 @@ def py_virtual_thread_channel_send_begin(vthread, sender, value) -> int:
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 120, PCC_VTHREAD_WAIT_CHANNEL_SEND)
-    if load_i64(vthread, 40) != 2:
-        store_i64(vthread, 40, 0)
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     _channel_queue_push(core, 88, 96, arm)
     _scheduler_unlock()
     return 0
@@ -1720,9 +1786,7 @@ def py_virtual_thread_channel_recv_begin(vthread, receiver) -> int:
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 120, PCC_VTHREAD_WAIT_CHANNEL_RECV)
-    if load_i64(vthread, 40) != 2:
-        store_i64(vthread, 40, 0)
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     _channel_queue_push(core, 104, 112, arm)
     _scheduler_unlock()
     return 0
@@ -1972,9 +2036,7 @@ def py_virtual_thread_channel_select2_begin(
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 120, PCC_VTHREAD_WAIT_CHANNEL_SELECT2)
-    if load_i64(vthread, 40) != 2:
-        store_i64(vthread, 40, 0)
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     _channel_queue_push(left_core, 104, 112, left_arm)
     _channel_queue_push(right_core, 104, 112, right_arm)
     _scheduler_unlock()
@@ -1989,7 +2051,50 @@ def py_virtual_thread_channel_select2_result(vthread):
     return _channel_result_tuple(vthread, 1)
 
 
+def _ready_node_take(node, scheduler_locked: int):
+    """Transfer a detached node's root to a running claim, outside queue locks.
+
+    The caller is no-park through the root transfer and state CAS, as the old
+    scheduler-mutex holder was. A failed READY CAS takes the scheduler mutex
+    before retiring mark 2: a wakeup that saw that mark must be consumed here
+    or published by a later waker, never left READY without a queue entry.
+    """
+    _counter_add(global_addr("pcc_vthread_ready_count_py"), -1)
+    thread = pcc_gc_load_ptr(null(), node)
+    if ptr_is_null(thread) == 0:
+        py_incref(thread)
+    _ready_release(node)
+    if (
+        ptr_is_null(thread) == 0
+        and is_tagged_int(thread) == 0
+        and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
+    ):
+        if atomic_cas_i64(thread, 40, 1, 2, "acq_rel", "acquire") == 1:
+            if atomic_cas_i64(thread, 32, 1, 2, "acq_rel", "acquire") == 1:
+                _effect(7, 0, 0, 2)
+                return thread
+            if scheduler_locked == 0:
+                if _scheduler_lock() != 0:
+                    pcc_platform_abort()
+                    return null()
+            resumed: int = 0
+            if atomic_load_i64(thread, 40, "acquire") == 2:
+                if atomic_cas_i64(thread, 32, 1, 2, "acq_rel", "acquire") == 1:
+                    resumed = 1
+                else:
+                    atomic_cas_i64(thread, 40, 2, 0, "acq_rel", "acquire")
+            if scheduler_locked == 0:
+                _scheduler_unlock()
+            if resumed != 0:
+                _effect(7, 0, 0, 2)
+                return thread
+    if ptr_is_null(thread) == 0:
+        py_decref(thread)
+    return null()
+
+
 def _dequeue_from(head_slot, tail_slot):
+    # Only the injection FIFO uses this helper, under the scheduler mutex.
     while True:
         node = load_ptr(head_slot, 0)
         if ptr_is_null(node):
@@ -1998,32 +2103,33 @@ def _dequeue_from(head_slot, tail_slot):
         store_ptr(head_slot, 0, next_node)
         if ptr_is_null(next_node):
             store_ptr(tail_slot, 0, null())
-        _counter_add(global_addr("pcc_vthread_ready_count_py"), -1)
-        thread = pcc_gc_load_ptr(null(), node)
+        thread = _ready_node_take(node, 1)
         if ptr_is_null(thread) == 0:
-            py_incref(thread)
-        _ready_release(node)
-        if (
-            ptr_is_null(thread) == 0
-            and is_tagged_int(thread) == 0
-            and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
-        ):
-            # A stale entry cannot clear another carrier's running mark.
-            # Keep ownership continuously from QUEUED to RUNNING: an
-            # intermediate zero would permit a second publisher to enqueue.
-            if atomic_cas_i64(thread, 40, 1, 2, "acq_rel", "acquire") == 1:
-                if atomic_cas_i64(thread, 32, 1, 2, "acq_rel", "acquire") == 1:
-                    _effect(7, 0, 0, 2)
-                    return thread
-                # This consumer claimed a parked or finished entry. Only
-                # its own claim may be retired. State/wakeup writers still
-                # use the scheduler lock until the queue-lock transition.
-                atomic_cas_i64(thread, 40, 2, 0, "acq_rel", "acquire")
+            return thread
+
+
+def _dequeue_global():
+    if _scheduler_lock() != 0:
+        return null()
+    thread = _dequeue_from(global_addr("pcc_vthread_ready_head_py"),
+                           global_addr("pcc_vthread_ready_tail_py"))
+    _scheduler_unlock()
+    return thread
+
+
+def _dequeue_carrier(index: int, owner: int):
+    while True:
+        node = _carrier_pop(index, owner)
+        if ptr_is_null(node):
+            return null()
+        thread = _ready_node_take(node, 0)
         if ptr_is_null(thread) == 0:
-            py_decref(thread)
+            return thread
 
 
 def _dequeue():
+    if _counter(global_addr("pcc_vthread_ready_count_py")) == 0:
+        return null()
     carrier_count = _counter(
         global_addr("pcc_vthread_carrier_queue_count_py")
     )
@@ -2031,17 +2137,22 @@ def _dequeue():
         global_addr("pcc_current_virtual_thread_carrier_py"), 0
     )
     if carrier_count > 0 and own >= 0 and own < carrier_count:
-        thread = _dequeue_from(
-            _carrier_head_slot(own), _carrier_tail_slot(own)
-        )
+        budget_slot = global_addr("pcc_vthread_local_poll_budget_py")
+        budget = load_i32(budget_slot, 0)
+        store_i32(budget_slot, 0, (budget + 1) % 32)
+        if budget == 31:
+            # Bounded local traffic cannot starve external submissions or
+            # overflow work. A failed poll still proceeds to local work.
+            thread = _dequeue_global()
+            if ptr_is_null(thread) == 0:
+                return thread
+        thread = _dequeue_carrier(own, 1)
         if ptr_is_null(thread) == 0:
             return thread
         offset = 1
         while offset < carrier_count:
             victim = (own + offset) % carrier_count
-            thread = _dequeue_from(
-                _carrier_head_slot(victim), _carrier_tail_slot(victim)
-            )
+            thread = _dequeue_carrier(victim, 0)
             if ptr_is_null(thread) == 0:
                 _counter_add(
                     global_addr("pcc_vthread_carrier_steal_count_py"), 1
@@ -2051,16 +2162,11 @@ def _dequeue():
     elif carrier_count > 0:
         index = 0
         while index < carrier_count:
-            thread = _dequeue_from(
-                _carrier_head_slot(index), _carrier_tail_slot(index)
-            )
+            thread = _dequeue_carrier(index, 0)
             if ptr_is_null(thread) == 0:
                 return thread
             index = index + 1
-    return _dequeue_from(
-        global_addr("pcc_vthread_ready_head_py"),
-        global_addr("pcc_vthread_ready_tail_py"),
-    )
+    return _dequeue_global()
 
 
 # Timer node: thread@0, deadline@8, next@16, root_handle@24 (32 bytes).
@@ -2113,7 +2219,7 @@ def _timer_cancel(vthread) -> int:
             if load_i64(vthread, 120) == 1:
                 store_i64(vthread, 120, 0)
             _timer_release(node)
-            _effect(12, 2, 0, load_i64(vthread, 32))
+            _effect(12, 2, 0, atomic_load_i64(vthread, 32, "acquire"))
             return 1
         previous = node
         node = load_ptr(node, 16)
@@ -2161,7 +2267,7 @@ def _timer_add(vthread, deadline: int) -> int:
         store_ptr(previous, 16, node)
     store_ptr(vthread, 56, node)
     store_i64(vthread, 120, 1)
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     _effect(8, 2, 0, 3)
     return 0
 
@@ -2347,7 +2453,7 @@ def _io_cancel(vthread) -> int:
             _counter_add(global_addr("pcc_vthread_io_count_py"), -1)
             _io_release(node)
             refresh_result = _io_refresh(fd)
-            _effect(13, 3, 0, load_i64(vthread, 32))
+            _effect(13, 3, 0, atomic_load_i64(vthread, 32, "acquire"))
             if refresh_result != 0:
                 return -1
             return 1
@@ -2382,7 +2488,7 @@ def _io_close_waiters_locked(fd: int) -> int:
             and is_tagged_int(thread) == 0
             and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
             and ptr_eq(load_ptr(thread, 64), node) != 0
-            and load_i64(thread, 32) == 3
+            and atomic_load_i64(thread, 32, "acquire") == 3
             and (load_i64(thread, 120) == 2 or load_i64(thread, 120) == 3)
         )
         if valid:
@@ -2415,7 +2521,7 @@ def _io_close_waiters_locked(fd: int) -> int:
             and is_tagged_int(thread) == 0
             and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
             and ptr_eq(load_ptr(thread, 64), node) != 0
-            and load_i64(thread, 32) == 3
+            and atomic_load_i64(thread, 32, "acquire") == 3
             and (load_i64(thread, 120) == 2 or load_i64(thread, 120) == 3)
         )
         if ptr_is_null(previous):
@@ -2430,7 +2536,7 @@ def _io_close_waiters_locked(fd: int) -> int:
             store_ptr(thread, 64, null())
             store_i64(thread, 120, 0)
             _ready_commit(thread, ready)
-            _effect(11, 3, 0, load_i64(thread, 32))
+            _effect(11, 3, 0, atomic_load_i64(thread, 32, "acquire"))
         elif (
             ptr_is_null(thread) == 0
             and is_tagged_int(thread) == 0
@@ -2478,7 +2584,7 @@ def _io_add(vthread, fd: int, events: int, deadline: int) -> int:
         _io_cancel(vthread)
         return -1
     _effect(1, 3, 1, -1)
-    _effect(10, 3, 0, load_i64(vthread, 32))
+    _effect(10, 3, 0, atomic_load_i64(vthread, 32, "acquire"))
     return 0
 
 
@@ -2520,14 +2626,58 @@ def py_virtual_thread_new(continuation):
     return vthread
 
 
+def _start_fresh_on_carrier(vthread) -> int:
+    """1 when a new thread was started locally, 0 for the coordinated path."""
+    index = load_i32(global_addr("pcc_current_virtual_thread_carrier_py"), 0)
+    count = _counter(global_addr("pcc_vthread_carrier_queue_count_py"))
+    if index < 0 or index >= count or atomic_load_i64(vthread, 32, "acquire") != 0:
+        return 0
+    pcc_current_thread_id()
+    pcc_thread_no_park_enter()
+    node = _ready_reserve(vthread)
+    if ptr_is_null(node):
+        pcc_thread_no_park_exit()
+        return -1
+    if atomic_cas_i64(vthread, 32, 0, 1, "acq_rel", "acquire") != 0:
+        _ready_release(node)
+        pcc_thread_no_park_exit()
+        return 0
+    if atomic_cas_i64(vthread, 40, 0, 1, "acq_rel", "acquire") == 0:
+        _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
+        _effect(3, 0, 0, 1)
+        if _carrier_push(index, node) != 0:
+            _scheduler_signal_unlocked()
+        else:
+            # The bounded local queue is full. Never acquire the scheduler
+            # mutex while holding a queue/pool lock; overflow keeps its root.
+            if _scheduler_lock() != 0:
+                pcc_platform_abort()
+                return -1
+            _queue_push(global_addr("pcc_vthread_ready_head_py"),
+                        global_addr("pcc_vthread_ready_tail_py"), node)
+            _scheduler_signal()
+            _scheduler_unlock()
+    else:
+        # Cancellation/readiness won publication after our NEW -> READY CAS.
+        _ready_release(node)
+    _effect(4, 0, 0, atomic_load_i64(vthread, 32, "acquire"))
+    pcc_thread_no_park_exit()
+    return 1
+
+
 @c_abi_export("py_virtual_thread_start")
 def py_virtual_thread_start(vthread) -> int:
     vthread = _checked(vthread)
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4:
+    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4:
+        return -1
+    started = _start_fresh_on_carrier(vthread)
+    if started > 0:
+        return 0
+    if started < 0:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
@@ -2535,12 +2685,12 @@ def py_virtual_thread_start(vthread) -> int:
         return -1
     _timer_cancel(vthread)
     _io_cancel(vthread)
-    state = load_i64(vthread, 32)
+    state = atomic_load_i64(vthread, 32, "acquire")
     if state == 0 or state == 3:
-        store_i64(vthread, 32, 1)
+        atomic_cas_i64(vthread, 32, state, 1, "acq_rel", "acquire")
     result = _enqueue(vthread)
     if result == 0:
-        _effect(4, 0, 0, load_i64(vthread, 32))
+        _effect(4, 0, 0, atomic_load_i64(vthread, 32, "acquire"))
     _scheduler_unlock()
     return result
 
@@ -2548,17 +2698,17 @@ def py_virtual_thread_start(vthread) -> int:
 @c_abi_export("py_virtual_thread_park")
 def py_virtual_thread_park(vthread) -> int:
     vthread = _checked(vthread)
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4:
+    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) != 0:
         _scheduler_unlock()
         return -1
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     _effect(5, 0, 0, 3)
     _scheduler_unlock()
     return 0
@@ -2567,11 +2717,11 @@ def py_virtual_thread_park(vthread) -> int:
 @c_abi_export("py_virtual_thread_unpark")
 def py_virtual_thread_unpark(vthread) -> int:
     vthread = _checked(vthread)
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4:
+    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
@@ -2581,7 +2731,7 @@ def py_virtual_thread_unpark(vthread) -> int:
     _io_cancel(vthread)
     result = _make_ready(vthread)
     if result == 0:
-        _effect(6, 0, 0, load_i64(vthread, 32))
+        _effect(6, 0, 0, atomic_load_i64(vthread, 32, "acquire"))
     _scheduler_unlock()
     return result
 
@@ -2589,11 +2739,11 @@ def py_virtual_thread_unpark(vthread) -> int:
 @c_abi_export("py_virtual_thread_sleep")
 def py_virtual_thread_sleep(vthread, delay_ms: int) -> int:
     vthread = _checked(vthread)
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4:
+    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
@@ -2604,7 +2754,7 @@ def py_virtual_thread_sleep(vthread, delay_ms: int) -> int:
         _timer_cancel(vthread)
         result = _make_ready(vthread)
         if result == 0:
-            _effect(6, 0, 0, load_i64(vthread, 32))
+            _effect(6, 0, 0, atomic_load_i64(vthread, 32, "acquire"))
         _scheduler_unlock()
         return result
     result = _timer_add(vthread, _now_ms() + delay_ms)
@@ -2645,7 +2795,7 @@ def py_virtual_thread_poll_timers() -> int:
             and is_tagged_int(thread) == 0
             and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
             and ptr_eq(load_ptr(thread, 56), node) != 0
-            and load_i64(thread, 32) == 3
+            and atomic_load_i64(thread, 32, "acquire") == 3
             and load_i64(thread, 120) == 1
         )
         ready_node = null()
@@ -2662,7 +2812,7 @@ def py_virtual_thread_poll_timers() -> int:
             store_i64(thread, 120, 0)
             _ready_commit(thread, ready_node)
             woken = woken + 1
-            _effect(9, 2, 0, load_i64(thread, 32))
+            _effect(9, 2, 0, atomic_load_i64(thread, 32, "acquire"))
         elif (
             ptr_is_null(thread) == 0
             and is_tagged_int(thread) == 0
@@ -2794,7 +2944,7 @@ def py_virtual_thread_block_on_fd_generation(
     vthread = _checked(vthread)
     if (
         ptr_is_null(vthread)
-        or load_i64(vthread, 32) == 4
+        or atomic_load_i64(vthread, 32, "acquire") == 4
         or fd < 0
         or generation <= 0
     ):
@@ -2808,7 +2958,7 @@ def py_virtual_thread_block_on_fd_generation(
         _scheduler_unlock()
         py_raise_owned(py_exc_new(14, cstr("TCP descriptor was closed")))
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
@@ -2821,7 +2971,7 @@ def py_virtual_thread_block_on_fd_generation(
     _timer_cancel(vthread)
     _io_cancel(vthread)
     if ready != 0:
-        if load_i64(vthread, 32) == 2:
+        if atomic_load_i64(vthread, 32, "acquire") == 2:
             _scheduler_unlock()
             return 1
         if _make_ready(vthread) != 0:
@@ -2832,7 +2982,7 @@ def py_virtual_thread_block_on_fd_generation(
     deadline = -1
     if timeout_ms >= 0:
         deadline = _now_ms() + timeout_ms
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     result = _io_add(vthread, fd, events, deadline)
     _scheduler_unlock()
     return result
@@ -2843,13 +2993,13 @@ def py_virtual_thread_block_on_fd(
     vthread, fd: int, events: int, timeout_ms: int
 ) -> int:
     vthread = _checked(vthread)
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4 or fd < 0:
+    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4 or fd < 0:
         return -1
     if events == 0:
         events = 1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
@@ -2862,7 +3012,7 @@ def py_virtual_thread_block_on_fd(
     _timer_cancel(vthread)
     _io_cancel(vthread)
     if ready != 0:
-        if load_i64(vthread, 32) == 2:
+        if atomic_load_i64(vthread, 32, "acquire") == 2:
             _scheduler_unlock()
             return 1
         if _make_ready(vthread) != 0:
@@ -2873,7 +3023,7 @@ def py_virtual_thread_block_on_fd(
     deadline = -1
     if timeout_ms >= 0:
         deadline = _now_ms() + timeout_ms
-    store_i64(vthread, 32, 3)
+    atomic_store_i64(vthread, 32, 3, "release")
     result = _io_add(vthread, fd, events, deadline)
     _scheduler_unlock()
     return result
@@ -2987,7 +3137,7 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
                 and is_tagged_int(thread) == 0
                 and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
                 and ptr_eq(load_ptr(thread, 64), node) != 0
-                and load_i64(thread, 32) == 3
+                and atomic_load_i64(thread, 32, "acquire") == 3
                 and (
                     load_i64(thread, 120) == 2
                     or load_i64(thread, 120) == 3
@@ -3013,7 +3163,7 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
                 store_i64(thread, 120, 0)
                 _ready_commit(thread, ready_node)
                 woken = woken + 1
-                _effect(11, 3, 0, load_i64(thread, 32))
+                _effect(11, 3, 0, atomic_load_i64(thread, 32, "acquire"))
             elif (
                 ptr_is_null(thread) == 0
                 and is_tagged_int(thread) == 0
@@ -3085,10 +3235,10 @@ def py_virtual_thread_io_backend() -> int:
 
 @c_abi_export("py_virtual_thread_poll_ready")
 def py_virtual_thread_poll_ready():
-    if _scheduler_lock() != 0:
-        return null()
+    pcc_current_thread_id()
+    pcc_thread_no_park_enter()
     ready = _dequeue()
-    _scheduler_unlock()
+    pcc_thread_no_park_exit()
     return ready
 
 
@@ -3147,20 +3297,17 @@ def py_virtual_thread_carrier_queue_count() -> int:
 
 @c_abi_export("py_virtual_thread_carrier_queue_depth")
 def py_virtual_thread_carrier_queue_depth(index: int) -> int:
-    if _scheduler_lock() != 0:
-        return -1
     carrier_count = _counter(
         global_addr("pcc_vthread_carrier_queue_count_py")
     )
     if index < 0 or index >= carrier_count:
-        _scheduler_unlock()
         return -1
-    depth = 0
-    node = load_ptr(_carrier_head_slot(index), 0)
-    while ptr_is_null(node) == 0:
-        depth = depth + 1
-        node = load_ptr(node, 8)
-    _scheduler_unlock()
+    queue = _carrier_queue(index)
+    _raw_queue_lock(queue)
+    depth: int = -1
+    if index < _counter(global_addr("pcc_vthread_carrier_queue_count_py")):
+        depth = load_i64(_carrier_length_slot(queue), 0)
+    _raw_queue_unlock(queue)
     return depth
 
 
@@ -3247,7 +3394,7 @@ def _run_ready_thread(ready, continuation) -> int:
                     result = -1
             elif rc != 0:
                 result = -1
-    if result == 1 and load_i64(ready, 32) == 2:
+    if result == 1 and atomic_load_i64(ready, 32, "acquire") == 2:
         if py_virtual_thread_complete(ready, global_load_ptr("py_None")) != 0:
             result = -1
     if _step_finished(ready) != 0:
@@ -3432,6 +3579,16 @@ def py_virtual_thread_run_carrier_pool(carrier_count: int, max_steps: int) -> in
     return ran
 
 
+def _carrier_wait_locked() -> None:
+    sleepers = global_addr("pcc_vthread_sleepers_py")
+    atomic_rmw_i64("add", sleepers, 0, 1, "seq_cst")
+    atomic_fence("seq_cst")
+    if (_counter(global_addr("pcc_vthread_persistent_pool_stop_py")) == 0
+            and _counter(global_addr("pcc_vthread_ready_count_py")) == 0):
+        pcc_cond_timedwait_ms(_scheduler_cond(), _scheduler_mutex(), 1)
+    atomic_rmw_i64("add", sleepers, 0, -1, "seq_cst")
+
+
 @c_abi_export("pcc_vthread_persistent_carrier_worker_py")
 def _persistent_carrier_worker(arg):
     carrier_index = load_i64(arg, 0)
@@ -3469,15 +3626,7 @@ def _persistent_carrier_worker(arg):
         if step == 0:
             ready_steps_remaining = 0
         if step == 0 and _scheduler_lock() == 0:
-            if (
-                _counter(
-                    global_addr("pcc_vthread_persistent_pool_stop_py")
-                ) == 0
-                and _counter(global_addr("pcc_vthread_ready_count_py")) == 0
-            ):
-                pcc_cond_timedwait_ms(
-                    _scheduler_cond(), _scheduler_mutex(), 1
-                )
+            _carrier_wait_locked()
             _scheduler_unlock()
             pcc_thread_safepoint()
     _counter_add(global_addr("pcc_vthread_carrier_count_py"), -1)
@@ -3770,13 +3919,13 @@ def py_virtual_thread_cancel(vthread) -> int:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    state = load_i64(vthread, 32)
+    state = atomic_load_i64(vthread, 32, "acquire")
     if state == 4 or load_i64(vthread, 128) != 0:
         _scheduler_unlock()
         return 0
     if (
         state == 1
-        and load_i64(vthread, 40) != 0
+        and atomic_load_i64(vthread, 40, "acquire") != 0
         and load_i64(vthread, 120) == 0
         and load_i64(vthread, 176) >= 0
     ):
@@ -3794,7 +3943,7 @@ def py_virtual_thread_cancel(vthread) -> int:
     needs_ready = (
         state == 0
         or state == 3
-        or (state == 1 and load_i64(vthread, 40) == 0)
+        or (state == 1 and atomic_load_i64(vthread, 40, "acquire") == 0)
     )
     wait_kind = load_i64(vthread, 120)
     if (
@@ -3834,12 +3983,12 @@ def py_virtual_thread_cancel(vthread) -> int:
         return 0
     if ptr_is_null(channel_group) == 0:
         _ready_commit(vthread, channel_group)
-        _effect(6, 4, 0, load_i64(vthread, 32))
+        _effect(6, 4, 0, atomic_load_i64(vthread, 32, "acquire"))
     elif ptr_is_null(join_node) == 0:
         # Join and ready nodes share their rooted prefix. Hand the existing
         # node directly to the ready queue without allocation or root churn.
         _ready_commit(vthread, join_node)
-        _effect(6, 1, 0, load_i64(vthread, 32))
+        _effect(6, 1, 0, atomic_load_i64(vthread, 32, "acquire"))
     elif ptr_is_null(ready_node) == 0:
         _timer_cancel(vthread)
         _io_cancel(vthread)
@@ -3848,7 +3997,7 @@ def py_virtual_thread_cancel(vthread) -> int:
         # committed: a stale aggregate kernel registration has no live task
         # node and a later refresh will remove it.
         _ready_commit(vthread, ready_node)
-        _effect(6, 0, 0, load_i64(vthread, 32))
+        _effect(6, 0, 0, atomic_load_i64(vthread, 32, "acquire"))
     _scheduler_unlock()
     return 1
 
@@ -3867,7 +4016,7 @@ def _cancel_publish_locked(vthread) -> int:
     store_ptr(vthread, 104, null())
     store_i64(vthread, 80, 3)
     atomic_store_i64(vthread, 32, 4, "release")
-    store_i64(vthread, 40, 0)
+    atomic_store_i64(vthread, 40, 0, "release")
     store_i64(vthread, 120, 0)
     store_i64(vthread, 128, 0)
     if _join_wake_all(vthread) != 0:
@@ -3883,7 +4032,7 @@ def py_virtual_thread_cancel_complete(vthread) -> int:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         already_cancelled = load_i64(vthread, 80) == 3
         _scheduler_unlock()
         if already_cancelled:
@@ -4012,14 +4161,14 @@ def py_virtual_thread_join(vthread, target) -> int:
     if _scheduler_lock() != 0:
         return -1
     if (
-        load_i64(waiter, 32) != 2
+        atomic_load_i64(waiter, 32, "acquire") != 2
         or ptr_is_null(load_ptr(waiter, 104)) == 0
         or ptr_is_null(pcc_gc_load_ptr(waiter, ptr_add(waiter, 112))) == 0
     ):
         _scheduler_unlock()
         return -1
     pcc_gc_store_ptr(waiter, ptr_add(waiter, 112), joined)
-    if load_i64(joined, 32) == 4:
+    if atomic_load_i64(joined, 32, "acquire") == 4:
         store_i64(waiter, 120, 0)
         _scheduler_unlock()
         return 1
@@ -4037,7 +4186,7 @@ def py_virtual_thread_join(vthread, target) -> int:
         if ptr_is_null(node) == 0:
             _join_release(node)
         pcc_gc_store_ptr(waiter, ptr_add(waiter, 112), joined)
-        store_i64(waiter, 32, 2)
+        atomic_store_i64(waiter, 32, 2, "release")
         store_i64(waiter, 120, 0)
         _scheduler_unlock()
         return 1
@@ -4063,7 +4212,7 @@ def py_virtual_thread_join_result(vthread):
         py_raise(exception)
         py_decref(exception)
         return null()
-    if load_i64(target, 32) != 4:
+    if atomic_load_i64(target, 32, "acquire") != 4:
         _scheduler_unlock()
         exception = py_exc_new(7, cstr("join target is not done"))
         py_raise(exception)
@@ -4120,7 +4269,7 @@ def _complete_running_unlocked(vthread, result) -> int:
     then reread the state; FINISHED is published before the waiter list is
     read, each behind a full fence, so one side always sees the other.
     """
-    if (load_i64(vthread, 32) != 2 or load_i64(vthread, 40) != 2
+    if (atomic_load_i64(vthread, 32, "acquire") != 2 or atomic_load_i64(vthread, 40, "acquire") != 2
             or load_i64(vthread, 80) != 0 or load_i64(vthread, 120) != 0
             or ptr_is_null(load_ptr(vthread, 56)) == 0
             or ptr_is_null(load_ptr(vthread, 64)) == 0
@@ -4137,7 +4286,7 @@ def _complete_running_unlocked(vthread, result) -> int:
     store_i64(vthread, 176, -1)
     store_i64(vthread, 184, -1)
     store_i64(vthread, 80, 1)
-    store_i64(vthread, 40, 0)
+    atomic_store_i64(vthread, 40, 0, "release")
     atomic_store_i64(vthread, 32, 4, "release")
     atomic_store_i64(vthread, 128, 0, "release")
     atomic_fence("seq_cst")
@@ -4164,7 +4313,7 @@ def py_virtual_thread_complete(vthread, result) -> int:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4 and load_i64(vthread, 80) != 0:
+    if atomic_load_i64(vthread, 32, "acquire") == 4 and load_i64(vthread, 80) != 0:
         already_returned = load_i64(vthread, 80) == 1
         _scheduler_unlock()
         if already_returned:
@@ -4199,7 +4348,7 @@ def py_virtual_thread_complete(vthread, result) -> int:
     store_ptr(vthread, 104, null())
     store_i64(vthread, 80, 1)
     atomic_store_i64(vthread, 32, 4, "release")
-    store_i64(vthread, 40, 0)
+    atomic_store_i64(vthread, 40, 0, "release")
     store_i64(vthread, 120, 0)
     store_i64(vthread, 128, 0)
     if _join_wake_all(vthread) != 0:
@@ -4218,7 +4367,7 @@ def py_virtual_thread_fail(vthread, exception) -> int:
     if _scheduler_lock() != 0:
         return -1
     outcome = load_i64(vthread, 80)
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         already_raised = outcome == 2
         _scheduler_unlock()
         if already_raised:
@@ -4251,7 +4400,7 @@ def py_virtual_thread_fail(vthread, exception) -> int:
     store_ptr(vthread, 104, null())
     store_i64(vthread, 80, 2)
     atomic_store_i64(vthread, 32, 4, "release")
-    store_i64(vthread, 40, 0)
+    atomic_store_i64(vthread, 40, 0, "release")
     store_i64(vthread, 120, 0)
     store_i64(vthread, 128, 0)
     if _join_wake_all(vthread) != 0:
@@ -4389,11 +4538,11 @@ def py_virtual_thread_pin_reason_dropped_count() -> int:
 @c_abi_export("py_virtual_thread_pin_enter")
 def py_virtual_thread_pin_enter(vthread, reason) -> int:
     vthread = _checked(vthread)
-    if ptr_is_null(vthread) or load_i64(vthread, 32) == 4:
+    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4:
         return -1
     if _scheduler_lock() != 0:
         return -1
-    if load_i64(vthread, 32) == 4:
+    if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     pinned = load_i64(vthread, 48)
