@@ -331,7 +331,20 @@ class SourceAnalyzer:
     def statement(self, node, assigned):
         kind = node.kind
         assigned = set(assigned)
-        if kind == "block":
+        if kind == "label":
+            # Labels have their own namespace and a lexical statement extent.
+            # Preserve the typed target node, not just its reusable spelling.
+            if any(context.get("label") == node.value for context in self.controls):
+                node.token.error("duplicate enclosing statement label: " + node.value)
+            context = {"node": node, "label": node.value, "break": []}
+            self.controls.append(context)
+            try:
+                outgoing = self.statement(node.children[0], assigned)
+            finally:
+                self.controls.pop()
+            paths = context["break"] + ([outgoing] if outgoing is not None else [])
+            assigned = set.intersection(*paths) if paths else None
+        elif kind == "block":
             self.scopes.append({})
             for child in node.children:
                 if assigned is None:
@@ -404,7 +417,7 @@ class SourceAnalyzer:
             if selector.dtype not in {"byte", "short", "char", "int"}:
                 selector.token.error("switch selector requires byte, short, char or int")
             self.scopes.append({})
-            context = {"break": []}
+            context = {"node": node, "break": []}
             self.controls.append(context)
             values, has_default = set(), False
             outgoing, rule_exits = None, []
@@ -447,7 +460,7 @@ class SourceAnalyzer:
             assigned = set.intersection(*paths) if paths else None
         elif kind == "do":
             condition, body = node.children
-            loop = {"break": [], "continue": []}
+            loop = {"node": node, "break": [], "continue": []}
             self.controls.append(loop)
             outgoing = self.statement(body, assigned)
             self.controls.pop()
@@ -467,7 +480,7 @@ class SourceAnalyzer:
             when_true, when_false = self.condition(condition, assigned)
             if condition.constant is False:
                 body.token.error("unreachable loop body")
-            loop = {"break": [], "continue": []}
+            loop = {"node": node, "break": [], "continue": []}
             self.controls.append(loop)
             outgoing = self.statement(body, when_true)
             if update is not None:
@@ -479,9 +492,22 @@ class SourceAnalyzer:
             assigned = set.intersection(*paths) if paths else None
             self.scopes.pop()
         elif kind in ("break", "continue"):
-            target = next((context for context in reversed(self.controls) if kind in context), None)
-            if target is None:
-                node.token.error(kind + " requires an enclosing loop" + (" or switch" if kind == "break" else ""))
+            if node.value is None:
+                target = next((context for context in reversed(self.controls)
+                               if "label" not in context and kind in context), None)
+                if target is None:
+                    node.token.error(kind + " requires an enclosing loop" + (" or switch" if kind == "break" else ""))
+            else:
+                target = next((context for context in reversed(self.controls)
+                               if context.get("label") == node.value), None)
+                if target is None:
+                    node.token.error("undefined enclosing statement label: " + node.value)
+                if kind == "continue":
+                    loop = target["node"].children[0]
+                    if loop.kind not in ("while", "do", "for"):
+                        node.token.error("continue label must directly label a loop: " + node.value)
+                    target = next(context for context in reversed(self.controls) if context["node"] is loop)
+            node.control_target = target["node"]
             target[kind].append(assigned)
             assigned = None
         elif kind != "empty":

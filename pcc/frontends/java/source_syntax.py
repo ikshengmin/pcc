@@ -19,6 +19,8 @@ KEYWORDS = frozenset((
     "short static strictfp super switch synchronized this throw throws transient try "
     "void volatile while true false null _ record sealed permits yield var"
 ).split())
+# These contextual spellings are ordinary Identifiers in label positions (JLS 3.8/3.9).
+LABEL_CONTEXTUAL_NAMES = frozenset("record sealed permits yield var".split())
 MODIFIERS = frozenset("public protected private static final abstract native synchronized strictfp".split())
 PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
               "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7,
@@ -56,6 +58,7 @@ class Node:
     operation_type: str | None = None
     is_final: bool = False
     runtime_steps: tuple[str, ...] = ()
+    control_target: object = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -180,9 +183,10 @@ class SourceParser:
             self.peek().error(f"expected {text!r}, got {self.peek().text!r}")
         return self.take()
 
-    def identifier(self):
+    def identifier(self, *, label=False):
         token = self.take()
-        if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) or token.text in KEYWORDS:
+        keywords = KEYWORDS - LABEL_CONTEXTUAL_NAMES if label else KEYWORDS
+        if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) or token.text in keywords:
             token.error("expected a non-keyword Java identifier")
         return token
 
@@ -402,6 +406,10 @@ class SourceParser:
 
     def statement(self, in_block=False):
         token = self.peek()
+        if token.text not in KEYWORDS - LABEL_CONTEXTUAL_NAMES and self.peek(1).text == ":":
+            label = self.identifier(label=True)
+            self.expect(":")
+            return Node("label", label, label.text, [self.statement()])
         if self.class_model and token.text in ("this", "super") and self.peek(1).text == "(":
             self.take()
             self.expect("(")
@@ -450,8 +458,9 @@ class SourceParser:
             return Node("return", token, children=children)
         if token.text in ("break", "continue"):
             self.take()
+            label = None if self.peek().text == ";" else self.identifier(label=True).text
             self.expect(";")
-            return Node(token.text, token)
+            return Node(token.text, token, label)
         if token.text in ("case", "default"):
             token.error("case/default requires a directly enclosing switch block")
         node = self.simple(allow_declaration=in_block)

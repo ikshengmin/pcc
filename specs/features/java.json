@@ -793,6 +793,36 @@
         "java.narrow.df3e.eight-lanes-independent-entry.program",
         "java.narrow.df3e.eight-lanes-independent-entry.differential"
       ]
+    },
+    {
+      "id": "java.labeled-control-flow",
+      "title": "Labeled statements and target-specific break/continue",
+      "chapter_ids": [
+        "JLS-3",
+        "JLS-14",
+        "JLS-16"
+      ],
+      "scope": "Qualified host pcc0 Linux x86-64 self-backend labeled statements, target-specific break/continue, independent label namespace, direct-loop continue, normal-completion and definite-assignment joins, and owned IR branches including outer for updates/do tests. Fresh whole Java validation: 1016 ordinary + 354 integration (112 frozen compatibility cases excluded from source acceptance). All 33 complete executable originals matched actual JDK 21.0.12.1 stdout/stderr/exit; 19 invalid originals were rejected. Three nonterminating originals were compiler-checked only, never executed. Current-platform source/target 21 only; no finally unwinding, bytecode expansion or native object/array claim.",
+      "status": "supported",
+      "tests": [
+        "tests/java/test_source_labels.py",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "java.labels.c182.sibling-label-identity.unit",
+        "java.labels.c182.sibling-label-identity.program",
+        "java.labels.c182.sibling-label-identity.differential",
+        "java.labels.c182.outer-for-continue-update.unit",
+        "java.labels.c182.outer-for-continue-update.program",
+        "java.labels.c182.outer-for-continue-update.differential",
+        "java.labels.c182.outer-do-continue-test.unit",
+        "java.labels.c182.outer-do-continue-test.program",
+        "java.labels.c182.outer-do-continue-test.differential",
+        "java.labels.c182.da-all-labeled-exits.unit",
+        "java.labels.c182.da-all-labeled-exits.program",
+        "java.labels.c182.da-all-labeled-exits.differential"
+      ]
     }
   ],
   "diagnostics": {
@@ -804,12 +834,12 @@
         "feature_id": "java.abstract-classes",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -818,12 +848,12 @@
         "feature_id": "java.interfaces-annotations",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -832,12 +862,12 @@
         "feature_id": "java.division-dynamic-exception",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
           }
         ]
       },
@@ -855,7 +885,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -864,12 +894,12 @@
         "feature_id": "java.arrays-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -878,12 +908,12 @@
         "feature_id": "java.assert-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -892,12 +922,12 @@
         "feature_id": "java.blank-final-local",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -915,7 +945,7 @@
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
           }
         ]
       },
@@ -924,12 +954,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -938,12 +968,12 @@
         "feature_id": "java.class-initialization",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
           }
         ]
       },
@@ -952,12 +982,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -966,12 +996,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -980,12 +1010,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1022,12 +1052,12 @@
         "feature_id": "java.blank-final-instance-model",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1036,12 +1066,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1064,12 +1094,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1078,12 +1108,12 @@
         "feature_id": "java.local-types",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1092,12 +1122,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
           }
         ]
       },
@@ -1115,7 +1145,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1142,12 +1172,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1170,12 +1200,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1216,12 +1246,12 @@
         "feature_id": "java.runtime-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1244,12 +1274,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1258,12 +1288,12 @@
         "feature_id": "java.special-methods",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1272,12 +1302,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1286,16 +1316,16 @@
         "feature_id": "java.class-initialization",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "e5e6fee4023d93b87c9c68bb4426d5857e37999d24220dffb1b68f8940fd3451"
+            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1304,12 +1334,12 @@
         "feature_id": "java.string-runtime",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1318,12 +1348,12 @@
         "feature_id": "java.switch-expressions",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1346,12 +1376,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1360,12 +1390,12 @@
         "feature_id": "java.unicode-translation",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       },
@@ -1374,12 +1404,12 @@
         "feature_id": "java.unicode-tokens",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "c9b6eaf7ada3724186d359f52c8789ce5e224e1974e0df1d206da26806c4a148"
+            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
           }
         ]
       }
@@ -3062,6 +3092,566 @@
           "PccNarrowObserve"
         ],
         "input_sha256": "ebaaf24cdf4c32d0f4860e64c8338fd791c69e0bfacc2d0b73a19ac975e59916"
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      }
+    },
+    {
+      "id": "java.labels.c182.sibling-label-identity.unit",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34"
+    },
+    {
+      "id": "java.labels.c182.sibling-label-identity.program",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34"
+    },
+    {
+      "id": "java.labels.c182.sibling-label-identity.differential",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34",
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK actual jdk.compiler and separately executed JVM binary observer",
+        "version": "21.0.12.1; -source 21 -target 21 current selected platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "classes",
+          "PccNarrowObserve"
+        ],
+        "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34"
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      }
+    },
+    {
+      "id": "java.labels.c182.outer-for-continue-update.unit",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77"
+    },
+    {
+      "id": "java.labels.c182.outer-for-continue-update.program",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77"
+    },
+    {
+      "id": "java.labels.c182.outer-for-continue-update.differential",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77",
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK actual jdk.compiler and separately executed JVM binary observer",
+        "version": "21.0.12.1; -source 21 -target 21 current selected platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "classes",
+          "PccNarrowObserve"
+        ],
+        "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77"
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      }
+    },
+    {
+      "id": "java.labels.c182.outer-do-continue-test.unit",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad"
+    },
+    {
+      "id": "java.labels.c182.outer-do-continue-test.program",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad"
+    },
+    {
+      "id": "java.labels.c182.outer-do-continue-test.differential",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad",
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK actual jdk.compiler and separately executed JVM binary observer",
+        "version": "21.0.12.1; -source 21 -target 21 current selected platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "classes",
+          "PccNarrowObserve"
+        ],
+        "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad"
+      },
+      "comparison": {
+        "kind": "raw_process_streams",
+        "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      }
+    },
+    {
+      "id": "java.labels.c182.da-all-labeled-exits.unit",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41"
+    },
+    {
+      "id": "java.labels.c182.da-all-labeled-exits.program",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41"
+    },
+    {
+      "id": "java.labels.c182.da-all-labeled-exits.differential",
+      "test_id": "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "c182dd58654ce7875cd213d0a70429cdf0f3e9c0",
+      "source": {
+        "path": "tests/java/test_source_labels.py",
+        "sha256": "6d53835d943f9a822bca2959c0b11d360c78ea824bcd2d1cb99b920c464f0c69"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command": [
+        "env",
+        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "pytest",
+        "-x",
+        "-vv",
+        "-m",
+        "integration",
+        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+      ],
+      "command_kind": "reproduction",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41",
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "OpenJDK actual jdk.compiler and separately executed JVM binary observer",
+        "version": "21.0.12.1; -source 21 -target 21 current selected platform",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "platform": "linux-x86_64",
+        "command": [
+          "java",
+          "-Xms16m",
+          "-Xmx128m",
+          "-XX:MaxMetaspaceSize=96m",
+          "-cp",
+          "classes",
+          "PccNarrowObserve"
+        ],
+        "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41"
       },
       "comparison": {
         "kind": "raw_process_streams",

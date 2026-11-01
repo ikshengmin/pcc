@@ -21,7 +21,7 @@ class SourceLowerer:
         self.module.triple = target
         self.functions = {}
         self.i32 = ir.IntType(32)
-        self.controls = []
+        self.control_blocks = {}
 
     @staticmethod
     def scalar_type(dtype):
@@ -71,6 +71,7 @@ class SourceLowerer:
         for method in methods:
             self.function = self.functions[method.owner, method.token.text, method.descriptor]
             self.result_type = method.result
+            self.control_blocks = {}
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.slots = {binding: self.builder.alloca(self.scalar_type(binding.dtype), name="local_" + str(binding.slot))
                           for binding in method.locals}
@@ -158,6 +159,17 @@ class SourceLowerer:
 
     def statement(self, node):
         kind = node.kind
+        if kind == "label":
+            done = self.function.append_basic_block("label_done")
+            self.control_blocks[id(node)] = (None, done)
+            self.statement(node.children[0])
+            del self.control_blocks[id(node)]
+            if not self.builder.block.is_terminated:
+                self.builder.branch(done)
+            self.builder.position_at_end(done)
+            if not node.completes:
+                self.builder.unreachable()
+            return
         if kind == "block":
             for child in node.children:
                 self.statement(child)
@@ -195,8 +207,8 @@ class SourceLowerer:
                 self.builder.ret_void()
             return
         if kind in ("break", "continue"):
-            target = (self.controls[-1][1] if kind == "break" else
-                      next(target[0] for target in reversed(self.controls) if target[0] is not None))
+            target = self.control_blocks[id(node.control_target)][1 if kind == "break" else 0]
+            assert target is not None
             self.builder.branch(target)
             return
         if kind == "if":
@@ -230,7 +242,7 @@ class SourceLowerer:
                 for label in group.value:
                     if label.kind == "case":
                         dispatch.add_case(ir.Constant(value.type, label.constant), block)
-            self.controls.append((None, done))
+            self.control_blocks[id(node)] = (None, done)
             for index, (group, block) in enumerate(zip(groups, blocks)):
                 self.builder.position_at_end(block)
                 for child in group.children:
@@ -238,7 +250,7 @@ class SourceLowerer:
                 if not self.builder.block.is_terminated:
                     target = blocks[index + 1] if node.value == "colon" and index + 1 < len(blocks) else done
                     self.builder.branch(target)
-            self.controls.pop()
+            del self.control_blocks[id(node)]
             self.builder.position_at_end(done)
             if not node.completes:
                 self.builder.unreachable()
@@ -250,9 +262,9 @@ class SourceLowerer:
             done = self.function.append_basic_block("do_done")
             self.builder.branch(body_block)
             self.builder.position_at_end(body_block)
-            self.controls.append((check, done))
+            self.control_blocks[id(node)] = (check, done)
             self.statement(body)
-            self.controls.pop()
+            del self.control_blocks[id(node)]
             if not self.builder.block.is_terminated:
                 self.builder.branch(check)
             self.builder.position_at_end(check)
@@ -276,9 +288,9 @@ class SourceLowerer:
             self.builder.position_at_end(check)
             self.builder.cbranch(self.expression(condition), body_block, done)
             self.builder.position_at_end(body_block)
-            self.controls.append((update_block, done))
+            self.control_blocks[id(node)] = (update_block, done)
             self.statement(body)
-            self.controls.pop()
+            del self.control_blocks[id(node)]
             if not self.builder.block.is_terminated:
                 self.builder.branch(update_block)
             if update is not None:

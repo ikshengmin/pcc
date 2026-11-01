@@ -84,6 +84,19 @@ exception paths remain separate capabilities. `do` loops execute the body before
 the boolean test, continue at that test, and intersect body/continue/break states;
 constant conditions do not erase Java's syntactic reachability checks.
 
+Labeled statements and labeled `break`/`continue` now bind typed target identities,
+not label strings. Label scope is separate from local/method names; only a
+directly labeled loop can receive `continue`. Matching exits and continues
+participate in definite assignment, normal completion and loop update/test
+selection. The complete Java domain passed 1016 ordinary and 354 integration
+cases on Linux x86-64 (112 frozen compatibility cases excluded from source
+acceptance). All 33 complete executable label originals matched the selected
+OpenJDK 21.0.12.1 observer's actual stdout, stderr and exit status; 19 invalid
+originals were rejected. Three intentionally nonterminating originals were
+compiler-checked only, never executed. The reference uses source/target 21 on
+the current JDK platform. Exception/finally unwinding and native managed objects
+remain separate unsupported runtime domains.
+
 Integral division/remainder and their compound assignments support nonzero
 constant-expression divisors, preserving truncation toward zero, dividend-signed
 remainders and int/long minimum divided by minus one. Neither float-based
