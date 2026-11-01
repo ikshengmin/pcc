@@ -689,21 +689,41 @@ class Analyzer:
             # variables: `for a := range a` reads the enclosing a.
             self.expression(ranged)
             dtype = underlying(ranged.type)
-            if not isinstance(dtype, ArrayType):
-                if (is_integer(ranged.type) or is_string(ranged.type) or
+            if is_integer(ranged.type):
+                if len(statement.targets) > 1:
+                    raise GoDiagnostic(statement.token, "integer range permits at most one iteration variable")
+                # An untyped bound is assigned to the preexisting iteration
+                # target's type, not defaulted to int before that assignment.
+                # Resolve target types here without evaluating their operands;
+                # ordinary assignment lowering evaluates them each iteration.
+                iteration_type = default_type(ranged.type)
+                if ranged.type == "untyped int" and statement.targets and not statement.range_declaration:
+                    target = statement.targets[0]
+                    self.assignment_target(target, read=False)
+                    if not (target.kind == "name" and target.value == "_"):
+                        if not is_integer(target.type):
+                            raise GoDiagnostic(target.token, "integer range requires an integer iteration variable")
+                        iteration_type = target.type
+                coerce(ranged, iteration_type)
+                statement.evaluate_range = ranged.constant is None
+                value_types = (iteration_type,)
+            elif isinstance(dtype, ArrayType):
+                if len(statement.targets) > 2:
+                    raise GoDiagnostic(statement.token, "array range permits at most two iteration variables")
+                uses_element = len(statement.targets) == 2 and not (
+                    statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
+                statement.evaluate_range = uses_element or has_evaluated_call(ranged)
+                if uses_element:
+                    self.function.temporaries.append(ranged)
+                value_types = ("int", dtype.element)
+            else:
+                if (is_string(ranged.type) or
                         isinstance(dtype, PointerType) and isinstance(underlying(dtype.element), ArrayType)):
-                    raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
-                raise GoDiagnostic(ranged.token, "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
-            if len(statement.targets) > 2:
-                raise GoDiagnostic(statement.token, "array range permits at most two iteration variables")
-            uses_element = len(statement.targets) == 2 and not (
-                statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
-            statement.evaluate_range = uses_element or has_evaluated_call(ranged)
-            if uses_element:
-                self.function.temporaries.append(ranged)
-            statement.range_index = Expr("range_index", statement.token, type="int")
+                    raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array or integer; other iterator/runtime contracts are not implemented")
+                raise GoDiagnostic(ranged.token, "range currently requires a fixed array or integer; other iterator/runtime contracts are not implemented")
+            statement.range_index = Expr("range_index", statement.token, type=value_types[0])
             self.function.temporaries.append(statement.range_index)
-            values = [Expr("range_value", statement.token, type=typ) for typ in ("int", dtype.element)][:len(statement.targets)]
+            values = [Expr("range_value", statement.token, type=typ) for typ in value_types][:len(statement.targets)]
             self.scopes.append({})
             if statement.targets:
                 statement.init = Stmt(":=" if statement.range_declaration else "=", statement.token,
@@ -717,7 +737,7 @@ class Analyzer:
             self.break_depth -= 1
             self.loop_depth -= 1
             self.scopes.pop()
-            # Even a fixed nonempty array range is not a terminating statement
+            # Even a known nonempty range is not a terminating statement
             # under Go's syntactic missing-return rule.
             return
         if kind in ("if", "for"):

@@ -61,7 +61,9 @@ CASES = [
     ('array-bounds-panic', original('func f(a [2]int,i int)int{return a[i]}')),
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
-    ('non-array-range', original(body='for range 3{}')),
+    # The exact former integer-range original graduates in test_integer_range;
+    # pointer-to-array range still needs its separate dereference contract.
+    ('non-array-range', original('func f(p *[2]int){for range p{}}')),
     ('non-array-range', original(body='for range "abc"{}')),
     ('limit-function-arity', original('func f('+','.join('a'+str(i)+' int' for i in range(257))+'){}')),
     ('limit-string-bytes', original('const x="'+'a'*(1048576+1)+'"')),

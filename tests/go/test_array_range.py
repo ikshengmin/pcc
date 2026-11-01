@@ -31,7 +31,9 @@ INVALID = [
     ('const i=0;for i=range [2]int{}{}', '', 'constant or non-addressable'),
     ('for i:=range [2]int{}{}', '', 'declared and not used'),
     ('for i:=range [2]int{}{_=i};_=i', '', 'undefined name'),
-    ('for range 3{}', '', 'fixed array'),
+    # The former `for range 3{}` is retained unchanged as a positive/native/
+    # reference control in test_integer_range.py; bool is still invalid.
+    ('for range true{}', '', 'fixed array'),
     ('for range "abc"{}', '', 'fixed array'),
     ('for range f(){}', 'func f()(int,int){return 1,2}', 'fixed array'),
     ('for range [2]int{}{fallthrough}', '', 'final non-empty'),

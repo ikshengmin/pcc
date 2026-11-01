@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Feature inventory remains incomplete: these62 rows are not a Go coverage denominator. The schema1 status field is legacy qualification status, not an independent implementation-status axis; README lists implementation and acceptance separately. Current source identity sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf completed all repository-Go ordinary708 and integration407 tests in pcc0/self/Linuxx86_64.31 ordinary nodes are simulated reference-harness checks and1 integration node is diagnostic-only, neither language acceptance. Integration distinguishes280 owned-native nodes,30 positive external-reference nodes,70 normal-source rejections,24 build-only valid-unsupported checks and2 external nil-panic frontiers. Four narrow feature rows have unit/program/reference triplets; this is not fullGo/nativepcc1/Mac/runtimeGC/official-suite qualification. Older switch/range triplets are preserved in Git history and local immutable evidence; current rows explicitly renew their source-hash bindings after the reference-harness test edits. Historical v3 original-main timeout and v4 panic-message assertion failure remain failures, not rewritten passes."
+    "notes": "Incomplete inventory: these 63 rows are not a Go coverage denominator. Schema1 status is a qualification field, not an independent implementation axis; README distinguishes both. Frozen compiler/test source identity sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c excludes the two qualification metadata files and passed all 791 ordinary and 465 integration repository-Go nodes in pcc0/self/Linux x86_64. 31 ordinary nodes are simulated reference-harness checks. Integration separates 311 standalone owned-native, 33 positive external-reference, 94 normal-source rejections, 24 valid-unsupported build-only, 2 external nil-panic frontiers and 1 diagnostic-only node. The 59 regular official build successes are not 59 executions; a separate diagnostic Go-test observer is excluded from baseline. Five narrow rows have actual unit/program/reference triplets. Prior v7 and unrun candidate records remain in Git history and immutable local evidence; none are relabeled as current execution. Original pointer-main timeout and panic-message expectation failures remain historical failures. No full Go/stdlib/native pcc1/Mac/shared runtime/GC qualification follows."
   },
   "chapters": [
     {
@@ -232,9 +232,9 @@
       ],
       "diagnostics": [],
       "evidence": [
-        "go.switch.v7.unit",
-        "go.switch.v7.program",
-        "go.switch.v7.differential"
+        "go.switch.irange-v3.unit",
+        "go.switch.irange-v3.program",
+        "go.switch.irange-v3.differential"
       ]
     },
     {
@@ -260,9 +260,39 @@
       ],
       "diagnostics": [],
       "evidence": [
-        "go.array-range.v7.unit",
-        "go.array-range.v7.program",
-        "go.array-range.v7.differential"
+        "go.array-range.irange-v3.unit",
+        "go.array-range.irange-v3.program",
+        "go.array-range.irange-v3.differential"
+      ]
+    },
+    {
+      "id": "go.integer-range.typed-bound",
+      "title": "Integer range with typed one-time bounds",
+      "chapter_ids": [
+        "range",
+        "assignment",
+        "constants",
+        "numeric",
+        "blocks",
+        "break",
+        "continue",
+        "termination"
+      ],
+      "scope": "Qualified bounded Linux pcc0/self integer range: zero/one iteration variable, all admitted signed/unsigned and defined integer types, contextual untyped bounds, one-time bound evaluation, per-iteration assignment targets, hidden width-correct induction, zero/negative limits and structured control flow. Addresses of range-declared variables remain explicitly unimplemented; no closure/heap/panic/native-pcc1/Mac/complete-Go claim.",
+      "status": "supported",
+      "tests": [
+        "tests/go/test_integer_range.py::test_integer_range_retains_bound_and_iteration_type",
+        "tests/go/test_integer_range.py::test_complete_integer_range_program_main_executes_owned",
+        "tests/go/test_integer_range.py::test_identical_integer_range_program_matches_official_raw_streams",
+        "tests/go/test_integer_range.py::test_original_integer_range_helpers_have_full_width_native_observations",
+        "tests/go/test_integer_range.py::test_invalid_integer_range_fails_before_ir",
+        "tests/go/test_integer_range.py::test_integer_range_does_not_invent_nil_or_iteration_identity_proofs"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "go.integer-range.v3.unit",
+        "go.integer-range.v3.program",
+        "go.integer-range.v3.differential"
       ]
     },
     {
@@ -918,11 +948,11 @@
     },
     {
       "id": "go.capability.non-array-range",
-      "title": "Non array range",
+      "title": "Remaining non-array/non-integer range",
       "chapter_ids": [
         "range"
       ],
-      "scope": "Integer and string range, distinct from the admitted fixed-array range subset. Other iterator types may fail at earlier unimplemented syntax/type boundaries.",
+      "scope": "String and pointer-to-array range, distinct from admitted fixed arrays and integer-range source implementation. Other iterator types may fail at earlier unimplemented syntax/type boundaries.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
@@ -1189,7 +1219,7 @@
         "comparison",
         "statements"
       ],
-      "scope": "Implementation: bounded local aliases, address/deref, pointer equality and indirect scalar/record/array value updates with independent lexical nonescape checks. Acceptance: qualified only for the listed original deterministic source/tests in host pcc0/self/Linux x86_64 with pinned official Go1.27.3; not general heap pointers. The retained original ordinary-receiver ordering observer is diagnostic only and excluded from acceptance.",
+      "scope": "Implementation: bounded local aliases, address/deref, pointer equality and indirect scalar/record/array value updates with independent lexical nonescape checks. Acceptance: qualified only for the listed original deterministic source/tests in host pcc0/self/Linux x86_64 with pinned official Go 1.27.3; not general heap pointers. The retained original ordinary-receiver ordering observer is diagnostic only and excluded from acceptance.",
       "status": "supported",
       "tests": [
         "tests/go/test_pointers.py::test_nonescaping_pointer_types_and_aliases_lower_without_external_owner",
@@ -1199,9 +1229,9 @@
       ],
       "diagnostics": [],
       "evidence": [
-        "go.local-pointer.v7.unit",
-        "go.local-pointer.v7.program",
-        "go.local-pointer.v7.differential"
+        "go.local-pointer.irange-v3.unit",
+        "go.local-pointer.irange-v3.program",
+        "go.local-pointer.irange-v3.differential"
       ]
     },
     {
@@ -1215,7 +1245,7 @@
         "statements",
         "panics"
       ],
-      "scope": "Implementation: nullable locals and independently source-guarded non-retaining direct pointer parameters; finite CFG nullability and lexical/call-duration lifetime proofs, short-circuit/joins/backedges/continue/post/break/switch-fallthrough and pre-store parallel-assignment checks. Complete supplied source call closure is checked without noalias/caller-derived nonnull or new runtime/backend machinery. Acceptance: listed unit/native/same-input raw-pair cases qualified in host pcc0/self/Linux x86_64 with Go1.27.3; 30 full-width observations, six exact graduated originals and an unchanged two-package pair pass the complete Go selections. Pointer-valued returns, pointer receiver declarations, escaping/pointer-bearing storage and unproven evaluated indirection remain unsupported.",
+      "scope": "Implementation: nullable locals and independently source-guarded non-retaining direct pointer parameters; finite CFG nullability and lexical/call-duration lifetime proofs, short-circuit/joins/backedges/continue/post/break/switch-fallthrough and pre-store parallel-assignment checks. Complete supplied source call closure is checked without noalias/caller-derived nonnull or new runtime/backend machinery. Acceptance: listed unit/native/same-input raw-pair cases qualified in host pcc0/self/Linux x86_64 with Go 1.27.3; 30 full-width observations, six exact graduated originals and an unchanged two-package pair pass the complete Go selections. Pointer-valued returns, pointer receiver declarations, escaping/pointer-bearing storage and unproven evaluated indirection remain unsupported.",
       "status": "supported",
       "tests": [
         "tests/go/test_nullable_pointers.py::test_source_guards_and_unevaluated_operands_admit_pointer_parameters",
@@ -1224,9 +1254,9 @@
       ],
       "diagnostics": [],
       "evidence": [
-        "go.nullable-pointer.v7.unit",
-        "go.nullable-pointer.v7.program",
-        "go.nullable-pointer.v7.differential"
+        "go.nullable-pointer.irange-v3.unit",
+        "go.nullable-pointer.irange-v3.program",
+        "go.nullable-pointer.irange-v3.differential"
       ]
     }
   ],
@@ -1647,7 +1677,7 @@
         "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1655,7 +1685,7 @@
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1663,7 +1693,7 @@
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1671,15 +1701,15 @@
         "message": "'switch currently requires integer, boolean or string comparison support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
       {
-        "message": "'range currently requires a fixed array; other iterator/runtime contracts are not implemented'",
+        "message": "'range currently requires a fixed array or integer; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1687,7 +1717,7 @@
         "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1695,7 +1725,7 @@
         "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1703,7 +1733,7 @@
         "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1711,7 +1741,7 @@
         "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "5110e1dd34c8f842235769683c51d3946a6f1359fdb9bd2d4db48b3c25a0aa49"
+          "sha256": "6ba30fdebbe986ea54f154b3d59d9e38edbb65613fcfccce86ed5067efb6d74a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }
@@ -1721,14 +1751,14 @@
   "evidence": [
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:43:01.671033+00:00",
-      "id": "go.switch.v7.unit",
+      "observed_at_utc": "2026-11-01T05:13:06.866073+00:00",
+      "id": "go.switch.irange-v3.unit",
       "test_id": "tests/go/test_switches.py::test_retained_original_unreachable_case_still_requires_matching_type",
       "kind": "unit",
       "purpose": "unit",
@@ -1746,30 +1776,30 @@
         "-m",
         "pytest",
         "-x",
-        "--maxfail=0",
         "-c",
         "pyproject.toml",
+        "--maxfail=0",
         "-m",
         "not integration",
         "tests/go"
       ],
       "actual": {
         "exit_code": 0,
-        "stdout_sha256": "6647a96b7c0b612f2913557a4de4f539f686cf52fed3e3d8c757ca066ef777e8",
+        "stdout_sha256": "b8c99cbd5b07bddc4c35f920c53aeffd52f2331114193fe17e2389b1431b6843",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh complete ordinary selection; this named test passed. Stream hashes identify that full ordinary process log, not a fabricated per-node stream."
+      "observation": "Fresh complete 791-node ordinary gate. All parameters of this named test passed;31 protocol-simulation nodes elsewhere are not language execution. Stream hashes identify the full gate, not fabricated per-node output. Qualification metadata is excluded from the frozen compiler/test source identity."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.switch.v7.program",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.switch.irange-v3.program",
       "test_id": "tests/go/test_switches.py::test_original_switch_program_main_executes",
       "kind": "program",
       "purpose": "runtime",
@@ -1779,25 +1809,38 @@
       },
       "input_sha256": "9f46cd5a69f1cc97c362b1ee85a12b0c929b47a6678c61b767ca17cc87b414c6",
       "command": [
-        "./switch-main"
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "-m",
+        "integration",
+        "tests/go/test_switches.py::test_original_switch_program_main_executes"
       ],
       "actual": {
         "exit_code": 0,
         "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh owned native main from the complete integration selection. Exact exit/stdout/stderr tuple is asserted by the named test; this main-only node does not retain separate raw stream files."
+      "observation": "Fresh complete 465-node integration gate executed this unchanged program main. Its named test asserts the exact owned-program zero/empty/empty process tuple. These hashes describe that program assertion, not pytest output; this main-only node does not retain separate stream files."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.switch.v7.differential",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.switch.irange-v3.differential",
       "test_id": "tests/go/test_switches.py::test_official_go_receives_identical_original_switch_program",
       "kind": "differential",
       "purpose": "runtime",
@@ -1843,25 +1886,25 @@
       "comparison": {
         "kind": "raw_process_streams"
       },
-      "observation": "Fresh same-source PCC main and official-Go reference nodes independently assert the exact zero/empty/empty process tuple. These existing nodes do not retain separate raw stream files; their actual executed assertions and binaries are the evidence, not copied historical results."
+      "observation": "Fresh owned main and official-Go reference nodes in the 465-node integration gate independently assert the identical raw zero/empty/empty tuple from the same complete fixture. These existing nodes do not retain separate raw stream files; their executed assertions and retained binaries are the evidence."
     },
     {
+      "test_id": "tests/go/test_array_range.py::test_fixed_array_range_grammar_scope_and_empty_values",
+      "source": {
+        "path": "tests/go/test_array_range.py",
+        "sha256": "5b55e571e0da837537ef0e3a0e1cc65aa6b67b056b28574d22182c8eeab883a8"
+      },
+      "id": "go.array-range.irange-v3.unit",
+      "kind": "unit",
+      "purpose": "unit",
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:43:01.671033+00:00",
-      "id": "go.array-range.v7.unit",
-      "test_id": "tests/go/test_array_range.py::test_fixed_array_range_grammar_scope_and_empty_values",
-      "kind": "unit",
-      "purpose": "unit",
-      "source": {
-        "path": "tests/go/test_array_range.py",
-        "sha256": "5030c975be35eb2b9c350a9ae58cb7cc4f2d538373547d67da0ddad52496720d"
-      },
+      "observed_at_utc": "2026-11-01T05:13:06.866073+00:00",
       "command": [
         "uv",
         "run",
@@ -1872,30 +1915,30 @@
         "-m",
         "pytest",
         "-x",
-        "--maxfail=0",
         "-c",
         "pyproject.toml",
+        "--maxfail=0",
         "-m",
         "not integration",
         "tests/go"
       ],
       "actual": {
         "exit_code": 0,
-        "stdout_sha256": "6647a96b7c0b612f2913557a4de4f539f686cf52fed3e3d8c757ca066ef777e8",
+        "stdout_sha256": "b8c99cbd5b07bddc4c35f920c53aeffd52f2331114193fe17e2389b1431b6843",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh complete ordinary selection; this named test passed. Stream hashes identify that full ordinary process log, not a fabricated per-node stream."
+      "observation": "Fresh complete 791-node ordinary gate. All parameters of this named test passed;31 protocol-simulation nodes elsewhere are not language execution. Stream hashes identify the full gate, not fabricated per-node output. Qualification metadata is excluded from the frozen compiler/test source identity."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.array-range.v7.program",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.array-range.irange-v3.program",
       "test_id": "tests/go/test_array_range.py::test_original_array_range_program_main_executes",
       "kind": "program",
       "purpose": "runtime",
@@ -1905,25 +1948,38 @@
       },
       "input_sha256": "a0b3d2ff4ff5b426739403c6c2c84cb86907adf9982ebecc7de1f41acd7641b2",
       "command": [
-        "./range-main"
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "-m",
+        "integration",
+        "tests/go/test_array_range.py::test_original_array_range_program_main_executes"
       ],
       "actual": {
         "exit_code": 0,
         "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh owned native main from the complete integration selection. Exact exit/stdout/stderr tuple is asserted by the named test; this main-only node does not retain separate raw stream files."
+      "observation": "Fresh complete 465-node integration gate executed this unchanged program main. Its named test asserts the exact owned-program zero/empty/empty process tuple. These hashes describe that program assertion, not pytest output; this main-only node does not retain separate stream files."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.array-range.v7.differential",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.array-range.irange-v3.differential",
       "test_id": "tests/go/test_array_range.py::test_official_go_receives_identical_original_array_range_program",
       "kind": "differential",
       "purpose": "runtime",
@@ -1969,18 +2025,18 @@
       "comparison": {
         "kind": "raw_process_streams"
       },
-      "observation": "Fresh same-source PCC main and official-Go reference nodes independently assert the exact zero/empty/empty process tuple. These existing nodes do not retain separate raw stream files; their actual executed assertions and binaries are the evidence, not copied historical results."
+      "observation": "Fresh owned main and official-Go reference nodes in the 465-node integration gate independently assert the identical raw zero/empty/empty tuple from the same complete fixture. These existing nodes do not retain separate raw stream files; their executed assertions and retained binaries are the evidence."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:43:01.671033+00:00",
-      "id": "go.local-pointer.v7.unit",
+      "observed_at_utc": "2026-11-01T05:13:06.866073+00:00",
+      "id": "go.local-pointer.irange-v3.unit",
       "test_id": "tests/go/test_pointers.py::test_nonescaping_pointer_types_and_aliases_lower_without_external_owner",
       "kind": "unit",
       "purpose": "unit",
@@ -1998,30 +2054,30 @@
         "-m",
         "pytest",
         "-x",
-        "--maxfail=0",
         "-c",
         "pyproject.toml",
+        "--maxfail=0",
         "-m",
         "not integration",
         "tests/go"
       ],
       "actual": {
         "exit_code": 0,
-        "stdout_sha256": "6647a96b7c0b612f2913557a4de4f539f686cf52fed3e3d8c757ca066ef777e8",
+        "stdout_sha256": "b8c99cbd5b07bddc4c35f920c53aeffd52f2331114193fe17e2389b1431b6843",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh complete ordinary selection; this named test passed. Stream hashes identify that full ordinary process log, not a fabricated per-node stream."
+      "observation": "Fresh complete 791-node ordinary gate. All parameters of this named test passed;31 protocol-simulation nodes elsewhere are not language execution. Stream hashes identify the full gate, not fabricated per-node output. Qualification metadata is excluded from the frozen compiler/test source identity."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.local-pointer.v7.program",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.local-pointer.irange-v3.program",
       "test_id": "tests/go/test_pointers.py::test_deterministic_pointer_program_main_executes",
       "kind": "program",
       "purpose": "runtime",
@@ -2031,25 +2087,38 @@
       },
       "input_sha256": "54971313ef296092944a54a127f8e32f550fc3cba23fc67e49015a6d87330b3c",
       "command": [
-        "./pointer-main"
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "-m",
+        "integration",
+        "tests/go/test_pointers.py::test_deterministic_pointer_program_main_executes"
       ],
       "actual": {
         "exit_code": 0,
         "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh owned native main from the complete integration selection. Exact exit/stdout/stderr tuple is asserted by the named test; this main-only node does not retain separate raw stream files."
+      "observation": "Fresh complete 465-node integration gate executed this unchanged program main. Its named test asserts the exact owned-program zero/empty/empty process tuple. These hashes describe that program assertion, not pytest output; this main-only node does not retain separate stream files."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.local-pointer.v7.differential",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.local-pointer.irange-v3.differential",
       "test_id": "tests/go/test_pointers.py::test_same_deterministic_pointer_program_matches_official_raw_process_streams",
       "kind": "differential",
       "purpose": "runtime",
@@ -2095,18 +2164,18 @@
       "comparison": {
         "kind": "raw_process_streams"
       },
-      "observation": "Fresh same-source paired native executions retain separate PCC and official-Go raw stream files and exit receipts."
+      "observation": "Fresh same-original-source owned/reference comparison in the 465-node integration gate; both raw stdout/stderr streams and exit receipts are retained. These are actual process results, not build-only or normalized diagnostic observations."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:43:01.671033+00:00",
-      "id": "go.nullable-pointer.v7.unit",
+      "observed_at_utc": "2026-11-01T05:13:06.866073+00:00",
+      "id": "go.nullable-pointer.irange-v3.unit",
       "test_id": "tests/go/test_nullable_pointers.py::test_source_guards_and_unevaluated_operands_admit_pointer_parameters",
       "kind": "unit",
       "purpose": "unit",
@@ -2124,30 +2193,30 @@
         "-m",
         "pytest",
         "-x",
-        "--maxfail=0",
         "-c",
         "pyproject.toml",
+        "--maxfail=0",
         "-m",
         "not integration",
         "tests/go"
       ],
       "actual": {
         "exit_code": 0,
-        "stdout_sha256": "6647a96b7c0b612f2913557a4de4f539f686cf52fed3e3d8c757ca066ef777e8",
+        "stdout_sha256": "b8c99cbd5b07bddc4c35f920c53aeffd52f2331114193fe17e2389b1431b6843",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh complete ordinary selection; this named test passed. Stream hashes identify that full ordinary process log, not a fabricated per-node stream."
+      "observation": "Fresh complete 791-node ordinary gate. All parameters of this named test passed;31 protocol-simulation nodes elsewhere are not language execution. Stream hashes identify the full gate, not fabricated per-node output. Qualification metadata is excluded from the frozen compiler/test source identity."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.nullable-pointer.v7.program",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.nullable-pointer.irange-v3.program",
       "test_id": "tests/go/test_nullable_pointers.py::test_complete_nullable_pointer_main_executes_owned",
       "kind": "program",
       "purpose": "runtime",
@@ -2157,25 +2226,38 @@
       },
       "input_sha256": "d9994f4a5f7c055f692f5672d9b6d54bf19b3100b471b2a9c8be69a4e5c07611",
       "command": [
-        "./nullable-main"
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "-m",
+        "integration",
+        "tests/go/test_nullable_pointers.py::test_complete_nullable_pointer_main_executes_owned"
       ],
       "actual": {
         "exit_code": 0,
         "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
-      "observation": "Fresh owned native main from the complete integration selection. Exact exit/stdout/stderr tuple is asserted by the named test; this main-only node does not retain separate raw stream files."
+      "observation": "Fresh complete 465-node integration gate executed this unchanged program main. Its named test asserts the exact owned-program zero/empty/empty process tuple. These hashes describe that program assertion, not pytest output; this main-only node does not retain separate stream files."
     },
     {
       "outcome": "passed",
-      "source_revision": "sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
       "gc": "not_applicable",
       "command_kind": "reproduction",
-      "observed_at_utc": "2026-11-01T00:44:56.358619+00:00",
-      "id": "go.nullable-pointer.v7.differential",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "id": "go.nullable-pointer.irange-v3.differential",
       "test_id": "tests/go/test_nullable_pointers.py::test_identical_nullable_pointer_program_matches_official_raw_streams",
       "kind": "differential",
       "purpose": "runtime",
@@ -2221,7 +2303,146 @@
       "comparison": {
         "kind": "raw_process_streams"
       },
-      "observation": "Fresh same-source paired native executions retain separate PCC and official-Go raw stream files and exit receipts."
+      "observation": "Fresh same-original-source owned/reference comparison in the 465-node integration gate; both raw stdout/stderr streams and exit receipts are retained. These are actual process results, not build-only or normalized diagnostic observations."
+    },
+    {
+      "id": "go.integer-range.v3.unit",
+      "test_id": "tests/go/test_integer_range.py::test_integer_range_retains_bound_and_iteration_type",
+      "kind": "unit",
+      "purpose": "unit",
+      "outcome": "passed",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
+      "source": {
+        "path": "tests/go/test_integer_range.py",
+        "sha256": "42daf4c0027a049290b734b3ac75e3cf7a959fbe0b4255e5322103d33a14fce7"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "--maxfail=0",
+        "-m",
+        "not integration",
+        "tests/go"
+      ],
+      "observation": "Fresh complete 791-node ordinary gate. All parameters of this named test passed;31 protocol-simulation nodes elsewhere are not language execution. Stream hashes identify the full gate, not fabricated per-node output. Qualification metadata is excluded from the frozen compiler/test source identity.",
+      "observed_at_utc": "2026-11-01T05:13:06.866073+00:00",
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "b8c99cbd5b07bddc4c35f920c53aeffd52f2331114193fe17e2389b1431b6843",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "id": "go.integer-range.v3.program",
+      "test_id": "tests/go/test_integer_range.py::test_complete_integer_range_program_main_executes_owned",
+      "kind": "program",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
+      "source": {
+        "path": "tests/go/fixtures/integer_range.go",
+        "sha256": "65e8279fe7a924e63ae76234de037b7c8be278c7d7de7f4f0f4ab73a58444f33"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "-m",
+        "integration",
+        "tests/go/test_integer_range.py::test_complete_integer_range_program_main_executes_owned"
+      ],
+      "observation": "Fresh complete 465-node integration gate executed this unchanged program main. Its named test asserts the exact owned-program zero/empty/empty process tuple. These hashes describe that program assertion, not pytest output; this main-only node does not retain separate stream files.",
+      "input_sha256": "65e8279fe7a924e63ae76234de037b7c8be278c7d7de7f4f0f4ab73a58444f33",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "id": "go.integer-range.v3.differential",
+      "test_id": "tests/go/test_integer_range.py::test_identical_integer_range_program_matches_official_raw_streams",
+      "kind": "differential",
+      "purpose": "runtime",
+      "outcome": "passed",
+      "source_revision": "sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c",
+      "source": {
+        "path": "tests/go/fixtures/integer_range.go",
+        "sha256": "65e8279fe7a924e63ae76234de037b7c8be278c7d7de7f4f0f4ab73a58444f33"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "command": [
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-c",
+        "pyproject.toml",
+        "-m",
+        "integration",
+        "tests/go/test_integer_range.py::test_identical_integer_range_program_matches_official_raw_streams"
+      ],
+      "observation": "Fresh same-original-source owned/reference execution in the 465-node integration gate. This named comparison retains both raw stdout/stderr streams and exit receipts; the complete integer fixture and the two byte-distinct graduated originals are separate parameter cases. Official Go is an explicit development oracle, never the production owner.",
+      "input_sha256": "65e8279fe7a924e63ae76234de037b7c8be278c7d7de7f4f0f4ab73a58444f33",
+      "observed_at_utc": "2026-11-01T05:15:12.247609+00:00",
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "reference": {
+        "name": "Go",
+        "version": "go1.27.3",
+        "platform": "linux/amd64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "65e8279fe7a924e63ae76234de037b7c8be278c7d7de7f4f0f4ab73a58444f33"
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
     }
   ]
 }

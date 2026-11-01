@@ -296,11 +296,44 @@ length; this is not a substitute for arbitrary dynamic bounds panics.
 Range-declared variables have per-iteration Go semantics. The current admitted
 values do not qualify distinct per-iteration address identity: addresses of
 per-iteration bindings, captured closures and stored method values remain
-explicit gaps, not a claim of escaping-loop-variable support. Slice/pointer/string/map/channel/integer/function range remain
+explicit gaps, not a claim of escaping-loop-variable support. Slice/pointer/string/map/channel/function range remain
 unsupported; no slice backing, UTF-8 iterator, scheduler or managed allocation
 is manufactured. Relevant rules are the official Go specification's
 [range clauses](https://go.dev/ref/spec#For_range) and
 [length and capacity](https://go.dev/ref/spec#Length_and_capacity).
+
+## Integer range implementation and acceptance
+
+Integer range uses the existing source range AST, ordinary public-IR loop edges
+and local storage. It admits no iteration variable, a newly declared variable,
+or one preexisting assignment target. The hidden induction value retains the
+bound's signedness, width and defined-type identity. An untyped bound instead
+acquires the preexisting target's integer type, or defaults to `int` when the
+target is new/blank/absent; constants must remain representable. Typed bounds
+do not silently convert to a mismatched target type.
+
+The bound is captured once before target-address or body effects. Targets are
+evaluated once per iteration through ordinary assignment lowering; body writes
+to the bound or visible iteration variable cannot change the hidden progression.
+Signed zero/negative limits have no iterations. Incrementing the last index to
+the bound is representable even at the integer type maximum. The frontend CFG
+keeps dynamic trip counts conservative and excludes statically nonpositive
+body/target edges without skipping evaluation of a dynamic bound. The existing
+per-iteration-address restriction remains; no fresh heap, nil-panic substitute,
+closure support or runtime contract is introduced.
+
+Specification-linked tests and the unchanged authored `integer_range.go` include
+contextual types, narrow maxima, high-bit bounds, nil-flow edges, target/bound
+effects and structured control flow. Both former `for range 3{}` rejection
+inputs are preserved byte-for-byte as positive obligations. **Acceptance** is bounded Linux pcc0/self execution: all 83 new ordinary
+nodes and 58 new integration nodes passed within the complete repository-Go
+selections below. The integration obligations include 30 independent full-width
+owned observations, a complete program main, three retained same-source raw
+reference pairs and 24 normal-source rejections; rejection checks are not
+positive language execution. Official Go 1.27.3 is the explicit oracle only. Rules:
+[range clauses](https://go.dev/ref/spec#For_range),
+[assignments](https://go.dev/ref/spec#Assignments), and
+[representability](https://go.dev/ref/spec#Representability).
 
 ### Structured capability diagnostics
 
@@ -385,7 +418,7 @@ evidence, not all possible programs. An inventory row with legacy `missing`
 does not mean its chapter has no implementation. An explicit capability
 rejection is not an invalid-Go classification or a positive runtime pass.
 
-Qualification version: `sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf` (the frozen tested source manifest).
+Qualification source identity: `sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c` (the frozen compiler/test closure, excluding this README and the feature-map qualification metadata). It uses the reviewed `cb51679a` shared implementation plus the Go integer-range source/test changes; later unrelated publication-tree contents are not silently described as this tested snapshot.
 Execution lane **L** is host **pcc0**, owned **self** backend, **Linux x86_64**,
 no applicable GC; official **Go 1.27.3 linux/amd64** is an external reference only.
 PCC native-pcc1, Mac execution, full Go/standard library and shared runtime/GC
@@ -401,7 +434,8 @@ JSON fields are used to simulate such a migration.
 | Existing feature ID | Implementation status | Acceptance status / test binding | Legacy schema1 status |
 |---|---|---|---|
 | `go.expression-switch.scalar` | Implemented: bounded scalar/static-string expression switches | Qualified in L for SW-U / -P / -D only | `supported` |
-| `go.array-range.fixed-value` | Implemented: bounded fixed value-array range and len/cap | Qualified in L for AR-U / -P / -D only | `supported` |
+| `go.array-range.fixed-value` | Implemented: bounded fixed value-array range and len/cap | Renewed in L for AR-U / -P / -D on the current unit file | `supported` |
+| `go.integer-range.typed-bound` | Implemented: bounded typed/untyped integer range with one-time bounds | Qualified in L for IR-U / -P / -D and the listed full-width cases | `supported` |
 | `go.inventory.source` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.inventory.lexical` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.inventory.constants` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
@@ -445,7 +479,7 @@ JSON fields are used to simulate such a migration.
 | `go.capability.local-type-declarations` | Explicitly unimplemented boundary: local type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.method-values` | Explicitly unimplemented boundary: method values | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.negative-shift-panic` | Explicitly unimplemented boundary: negative shift panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.non-array-range` | Explicitly unimplemented boundary: non array range | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.non-array-range` | Explicitly unimplemented: string and pointer-to-array range; integer-range implementation is separate | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.package-initialization` | Explicitly unimplemented boundary: package initialization | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-receivers` | Explicitly unimplemented boundary: pointer receivers | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.predeclared-shadowing` | Explicitly unimplemented boundary: predeclared shadowing | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -480,6 +514,9 @@ ordinary test-process log, not invented per-node output.
 | AR-U | `tests/go/test_array_range.py::test_fixed_array_range_grammar_scope_and_empty_values` |
 | AR-P | `tests/go/test_array_range.py::test_original_array_range_program_main_executes` |
 | AR-D | `tests/go/test_array_range.py::test_official_go_receives_identical_original_array_range_program` |
+| IR-U | `tests/go/test_integer_range.py::test_integer_range_retains_bound_and_iteration_type` |
+| IR-P | `tests/go/test_integer_range.py::test_complete_integer_range_program_main_executes_owned` |
+| IR-D | `tests/go/test_integer_range.py::test_identical_integer_range_program_matches_official_raw_streams` |
 | LP-U | `tests/go/test_pointers.py::test_nonescaping_pointer_types_and_aliases_lower_without_external_owner` |
 | LP-P | `tests/go/test_pointers.py::test_deterministic_pointer_program_main_executes` |
 | LP-D | `tests/go/test_pointers.py::test_same_deterministic_pointer_program_matches_official_raw_process_streams` |
@@ -501,11 +538,13 @@ hashable. The 24
 native official-Go executables **without running them** and do not qualify PCC
 nil-panic/escape/receiver support.
 
-The complete selections finished with **708 ordinary test nodes** (31 simulated
-reference-protocol checks + 677 other ordinary checks) and **407 integration
-nodes** (280 owned-native, 30 positive external-reference, 70 normal-source
+The complete selections finished with **791 ordinary test nodes** (31 simulated
+reference-protocol checks + 760 other ordinary checks) and **465 integration
+nodes** (311 standalone owned-native, 33 positive external-reference, 94 normal-source
 rejections, 24 build-only valid-unsupported, two external nil-panic frontiers,
-and one diagnostic-only observer). These are test outcomes, not 1,115 supported
+and one diagnostic-only observer). The 59 regular official build successes are
+not 59 executions; the separate diagnostic Go-test build/observer remains
+excluded from acceptance. These are test outcomes, not 1,256 supported
 features or a whole-language completeness percentage. Both selections retain
 all cases; no failed case was skipped or relabeled to obtain these outcomes.
 

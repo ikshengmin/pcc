@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.records import underlying
-from pcc.frontends.go.types import PointerType, Results, result_types
+from pcc.frontends.go.types import ArrayType, PointerType, Results, result_types
 
 
 NIL, NONNULL, UNKNOWN = 1, 2, 3
@@ -114,9 +114,14 @@ class Graph:
             return (self.statement(statement.init, header, breaking, continuing, falling)
                     if statement.init is not None else header)
         if kind == 'range':
-            # Zero length has no body edge. Otherwise preserve both completion
-            # and backedges without inventing facts from the iteration count.
-            header = self.add('range_check', underlying(statement.exprs[0].type).count)
+            # A statically empty array/integer range has no body edge. Dynamic
+            # integer bounds preserve both edges, including zero iterations;
+            # do not infer nonnil facts from an unknown trip count.
+            ranged = statement.exprs[0]
+            dtype = underlying(ranged.type)
+            has_body = (dtype.count > 0 if isinstance(dtype, ArrayType) else
+                        ranged.constant is None or ranged.constant > 0)
+            header = self.add('range_check', has_body)
             body = self.sequence(statement.body, header, following, header, falling)
             if statement.init is not None:
                 body = self.statement(statement.init, body, following, header, falling)

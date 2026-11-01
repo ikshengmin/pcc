@@ -265,16 +265,20 @@ class Lowerer:
         if kind == "range":
             ranged = statement.exprs[0]
             dtype = underlying(ranged.type)
+            array_range = isinstance(dtype, ArrayType)
             uses_element = len(statement.targets) == 2 and not (
                 statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
-            if statement.evaluate_range:
+            if statement.evaluate_range or not array_range:
+                # Integer bounds are captured once, before any target address
+                # or body effects. Constants merely materialize a typed value.
                 value = self.expression(ranged)
                 if uses_element:
                     # An array range snapshots the entire value once, not a
                     # pointer to the original variable or caller's storage.
                     self.builder.store(value, self.temps[id(ranged)])
             index_slot = self.temps[id(statement.range_index)]
-            index_type = ir.IntType(64)
+            index_type = ir_type(statement.range_index.type)
+            limit = ir.Constant(index_type, dtype.count) if array_range else value
             self.builder.store(ir.Constant(index_type, 0), index_slot)
             check = self.function.append_basic_block("range_check")
             body = self.function.append_basic_block("range_body")
@@ -283,7 +287,9 @@ class Lowerer:
             self.builder.branch(check)
             self.builder.position_at_end(check)
             index = self.builder.load(index_slot)
-            self.builder.cbranch(self.builder.icmp_unsigned("<", index, ir.Constant(index_type, dtype.count)), body, done)
+            compare = (self.builder.icmp_signed if not array_range and integer_signed(ranged.type)
+                       else self.builder.icmp_unsigned)
+            self.builder.cbranch(compare("<", index, limit), body, done)
             self.builder.position_at_end(body)
             if statement.init is not None:
                 values = [index]
@@ -308,6 +314,8 @@ class Lowerer:
             if not self.builder.block.is_terminated:
                 self.builder.branch(post)
             self.builder.position_at_end(post)
+            # The final executed index is at most limit-1: incrementing to
+            # limit is representable even at the signed/unsigned type maximum.
             self.builder.store(self.builder.add(index, ir.Constant(index_type, 1)), index_slot)
             self.builder.branch(check)
             self.builder.position_at_end(done)
