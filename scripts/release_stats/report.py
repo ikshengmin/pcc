@@ -63,6 +63,47 @@ def _language_lane(entry: dict, lane: str, audit: dict) -> str:
     return text
 
 
+def _official_language(entry: dict) -> str:
+    if entry["status"] == "missing_adapter":
+        return "official suite: missing adapter; denominator unknown; not run"
+    counts = entry["outcomes"]
+    total = entry["selected_denominator"]
+    runtime = entry["selected_by_kind"].get("run_pass", 0)
+    passed = sum(counts[key] for key in ("run_pass", "compile_only_pass", "expected_reject_pass"))
+    text = (f"official {entry['version']} tiny representative shard: {passed}/{total} "
+            f"({_pct(passed, total)}) selected obligations passed; "
+            f"{entry['executed_programs']} programs actually executed, "
+            f"{entry['reference_matched_programs']}/{runtime} run-pass inputs matched raw "
+            "reference stdout/stderr/exit; "
+            f"{counts['compile_only_pass']}/{entry['selected_by_kind'].get('compile_only', 0)} compile-only and "
+            f"{counts['expected_reject_pass']}/{entry['selected_by_kind'].get('expected_reject', 0)} "
+            "expected-reject passes (not executed programs)")
+    others = ", ".join(f"{counts[key]} {key.replace('_', ' ')}" for key in (
+        "failed", "unsupported", "missing_prerequisite", "missing_evidence", "unrun"))
+    text += "; " + others
+    inventory = entry["inventory"]
+    if inventory["complete"]:
+        text += (f"; declared official-driver inventory {inventory['denominator']}, "
+                 f"{inventory['unobserved']} unobserved (not a full-suite pass)")
+        text += (f"; run-recipe inventory {inventory['recipe_counts'].get('run', 0)} "
+                 f"(including flag/argument variants), {inventory['unobserved_by_recipe'].get('run', 0)} "
+                 "unobserved; inventory admission is not a pass")
+    else:
+        text += "; full-suite denominator and unrun remainder unknown (inventory not supplied)"
+    if entry.get("observed_compiler_revision"):
+        text += (f"; observed PCC `{entry['observed_compiler_revision']}` "
+                 f"({entry['mode']}/{entry['backend']}/{entry['platform']}, GC {entry['gc']})")
+        if not entry["current_revision_match"]:
+            text += "; historical observation, not the current report revision"
+    execution = entry.get("execution", {})
+    if execution.get("status") not in (None, "not_requested", "complete"):
+        text += "; adapter execution " + execution["status"]
+        if execution.get("reason"):
+            text += " (" + execution["reason"] + ")"
+    text += f"; upstream `{entry['source_revision']}`, license {entry['license']}"
+    return text
+
+
 def compatibility_rows(results: dict) -> list[tuple[str, int, int]]:
     rows = []
     if "cpython" in results:
@@ -137,19 +178,25 @@ def section(results: dict, image_prefix: str) -> str:
         suites = results["languages"]["c_suites"]
         parts = [f"{data['passed']:,} of {data['cases']:,} {suite} cases"
                  for suite, data in suites.items()]
-        lines.append(f"- **C**: pcc alone compiles and runs {', '.join(parts)}.")
+        if parts:
+            lines.append(f"- **C**: pcc alone compiles and runs {', '.join(parts)}.")
+        else:
+            lines.append("- **C**: not run in this result.")
         ordinary = results["languages"]["language_suites"]
         named = {"cpp": "C++", "go": "Go", "java": "Java", "rust": "Rust"}
         audit = results["languages"].get("execution_audit", {})
-        lines.append("- **C++, Go, Java, Rust**: bounded language subsets, no official "
-                     "conformance suite yet. Ordinary and integration results follow; "
+        lines.append("- **C++, Go, Java, Rust**: ordinary/integration pytest counts are "
+                     "bounded language checks, not native program or official-suite counts; "
                      "their reference comparisons are not separately enumerated here.")
         for name, entry in ordinary.items():
             lanes = audit.get("lanes", {})
             descriptions = [_language_lane(entry, lane, lanes.get(name + "-" + lane, {}))
                             for lane in ("ordinary", "integration")]
             lines.append(f"- **{named[name]}**: " + "; ".join(descriptions) + ".")
-    lines += ["", f"![Compatibility]({image_prefix}/compatibility.svg)", ""]
+        for name, entry in results["languages"].get("official_suites", {}).items():
+            lines.append(f"- **{named[name]}**: " + _official_language(entry) + ".")
+    if compatibility_rows(results):
+        lines += ["", f"![Compatibility]({image_prefix}/compatibility.svg)", ""]
     if "packages" in results:
         lines += [f"![Native languages of the top PyPI projects]({image_prefix}/native-languages.svg)", ""]
     lines.append("### Speed against CPython")

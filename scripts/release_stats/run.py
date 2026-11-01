@@ -75,6 +75,22 @@ def parser() -> argparse.ArgumentParser:
     languages = result.add_argument_group("languages")
     languages.add_argument("--c-case-timeout", type=int, default=60)
     languages.add_argument("--suite-timeout", type=float, default=7200.0)
+    languages.add_argument("--official-only", action="store_true",
+                           help="languages: no C-suite or ordinary/integration pytest execution")
+    languages.add_argument("--official-selection", choices=("fast", "full"), default="fast",
+                           help="fast selects the pinned tiny shard; full is explicitly unavailable")
+    official_go = languages.add_mutually_exclusive_group()
+    official_go.add_argument("--official-go-run", type=Path,
+                             help="import a retained go_conformance run directory, preserving its revision")
+    official_go.add_argument("--official-go-execute", action="store_true",
+                             help="execute the existing pinned Go adapter with 90 s/1 GiB guards")
+    languages.add_argument("--official-go-inventory", type=Path,
+                           help="verified go_conformance inventory JSON for the full denominator")
+    languages.add_argument("--official-go-src", type=Path)
+    languages.add_argument("--official-go-tool", type=Path)
+    languages.add_argument("--official-go-reference-cache", type=Path)
+    languages.add_argument("--official-pcc-source", type=Path,
+                           help="clean compiler checkout at this measured revision (default: this tree)")
     result.add_argument("--update-readme", action="store_true",
                         help="report: replace the README section and its images")
     return result

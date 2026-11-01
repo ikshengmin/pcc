@@ -23,7 +23,7 @@ exported without Git metadata names its commit with `--pcc-revision`.
 | `pyperformance` | pyperformance 1.14.0 (pinned SHA-256), programs unchanged, `pyperf_shim.py` as `pyperf` on both sides | exit 0, same benchmarks and result hashes as CPython; speedup = CPython s / pcc s | ~2 h |
 | `micro` | `tests/benchmarks/threading/programs` single-thread programs | same printed fields as CPython | minutes |
 | `packages` | top 100 PyPI projects (hugovk.dev 30-day list, kept with the results): wheels-only install, CPython import baseline, `import <module>` compiled and run by pcc; native languages from the source distribution | the native program prints `import ok` | ~1-3 h |
-| `languages` | c-testsuite and gcc torture execute by pcc alone (`tests/*_cases.py` owned path); `tests/{cpp,go,java,rust}` ordinary and integration selections | exit 0 (and `.expected` output for c-testsuite); junit outcomes | ~1 h |
+| `languages` | existing C suites; ordinary/integration pytest checks; separately selected official-source adapter results | C expectations; junit outcomes separately; official raw reference streams/exit and upstream assertions | selected lanes |
 | `report` | README section, `docs/images/release-stats/*.svg` | | seconds |
 
 Rules the numbers keep:
@@ -36,5 +36,62 @@ Rules the numbers keep:
   packages, compile failed, ...) next to it.
 - The timed stages (`pyperformance`, `micro`) hold `build/.pcc-performance.lock`;
   keep the machine otherwise idle and compare releases on the same machine.
-- Package test suites are not run yet, and C++/Go/Java/Rust have no official
-  conformance suite in the repository yet; the README says so.
+- Package test suites are not run yet. The official Go adapter covers a tiny
+  pinned shard, not the entire Go suite. Official C++/Rust/Java adapters remain
+  explicitly missing; authored tests never become official-suite counts.
+
+## Bounded official-language lane
+
+Use `--official-only` to avoid running the existing C suites or pytest lanes.
+By default this performs no compiler execution: the five Go obligations stay
+UNRUN, and missing adapters remain visible. Import retained observations with:
+
+```sh
+uv run python scripts/release_stats/run.py languages --out "$OUT" --official-only \
+  --official-go-run "$RETAINED_GO_RUN" \
+  --official-go-inventory "$VERIFIED_GO_INVENTORY_JSON"
+uv run python scripts/release_stats/run.py report --out "$OUT"
+```
+
+The inventory is the existing `scripts/go_conformance.py inventory` output,
+not a pytest count. Its pinned version/revision/archive/license and selection
+hashes must agree. Without it the complete denominator and unrun remainder
+are **unknown**, never five or zero. With it the report states the declared
+driver-test inventory and unobserved remainder; standard-library tests are
+outside that inventory. Missing/malformed raw artifacts do not pass.
+
+Explicit execution uses the existing adapter, not another compiler path:
+
+```sh
+uv run python scripts/release_stats/run.py languages --out "$FRESH_OUT" --official-only \
+  --official-selection fast --official-go-execute \
+  --official-go-src "$GO_SOURCE_ROOT" --official-go-tool "$GO_REFERENCE_COMPILER" \
+  --official-go-reference-cache "$EXISTING_BOUNDED_CACHE" \
+  --official-pcc-source "$CLEAN_PCC_CHECKOUT_AT_REPORT_REVISION"
+```
+
+No download or installation is performed. The source/license hashes and
+reference version are locked by
+[`go1.27.3-representative.json`](../../specs/conformance/suites/go1.27.3-representative.json)
+and the [existing adapter](../../specs/conformance/README.md). `fast` selects
+exactly its three run-pass, one compile-only and one expected-rejection inputs.
+The adapter runs sequentially with six seconds per process inside the existing
+process-tree watchdog's **90-second / 1-GiB** cap. Existing pytest six-worker
+defaults and other language guards are unchanged. Coordinate heavy runs using
+the repository's existing admission/serialization procedure.
+
+`full` is an explicit selection interface, but currently reports **unsupported**
+without launching the tiny adapter. It is not an alias for `fast`, an automatic
+download, or authorization to run a full suite. Workflow owners can consume
+this interface without this change editing any workflow.
+
+The report re-reads retained source bytes, stdout, stderr, process exits and
+upstream assertions. It separates actual executed programs and raw-reference
+matches from compile-only/rejection passes, failures, unsupported cases,
+missing prerequisites/evidence and unrun cases. Selected-obligation percentages
+always retain their five-input denominator, including failures/unrun; runtime
+matches use their three-input denominator. These are **tiny-shard rates**, not
+language completeness or whole-suite pass rates. The observed compiler commit
+and pcc0/self/Linux/GC axes remain attached even when importing an older run.
+No imported run is relabeled as the report checkout, and no passed baseline is
+exported. Raw logs, receipts, original inputs and local paths stay outside Git.

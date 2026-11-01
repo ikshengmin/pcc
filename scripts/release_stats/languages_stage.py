@@ -6,8 +6,9 @@ same owned path the C tests use (``tests/*_cases.py``; no cc, no clang):
 - c-testsuite: a case passes when it exits 0 and prints its ``.expected``;
 - gcc torture execute: a case passes when it exits 0 (failures call abort).
 
-For C++, Go, Java and Rust there is no official conformance suite in the
-repository yet. Their own test suites (``tests/<language>``) run as the
+The bounded official Go adapter is integrated separately from pytest; other
+official-language adapters remain explicitly missing. Their own test suites
+(``tests/<language>``) run as the
 status page prescribes, ordinary and integration selections separately; the
 counts are reported as the bounded language subsets they are, together with
 the platform, because the native-execution adapters of some selections
@@ -113,10 +114,16 @@ def run_language_suites(options, stage_dir: Path) -> dict:
 def run(options, out: Path, identity: dict) -> dict:
     stage_dir = out / "languages"
     stage_dir.mkdir(parents=True, exist_ok=True)
+    from official_languages import collect
+
+    official = collect(options, stage_dir, identity)
+    official_only = getattr(options, "official_only", False)
     return {
         "stage": "languages",
         "identity": identity,
         "platform": f"{platform.system()} {platform.machine()}",
-        "c_suites": run_c_suites(options, stage_dir),
-        "language_suites": run_language_suites(options, stage_dir),
+        "c_suites": {} if official_only else run_c_suites(options, stage_dir),
+        "language_suites": {} if official_only else run_language_suites(options, stage_dir),
+        "official_suites": official,
+        "legacy_suites_status": "not_requested" if official_only else "requested",
     }
