@@ -691,9 +691,9 @@ def test_stack_maps_alone_root_the_stack_frames_on_gc1_to_gc4(
         assert ran.returncode == 0, f"GC{gc}: {ran.stdout}{ran.stderr[-2000:]}"
         assert ran.stdout == expected.stdout, f"GC{gc}: {ran.stdout}"
         found = report.findall(ran.stderr)
-        if program == "churn" and gc == 3:
-            assert found == []  # GC3 young blocks grow without collecting here
-            continue
+        # GC3 collects in the churn program too. The old "no GC3 collection
+        # here" exception only held while the pattern above matched a field
+        # the runtime no longer prints, so nothing was ever found.
         assert found, ran.stderr[-2000:]
         assert sum(int(mapped) for mapped, _registered in found) > 0
 
