@@ -2851,6 +2851,20 @@ def _release_cms_worker_pause_unless_kept(keeps_collector: int) -> None:
         _release_cms_worker_pause()
 
 
+def _publish_frame_registry_inactive() -> None:
+    # pcc_gc_frame_registry_inactive mirrors its three inputs (configuration
+    # parsed, backend 0, no backend-0 frame roots); republish it after
+    # storing any of them.
+    inactive: int = 0
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0
+    ):
+        inactive = 1
+    store_i32(global_addr("pcc_gc_frame_registry_inactive"), 0, inactive)
+
+
 @c_abi_export("pcc_gc_set_backend")
 def pcc_gc_set_backend(backend: int) -> int:
     _init_config()
@@ -2980,6 +2994,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
     store_i32(global_addr("pcc_gc_backend_selected"), 0, backend)
+    _publish_frame_registry_inactive()
     store_i32(global_addr("pcc_gc_mark_active"), 0, 0)
     store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     store_i32(
@@ -2996,6 +3011,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
     if backend == 0:
         store_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0, 1)
+        _publish_frame_registry_inactive()
     if backend != 3 and backend != 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 0)
     refcount_fast: int = 0

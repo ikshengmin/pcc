@@ -136,6 +136,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_stackmap_index_count",
     "pcc_gc_stackmap_location_base",
     "pcc_gc_stackmap_roots_setting",
+    "pcc_gc_stackmap_walk_state",
 }
 # Not GC state: the managed runtime's builtin type root table, which the
 # visitor walks for the builtin class statics it keeps alive.

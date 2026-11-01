@@ -132,6 +132,11 @@ define_global_i32("pcc_gc_refcount_atomic", 0)
 define_global_i32("pcc_gc_config_initialized", 0)
 define_global_i32("pcc_gc_read_barrier_enabled", 1)
 define_global_i32("pcc_gc_backend0_frame_roots_enabled", 0)
+# 1 while compiled frames register nothing: the configuration is parsed,
+# backend 0 is selected and its frame roots are off. Republished wherever
+# one of those three words is stored, so a frame entry and the AArch64 short
+# path load one word instead of three.
+define_global_i32("pcc_gc_frame_registry_inactive", 0)
 define_global_i64_array(
     "pcc_gc_hot_config_isolation_after",
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -356,6 +361,11 @@ define_global_i64("pcc_gc_stackmap_location_base", 0)
 # PCC_GC_STACKMAP_ROOTS, read once: -1 unread, 0 registered slots root
 # every frame, 1 the stack walk roots this thread's frames, 2 with a report.
 define_global_i32("pcc_gc_stackmap_roots_setting", -1)
+# The final pcc_gc_stackmap_roots_mode answer for mapped frame entries:
+# 0 not final yet, 1 the stack walk roots them, 2 they register. The setting
+# is read once, a validated index stays valid and a table that failed
+# validation stays invalid, so a published answer never changes.
+define_global_i32("pcc_gc_stackmap_walk_state", 0)
 define_global_ptr_null("pcc_gc_continuation_root_head")
 define_global_ptr_null("pcc_gc_scheduler_root_head")
 define_global_i64("pcc_gc_root_registry_revision", 0)

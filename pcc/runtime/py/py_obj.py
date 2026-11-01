@@ -1483,14 +1483,9 @@ def pcc_gc_try_take_ptr(owner, slot):
 def _frame_registry_inactive() -> int:
     # GC0 without frame roots registers nothing. Decide it here, in the thin
     # entry every compiled frame calls, before entering the registry body
-    # (whose prologue and slot setup cost more than the early return).
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        return 0
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
-        return 0
-    if load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) != 0:
-        return 0
-    return 1
+    # (whose prologue and slot setup cost more than the early return). The
+    # runtime publishes the three-word condition as one word.
+    return load_i32(global_addr("pcc_gc_frame_registry_inactive"), 0)
 
 
 @c_abi_export("pcc_gc_frame_enter")

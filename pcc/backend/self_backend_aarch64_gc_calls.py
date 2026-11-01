@@ -85,12 +85,15 @@ def gc_short_call_lines(func, callee, call_id, ret_kind, arg_kinds, module_symbo
             lines.extend(["  cbz " + value + ", " + done,
                           "  and x17, " + value + ", #1",
                           "  cbnz x17, " + done])
-        _flag(lines, "pcc_gc_config_initialized", module_symbols)
-        lines.append("  cbz w17, " + slow)
-        _flag(lines, "pcc_gc_backend_selected", module_symbols)
-        lines.append("  cbnz w17, " + slow)
         if frame:
-            _flag(lines, "pcc_gc_backend0_frame_roots_enabled", module_symbols)
+            # Configuration parsed, backend 0 and no backend-0 frame roots,
+            # published by the runtime as one word.
+            _flag(lines, "pcc_gc_frame_registry_inactive", module_symbols)
+            lines.append("  cbz w17, " + slow)
+        else:
+            _flag(lines, "pcc_gc_config_initialized", module_symbols)
+            lines.append("  cbz w17, " + slow)
+            _flag(lines, "pcc_gc_backend_selected", module_symbols)
             lines.append("  cbnz w17, " + slow)
         lines.append("  b " + done)
     lines.append(slow + ":")

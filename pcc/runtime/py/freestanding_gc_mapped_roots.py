@@ -290,7 +290,15 @@ def _pcc_stackmap_roots_mode() -> i64:
             setting = 2
         store_i32(global_addr("pcc_gc_stackmap_roots_setting"), 0, setting)
     if setting != 0 and _pcc_stackmap_index_ready() == 0:
+        # A table that failed validation stays invalid; a missing table may
+        # still be published.
+        if load_i64(global_addr("pcc_gc_stackmap_index_count"), 0) < 0:
+            store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 2)
         return 0
+    if setting != 0:
+        store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 1)
+    else:
+        store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 2)
     return setting
 
 

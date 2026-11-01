@@ -312,6 +312,12 @@ def pcc_gc_config_ensure() -> i64:
     if refcount_probe < 0:
         refcount_probe = 1 if (backend == 3 or backend == 4) else 0
     store_i32(global_addr("pcc_gc_backend_selected"), 0, backend)
+    # The configuration is initialized; publish the frame-registry word
+    # from the backend just stored and the current frame-root switch.
+    registry_inactive: i64 = 0
+    if backend == 0 and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0:
+        registry_inactive = 1
+    store_i32(global_addr("pcc_gc_frame_registry_inactive"), 0, registry_inactive)
     if backend == 3 or backend == 4:
         store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
     else:

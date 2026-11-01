@@ -32,7 +32,7 @@ HELPERS = (
 FLAGS = (
     "pcc_thread_stop_requested", "pcc_gc_read_barrier_enabled",
     "pcc_gc_config_initialized", "pcc_gc_backend_selected",
-    "pcc_gc_backend0_frame_roots_enabled",
+    "pcc_gc_backend0_frame_roots_enabled", "pcc_gc_frame_registry_inactive",
 )
 
 
@@ -86,8 +86,11 @@ def _fixture(name, marked):
     states = [(0, 0, 1, 0, 0), (0, 1, 1, 1, 1), (1, 0, 1, 0, 0),
               (0, 0, 0, 0, 0), (0, 1, 1, 4, 1), (0, 1, 1, 4, 1),
               (0, 1, 1, 4, 1), (0, 0, 1, 0, 1), (1, 1, 1, 4, 1)]
+    # The runtime publishes the frame-registry word with its three inputs.
+    states = [state + (int(state[2] == 1 and state[3] == 0 and state[4] == 0),)
+              for state in states]
     for i, state in enumerate(states):
-        stop, read, initialized, backend, roots = state
+        stop, read, initialized, backend, roots, _inactive = state
         null_case = i in (5, 8)
         tagged_case = i == 6
         if not marked:

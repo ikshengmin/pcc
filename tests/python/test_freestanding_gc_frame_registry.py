@@ -89,6 +89,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_config_initialized",
     "pcc_gc_explicit_collect_active",
     "pcc_gc_frame_head",
+    # The cached final pcc_gc_stackmap_roots_mode answer.
+    "pcc_gc_stackmap_walk_state",
 }
 
 
