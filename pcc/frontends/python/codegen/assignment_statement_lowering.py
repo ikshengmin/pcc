@@ -462,7 +462,7 @@ def _emit_live_import_sequence_unpack(host, stmt, target, source_root=None):
             )
         host.builder.branch(generic_ready)
         host.builder.position_at_end(iterate)
-        host._slot_call_runtime_call("py_obj_iter", (source,), result_slot=iterator, span=stmt.span)
+        host._slot_call_runtime_call("py_obj_unpack_iter", (source,), result_slot=iterator, span=stmt.span)
         host.builder.call(host.runtime["py_exc_builtin_class"], [ir.Constant(_I64, _STOP_ITERATION_TAG)])
         host._emit_post_call_err_check(stmt.span)
         cache = host.builder.call(host.runtime["py_subs_exc_cache_slot"], [ir.Constant(_I64, _STOP_ITERATION_TAG)])
@@ -2172,84 +2172,9 @@ class AssignmentStatementLoweringMixin:
             )
         rhs = stmt.value
         rhs_ty = rhs.ty
-        if not isinstance(rhs_ty, (DynType, ListType, TupleType)):
-            raise NotImplementedError(
-                "Layer 1 starred unpack assignment requires a list, tuple, "
-                "or dynamic sequence RHS"
-            )
         star_i = star_indices[0]
         before = star_i
         after = len(target.elems) - star_i - 1
-        seq = self._emit_expr(rhs)
-        if isinstance(rhs_ty, ListType):
-            n_val = self.builder.call(
-                self.runtime["py_list_len"],
-                [seq],
-                name=self._fresh("unpack.star.len"),
-            )
-            elem_ty: Type = rhs_ty.elem
-        elif isinstance(rhs_ty, TupleType):
-            n_val = self.builder.call(
-                self.runtime["py_tuple_len"],
-                [seq],
-                name=self._fresh("unpack.star.len"),
-            )
-            elem_ty = DynType(name="dyn")
-        else:
-            n_val = self.builder.call(
-                self.runtime["py_obj_len"],
-                [seq],
-                name=self._fresh("unpack.star.len"),
-            )
-            elem_ty = DynType(name="dyn")
-
-        def load_elem(idx_val: ir.Value, label: str) -> ir.Value:
-            if isinstance(rhs_ty, ListType):
-                return self.builder.call(
-                    self.runtime["py_list_get"],
-                    [seq, idx_val],
-                    name=self._fresh(label),
-                )
-            if isinstance(rhs_ty, TupleType):
-                return self.builder.call(
-                    self.runtime["py_tuple_get"],
-                    [seq, idx_val],
-                    name=self._fresh(label),
-                )
-            idx_box = self.builder.call(
-                self.runtime["py_int_from_i64"],
-                [idx_val],
-                name=self._fresh(label + ".idx"),
-            )
-            return self.builder.call(
-                self.runtime["py_obj_getitem"],
-                [seq, idx_box],
-                name=self._fresh(label),
-            )
-
-        i = 0
-        while i < before:
-            elem = load_elem(
-                ir.Constant(_I64, i),
-                f"unpack.star.pre.{i}",
-            )
-            native_val = elem
-            if _assign_unpack_needs_unbox(elem_ty):
-                native_val = marshal.marshal_from_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    elem,
-                    elem_ty,
-                )
-            self._store_unpack_target(
-                target.elems[i],
-                native_val,
-                elem_ty,
-                value_is_owned=True,
-            )
-            i += 1
-
         rest_target = target.elems[star_i]
         assert isinstance(rest_target, Call)
         rest_inner = rest_target.args[0]
@@ -2259,103 +2184,88 @@ class AssignmentStatementLoweringMixin:
             raise NotImplementedError(
                 "Layer 1 starred unpack target must be a name, subscript or attribute"
             )
-        lo_obj = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [ir.Constant(_I64, before)],
-            name=self._fresh("unpack.star.lo"),
+        elem_ty: Type = DynType(name="dyn")
+        if isinstance(rhs_ty, ListType):
+            elem_ty = rhs_ty.elem
+        # CPython's UNPACK_EX iterates the value once into the leading items,
+        # a list of the middle ones and the trailing items. A non-iterable
+        # value raises TypeError and too few items ValueError.
+        seq = self._emit_as_object(rhs)
+        parts = self.builder.call(
+            self.runtime["py_obj_unpack_ex"],
+            [seq, ir.Constant(_I64, before), ir.Constant(_I64, after)],
+            name=self._fresh("unpack.star.parts"),
         )
-        hi_i64 = self.builder.sub(
-            n_val,
-            ir.Constant(_I64, after),
-            name=self._fresh("unpack.star.hi.i64"),
-        )
-        hi_obj = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [hi_i64],
-            name=self._fresh("unpack.star.hi"),
-        )
-        rest_list = self.builder.call(
-            self.runtime["py_list_new"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh("unpack.star.rest"),
-        )
-
-        fn = self.current_function
-        rest_idx_slot = self._alloca_in_entry(
-            _I64,
-            name="unpack.star.rest.idx.addr",
-        )
-        self.builder.store(ir.Constant(_I64, before), rest_idx_slot)
-        rest_cond_bb = fn.append_basic_block(name=self._fresh("unpack.star.cond"))
-        rest_body_bb = fn.append_basic_block(name=self._fresh("unpack.star.body"))
-        rest_end_bb = fn.append_basic_block(name=self._fresh("unpack.star.end"))
-        self.builder.branch(rest_cond_bb)
-        self.builder.position_at_end(rest_cond_bb)
-        rest_cur = self.builder.load(
-            rest_idx_slot,
-            name=self._fresh("unpack.star.idx"),
-        )
-        rest_keep = self.builder.icmp_signed(
-            "<",
-            rest_cur,
-            hi_i64,
-            name=self._fresh("unpack.star.keep"),
-        )
-        self.builder.cbranch(rest_keep, rest_body_bb, rest_end_bb)
-        self.builder.position_at_end(rest_body_bb)
-        rest_elem = load_elem(rest_cur, "unpack.star.rest.elem")
-        self.builder.call(
-            self.runtime["py_list_append"],
-            [rest_list, rest_elem],
-            name=self._fresh("unpack.star.append"),
-        )
-        rest_next = self.builder.add(
-            rest_cur,
-            ir.Constant(_I64, 1),
-            name=self._fresh("unpack.star.next"),
-        )
-        self.builder.store(rest_next, rest_idx_slot)
-        self.builder.branch(rest_cond_bb)
-        self.builder.position_at_end(rest_end_bb)
-
-        # Keep the boxed bounds alive until after the dynamic rest loop; the
-        # generic path above may still need them for GC-rooted temporaries.
-        self._gc_release(lo_obj)
-        self._gc_release(hi_obj)
-        self._store_unpack_target(
-            rest_inner,
-            rest_list,
-            ListType(name="list", elem=elem_ty),
-            value_is_owned=True,
-        )
-
-        j = 0
-        while j < after:
-            target_idx = star_i + 1 + j
-            src_idx = self.builder.add(
-                hi_i64,
-                ir.Constant(_I64, j),
-                name=self._fresh(f"unpack.star.post.idx.{j}"),
-            )
-            elem = load_elem(src_idx, f"unpack.star.post.{j}")
-            native_val = elem
-            if _assign_unpack_needs_unbox(elem_ty):
-                native_val = marshal.marshal_from_object(
-                    self.builder,
-                    self.module,
-                    self.runtime,
-                    elem,
-                    elem_ty,
-                )
-            self._store_unpack_target(
-                target.elems[target_idx],
-                native_val,
-                elem_ty,
-                value_is_owned=True,
-            )
-            j += 1
-
         self._gc_release_if_owned(seq, rhs)
+        self._emit_post_call_err_check(stmt.span)
+        # Pinned and rooted while the targets are stored; a failing target
+        # store releases it with the pending exception preserved.
+        parts_root = self._enter_container_temp_root(parts, self._fresh("unpack.star.parts"))
+        outer_err = getattr(self, "_try_err_block", None)
+        parts_err = self.current_function.append_basic_block(name=self._fresh("unpack.star.error"))
+        self._try_err_block = parts_err
+        index = 0
+        while index < len(target.elems):
+            elem = self.builder.call(
+                self.runtime["py_list_get"],
+                [parts, ir.Constant(_I64, index)],
+                name=self._fresh("unpack.star.item"),
+            )
+            if index == star_i:
+                self._store_unpack_target(
+                    rest_inner,
+                    elem,
+                    ListType(name="list", elem=elem_ty),
+                    value_is_owned=True,
+                )
+            else:
+                native_val = elem
+                if _assign_unpack_needs_unbox(elem_ty):
+                    native_val = marshal.marshal_from_object(
+                        self.builder,
+                        self.module,
+                        self.runtime,
+                        elem,
+                        elem_ty,
+                    )
+                self._store_unpack_target(
+                    target.elems[index],
+                    native_val,
+                    elem_ty,
+                    value_is_owned=True,
+                )
+            index += 1
+        self._try_err_block = outer_err
+        done_block = self.builder._block
+        if not self._builder_block_is_terminated():
+            self._leave_container_temp_root(parts_root)
+            self._gc_release(parts)
+            done_block = self.builder._block
+
+        self.builder.position_at_end(parts_err)
+        pending = self.builder.call(
+            self.runtime["py_current_exception"],
+            [],
+            name=self._fresh("unpack.star.exception"),
+        )
+        exception_slot = self._exception_selection_owner_slot(
+            pending, "unpack.star.exception"
+        )
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        self._leave_container_temp_root(parts_root)
+        self._gc_release(parts)
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        pending = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(exception_slot)],
+            name=self._fresh("unpack.star.exception.restore"),
+        )
+        self.builder.call(self.runtime["py_raise"], [pending])
+        self._clear_exception_selection_owner_slot(exception_slot)
+        self.builder.branch(
+            outer_err if outer_err is not None else self._ensure_fn_err_exit()
+        )
+        self.builder.position_at_end(done_block)
 
     def _emit_augassign(self, stmt: AugAssign) -> None:
         from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound

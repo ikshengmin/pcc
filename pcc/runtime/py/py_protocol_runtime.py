@@ -1474,6 +1474,41 @@ def py_dict_subclass_getattr(obj, name):
     return bound
 
 
+@c_abi_export("py_dict_items_loop_source")
+def py_dict_items_loop_source(o):
+    """The dict whose entries ``for k, v in o.items()`` walks (NEW), or NULL.
+
+    An exact dict walks itself. A dict subclass instance walks its item
+    storage while ``o.items`` still resolves to dict's own method: neither
+    its class nor its instance __dict__ defines ``items``. Anything else
+    answers NULL without an exception; the loop then calls ``o.items()`` and
+    iterates the result. NULL with an exception is a failure.
+    """
+    if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
+        return null()
+    if _type_of(o) == PY_TYPE_DICT:
+        py_incref(o)
+        return o
+    if _class_is_dict_subclass(o) == 0:
+        return null()
+    if ptr_is_null(py_class_lookup(_instance_class(o), cstr("items"))) == 0:
+        return null()
+    env = _dict_subclass_env(o, 0)
+    if ptr_is_null(env) == 0:
+        name = py_str_new(cstr("items"), 5)
+        if ptr_is_null(name) != 0:
+            return null()
+        shadow = py_dict_get(env, name)
+        py_decref(name)
+        if ptr_is_null(shadow) == 0:
+            py_decref(shadow)
+            return null()
+    storage = _dict_subclass_backing(o, 1)
+    if ptr_is_null(storage) == 0:
+        py_incref(storage)
+    return storage
+
+
 @c_abi_export("py_dict_subclass_storage")
 def py_dict_subclass_storage(obj, create: int):
     """A dict subclass instance's item storage (borrowed), or NULL."""

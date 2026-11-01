@@ -812,6 +812,13 @@ def _runtime_signatures_part_16():
 
 def _runtime_signatures_part_17():
     return {
+    # for k, v in x.items(): the dict whose entries the loop walks, or NULL.
+    "py_dict_items_loop_source": (_PYOBJ, [_PYOBJ], False),
+    # iter(x) for ``a, b = x``: a non-iterable type raises CPython's
+    # "cannot unpack non-iterable int object".
+    "py_obj_unpack_iter": (_PYOBJ, [_PYOBJ], False),
+    # a, *b, c = x: [leading..., list of the middle, trailing...] (UNPACK_EX).
+    "py_obj_unpack_ex": (_PYOBJ, [_PYOBJ, _I64, _I64], False),
     "py_obj_call_context_is_deferred": (_I64, [], False),
     "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_forward": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),

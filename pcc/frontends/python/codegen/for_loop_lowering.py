@@ -1411,33 +1411,161 @@ class ForLoopLoweringMixin:
         # The dictionary expression can be temporary or rebound in the body.
         # Keep the same independent owner as indexed list iteration, rather
         # than making a live SSA address depend on the source name's slot.
+        # Its static type proves no exact dict: a dict subclass may override
+        # items(), which the dynamic call below must reach.
+        dyn = DynType(name="dyn")
         source_name = self._fresh("for.dict.items.source")
-        source_slot = _for_prepare_owned_object_target(self, source_name, dict_expr.ty)
+        source_slot = _for_prepare_owned_object_target(self, source_name, dyn)
         _for_store_owned_target(self, source_name, source_slot, dict_val)
         outer_err = getattr(self, "_try_err_block", None)
         source_err = self.current_function.append_basic_block(name=self._fresh("for.dict.items.error"))
         self._try_err_block = source_err
-        n_val = self.builder.call(
-            self.runtime["py_dict_entries_used"],
-            [dict_val],
-            name=self._fresh("for.dict.items.used"),
-        )
+        # Owners of the walked dict, of the items() iterator and of its item.
+        entries_name = self._fresh("for.dict.items.entries")
+        entries_slot = _for_prepare_owned_object_target(self, entries_name, dyn)
+        iter_name = self._fresh("for.dict.items.iter")
+        iter_slot = _for_prepare_owned_object_target(self, iter_name, dyn)
+        item_name = self._fresh("for.dict.items.item")
+        item_slot = _for_prepare_owned_object_target(self, item_name, dyn)
+        self._for_unpack_temporary_names.add(item_name)
         idx_slot = self._alloca_in_entry(_I64, name="for.dict.items.idx.addr")
-        self.builder.store(ir.Constant(_I64, 0), idx_slot)
+        # The iterator path reaches the shared step edge too, so the entry
+        # count lives in a slot rather than an SSA value of the walk block.
+        used_slot = self._alloca_in_entry(_I64, name="for.dict.items.used.addr")
 
         key_slot = self._ensure_object_for_target(key_name)
         value_slot = self._ensure_object_for_target(value_name)
 
         fn = self.current_function
+        entries_bb = fn.append_basic_block(name=self._fresh("for.dict.items.walk"))
+        call_bb = fn.append_basic_block(name=self._fresh("for.dict.items.call"))
+        next_bb = fn.append_basic_block(name=self._fresh("for.dict.items.next"))
+        unpack_bb = fn.append_basic_block(name=self._fresh("for.dict.items.unpack"))
+        exhausted_bb = fn.append_basic_block(name=self._fresh("for.dict.items.exhausted"))
+        match_bb = fn.append_basic_block(name=self._fresh("for.dict.items.match"))
+        clear_bb = fn.append_basic_block(name=self._fresh("for.dict.items.clear"))
         cond_bb = fn.append_basic_block(name=self._fresh("for.dict.items.cond"))
         load_bb = fn.append_basic_block(name=self._fresh("for.dict.items.load"))
+        bind_bb = fn.append_basic_block(name=self._fresh("for.dict.items.bind"))
         body_bb = fn.append_basic_block(name=self._fresh("for.dict.items.body"))
         step_bb = fn.append_basic_block(name=self._fresh("for.dict.items.step"))
+        advance_bb = fn.append_basic_block(name=self._fresh("for.dict.items.advance"))
         end_bb = fn.append_basic_block(name=self._fresh("for.dict.items.end"))
+
+        # The dict whose entries the loop walks: an exact dict itself, or a
+        # dict subclass instance's item storage while items() is dict's own.
+        # NULL without an exception: call items() and iterate the result,
+        # unpacking each item as the ordinary ``k, v = item`` assignment does.
+        entries = self.builder.call(
+            self.runtime["py_dict_items_loop_source"],
+            [dict_val],
+            name=self._fresh("for.dict.items.walked"),
+        )
+        by_entries = self.builder.icmp_unsigned(
+            "!=",
+            entries,
+            ir.Constant(_CSTR, None),
+            name=self._fresh("for.dict.items.by_entries"),
+        )
+        self.builder.cbranch(by_entries, entries_bb, call_bb)
+
+        self.builder.position_at_end(call_bb)
+        self._emit_post_call_err_check(stmt.span)
+        items_call = Call(
+            span=stmt.span,
+            ty=dyn,
+            func=Attr(span=stmt.span, ty=dyn, obj=Name(span=stmt.span, ty=dyn, ident=source_name), name="items"),
+            args=(),
+        )
+        items_val = self._emit_expr(items_call)
+        iterator = self.builder.call(
+            self.runtime["py_obj_iter"],
+            [items_val],
+            name=self._fresh("for.dict.items.iterator"),
+        )
+        self._gc_release_if_owned(items_val, items_call)
+        self._emit_post_call_err_check(stmt.span)
+        _for_store_owned_target(self, iter_name, iter_slot, iterator)
+        self.builder.branch(next_bb)
+
+        self.builder.position_at_end(next_bb)
+        iterator_current = self.builder.call(
+            self.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(iter_slot[0])],
+            name=self._fresh("for.dict.items.iterator.current"),
+        )
+        item = self.builder.call(
+            self.runtime["py_obj_iter_next"],
+            [iterator_current],
+            name=self._fresh("for.dict.items.item"),
+        )
+        item_is_null = self.builder.icmp_unsigned(
+            "==",
+            item,
+            ir.Constant(_CSTR, None),
+            name=self._fresh("for.dict.items.item.null"),
+        )
+        self.builder.cbranch(item_is_null, exhausted_bb, unpack_bb)
+
+        # Exhaustion: no exception, or a StopIteration that ends the loop.
+        self.builder.position_at_end(exhausted_bb)
+        current_exc = self.builder.call(
+            self.runtime["py_current_exception"],
+            [],
+            name=self._fresh("for.dict.items.exc"),
+        )
+        self.builder.cbranch(
+            self.builder.icmp_unsigned("==", current_exc, ir.Constant(_CSTR, None)),
+            end_bb,
+            match_bb,
+        )
+        self.builder.position_at_end(match_bb)
+        stop_cls = self.builder.call(
+            self.runtime["py_exc_builtin_class"],
+            [ir.Constant(_I64, _BUILTIN_EXC_TAG["StopIteration"])],
+            name=self._fresh("for.dict.items.stop_cls"),
+        )
+        stop_match = self.builder.call(
+            self.runtime["py_exc_matches"],
+            [current_exc, stop_cls],
+            name=self._fresh("for.dict.items.stop_match"),
+        )
+        is_stop = self.builder.icmp_signed(
+            "!=",
+            stop_match,
+            ir.Constant(_I64, 0),
+            name=self._fresh("for.dict.items.stop"),
+        )
+        self.builder.cbranch(is_stop, clear_bb, source_err)
+        self.builder.position_at_end(clear_bb)
+        self.builder.call(self.runtime["py_clear_exception"], [])
+        self.builder.branch(end_bb)
+
+        self.builder.position_at_end(unpack_bb)
+        _for_store_owned_target(self, item_name, item_slot, item)
+        self._emit_stmts((Assign(
+            span=stmt.target.span,
+            targets=(stmt.target,),
+            value=Name(span=stmt.target.span, ty=dyn, ident=item_name),
+            annotation=None,
+        ),))
+        if not self._builder_block_is_terminated():
+            self.builder.branch(body_bb)
+
+        self.builder.position_at_end(entries_bb)
+        _for_store_owned_target(self, entries_name, entries_slot, entries)
+        n_val = self.builder.call(
+            self.runtime["py_dict_entries_used"],
+            [entries],
+            name=self._fresh("for.dict.items.used"),
+        )
+        self.builder.store(n_val, used_slot)
+        self.builder.store(ir.Constant(_I64, 0), idx_slot)
         self.builder.branch(cond_bb)
 
         self.builder.position_at_end(cond_bb)
         cur = self.builder.load(idx_slot, name=self._fresh("for.dict.items.idx"))
+        n_val = self.builder.load(used_slot, name=self._fresh("for.dict.items.used.cur"))
         cond = self.builder.icmp_signed(
             "<",
             cur,
@@ -1449,7 +1577,7 @@ class ForLoopLoweringMixin:
         self.builder.position_at_end(load_bb)
         dict_current = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(entries_slot[0])],
             name=self._fresh("for.dict.items.source.current"),
         )
         key_obj = self.builder.call(
@@ -1463,14 +1591,14 @@ class ForLoopLoweringMixin:
             ir.Constant(_CSTR, None),
             name=self._fresh("for.dict.items.key.null"),
         )
-        self.builder.cbranch(key_is_null, step_bb, body_bb)
+        self.builder.cbranch(key_is_null, step_bb, bind_bb)
 
-        self.builder.position_at_end(body_bb)
+        self.builder.position_at_end(bind_bb)
         _for_store_owned_target(self, key_name, key_slot, key_obj)
         # Replacing the previous key can run a finalizer and relocate source.
         dict_current = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(source_slot[0])],
+            [ir.Constant(_CSTR, None), self._as_gc_ptr(entries_slot[0])],
             name=self._fresh("for.dict.items.source.current"),
         )
         value_obj = self.builder.call(
@@ -1480,6 +1608,9 @@ class ForLoopLoweringMixin:
         )
         self._emit_post_call_err_check(stmt.span)
         _for_store_owned_target(self, value_name, value_slot, value_obj)
+        self.builder.branch(body_bb)
+
+        self.builder.position_at_end(body_bb)
         self.loop_stack.append((step_bb, end_bb, self._loop_finally_base()))
         mark_bound_target(self, stmt.target)
         self._emit_stmts(stmt.body)
@@ -1488,6 +1619,10 @@ class ForLoopLoweringMixin:
             self.builder.branch(step_bb)
 
         self.builder.position_at_end(step_bb)
+        self._emit_application_safepoint()
+        self.builder.cbranch(by_entries, advance_bb, next_bb)
+
+        self.builder.position_at_end(advance_bb)
         cur2 = self.builder.load(idx_slot, name=self._fresh("for.dict.items.idx2"))
         nxt = self.builder.add(
             cur2,
@@ -1495,15 +1630,20 @@ class ForLoopLoweringMixin:
             name=self._fresh("for.dict.items.next"),
         )
         self.builder.store(nxt, idx_slot)
-        self._emit_application_safepoint()
         self.builder.branch(cond_bb)
 
         self._try_err_block = outer_err
         self.builder.position_at_end(source_err)
+        self._emit_release_owned_local_if_flagged(item_name, item_slot[0])
+        self._emit_release_owned_local_if_flagged(iter_name, iter_slot[0])
+        self._emit_release_owned_local_if_flagged(entries_name, entries_slot[0])
         self._emit_release_owned_local_if_flagged(source_name, source_slot[0])
         self.builder.branch(outer_err if outer_err is not None else self._ensure_fn_err_exit())
 
         self.builder.position_at_end(end_bb)
+        self._emit_release_owned_local_if_flagged(item_name, item_slot[0])
+        self._emit_release_owned_local_if_flagged(iter_name, iter_slot[0])
+        self._emit_release_owned_local_if_flagged(entries_name, entries_slot[0])
         self._emit_release_owned_local_if_flagged(source_name, source_slot[0])
 
     def _emit_for_obj_index(self, stmt: For, iter_val: ir.Value) -> None:

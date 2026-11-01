@@ -307,6 +307,133 @@ def _raise_typed_object_error(o, suffix) -> None:
 
 @c_abi_export("py_obj_iter")
 def py_obj_iter(o):
+    return _obj_iter_body(o, 0)
+
+
+@c_abi_export("py_obj_unpack_iter")
+def py_obj_unpack_iter(o):
+    """iter(o) for ``a, b = o``: a type with neither __iter__ nor the
+    sequence protocol raises CPython's "cannot unpack non-iterable int
+    object"; an error raised by an __iter__ itself passes through."""
+    return _obj_iter_body(o, 1)
+
+
+@c_abi_export("py_obj_unpack_ex")
+def py_obj_unpack_ex(o, before: int, after: int):
+    """CPython's starred unpacking (UNPACK_EX) of ``o``.
+
+    Returns one list of ``before + 1 + after`` items (NEW): the leading
+    items, a list of the middle ones, then the trailing items; or NULL with
+    the exception set. A non-iterable operand raises "cannot unpack
+    non-iterable int object", too few items ValueError "not enough values to
+    unpack (expected at least 2, got 1)".
+    """
+    it = py_obj_unpack_iter(o)
+    if ptr_is_null(it) != 0:
+        return null()
+    items = py_list_new(0)
+    if ptr_is_null(items) != 0:
+        py_decref(it)
+        return null()
+    done: int = 0
+    while done == 0:
+        item = py_obj_iter_next(it)
+        if ptr_is_null(item) != 0:
+            done = 1
+        else:
+            py_list_append(items, item)
+            py_decref(item)
+            if py_err_occurred() != 0:
+                done = 2
+    py_decref(it)
+    if done == 2 or _unpack_iteration_failed() != 0:
+        py_decref(items)
+        return null()
+    count: int = py_list_len(items)
+    if count < before + after:
+        _raise_not_enough_values(before + after, count)
+        py_decref(items)
+        return null()
+    out = py_list_new(0)
+    middle = py_list_new(0)
+    if ptr_is_null(out) != 0 or ptr_is_null(middle) != 0:
+        if ptr_is_null(out) == 0:
+            py_decref(out)
+        if ptr_is_null(middle) == 0:
+            py_decref(middle)
+        py_decref(items)
+        return null()
+    index: int = 0
+    while index < count:
+        item = py_list_get(items, index)
+        if index >= before and index < count - after:
+            py_list_append(middle, item)
+        else:
+            if index == count - after:
+                py_list_append(out, middle)
+            py_list_append(out, item)
+        py_decref(item)
+        index = index + 1
+    if after == 0:
+        py_list_append(out, middle)
+    py_decref(middle)
+    py_decref(items)
+    if py_err_occurred() != 0:
+        py_decref(out)
+        return null()
+    return out
+
+
+def _unpack_iteration_failed() -> int:
+    """1 when iteration ended on an exception other than StopIteration."""
+    current = py_current_exception()
+    if ptr_is_null(current) != 0:
+        return 0
+    if py_exc_matches(current, py_exc_builtin_class(8)) != 0:  # StopIteration
+        py_clear_exception()
+        return 0
+    return 1
+
+
+def _raise_not_enough_values(expected: int, got: int) -> None:
+    """ValueError "not enough values to unpack (expected at least N, got M)"."""
+    message = stack_alloc(96)
+    length: int = _append_text(message, 0, cstr("not enough values to unpack (expected at least "))
+    length = _append_decimal(message, length, expected)
+    length = _append_text(message, length, cstr(", got "))
+    length = _append_decimal(message, length, got)
+    length = _append_text(message, length, cstr(")"))
+    store_i8(message, length, 0)
+    py_raise_owned(py_exc_new(2, message))
+
+
+def _append_text(message, length: int, text) -> int:
+    offset: int = 0
+    while load_i8(text, offset) != 0:
+        store_i8(message, length + offset, load_i8(text, offset))
+        offset = offset + 1
+    return length + offset
+
+
+def _append_decimal(message, length: int, value: int) -> int:
+    digits = stack_alloc(24)
+    count: int = 0
+    rest: int = value
+    if rest == 0:
+        store_i8(digits, 0, 48)
+        count = 1
+    while rest > 0:
+        store_i8(digits, count, 48 + rest % 10)
+        rest = rest // 10
+        count = count + 1
+    index: int = 0
+    while index < count:
+        store_i8(message, length + index, load_i8(digits, count - 1 - index))
+        index = index + 1
+    return length + count
+
+
+def _obj_iter_body(o, unpacking: int):
     if ptr_is_null(o):
         return _require_result(
             null(),
@@ -385,8 +512,41 @@ def py_obj_iter(o):
             cstr("py_obj_iter"),
             cstr("sequence iterator allocation failed without an exception"),
         )
-    py_obj_raise_not_iterable(o)
+    if unpacking != 0:
+        _raise_cannot_unpack(o)
+    else:
+        py_obj_raise_not_iterable(o)
     return null()
+
+
+def _raise_cannot_unpack(o) -> None:
+    """TypeError "cannot unpack non-iterable <type(o).__name__> object"."""
+    prefix = cstr("cannot unpack non-iterable ")
+    message = stack_alloc(160)
+    length: int = 0
+    while load_i8(prefix, length) != 0:
+        store_i8(message, length, load_i8(prefix, length))
+        length = length + 1
+    name = py_obj_type_name(o)
+    if ptr_is_null(name) == 0:
+        text = py_str_utf8(name)
+        count: int = py_str_byte_len(name)
+        if count > 100:
+            count = 100
+        index: int = 0
+        while index < count:
+            store_i8(message, length, load_i8(text, index))
+            length = length + 1
+            index = index + 1
+        py_decref(name)
+    suffix = cstr(" object")
+    offset: int = 0
+    while load_i8(suffix, offset) != 0:
+        store_i8(message, length, load_i8(suffix, offset))
+        length = length + 1
+        offset = offset + 1
+    store_i8(message, length, 0)
+    py_raise_owned(py_exc_new(3, message))
 
 
 def _iter_type_has_getitem(o) -> int:
