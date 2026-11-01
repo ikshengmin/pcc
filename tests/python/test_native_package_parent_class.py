@@ -17,6 +17,10 @@ import pytest
 
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline_context import build_closed_world_context
+from pcc.frontends.python.pipeline_dependency_closure import (
+    _collect_multi_source_relative_closure,
+    _collect_relative_module_closure,
+)
 from pcc.frontends.python.py_ast import Name
 from pcc.frontends.python.type_infer import infer_module
 
@@ -54,6 +58,39 @@ def package_sources(root: Path, imports: str, base: str):
         encoding="utf-8",
     )
     return [str(parent), str(child), str(consumer)]
+
+
+@pytest.mark.parametrize("statement", (
+    "import class_package.child\n",
+    "import class_package.child as child\n",
+    "from class_package.child import Base\n",
+))
+def test_leaf_discovery_includes_its_regular_parent_package(tmp_path, statement):
+    sources = package_sources(tmp_path, statement, "class_package.Base")
+    paths, names = _collect_relative_module_closure(sources[-1])
+    assert names.index("class_package") < names.index("class_package.child")
+    assert paths[names.index("class_package")] == sources[0]
+    expanded_paths, expanded_names = _collect_multi_source_relative_closure(
+        [sources[-1]], ["consumer"],
+    )
+    assert expanded_names.index("class_package") < expanded_names.index("class_package.child")
+    assert expanded_paths[expanded_names.index("class_package")] == sources[0]
+
+
+def test_leaf_discovery_keeps_namespace_ancestors_without_fake_initializers(tmp_path):
+    from pcc.frontends.python.pipeline_dependency_closure import _top_level_import_targets
+
+    leaf = tmp_path / "namespace_package" / "regular"
+    leaf.mkdir(parents=True)
+    (leaf / "__init__.py").write_text("VALUE = 17\n", encoding="utf-8")
+    (leaf / "child.py").write_text("VALUE = 29\n", encoding="utf-8")
+    targets = _top_level_import_targets(
+        str(tmp_path), "import namespace_package.regular.child\n",
+        top_level_only=False,
+    )
+    assert [name for _path, name in targets] == [
+        "namespace_package.regular", "namespace_package.regular.child",
+    ]
 
 
 @pytest.mark.parametrize("imports,base,expected", IMPORT_CASES)

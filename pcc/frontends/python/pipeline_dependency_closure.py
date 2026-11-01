@@ -207,6 +207,20 @@ def _top_level_import_targets(
             src = _locate_pcc_owned_component_source(module_name)
         if src is None:
             return
+        # Importing a leaf executes its regular parent packages too. Their
+        # exports must be present before class bases and module aliases are
+        # resolved; the leaf cannot stand in for the parent package object.
+        parts = module_name.split(".")
+        for index in range(1, len(parts)):
+            parent_name = ".".join(parts[:index])
+            if parent_name in seen:
+                continue
+            parent_src = _resolve_module_src_for_import(root_dir, parent_name)
+            if parent_src is None:
+                parent_src = _locate_pcc_owned_component_source(parent_name)
+            if parent_src is not None and os.path.basename(parent_src) == "__init__.py":
+                seen.add(parent_name)
+                targets.append((parent_src, parent_name))
         seen.add(module_name)
         targets.append((src, module_name))
 
