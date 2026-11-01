@@ -20,7 +20,9 @@ def test_none_return_type_survives_self_host_module_class_boundary():
         name = "None"
 
     assert _is_none_semantic_type(IndependentlyCompiledNoneType()) is True
-    assert _is_none_semantic_type(None) is True
+    # A missing return annotation keeps the dynamic object ABI; treating it
+    # as ``-> None`` would emit ``ret void`` and drop the returned value.
+    assert _is_none_semantic_type(None) is False
     assert _is_none_semantic_type(object()) is False
 
 
