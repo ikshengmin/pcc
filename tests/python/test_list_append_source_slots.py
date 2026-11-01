@@ -23,7 +23,9 @@ def test_source_slots_reload_after_wait_and_growth_without_consuming_them(borrow
 
     model = AppendRoots(action="grow")
     model.ns["pcc_gc_load_borrowed_ptr"] = model.heal
-    result = model.ns["_append_rooted_slots"](100, 200, 0, 0, 0, 2 if borrowed else 1)
+    result = model.ns["_append_rooted_slots"](
+        100, 200, 0, 0, caller_item_root=2 if borrowed else 1,
+    )
     assert result == 0 and model.depth == 0
     assert model.memory[100] == 1100 and model.memory[200] == 5200
     assert model.memory[2032] == 6000 and model.memory[2040] == 5200
