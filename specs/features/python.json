@@ -21,13 +21,26 @@
       "id": "pep3131",
       "title": "Supporting Non-ASCII Identifiers",
       "url": "https://peps.python.org/pep-3131/"
+    },
+    {
+      "id": "typing.parameters",
+      "title": "Type parameter lists",
+      "url": "https://docs.python.org/3.15/reference/compound_stmts.html#type-params"
+    },
+    {
+      "id": "typing.aliases",
+      "title": "The type statement",
+      "url": "https://docs.python.org/3.15/reference/simple_stmts.html#the-type-statement"
     }
   ],
   "features": [
     {
       "id": "python.lexical.unicode-identifiers",
       "title": "Unicode identifier classification and NFKC normalization",
-      "chapter_ids": ["lexical.identifiers", "pep3131"],
+      "chapter_ids": [
+        "lexical.identifiers",
+        "pep3131"
+      ],
       "scope": "Implementation includes owned Unicode 17 XID and NFKC data, UTF-8 source offsets, raw soft-keyword spelling, and compiler-owned symbol encoding. Host unit/object checks and pcc0/self native name and owned-lexer programs match CPython across GC0-4. Six affected Lib/test modules pass the old lexical boundary but still yield 0/1389 native successes. Missing means final qualification and normalized immutable evidence rows are incomplete; native pcc1 and whole-Python gates remain pending. No complete Python language claim is made.",
       "status": "missing",
       "tests": [
@@ -39,12 +52,65 @@
       ],
       "diagnostics": [],
       "evidence": []
+    },
+    {
+      "id": "python.typing.annotation-scopes",
+      "title": "Generic function and class annotation scopes",
+      "chapter_ids": [
+        "typing.parameters"
+      ],
+      "scope": "Raw syntax preserves names, parameter kinds, bounds and defaults. Runtime annotation scopes and lazy alias evaluation are not implemented; lowering rejects these declarations explicitly rather than erasing them. Parser-only progress does not claim runtime support.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/python/test_type_parameter_syntax.py::test_type_parameter_syntax_preserves_cpython_ast_inputs",
+        "tests/python/test_type_parameter_syntax.py::test_lowering_does_not_silently_erase_annotation_scopes",
+        "tests/python/test_type_parameter_syntax.py::test_native_parser_preserves_type_parameter_records"
+      ],
+      "diagnostics": [
+        "PCC-PY-TYPE-PARAMS-UNIMPLEMENTED"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "python.typing.lazy-aliases",
+      "title": "Lazy type aliases",
+      "chapter_ids": [
+        "typing.aliases"
+      ],
+      "scope": "Raw syntax preserves names, parameter kinds, bounds and defaults. Runtime annotation scopes and lazy alias evaluation are not implemented; lowering rejects these declarations explicitly rather than erasing them. Parser-only progress does not claim runtime support.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/python/test_type_parameter_syntax.py::test_type_parameter_syntax_preserves_cpython_ast_inputs",
+        "tests/python/test_type_parameter_syntax.py::test_lowering_does_not_silently_erase_annotation_scopes",
+        "tests/python/test_type_parameter_syntax.py::test_native_parser_preserves_type_parameter_records"
+      ],
+      "diagnostics": [
+        "PCC-PY-TYPE-ALIAS-UNIMPLEMENTED"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
     "inventory_complete": false,
     "notes": "The existing Python diagnostic inventory is not yet migrated here. The new lexer errors reject invalid source characters and UTF-8; they are not unimplemented-feature diagnostics.",
-    "codes": [],
+    "codes": [
+      {
+        "code": "PCC-PY-TYPE-PARAMS-UNIMPLEMENTED",
+        "feature_id": "python.typing.annotation-scopes",
+        "source": {
+          "path": "pcc/frontends/python/py_lift.py",
+          "sha256": "5d2254bdcf4f01a8720a22b7fffd64a9c7ec6664876685221f28873f09a5fb0e"
+        }
+      },
+      {
+        "code": "PCC-PY-TYPE-ALIAS-UNIMPLEMENTED",
+        "feature_id": "python.typing.lazy-aliases",
+        "source": {
+          "path": "pcc/frontends/python/py_lift.py",
+          "sha256": "5d2254bdcf4f01a8720a22b7fffd64a9c7ec6664876685221f28873f09a5fb0e"
+        }
+      }
+    ],
     "message_only": []
   },
   "evidence": []

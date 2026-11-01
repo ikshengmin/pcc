@@ -219,6 +219,10 @@ class _Lifter:
             return self._s_FuncDef(s)
         if t is pp._ClassDef:
             return self._s_ClassDef(s)
+        if t is pp._TypeAlias:
+            raise LiftError(
+                "PCC-PY-TYPE-ALIAS-UNIMPLEMENTED: lazy type-alias evaluation is not implemented"
+            )
         if t is pp._Import:
             return self._s_Import(s)
         if t is pp._ImportFrom:
@@ -316,6 +320,10 @@ class _Lifter:
         )
 
     def _s_FuncDef(self, s: pp._FuncDef) -> pa.FuncDef:
+        if s.type_params:
+            raise LiftError(
+                "PCC-PY-TYPE-PARAMS-UNIMPLEMENTED: generic function annotation scopes are not implemented"
+            )
         args_list = []
         for p in s.params:
             args_list.append(self._lift_arg(p))
@@ -362,6 +370,10 @@ class _Lifter:
         )
 
     def _s_ClassDef(self, s: pp._ClassDef) -> pa.ClassDef:
+        if s.type_params:
+            raise LiftError(
+                "PCC-PY-TYPE-PARAMS-UNIMPLEMENTED: generic class annotation scopes are not implemented"
+            )
         bases: list[pa.Expr] = []
         keywords: list[tuple[str, pa.Expr]] = []
         for b in s.bases:

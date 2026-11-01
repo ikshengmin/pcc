@@ -754,7 +754,7 @@ def _populate_static_native_exports_1(out):
     out["pcc.frontends.python.py_lex"] = {
         "Token": _class_export(
             "Token",
-            ("kind", "text", "line", "col"),
+            ("kind", "text", "line", "col", "raw_text"),
         ),
         "LexError": _class_export("LexError"),
         "Lexer": _class_export(
@@ -927,7 +927,7 @@ def _populate_static_native_exports_8(out):
                 ("_Break", ("line",)),
                 ("_Bytes", ("parts", "line")),
                 ("_Call", ("func", "args", "line")),
-                ("_ClassDef", ("name", "bases", "body", "decorators", "line")),
+                ("_ClassDef", ("name", "bases", "body", "decorators", "line", "type_params")),
                 ("_Comp", ("kind", "elt", "generators", "line")),
                 ("_Compare", ("op", "lhs", "rhs", "line")),
                 ("_ComplexNum", ("text", "line")),
@@ -951,6 +951,7 @@ def _populate_static_native_exports_8(out):
                         "decorators",
                         "returns",
                         "is_async",
+                        "type_params",
                     ),
                 ),
                 ("_Global", ("names", "line")),
@@ -976,6 +977,8 @@ def _populate_static_native_exports_8(out):
                 ("_Ternary", ("then_expr", "cond", "else_expr", "line")),
                 ("_Try", ("body", "handlers", "else_body", "finally_body", "line")),
                 ("_Tuple", ("elems", "line")),
+                ("_TypeAlias", ("name", "type_params", "value", "line")),
+                ("_TypeParam", ("name", "kind", "bound", "default_value", "line")),
                 ("_UnaryOp", ("op", "operand", "line")),
                 ("_While", ("cond", "body", "else_body", "line")),
                 ("_With", ("items", "body", "line", "is_async")),

@@ -212,6 +212,23 @@ f-string parser gaps; Unicode identifier tests reach the missing frame-local
 The feature ledger retains missing final qualification; whole Python and
 native-pcc1 gates are still pending.
 
+PEP 695/696 parser work preserves type-variable, variadic and ParamSpec
+parameters, bounds/constraints, defaults, and soft-keyword type-alias nodes.
+Duplicate names and non-default parameters following defaults are rejected.
+The standalone class-field exports match the new parser records and the
+Unicode token's raw spelling. A focused parser/import/Unicode selection passes
+101 cases against CPython AST inputs and rejection outcomes. Runtime generic
+annotation scopes and lazy aliases are not implemented yet: lifting stops
+with the mapped `PCC-PY-TYPE-PARAMS-UNIMPLEMENTED` or
+`PCC-PY-TYPE-ALIAS-UNIMPLEMENTED` diagnostic. This is parser progress, not
+runtime PEP 695 support or a completed conformance category; native parser
+execution and the affected-module rerun remain pending.
+
+The adjacent standalone-lifter export test still observes its two historical
+CPython actions (`unicodedata` import and `py_cpy_wrap_pcc_3arg`) instead of its
+one-action expectation. Frozen `0fbc8d977` reproduces the same failure; this
+typing parser batch does not repair that pre-existing bridge boundary.
+
 The Unicode snapshot's runtime archive and the synchronous five-GC program
 pass. Its larger asynchronous benchmark build does not complete under the
 inherited two-GiB aggregate guard: the emitter tree peaks at 3.13 GB, with one

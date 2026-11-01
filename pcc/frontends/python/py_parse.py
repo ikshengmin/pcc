@@ -172,6 +172,24 @@ class _FuncDef:
     decorators: list = None
     returns: object = None
     is_async: bool = False
+    type_params: list = None
+
+
+@dataclass
+class _TypeParam:
+    name: str
+    kind: str
+    bound: object
+    default_value: object
+    line: int
+
+
+@dataclass
+class _TypeAlias:
+    name: str
+    type_params: list
+    value: object
+    line: int
 
 
 @dataclass
@@ -246,6 +264,7 @@ class _ClassDef:
     body: list
     decorators: list
     line: int
+    type_params: list = None
 
 
 @dataclass
@@ -927,6 +946,11 @@ class Parser:
         """Expression statement OR ``name (: ann)? = value`` assign OR
         ``target op= value`` augmented assign. Also handles tuple
         unpacking on the LHS: ``a, b = pair``."""
+        first = self._peek()
+        if (first.kind == TK_NAME and first.text == "type" and not first.raw_text
+                and self._peek(1).kind == TK_NAME
+                and self._peek(2).kind == TK_OP and self._peek(2).text in ("[", "=")):
+            return self._parse_type_alias()
         start = self.pos
         if self._peek().kind == TK_OP and self._peek().text == "*":
             lhs = self._parse_list_item()
@@ -1268,6 +1292,7 @@ class Parser:
         kw = self._expect(TK_KEYWORD, "class")
         name_tok = self._expect(TK_NAME)
         name = name_tok.text
+        type_params = self._parse_type_parameters()
         bases: list = []
         if self._accept(TK_OP, "("):
             if self._peek().text != ")":
@@ -1280,8 +1305,55 @@ class Parser:
         self._expect(TK_OP, ":")
         body = self._parse_block()
         return _ClassDef(
-            name=name, bases=bases, body=body, decorators=list(decorators), line=kw.line
+            name=name, bases=bases, body=body, decorators=list(decorators), line=kw.line,
+            type_params=type_params,
         )
+
+    def _parse_type_parameters(self) -> list:
+        if not self._accept(TK_OP, "["):
+            return []
+        parameters = []
+        names = []
+        default_seen = False
+        while True:
+            kind = "TypeVar"
+            if self._accept(TK_OP, "**"):
+                kind = "ParamSpec"
+            elif self._accept(TK_OP, "*"):
+                kind = "TypeVarTuple"
+            token = self._expect(TK_NAME)
+            if token.text in names:
+                raise ParseError(f"{self.filename}:{token.line}: duplicate type parameter {token.text!r}")
+            names.append(token.text)
+            bound = None
+            if self._accept(TK_OP, ":"):
+                if kind != "TypeVar":
+                    raise ParseError(f"{self.filename}:{token.line}: cannot use bound with {kind}")
+                bound = self._parse_expr()
+            default = None
+            if self._accept(TK_OP, "="):
+                default_seen = True
+                if kind == "TypeVarTuple" and self._accept(TK_OP, "*"):
+                    default = _Starred(self._parse_expr(), False, token.line)
+                else:
+                    default = self._parse_expr()
+            elif default_seen:
+                raise ParseError(
+                    f"{self.filename}:{token.line}: non-default type parameter {token.text!r} follows default type parameter"
+                )
+            parameters.append(_TypeParam(token.text, kind, bound, default, token.line))
+            if self._accept(TK_OP, "]"):
+                return parameters
+            self._expect(TK_OP, ",")
+            if self._accept(TK_OP, "]"):
+                return parameters
+
+    def _parse_type_alias(self) -> _TypeAlias:
+        keyword = self._expect(TK_NAME, "type")
+        name = self._expect(TK_NAME)
+        parameters = self._parse_type_parameters()
+        self._expect(TK_OP, "=")
+        return _TypeAlias(name.text, parameters, self._parse_expr(), keyword.line)
 
     def _parse_async_stmt(self, decorators: list | None = None):
         kw = self._expect(TK_KEYWORD, "async")
@@ -1311,6 +1383,7 @@ class Parser:
             phase = "name"
             name_tok = self._expect(TK_NAME)
             name = name_tok.text
+            type_params = self._parse_type_parameters()
             if _debug_parse_enabled():
                 _debug_parse("func_start name=" + name + " line=" + str(kw.line))
             phase = "open_paren"
@@ -1388,6 +1461,7 @@ class Parser:
                 decorators=decorators_list,
                 returns=returns,
                 is_async=is_async,
+                type_params=type_params,
             )
         except Exception as ex:
             raise ParseError(
