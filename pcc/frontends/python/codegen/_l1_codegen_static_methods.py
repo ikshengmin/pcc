@@ -762,6 +762,7 @@ def _part_64(out):
 def _part_65(out):
     _append_method(out, '_emit_frame_rooted_object_compare', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_frame_root_slot_for_operand', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_frame_rooted_membership', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False)))
 
 
 def _build_static_methods():

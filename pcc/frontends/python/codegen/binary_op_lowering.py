@@ -30,6 +30,11 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.call_object_lowering import (
+    frame_operand_sources,
+    restore_frame_operand_modes,
+    set_frame_operand_modes,
+)
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
@@ -382,23 +387,33 @@ class BinaryOpLoweringMixin:
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
         roots = [output]
+        staged_operands = []
+        previous_modes = []
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            left = (
-                self._emit_dict_keys_view_set_operand(expr.lhs, label + ".left")
-                if views is not None and views[0] is not None
-                else self._emit_slot_call_operand(expr.lhs, label + ".left")
-            )
-            roots.append(left)
-            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
-            self._cpy_operand_cleanup_block = self._try_err_block
-            right = (
-                self._emit_dict_keys_view_set_operand(expr.rhs, label + ".right")
-                if views is not None and views[1] is not None
-                else self._emit_slot_call_operand(expr.rhs, label + ".right")
-            )
-            roots.append(right)
+            sources = (frame_operand_sources(self, (expr.lhs, expr.rhs))
+                       if views is None else None)
+            if sources is not None:
+                left, right = sources[0][0], sources[1][0]
+                previous_modes = set_frame_operand_modes(self, sources)
+            else:
+                left = (
+                    self._emit_dict_keys_view_set_operand(expr.lhs, label + ".left")
+                    if views is not None and views[0] is not None
+                    else self._emit_slot_call_operand(expr.lhs, label + ".left")
+                )
+                roots.append(left)
+                staged_operands.append(left)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                right = (
+                    self._emit_dict_keys_view_set_operand(expr.rhs, label + ".right")
+                    if views is not None and views[1] is not None
+                    else self._emit_slot_call_operand(expr.rhs, label + ".right")
+                )
+                roots.append(right)
+                staged_operands.append(right)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             join = None
@@ -449,8 +464,11 @@ class BinaryOpLoweringMixin:
                 self._emit_zero_division_if_null(current, "division by zero")
             else:
                 self._guard_cpy_value_not_null(current)
-            self._release_slot_call_roots((left, right))
+            # The output and any captured expressions belong to this
+            # operation. Reused frame inputs still belong to their caller.
+            self._release_slot_call_roots(tuple(staged_operands))
         finally:
+            restore_frame_operand_modes(self, previous_modes)
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         return output

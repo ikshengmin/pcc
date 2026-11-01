@@ -791,6 +791,7 @@ L1_CODEGEN_HOST_METHODS = (
     "_shared_return_pinned_cleanup",
     "_emit_frame_rooted_object_compare",
     "_frame_root_slot_for_operand",
+    "_emit_frame_rooted_membership",
 )
 
 

@@ -43,6 +43,11 @@ from pcc.frontends.python.codegen.method_call_lowering import (
     _method_source_arg_type,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.call_object_lowering import (
+    frame_operand_sources,
+    restore_frame_operand_modes,
+    set_frame_operand_modes,
+)
 from pcc.frontends.python.codegen.unary_call_lowering import (
     folded_int_literal, is_i64_int_literal,
 )
@@ -84,6 +89,25 @@ _MIRRORED_COMPARE_OP = {
 
 
 class CompareMembershipLoweringMixin:
+    def _emit_frame_rooted_membership(self, expr, runtime_name):
+        sources = frame_operand_sources(self, (expr.lhs, expr.rhs))
+        if sources is None:
+            return None
+        previous = set_frame_operand_modes(self, sources)
+        try:
+            status = self._slot_call_runtime_call(
+                runtime_name, tuple(source[0] for source in sources),
+                argument_order=(1, 0), span=expr.span,
+            )
+        finally:
+            restore_frame_operand_modes(self, previous)
+        contains = self.builder.icmp_signed(
+            "!=", status, ir.Constant(status.type, 0), name=self._fresh("frame.contains"),
+        )
+        if expr.op == "not in":
+            return self.builder.not_(contains, name=self._fresh("frame.not_in"))
+        return contains
+
     def _emit_frame_rooted_object_compare(self, expr):
         """Compare stable local inputs without creating temporary owners.
 
@@ -92,52 +116,19 @@ class CompareMembershipLoweringMixin:
         resumable frames and runtime raw-pointer code keep their existing
         capture paths. The call still leases objects on its callback path.
         """
-        if (expr.op not in ("==", "!=", "<", "<=", ">", ">=")
-                or not isinstance(expr.lhs, Name) or not isinstance(expr.rhs, Name)
-                or not getattr(self, "_gc_rooted_local_names", ())
-                or getattr(self, "_generator_ctx_stack", ())
-                or getattr(self, "_runtime_port_module", False)
-                or getattr(self, "_freestanding_module", False)
-                or getattr(self, "_python_library", False)):
+        if expr.op not in ("==", "!=", "<", "<=", ">", ">="):
             return None
-        definition = getattr(self, "current_func_def", None)
-        if definition is not None:
-            boxed = getattr(self, "_closure_boxed_params", {}).get(definition.name, ())
-            if expr.lhs.ident in boxed or expr.rhs.ident in boxed:
-                return None
-        roots = tuple(self._frame_root_slot_for_operand(operand)
-                      for operand in (expr.lhs, expr.rhs))
-        if any(root is None for root in roots):
+        sources = frame_operand_sources(self, (expr.lhs, expr.rhs))
+        if sources is None:
             return None
-        if any(self._expr_returns_unsafe_raw_pointer(operand)
-               for operand in (expr.lhs, expr.rhs)):
-            return None
-        # Keep lease mode tied to the physical slot's ownership, including
-        # parameters promoted to owned locals. These are caller roots: no
-        # operand cleanup clears them, on either success or exception.
-        sources = tuple(self._slot_call_name_source(operand)
-                        for operand in (expr.lhs, expr.rhs))
-        if any(source is None or source[0] is not root
-               for source, root in zip(sources, roots)):
-            raise RuntimeError("frame comparison lost its authoritative operand slot")
-        borrowed_operands = self._slot_call_borrowed_operands
-        previous = []
+        roots = tuple(source[0] for source in sources)
+        previous = set_frame_operand_modes(self, sources)
         try:
-            for slot, borrowed in sources:
-                previous.append((slot, borrowed_operands.get(id(slot))))
-                if borrowed:
-                    borrowed_operands[id(slot)] = slot
-                else:
-                    borrowed_operands.pop(id(slot), None)
             return self._emit_runtime_object_compare(
                 expr, None, None, "frame", roots=roots,
             )
         finally:
-            for slot, original in reversed(previous):
-                if original is None:
-                    borrowed_operands.pop(id(slot), None)
-                else:
-                    borrowed_operands[id(slot)] = original
+            restore_frame_operand_modes(self, previous)
 
     def _emit_runtime_object_compare(
         self,
@@ -1679,6 +1670,19 @@ class CompareMembershipLoweringMixin:
         ):
             return self._emit_owned_string_predicate(expr, True)
         weak_dict_kind = self._weak_dict_kind_for_expr(expr.rhs)
+        if weak_dict_kind == "value":
+            frame_helper = "py_weak_value_dict_contains"
+        elif isinstance(container_ty, ListType):
+            frame_helper = "py_list_contains"
+        elif isinstance(container_ty, DictType):
+            frame_helper = "py_dict_contains"
+        elif isinstance(container_ty, StrType):
+            frame_helper = "py_str_contains"
+        else:
+            frame_helper = "py_obj_contains"
+        rooted = self._emit_frame_rooted_membership(expr, frame_helper)
+        if rooted is not None:
+            return rooted
 
         # Evaluate each operand once, in Python order. Preserve the original
         # domain until the container is known: a late CPython container must

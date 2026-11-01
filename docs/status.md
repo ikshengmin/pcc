@@ -151,8 +151,15 @@ entry on frozen `b9cb1bdd8` also passes the expanded unchanged-source CPython
 comparison on GC0-4: exact int/float boundaries, booleans, typed-string equality
 and long-prefix ordering, and reflected NotImplemented callbacks that collect.
 These are host-pcc0/self executions; no QPS change is claimed for this increment.
-Leaf-call effects and the membership/arithmetic extensions remain open, as do
-whole-language and native-pcc1 gates.
+The next increment shares operand eligibility and scoped lease-mode handling
+between comparisons, membership and arithmetic. General membership preserves
+its container-specific dispatch and source-order input checks. Non-tagged
+binary slot calls reuse eligible inputs while publishing results to a separate
+empty root; only staged operands enter temporary cleanup. Existing tagged-int
+in-place arithmetic remains in place. Sixty-one focused ordinary checks pass;
+the new membership/arithmetic CPython/five-GC probe has not yet run. Statically
+typed string membership and leaf-call effects remain open, as do whole-language
+and native-pcc1 gates.
 Static-method generation also exposes the pre-existing `_call_user` and
 `_emit_post_call_err_check` signature drift; this batch preserves those entries
 and adds only its two new method schemas.

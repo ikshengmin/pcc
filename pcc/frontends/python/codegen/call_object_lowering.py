@@ -62,6 +62,58 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
+def frame_operand_sources(host, operands):
+    """Stable private input roots, checked in source evaluation order.
+
+    A general operand can rebind an earlier local. Restrict this borrowing
+    to local-name pairs and leave cells, resumable frames and raw ABI code
+    on their existing capture paths. Ownership belongs to physical slots.
+    """
+    if (not all(isinstance(operand, Name) for operand in operands)
+            or not getattr(host, "_gc_rooted_local_names", ())
+            or getattr(host, "_generator_ctx_stack", ())
+            or getattr(host, "_runtime_port_module", False)
+            or getattr(host, "_freestanding_module", False)
+            or getattr(host, "_python_library", False)):
+        return None
+    definition = getattr(host, "current_func_def", None)
+    if definition is not None:
+        boxed = getattr(host, "_closure_boxed_params", {}).get(definition.name, ())
+        if any(operand.ident in boxed for operand in operands):
+            return None
+    roots = tuple(host._frame_root_slot_for_operand(operand) for operand in operands)
+    if any(root is None for root in roots):
+        return None
+    if any(host._expr_returns_unsafe_raw_pointer(operand) for operand in operands):
+        return None
+    sources = tuple(host._slot_call_name_source(operand) for operand in operands)
+    if any(source is None or source[0] is not root for source, root in zip(sources, roots)):
+        raise L1CodegenError("frame operand lost its authoritative slot")
+    return sources
+
+
+def set_frame_operand_modes(host, sources):
+    """Install input lease modes for this call without copying the registry."""
+    borrowed_operands = host._slot_call_borrowed_operands
+    previous = []
+    for slot, borrowed in sources:
+        previous.append((slot, borrowed_operands.get(id(slot))))
+        if borrowed:
+            borrowed_operands[id(slot)] = slot
+        else:
+            borrowed_operands.pop(id(slot), None)
+    return previous
+
+
+def restore_frame_operand_modes(host, previous):
+    borrowed_operands = host._slot_call_borrowed_operands
+    for slot, original in reversed(previous):
+        if original is None:
+            borrowed_operands.pop(id(slot), None)
+        else:
+            borrowed_operands[id(slot)] = original
+
+
 def stable_parameter_operand_source(host, expr):
     """Reuse only the authoritative, unchanged borrowed parameter owner."""
     if (isinstance(expr, Name)
