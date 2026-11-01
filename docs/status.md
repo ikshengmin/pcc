@@ -101,6 +101,60 @@ performance and compatibility should README gain the requested "Why PCC?"
 claims. All five collectors, arbitrary-precision integers, identity, exceptions,
 finalizers, weakrefs and resurrection remain required.
 
+### P0 takeover boundary: `f11a3513d`
+
+The container dead-branch removal is published in `f11a3513d`; its recorded
+host/model/IR checks do not qualify the pending native GC0-4 execution. The
+takeover started from this clean source identity. No new native execution,
+whole-language gate, bootstrap or QPS result is established by this entry.
+
+The remaining scope is the handoff's items 2-21, in order: native validation
+of the existing batch; release statistics and paired performance; scheduler
+local queues/stealing and a separately designed CAS state machine; rooted
+comparison operands and leaf-call effects; GC0 pins/leases and tagged-int
+temporaries; remaining GC/scheduler dead branches; TLS addressing; known-type
+provenance checks; release costs; lazy dict views; root-slot clearing;
+early-return frames; target-feature-controlled LSE atomics; GC1-4 refcount
+removal (GC4 prototype first); conditional, measured GC0 biased refcounts;
+GC1-4 list-slice reads; dynamic bytes-method dispatch; removal of codegen
+`py_cpy_*` bridges; Linux four-language integration; and final affected-language
+ordinary/integration/reference checks plus one-/four-worker QPS comparison.
+These items remain open; profile shares and design documents are hypotheses
+and historical evidence, not measured gains on this source.
+
+The inherited pipeline A is a Darwin-native run and excludes 432 recorded
+failure nodes from its 156-file GC/thread selection. That selection cannot
+replace the complete affected-language pre-push gate. Its focused command
+also uses `-x --maxfail=0` outside whole-language enumeration, and the shell
+continues after failed build/test steps; it must not be treated as a successful
+gate from its final log message. Pipeline B depends on A's qualified artifacts.
+Both Mac-native pipelines remain **UNRUN** at takeover. Linux Docker evidence
+must be labeled separately and cannot renew Darwin/AArch64 execution or Mac
+QPS. The current no-Mac-execution rule remains in force. No further shared
+runtime/backend batch is published before the required relayed Mac QPS review.
+
+Existing failures from the handoff, kept separate from newly observed results:
+
+- `tests/python/gcsubstrate_d_store_ptr_capi_pins.py::test_py_obj_sorted_roots_shared_inputs_and_pins_private_working_lists`:
+  reported `ValueError` at line 521 on the prior tree and on HEAD, also at
+  `737e42c90`. Source inspection at `f11a3513d` confirms that its expected
+  `pcc_gc_pin(scratch)` string is absent from `py_obj_sorted`; no fresh pytest
+  reproduction has run in this takeover. Reproduce with
+  `uv run pytest -x -vv --tb=short tests/python/gcsubstrate_d_store_ptr_capi_pins.py::test_py_obj_sorted_roots_shared_inputs_and_pins_private_working_lists`.
+- `tests/python/test_freestanding_gc_state.py::test_current_production_archive_gc_state_drives_all_five_collectors`:
+  the handoff reports one failure under heavy load and a passing rerun. The
+  cause is unconfirmed; the per-backend timeout is only a hypothesis. No fresh
+  reproduction has run here. Reproduce with
+  `uv run pytest -x -vv --tb=short tests/python/test_freestanding_gc_state.py::test_current_production_archive_gc_state_drives_all_five_collectors`.
+
+Run these commands in an authorized execution environment with a bounded
+process-group watchdog and durable logs. Preserve failures and unrun nodes;
+do not repair unrelated failures during this batch unless they block its
+validation. Whole-project pytest/bootstrap remains a separately authorized
+final gate. Raw logs and recovery materials stay outside Git.
+
+### Historical P0 evidence
+
 P0 package 4 and runtime fast paths, 2026-11-01 evening (Claude). Each
 commit passes its host/IR tests; the native GC0-4 runs of the later ones and
 their A/B timing against s2f (`02acaa2f5`) are pending, as noted:
