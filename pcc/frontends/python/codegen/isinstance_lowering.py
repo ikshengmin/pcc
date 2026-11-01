@@ -9,7 +9,25 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Attr, BinOp, BoolType, ByteArrayType, BytesType, Call, ClassType, ComplexType, DictType, DynType, Expr, FloatType, IntLit, IntType, ListType, Name, NoneLit, NoneType, SetType, StrType, Subscript, TupleExpr, TupleType
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.errors import L1CodegenError
-from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_BOOL,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_CLASS,
+    PY_TYPE_COMPLEX,
+    PY_TYPE_DICT,
+    PY_TYPE_FLOAT,
+    PY_TYPE_FUNC,
+    PY_TYPE_INSTANCE,
+    PY_TYPE_INT,
+    PY_TYPE_LIST,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_NONE,
+    PY_TYPE_SET,
+    PY_TYPE_STR,
+    PY_TYPE_TUPLE,
+    PY_TYPE_USER_CLASS_START,
+)
 from pcc.frontends.python.codegen.hoist_boxing import CELL_READ
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
@@ -86,10 +104,10 @@ def compile_time_isinstance_impl(
         return None
     matcher = _BUILTIN_TYPE_MATCHERS[class_ident]
     ty = obj_expr.ty
-    # ClassType describes the Python class, not an exact builtin layout.
-    # Native immutable subclasses keep that class and are checked by the
-    # subclass-aware runtime predicates below.
-    if isinstance(ty, DynType) or (class_ident in ("str", "tuple") and isinstance(ty, ClassType)):
+    # ClassType describes the Python class, not an exact builtin layout: a
+    # user class may subclass the builtin (class D(dict)), so its instances
+    # are checked by the subclass-aware runtime predicates below.
+    if isinstance(ty, (DynType, ClassType)):
         return None
     # bool is a subclass of int.
     if class_ident == "int" and isinstance(ty, BoolType):
@@ -130,10 +148,6 @@ def emit_builtin_runtime_isinstance_impl(
         [obj_val],
         name=host._fresh("obj.type_tag"),
     )
-    # The runtime predicate borrows. An enclosing tuple check supplies its
-    # own operand and retires it after all members have inspected it.
-    if evaluated_operand:
-        host._gc_release_if_owned(obj_val, obj_expr)
     matched = host.builder.icmp_signed(
         "==",
         actual,
@@ -147,7 +161,57 @@ def emit_builtin_runtime_isinstance_impl(
             name=host._fresh("builtin.isinstance.bool"),
         )
         matched = host.builder.or_(matched, is_bool, name=host._fresh("builtin.isinstance.int"))
+    if class_ident in _SUBCLASSABLE_BUILTINS:
+        matched = _emit_user_subclass_isinstance(host, obj_val, actual, tag, matched)
+    # The runtime predicates borrow. An enclosing tuple check supplies its
+    # own operand and retires it after all members have inspected it.
+    if evaluated_operand:
+        host._gc_release_if_owned(obj_val, obj_expr)
     return matched
+
+
+# Builtin types a Python class may subclass whose own instances answer by tag
+# (str and tuple use their subclass-aware runtime predicates instead).
+_SUBCLASSABLE_BUILTINS = ("int", "float", "list", "dict", "set", "bytes", "bytearray", "complex")
+
+
+def _emit_user_subclass_isinstance(host, obj_val, actual, tag: int, matched):
+    """``matched``, or for a user-class instance its MRO answer.
+
+    An instance of ``class D(dict)`` has an instance tag, and its class's MRO
+    names the builtin type object; only that case leaves the inline compare.
+    """
+    is_instance = host.builder.icmp_signed(
+        "==", actual, ir.Constant(_I64, PY_TYPE_INSTANCE),
+        name=host._fresh("builtin.isinstance.instance"),
+    )
+    is_user_class = host.builder.icmp_signed(
+        ">=", actual, ir.Constant(_I64, PY_TYPE_USER_CLASS_START),
+        name=host._fresh("builtin.isinstance.user_class"),
+    )
+    user = host.builder.or_(is_instance, is_user_class, name=host._fresh("builtin.isinstance.user"))
+    unmatched = host.builder.xor(matched, ir.Constant(_I1, 1), name=host._fresh("builtin.isinstance.miss"))
+    ask = host.builder.and_(unmatched, user, name=host._fresh("builtin.isinstance.ask"))
+    fn = host.current_function
+    inline_block = host.builder._block
+    mro_block = fn.append_basic_block(name=host._fresh("builtin.isinstance.mro"))
+    done_block = fn.append_basic_block(name=host._fresh("builtin.isinstance.done"))
+    host.builder.cbranch(ask, mro_block, done_block)
+    host.builder.position_at_end(mro_block)
+    cls_val = host.builder.call(
+        host.runtime["py_builtin_type_for_tag"], [ir.Constant(_I64, tag)],
+        name=host._fresh("builtin.isinstance.class"),
+    )
+    raw = host.builder.call(host.runtime["py_obj_isinstance"], [obj_val, cls_val])
+    host.builder.call(host.runtime["py_decref"], [cls_val])
+    by_mro = host.builder.icmp_signed("!=", raw, ir.Constant(_I64, 0), name=host._fresh("builtin.isinstance.by_mro"))
+    mro_exit = host.builder._block
+    host.builder.branch(done_block)
+    host.builder.position_at_end(done_block)
+    result = host.builder.phi(_I1, name=host._fresh("builtin.isinstance.result"))
+    result.add_incoming(matched, inline_block)
+    result.add_incoming(by_mro, mro_exit)
+    return result
 
 
 def ir_scaffold_class_symbol_impl(host, expr: Expr) -> Optional[str]:

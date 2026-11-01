@@ -24,6 +24,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYPROPERTYOBJECT_FGET_OFFSET,
     PYPROPERTYOBJECT_FSET_OFFSET,
     PYPROPERTYOBJECT_FDEL_OFFSET,
+    PY_FLAG_CLASS_DICT_SUBCLASS,
     PY_FLAG_CLASS_SLOTS_ONLY,
     PY_FLAG_EXC_SUPPRESS_CONTEXT,
     PY_FLAG_EXC_UNICODE_PAYLOAD,
@@ -174,6 +175,7 @@ py_tuple_concat = extern("py_tuple_concat", (c_ptr, c_ptr), c_ptr)
 py_tuple_from_list = extern("py_tuple_from_list", (c_ptr,), c_ptr)
 
 py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
+py_dict_subclass_getattr = extern("py_dict_subclass_getattr", (c_ptr, c_ptr), c_ptr)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_dict_get_default_slots = extern("py_dict_get_default_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
@@ -5808,6 +5810,14 @@ def _py_obj_call_body(callable, args, kwargs, include_metaclass: int):
             if ptr_is_null(inst) != 0:
                 return null()
         init_method = py_class_lookup(callable, cstr("__init__"))
+        if (ptr_is_null(init_method) != 0
+                and (load_i32(callable, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0):
+            # dict is not an MRO entry of its subclasses: with no __init__ of
+            # their own, dict.__init__ fills the new instance's items.
+            if _dict_subclass_default_init(inst, args, kwargs) != 0:
+                py_decref(inst)
+                return null()
+            return inst
         if ptr_is_null(init_method) == 0:
             if is_tagged_int(init_method) == 0:
                 if load_i32(init_method, 8) == PY_TYPE_FUNC:  # PY_TYPE_FUNC
@@ -5951,6 +5961,32 @@ def py_obj_call_method1(o, name, arg):
     return out
 
 
+def _dict_subclass_default_init(inst, args, kwargs) -> int:
+    """Run dict.__init__(inst, *args, **kwargs) on a dict subclass instance."""
+    init = py_dict_subclass_getattr(inst, cstr("__init__"))
+    if ptr_is_null(init) != 0:
+        _require_call_result(null(), cstr("dict.__init__"),
+                             cstr("dict subclass has no native dict.__init__"))
+        return -1
+    out = py_obj_call(init, args, kwargs)
+    py_decref(init)
+    if ptr_is_null(out) != 0:
+        return -1
+    py_decref(out)
+    return 0
+
+
+def _builtin_subclass_instance(o, cls, tag: int) -> int:
+    """Whether ``o`` instantiates a user subclass of the builtin type ``cls``.
+
+    An instance of ``class D(dict)`` carries its own class, whose MRO names
+    the builtin type object; any other value answers by its own tag.
+    """
+    if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:
+        return py_isinstance(o, cls)
+    return 0
+
+
 @c_abi_export("py_obj_isinstance")
 def py_obj_isinstance(o, cls) -> int:
     if ptr_is_null(o) != 0:
@@ -6000,25 +6036,41 @@ def py_obj_isinstance(o, cls) -> int:
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_method")) != 0:
         return 1 if tag == PY_TYPE_FUNC and py_func_kind(o) == 2 else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_staticmethod")) != 0:
-        return 1 if tag == PY_TYPE_STATICMETHOD else 0
+        if tag == PY_TYPE_STATICMETHOD:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_classmethod")) != 0:
-        return 1 if tag == PY_TYPE_CLASSMETHOD else 0
+        if tag == PY_TYPE_CLASSMETHOD:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_property")) != 0:
-        return 1 if tag == PY_TYPE_PROPERTY else 0
+        if tag == PY_TYPE_PROPERTY:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_bool")) != 0:
         return 1 if tag == PY_TYPE_BOOL else 0
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_int")) != 0:
-        return 1 if tag == PY_TYPE_BOOL or tag == PY_TYPE_INT else 0
+        if tag == PY_TYPE_BOOL or tag == PY_TYPE_INT:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_float")) != 0:
-        return 1 if tag == PY_TYPE_FLOAT else 0
+        if tag == PY_TYPE_FLOAT:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_str")) != 0:
         return py_str_check(o)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_list")) != 0:
-        return 1 if tag == PY_TYPE_LIST else 0
+        if tag == PY_TYPE_LIST:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_dict")) != 0:
-        return 1 if tag == PY_TYPE_DICT else 0
+        if tag == PY_TYPE_DICT:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     if ptr_eq(cls, global_load_ptr("pcc_type_cls_tuple")) != 0:
-        return 1 if tag == PY_TYPE_TUPLE else 0
+        if tag == PY_TYPE_TUPLE:
+            return 1
+        return _builtin_subclass_instance(o, cls, tag)
     # The remaining value classes match their own tag; anything else (a user
     # subclass instance, say) keeps the MRO check below.
     cls_tag: int = py_builtin_type_class_tag(cls)
@@ -6072,6 +6124,10 @@ def py_obj_issubclass(derived, cls) -> int:
     derived = pcc_gc_note_relocation_read(derived)
     cls = pcc_gc_note_relocation_read(cls)
     if ptr_eq(derived, cls) != 0:
+        return 1
+    # dict is not an MRO entry of its subclasses; their classes carry the flag.
+    if (ptr_eq(cls, global_load_ptr("pcc_type_cls_dict")) != 0
+            and (load_i32(derived, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0):
         return 1
     n_mro: int = load_i32(derived, PYCLASSOBJECT_N_MRO_OFFSET)
     mro = load_ptr(derived, PYCLASSOBJECT_MRO_OFFSET)

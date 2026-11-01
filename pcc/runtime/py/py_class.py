@@ -3806,6 +3806,10 @@ def py_isinstance(obj, cls) -> int:
         if ptr_eq(m, cls) != 0:
             return 1
         i = i + 1
+    # dict is not an MRO entry of its subclasses; their classes carry the flag.
+    if (ptr_eq(cls, global_load_ptr("pcc_type_cls_dict")) != 0
+            and (load_i32(obj_cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS) != 0):
+        return 1
     return 0
 
 
@@ -6691,6 +6695,9 @@ def py_class_mark_dict_subclass(cls) -> None:
     # backing dict in the instance's __dict__ slot (py_protocol_runtime.py).
     if ptr_is_null(cls) != 0:
         return
+    # Special-method lookup reads dict's native namespace under the graph
+    # lock, where it cannot build it: publish it before any instance exists.
+    _builtin_namespace(2)
     atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_CLASS_DICT_SUBCLASS, "relaxed")
 
 
@@ -7025,9 +7032,18 @@ def _special_lookup_locked(cls, name, record, start_index: int = 0):
     length: int = strlen(name)
     count: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
     mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
+    # dict is not an MRO entry of its subclasses: its native namespace
+    # answers just before the root, as _builtin_mro_member does.
+    dict_pending: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_CLASS_DICT_SUBCLASS
     index: int = start_index
     while index < count:
         owner = pcc_gc_load_ptr(cls, ptr_add(mro, index * C_POINTER_SIZE))
+        if dict_pending != 0 and ptr_eq(owner, global_load_ptr("py_object_root_cache")) != 0:
+            dict_pending = 0
+            dict_slot = _dict_namespace_slot_locked(name, length)
+            if ptr_is_null(dict_slot) == 0:
+                store_i64(record, 0, 1)
+                return dict_slot
         if ptr_is_null(owner) == 0:
             attrs = pcc_gc_resolve_root_slot_unlocked(ptr_add(owner, PYCLASSOBJECT_ATTRS_OFFSET), 0)
             if ptr_is_null(attrs) == 0:
@@ -7064,6 +7080,35 @@ def _special_lookup_locked(cls, name, record, start_index: int = 0):
                         return null()
                 entry = entry + 1
         index = index + 1
+    if dict_pending != 0:
+        dict_slot = _dict_namespace_slot_locked(name, length)
+        if ptr_is_null(dict_slot) == 0:
+            store_i64(record, 0, 1)
+            return dict_slot
+    return null()
+
+
+def _dict_namespace_slot_locked(name, length: int):
+    """The entry slot of dict's native member ``name``, or NULL.
+
+    Reads only the published namespace (py_class_mark_dict_subclass builds it
+    before any instance exists) and allocates nothing, so it may run under the
+    graph lock. The namespace is never mutated once published.
+    """
+    namespace = pcc_gc_load_ptr(null(), _builtin_namespace_slot(2))
+    if ptr_is_null(namespace) != 0:
+        return null()
+    entries = load_ptr(namespace, PYDICTOBJECT_ENTRIES_OFFSET)
+    used: int = load_i64(namespace, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+    entry: int = 0
+    while entry < used:
+        offset: int = entry * DICTENTRY_SIZE
+        key = pcc_gc_resolve_root_slot_unlocked(ptr_add(entries, offset + DICTENTRY_KEY_OFFSET), 0)
+        if _special_name_equal(key, name, length) != 0:
+            slot = ptr_add(entries, offset + DICTENTRY_VALUE_OFFSET)
+            if ptr_is_null(load_ptr(slot, 0)) == 0:
+                return slot
+        entry = entry + 1
     return null()
 
 
