@@ -1,6 +1,6 @@
 # PCC current status
 
-Updated 2026-10-30. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-01. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
@@ -567,6 +567,87 @@ packages 4 and 5.
   emission path's import closure and `PCC_*` environment recorded (emission
   imports nine codegen modules through pipeline imports); not implemented.
   Correctness arms now build with six runtime jobs (archive `fast_build.py`).
+
+Self backend instruction gap (2026-11-01; maintainer scope: the five
+backend items below, then stop if asyncio is still ahead). Per json.dumps
+call on the frozen `30e7525a3` runtime (GC0, Darwin arm64), the self backend
+executes 148,225 instructions. The same post-pass runtime IR through
+`llc -O2` (labeled LLVM reference, not an ownership claim) executes 100,471,
+`clang -O2` 93,900, and CPython 3.15.0 interpreting the same
+`pcc/stdlib/json.py` 44,402. IPC is about 5 in every case, so the gap is
+instruction count; the backend alone accounts for 88% of LLVM's reduction.
+Weighted by hotness, the extra static instructions are register moves
+(+7.3%), branches (+7.2%), ALU (+6.6%), address arithmetic (+5.7%), frame
+saves (+4.5%), pac-ret (+4.0%, intentional; the reference IR lacked the
+attributes), stack memory (+3.8%), constants (+3.6%) and LL/SC loops (+1.0%).
+- `74019b167`: frame slots beyond the 255-byte unscaled range are one scaled
+  `[sp, #pos]` access instead of `sub x15, x29, #off` plus `stur`; zero
+  stores use `xzr`/`wzr` and allocated sources are stored directly.
+- `7f36ae06a`: arm64 macOS atomics use LSE `ld<op>`/`swp`/`cas` (assembler
+  encodings included); Linux AArch64 keeps LL/SC, the ARMv8.0 baseline.
+  MOVN builds constants with fewer non-0xFFFF chunks than nonzero chunks.
+- `4439e6938`: getelementptr between register homes (constant offset: one
+  add; one scaled 64-bit index: one shifted add); far result spills use SP.
+- `b55d5e710`: x86-64 writes a scratch definition (mov, movzx, movsx,
+  movsxd, lea) straight into the following copy's register when the scratch
+  is dead; a constant-index getelementptr is one lea. Windows x86-64 uses
+  the same emitter.
+- `0bd3143e2`, `30765ff85`: one tokenization per line for LSE operand roles;
+  MOVN chunks counted in place.
+- Not done: TLV access without the register save/restore (about 0.5% of the
+  profile; it needs cross-block liveness).
+- Tests (`8e19b708b`, `13284db0d`): `test_aarch64_sp_relative_frame_slots.py`,
+  `test_aarch64_lse_atomics.py`, `test_aarch64_constant_and_gep_lowering.py`
+  (native execution on Darwin arm64), `test_x86_64_register_homes.py`; LL/SC
+  shape tests pin the Linux triple and the Darwin tests pin LSE.
+
+Results: json.dumps 148,225 -> 134,473 instructions (-9.3%) but cycles only
+-0.4%: the removed moves were mostly eliminated at register rename. r79,
+seven alternating pairs, `30e7525a3` against the candidate built before the
+rebase from the backend source of `0bd3143e2` (`30765ff85` emits the same
+`__text`): one worker 37,581 -> 38,601 QPS, paired median +2.45% (7/7),
+cycles -3.33%, instructions -7.17%; four workers 89,860 -> 91,842, paired
+median +0.21% (4/7), cycles +0.33%, instructions -5.17%. Same-run CPython
+3.15.0 asyncio is 90,840 / 290,618, so the gaps are about 2.4x / 3.2x and
+acceptance remains open. Per the maintainer's stop condition, this backend
+round ends here.
+
+Validation, from frozen arms with `PCC_TEST_NO_NATIVE_PROVISIONING=1`
+unless noted. The four new files and the affected backend set pass (3,840);
+`tests/c` passes 4,305. Linux, in Docker (Debian bookworm-slim; amd64 under
+Rosetta, arm64 native): a program covering big integers, containers,
+strings, exceptions, classes, generators, four locked threads and json,
+compiled with each arm's own cross-built runtime, prints exactly CPython
+3.15.0's output on x86-64 and AArch64, as do the Darwin builds. Executable
+bytes of the Linux runtimes fall 1.17% (x86-64) and 7.08% (AArch64).
+The Python native GC/thread set (156 files under `tests/python`, enumerated
+on the candidate arm with `-x` and per-round deselection) is still being
+finished: 423 failing nodes so far. Most raise `NativeProvisioningError`:
+they build their own runtime and compile C probes with `cc` against the
+removed C runtime headers, which a sealed arm cannot do. Some need a current
+pcc1 or `PCC_GC_GRAY_COUNT_COMPILER`. The remaining assertion failures are
+being rerun on the base arm and are unclassified until then.
+Not run here: Windows execution (left to CI; Windows x86-64 shares the
+changed emitter), the three-stage bootstrap (no admitted Stage1), tests
+that provision their own runtime, and pcc1-gated tests.
+
+Failing identically at the base, recorded for CI: `test_x86_64_indexed_bridge.py`
+(3); `tests/c/test_self_backend.py` direct_call_subset and branch_phi_subset;
+`tests/c/test_api.py` (12, precise stack map IndexError);
+`test_c_freestanding_libc_link.py` link map (extra libSystem imports);
+`test_c_target_abi_contract.py` (4); `test_clang_c.py` (7, three csmith
+runtime mismatches); `test_header_nonnull_macro.py[system]`;
+`test_owned_shared_api.py` (5); `test_pcc1_owns_c_compilation.py` (2);
+`test_refcount_strategy_matrix.py` (1);
+`test_gc_abstraction_surface.py::test_colored_relocating_gc_read_barrier_clears_candidate`
+(prints 0/0/0); `test_gc_backend_under_env.py` GC2/GC3 (nested failures in
+`test_gc_threading_substrate.py`, `test_gc_backend_generational.py` and
+`test_gc_backend23_production.py`); `test_gc_backend_generational.py` minor
+bump arena (one counter 0, not 1) and the owner slot walker source pin.
+Repro: the archive's `freeze.py <arm> <rev>`, `fast_build.py <arm>`,
+`guard_measure.py <base> <cand> <tag>` and `summarize.py <tag>.json`; the gap
+measurement and its scripts are in the archive's
+`design/one-worker-instruction-gap.md`.
 
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
