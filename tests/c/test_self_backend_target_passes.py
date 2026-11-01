@@ -57,6 +57,41 @@ def test_aarch64_target_pass_pairs_adjacent_64bit_loads_and_stores():
     assert pair_adjacent_aarch64_64bit_memory_ops(lines, enabled=False) == lines
 
 
+def test_aarch64_target_pass_pairs_unscaled_frame_slots():
+    # Frame slots below x29 are addressed with STUR/LDUR; LDP/STP take the
+    # same signed offsets as multiples of 8 down to -512 (Arm ARM C6.2).
+    lines = [
+        "  stur x10, [x29, #-24]",
+        "  stur x11, [x29, #-16]",
+        "  ldur x12, [x29, #-8]",
+        "  ldr x13, [x29]",
+        "  ldur x14, [x29, #-512]",
+        "  ldur x15, [x29, #-504]",
+    ]
+    assert pair_adjacent_aarch64_64bit_memory_ops(lines) == [
+        "  stp x10, x11, [x29, #-24]",
+        "  ldp x12, x13, [x29, #-8]",
+        "  ldp x14, x15, [x29, #-512]",
+    ]
+    # Root-slot clearing stores zero walking down from x29.
+    clearing = ["  stur xzr, [x29, #-8]", "  stur xzr, [x29, #-16]", "  stur xzr, [x29, #-24]",
+                "  stur xzr, [x29, #-32]", "  stur xzr, [x29, #-40]"]
+    assert pair_adjacent_aarch64_64bit_memory_ops(clearing) == [
+        "  stp xzr, xzr, [x29, #-16]", "  stp xzr, xzr, [x29, #-32]", "  stur xzr, [x29, #-40]",
+    ]
+    controls = (
+        ["  stur x10, [x29, #-8]", "  stur x11, [x29, #-16]"],
+        ["  stur xzr, [x29, #-8]", "  stur x11, [x29, #-16]"],
+        ["  stur xzr, [x29, #-512]", "  stur xzr, [x29, #-520]"],
+        ["  ldur x10, [x29, #-520]", "  ldur x11, [x29, #-512]"],
+        ["  ldur x10, [x29, #-12]", "  ldur x11, [x29, #-4]"],
+        ["  stur w10, [x29, #-8]", "  stur w11, [x29, #-4]"],
+        ["  stur x10, [x29, #-16]", "  ldur x11, [x29, #-8]"],
+    )
+    for control in controls:
+        assert pair_adjacent_aarch64_64bit_memory_ops(control) == control
+
+
 def test_aarch64_target_pass_rejects_aliasing_and_unencodable_pairs():
     controls = (
         # Different textual bases may alias at runtime; no speculation.

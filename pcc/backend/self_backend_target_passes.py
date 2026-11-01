@@ -455,7 +455,7 @@ def _parse_aarch64_64bit_offset_transfer(
         return None
     stripped = line[2:]
     opcode, separator, operands = stripped.partition(" ")
-    if not separator or opcode not in ("ldr", "str"):
+    if not separator or opcode not in ("ldr", "str", "ldur", "stur"):
         return None
     value_reg, separator, address = operands.partition(", ")
     if not separator or not _is_aarch64_x_register(value_reg, allow_zero=True):
@@ -479,7 +479,8 @@ def _parse_aarch64_64bit_offset_transfer(
             return None
     if offset % 8 != 0:
         return None
-    return opcode, value_reg, base_reg, offset
+    # Frame slots below x29 use the unscaled forms; a pair is one access shape.
+    return opcode[:2] + "r", value_reg, base_reg, offset
 
 
 def _aarch64_opcode(line: str) -> str:
@@ -505,6 +506,16 @@ def _pair_aarch64_transfer_lines(first_line: str, second_line: str) -> str | Non
         return None
     first_opcode, first_reg, first_base, first_offset = first
     second_opcode, second_reg, second_base, second_offset = second
+    if (
+        first_opcode == second_opcode == "str"
+        and first_reg == second_reg == "xzr"
+        and first_base == second_base
+        and second_offset == first_offset - 8
+    ):
+        # Descending zero stores (frame-slot clearing walks down from x29):
+        # both slots receive zero, so naming the lower slot first reverses no
+        # register operands. The pair takes the lower offset.
+        first_offset, second_offset = second_offset, first_offset
     if (
         first_opcode != second_opcode
         or first_base != second_base
