@@ -59,7 +59,6 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_scheduler_root_register_handle = extern(
     "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
 )
@@ -491,10 +490,6 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         return -1
     repl_len: int = load_i64(snapshot, 16)
     backend: int = pcc_gc_backend()
-    # Replacing the item array without the graph lock is single-threaded only.
-    unlocked: int = 0
-    if backend == 0 and pcc_threads_enabled() == 0:
-        unlocked = 1
     lo_out = stack_alloc(8)
     hi_out = stack_alloc(8)
     attempt: int = 0
@@ -506,20 +501,14 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         # it. Planning there only mallocs; it neither collects nor parks.
         if attempt == 8:
             hold = 1
-        if unlocked != 0:
-            lst = _reload_moving_root(list_slot, list_handle_slot)
-            old_len: int = load_i64(lst, 16)
-            old_capacity: int = load_i64(lst, 24)
-            old_items = load_ptr(lst, 32)
-        else:
-            locked = load_ptr(list_slot, 0)
-            pcc_list_lock(locked)
-            lst = _reload_moving_root(list_slot, list_handle_slot)
-            old_len = load_i64(lst, 16)
-            old_capacity = load_i64(lst, 24)
-            old_items = load_ptr(lst, 32)
-            if hold == 0:
-                pcc_list_unlock(locked)
+        locked = load_ptr(list_slot, 0)
+        pcc_list_lock(locked)
+        lst = _reload_moving_root(list_slot, list_handle_slot)
+        old_len: int = load_i64(lst, 16)
+        old_capacity: int = load_i64(lst, 24)
+        old_items = load_ptr(lst, 32)
+        if hold == 0:
+            pcc_list_unlock(locked)
         _normalize_set_slice_scalars(
             lo_none,
             hi_none,
@@ -541,7 +530,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         else:
             selected = _slice_count(lo_v, hi_v, step_v)
             if repl_len != selected:
-                if hold == 0 and unlocked == 0:
+                if hold == 0:
                     # Decide on the length the commit sees.
                     attempt = 7
                     continue
@@ -594,57 +583,6 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                     store_i64(replacement_index, idx * 8, i)
                 idx = idx + step_v
                 i = i + 1
-
-        if unlocked != 0:
-            built: int = 0
-            i = 0
-            while i < new_len:
-                value = null()
-                if step_v == 1:
-                    if i < lo_v:
-                        value = py_list_get(lst, i)
-                    elif i < lo_v + repl_len:
-                        value = py_list_get(snapshot, i - lo_v)
-                    else:
-                        value = py_list_get(
-                            lst, hi_v + i - (lo_v + repl_len)
-                        )
-                elif load_i64(replacement_index, i * 8) >= 0:
-                    value = py_list_get(
-                        snapshot, load_i64(replacement_index, i * 8)
-                    )
-                else:
-                    value = py_list_get(lst, i)
-                if ptr_is_null(value) != 0:
-                    i = new_len
-                else:
-                    store_ptr(new_items, built * 8, value)
-                    built = built + 1
-                    i = i + 1
-            if built != new_len:
-                i = 0
-                while i < built:
-                    py_decref(load_ptr(new_items, i * 8))
-                    i = i + 1
-                free(replacement_index)
-                free(new_items)
-                break
-            store_ptr(lst, 32, new_items)
-            store_i64(lst, 24, new_capacity)
-            store_i64(lst, 16, new_len)
-            i = 0
-            while i < old_len:
-                value = load_ptr(old_items, i * 8)
-                if ptr_is_null(value) == 0:
-                    py_decref(value)
-                i = i + 1
-            free(old_items)
-            free(replacement_index)
-            snapshot = _reload_moving_root(snapshot_slot, snapshot_handle_slot)
-            _finish_moving_root(snapshot_handle_slot)
-            _finish_moving_root(list_handle_slot)
-            py_decref(snapshot)
-            return 0
 
         old_plans = null()
         new_plans = null()

@@ -87,7 +87,7 @@ def test_store_ptr_uses_owner_aware_prepare_commit_finish_transaction():
         assert f'@c_abi_export("{symbol}")' in py_src
     py_store = py_src.split("def pcc_gc_store_ptr(owner, slot, value) -> None:", 1)[
         1
-    ].split('@c_abi_export("pcc_gc_store_ptr_fresh_native_instance")', 1)[0]
+    ].split('@c_abi_export("pcc_gc_store_root_plan_init")', 1)[0]
     py_plan = py_store.index("pcc_gc_store_ptr_plan_init(plan, owner, backend)")
     py_lock = py_store.index("pcc_py_gc_minor_graph_lock()", py_plan)
     py_commit = py_store.index("pcc_gc_store_ptr_plan_commit_locked(", py_lock)

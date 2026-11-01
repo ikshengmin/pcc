@@ -80,7 +80,6 @@ pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
-pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
@@ -89,9 +88,7 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 
 
 define_global_ptr_null("pcc_module_attrs_cache")
-# 512 (C string address, pinned str) pairs; see _cached_name_key.
-define_global_ptr_null("pcc_module_name_key_cache")
-# Threaded entries are immutable after publication, never evicted, and own
+# Name-key entries are immutable after publication, never evicted, and own
 # registered pinned keys. At most 512 names of at most 256 bytes are retained.
 # Collisions, changed C buffers and allocation failures use per-call keys.
 define_global_i64("pcc_threaded_name_key_cache_bits", 0)
@@ -551,33 +548,10 @@ def _cached_name_key(text):
     released one str per name, twice per module global read, which was most
     of py_module_attr_get in a pcc1 codegen worker. An entry is reused only
     when its address and its bytes both match, so a reused buffer address
-    cannot return another name. Threaded entries are never evicted; collisions
-    retain the per-call allocation path.
+    cannot return another name. Entries are never evicted; collisions retain
+    the per-call allocation path.
     """
-    if pcc_threads_enabled() != 0:
-        return _threaded_cached_name_key(text)
-    table = global_load_ptr("pcc_module_name_key_cache")
-    if ptr_is_null(table):
-        table = malloc(8192)
-        if ptr_is_null(table):
-            return null()
-        memset(table, 0, 8192)
-        global_store_ptr("pcc_module_name_key_cache", table)
-    slot = ptr_add(table, ((ptr_to_int(text) >> 3) & 511) * 16)
-    key = load_ptr(slot, 8)
-    if not ptr_is_null(key) and ptr_eq(load_ptr(slot, 0), text):
-        if _str_matches_cstr(key, text) != 0:
-            return key
-    fresh = py_str_new(text, strlen(text))
-    if ptr_is_null(fresh):
-        return null()
-    pcc_gc_pin(fresh)
-    store_ptr(slot, 0, text)
-    store_ptr(slot, 8, fresh)
-    if not ptr_is_null(key):
-        pcc_gc_unpin(key)
-        py_decref(key)
-    return fresh
+    return _threaded_cached_name_key(text)
 
 
 @c_abi_export("pcc_cached_name_key")
@@ -611,19 +585,17 @@ def _module_find(module_name):
         # A namespace is registered once, never replaced or removed, and
         # pinned: the name's cache entry publishes it, and later lookups skip
         # the locked dictionary lookup. Values are still read from it.
-        entry = null()
-        if pcc_threads_enabled() != 0:
-            entry = _threaded_name_entry(module_name)
-            if not ptr_is_null(entry):
-                known: int = atomic_load_i64(entry, _NAME_CACHE_MODULE * C_POINTER_SIZE, "acquire")
-                if known != 0:
-                    return int_to_ptr(known)
+        entry = _threaded_name_entry(module_name)
+        if not ptr_is_null(entry):
+            known: int = atomic_load_i64(entry, _NAME_CACHE_MODULE * C_POINTER_SIZE, "acquire")
+            if known != 0:
+                return int_to_ptr(known)
         cached = _cached_name_key(module_name)
         if not ptr_is_null(cached):
             attrs = py_dict_get(cache, cached)
             if not ptr_is_null(attrs):
                 py_decref(attrs)
-                if pcc_threads_enabled() != 0 and ptr_is_null(entry):
+                if ptr_is_null(entry):
                     entry = _threaded_name_entry(module_name)
                 if not ptr_is_null(entry):
                     atomic_cas_i64(entry, _NAME_CACHE_MODULE * C_POINTER_SIZE,

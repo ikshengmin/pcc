@@ -283,14 +283,6 @@ void pcc_gc_note_slot_write_barrier(
     PyObject **slot,
     PyObject *value
 );
-/* Internal trusted-provenance store.  The caller must prove that value is the
- * current pointer for a freshly allocated native PY_TYPE_INSTANCE.  The
- * generic slot barrier and borrowed-value retain semantics are unchanged. */
-void pcc_gc_store_ptr_fresh_native_instance(
-    PyObject *owner,
-    PyObject **slot,
-    PyObject *value
-);
 /* Internal split-phase root publication.  The plan owns every scalar and
  * refcount token needed after the caller releases its outermost graph lock;
  * it is deliberately absent from the public py_runtime.h ABI. */

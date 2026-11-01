@@ -43,7 +43,6 @@ class Field:
             "global_addr": lambda name: STATICS[name],
             "atomic_load_i64": self.atomic_load,
             "load_ptr": self.load,
-            "pcc_threads_enabled": lambda: 1,
             "_gc_backend_selected_fast": lambda: 0,
             "pcc_py_gc_minor_graph_lock": lambda: self.events.append("lock"),
             "pcc_py_gc_minor_graph_unlock": lambda: self.events.append("unlock"),

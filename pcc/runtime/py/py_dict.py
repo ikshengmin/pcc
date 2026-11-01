@@ -97,7 +97,6 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
@@ -842,68 +841,10 @@ def _rehash_find_empty_slot(indices, capacity: int, hash_val: int) -> int:
     return -1
 
 
-def _rehash_refcount_fast(d, new_capacity: int) -> int:
-    old_entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-    old_indices = load_ptr(d, PYDICTOBJECT_INDICES_OFFSET)
-    old_entries_used: int = load_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET)
-    new_indices = malloc(new_capacity * 8)
-    new_entries = malloc(new_capacity * DICTENTRY_SIZE)
-    if ptr_is_null(new_indices) != 0 or ptr_is_null(new_entries) != 0:
-        free(new_entries)
-        free(new_indices)
-        return -1
-    memset(new_entries, 0, new_capacity * DICTENTRY_SIZE)
-    init_index: int = 0
-    while init_index < new_capacity:
-        store_i64(new_indices, init_index * 8, -1)
-        init_index = init_index + 1
-    new_entries_used: int = 0
-    old_index: int = 0
-    while old_index < old_entries_used:
-        old_off: int = old_index * DICTENTRY_SIZE
-        key = load_ptr(old_entries, old_off + DICTENTRY_KEY_OFFSET)
-        if ptr_is_null(key) == 0:
-            hash_value: int = load_i64(
-                old_entries, old_off + DICTENTRY_HASH_OFFSET
-            )
-            target_slot: int = _rehash_find_empty_slot(
-                new_indices, new_capacity, hash_value
-            )
-            if target_slot < 0:
-                free(new_entries)
-                free(new_indices)
-                return -1
-            new_off: int = new_entries_used * DICTENTRY_SIZE
-            store_i64(
-                new_entries, new_off + DICTENTRY_HASH_OFFSET, hash_value
-            )
-            store_ptr(new_entries, new_off + DICTENTRY_KEY_OFFSET, key)
-            store_ptr(
-                new_entries,
-                new_off + DICTENTRY_VALUE_OFFSET,
-                load_ptr(old_entries, old_off + DICTENTRY_VALUE_OFFSET),
-            )
-            store_i64(new_indices, target_slot * 8, new_entries_used)
-            new_entries_used = new_entries_used + 1
-        old_index = old_index + 1
-    store_ptr(d, PYDICTOBJECT_INDICES_OFFSET, new_indices)
-    store_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET, new_entries)
-    store_i64(d, PYDICTOBJECT_CAPACITY_OFFSET, new_capacity)
-    store_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET, new_entries_used)
-    store_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET, new_entries_used)
-    free(old_indices)
-    free(old_entries)
-    return 0
-
-
 def _rehash(d, new_capacity: int) -> int:
     if ptr_is_null(d) != 0 or new_capacity <= 0:
         return -1
     initial_backend: int = pcc_gc_backend()
-    # The unlocked table swap is single-threaded only: another carrier may
-    # be reading the old table under the graph lock.
-    if initial_backend == 0 and pcc_threads_enabled() == 0:
-        return _rehash_refcount_fast(d, new_capacity)
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, d)
     owner_handle = null()
@@ -1146,11 +1087,7 @@ def py_dict_set(d, key, value) -> None:
     if pcc_gc_backend() == 0:
         kind: int = _dict_fast0_key_kind(key)
         if kind != 0:
-            # The unlocked probe and insert are single-threaded only.
-            if pcc_threads_enabled() == 0:
-                if _dict_set_fast0(d, key, value, kind) != 0:
-                    return
-            elif _dict_set_gc0_locked(d, key, value, kind) != 0:
+            if _dict_set_gc0_locked(d, key, value, kind) != 0:
                 return
     _dict_rooted_op(d, key, value, 2, null())
 
@@ -1460,28 +1397,13 @@ def py_dict_get(d, key):
     if pcc_gc_backend() == 0:
         kind: int = _dict_fast0_key_kind(key)
         if kind != 0:
-            # The unlocked probe is single-threaded only.
-            if pcc_threads_enabled() == 0:
-                insert_slot = stack_alloc(8)
-                ix: int = _dict_probe_fast0(
-                    d, key, kind, _dict_fast0_hash(key, kind), insert_slot
-                )
-                if ix >= 0:
-                    entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
-                    found = load_ptr(entries, ix * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET)
-                    if ptr_is_null(found) == 0:
-                        py_incref(found)
-                        return found
-                elif ix == -1:
-                    return null()
-            else:
-                result_slot = stack_alloc(8)
-                store_ptr(result_slot, 0, null())
-                status: int = _dict_get_gc0_locked(d, key, kind, result_slot)
-                if status > 0:
-                    return load_ptr(result_slot, 0)
-                if status == 0:
-                    return null()
+            result_slot = stack_alloc(8)
+            store_ptr(result_slot, 0, null())
+            status: int = _dict_get_gc0_locked(d, key, kind, result_slot)
+            if status > 0:
+                return load_ptr(result_slot, 0)
+            if status == 0:
+                return null()
     return _dict_rooted_op(d, key, null(), 0, null())
 
 

@@ -158,10 +158,8 @@ def test_list_reverse_permutes_owners_in_one_transaction():
     py_src = _read(RUNTIME_PY / "py_list.py")
     py_block = py_src.split("def py_list_reverse(lst) -> None:", 1)[1]
     py_block = py_block.split("\ndef ", 1)[0]
-    py_fast = py_block.split("list_slot = stack_alloc(8)", 1)[0]
-    assert py_fast.index("py_incref(fast_left)") < py_fast.index(
-        "pcc_gc_store_ptr("
-    ) < py_fast.index("py_decref(fast_left)")
+    # No unlocked reversal remains: the runtime is always threaded.
+    assert "fast_left" not in py_block
     py_moving = py_block.split("list_slot = stack_alloc(8)", 1)[1]
     py_order = [
         "_list_lock(locked)",
@@ -228,20 +226,9 @@ def test_hash_rehash_move_stores_route_through_slot_write_barrier():
     )[1].split("def _rehash(", 1)[0]
     assert "py_obj_eq" not in dict_py_raw_lookup
     assert "_lookup(" not in dict_py_raw_lookup
-    dict_py_fast = dict_py.split(
-        "def _rehash_refcount_fast(", 1
-    )[1].split("def _rehash(", 1)[0]
-    for forbidden in (
-        "pcc_py_gc_minor_graph_lock",
-        "pcc_gc_scheduler_root_register_handle",
-        "slot_pairs",
-        "pcc_gc_note_slot_write_barrier",
-        "pcc_gc_backend4_retarget_mutator_payload_locked",
-    ):
-        assert forbidden not in dict_py_fast
-    assert dict_py_rehash.index(
-        "return _rehash_refcount_fast(d, new_capacity)"
-    ) < dict_py_rehash.index("pcc_gc_scheduler_root_register_handle")
+    # The runtime is always threaded: another carrier may be reading the old
+    # table, so no rehash swaps it without the graph lock.
+    assert "_rehash_refcount_fast" not in dict_py
 
     set_py = _read(RUNTIME_PY / "py_set.py")
     set_py_rehash = set_py.split(
@@ -263,20 +250,7 @@ def test_hash_rehash_move_stores_route_through_slot_write_barrier():
     )[1].split("def _rehash(", 1)[0]
     assert "py_obj_eq" not in set_py_raw_lookup
     assert "_lookup_slot(" not in set_py_raw_lookup
-    set_py_fast = set_py.split(
-        "def _rehash_refcount_fast(", 1
-    )[1].split("def _rehash(", 1)[0]
-    for forbidden in (
-        "pcc_py_gc_minor_graph_lock",
-        "pcc_gc_scheduler_root_register_handle",
-        "slot_pairs",
-        "pcc_gc_note_slot_write_barrier",
-        "pcc_gc_backend4_retarget_mutator_payload_locked",
-    ):
-        assert forbidden not in set_py_fast
-    assert set_py_rehash.index(
-        "return _rehash_refcount_fast(s, new_capacity)"
-    ) < set_py_rehash.index("pcc_gc_scheduler_root_register_handle")
+    assert "_rehash_refcount_fast" not in set_py
 
 
 def test_list_extend_element_store_matches_append_slot_write_barrier():
@@ -328,15 +302,8 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
         "pcc_gc_store_ptr_plan_finish("
     ), "py_list.py extend must NULL-init, then locked-plan-store, then finish"
     assert "py_incref(" not in py_locked
-    # The GC0 fast paths (list and tuple source) keep the same idiom through
-    # the unlocked barrier store.
-    assert py_extend.count(
-        "store_ptr(fast_a_items, (fast_la + fast_i) * 8, null())"
-    ) == 2
-    assert py_extend.count(
-        "pcc_gc_store_ptr(\n                    fast_grown,\n"
-        "                    ptr_add(fast_a_items, (fast_la + fast_i) * 8),"
-    ) == 2
+    # There is no unlocked extend: every source shape takes the transaction.
+    assert "fast_a_items" not in py_extend
     assert "store_ptr(a_items, (la + i) * 8, v)" not in py_extend, (
         "py_list.py extend still has the raw, unbarriered element store"
     )
@@ -345,24 +312,15 @@ def test_list_extend_element_store_matches_append_slot_write_barrier():
     )
 
 
-def test_list_capacity_growth_retargets_raw_slots_and_preserves_backend0_fast_path():
+def test_list_capacity_growth_retargets_raw_slots_and_publishes_a_replacement_array():
 
     strict_src = _read(RUNTIME_PY / "py_list.py")
     strict_grow = strict_src.split("def _grow_if_needed(l, want: int):", 1)[
         1
     ].split("def _normalize_index", 1)[0]
-    strict_fast = strict_grow.split("if initial_backend == 0 and threads == 0:", 1)[1].split(
-        "owner_slot = stack_alloc(8)", 1
-    )[0]
-    assert "realloc(" in strict_fast
-    for forbidden in (
-        "pcc_py_gc_minor_graph_lock",
-        "pcc_gc_scheduler_root_register_handle",
-        "slot_pairs",
-        "pcc_gc_note_slot_write_barrier",
-        "pcc_gc_backend4_retarget_mutator_payload_locked",
-    ):
-        assert forbidden not in strict_fast
+    # Other carriers may read the old array: it is replaced, never resized
+    # in place, on every backend.
+    assert "realloc(" not in strict_src
     assert strict_grow.index(
         "pcc_gc_scheduler_root_register_handle(owner_slot)"
     ) < strict_grow.index("new_items = malloc(")
@@ -404,7 +362,7 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     # GC0 appends in one container-lock transaction on the caller's own
     # references (growth included) before the general rooted path.
     assert strict_append.index("_append_existing_capacity_gc0(cells, ptr_add(cells, 8))") < (
-        strict_append.index("_append_rooted(lst, item, 0)")
+        strict_append.index("_append_rooted(lst, item)")
     )
     strict_append_fast = strict_src.split("def _append_existing_capacity_gc0(", 1)[1].split(
         "\ndef py_list_append_from_slots(", 1
@@ -416,8 +374,8 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
         "pcc_gc_scheduler_root_register_handle",
     ):
         assert forbidden not in strict_append_fast
-    assert "_append_rooted(lst, item, 0)" in strict_append
-    strict_wrapper = strict_src.split("def _append_rooted(lst, item, fresh: int) -> int:", 1)[1].split(
+    assert "_append_rooted(lst, item)" in strict_append
+    strict_wrapper = strict_src.split("def _append_rooted(lst, item) -> int:", 1)[1].split(
         "def _append_rooted_slots(", 1
     )[0]
     strict_list_prepare = strict_wrapper.index(
@@ -601,7 +559,7 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     assert strict_fill.index(
         "py_list_get(load_ptr(source_slot, 0), source_index)"
     ) < strict_fill.index("appended: int = _append_rooted_slots(")
-    assert "result_slot, item_slot, result_handle_slot, item_handle_slot, 0" in strict_fill
+    assert "result_slot, item_slot, result_handle_slot, item_handle_slot\n" in strict_fill
     assert "item_pin: int" not in strict_fill
     assert strict_fill.index("result_pin: int = _list_concat_pin_slot(result_slot)") < (
         strict_fill.index("appended: int = _append_rooted_slots(")
@@ -670,12 +628,7 @@ def test_list_clear_publishes_empty_before_split_decref_tails():
     strict_clear = strict_src.split("def py_list_clear(lst) -> None:", 1)[1].split(
         '@c_abi_export("py_obj_clear")', 1
     )[0]
-    strict_fast = strict_clear.split(
-        "if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:", 1
-    )[1].split(
-        "list_slot = stack_alloc(8)", 1
-    )[0]
-    assert "pcc_gc_store_ptr_plan_" not in strict_fast
+    assert "pcc_threads_enabled" not in strict_clear
     strict_init = strict_clear.index("pcc_gc_store_ptr_plan_init(")
     strict_lock = strict_clear.index("_list_lock(locked)", strict_init)
     strict_commit = strict_clear.index(
@@ -741,13 +694,8 @@ def test_list_set_slice_snapshots_then_publishes_whole_payload_before_decref_tai
     strict_snapshot = strict_set.index(
         "_snapshot_set_slice_replacement(replacement)", strict_convert
     )
-    # The unlocked GC0 swap is single-threaded only (``unlocked``).
-    strict_fast = strict_set.split("if unlocked != 0:", 1)[1].split(
-        "old_plans = null()", 1
-    )[0]
-    assert strict_fast.index("store_ptr(lst, 32, new_items)") < strict_fast.index(
-        "py_decref(value)"
-    )
+    # No unlocked swap remains: the runtime is always threaded.
+    assert "unlocked" not in strict_set.replace("_unlock", "")
     strict_plan_init = strict_set.index(
         "pcc_gc_store_ptr_plan_init(", strict_snapshot
     )

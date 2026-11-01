@@ -45,6 +45,13 @@ class NamespaceMemory(DictMemory):
             # This model is the general slot protocol; the GC0 transaction
             # is test_dict_materialize_gc0_transaction's.
             '_dict_gc0_materialize': lambda receiver, kind, output: 0,
+            # Dict materialization copies each owner without an address
+            # lease and finishes the plan after the outermost unlock, as
+            # test_dict_materialization_owners models it.
+            'pcc_gc_root_copy_owned_prepare_locked': self.copy_owned_prepare,
+            'pcc_gc_store_root_plan_finish': self.copy_finish,
+            'pcc_tuple_from_owned_roots_lease': self.tuple_from_owned_roots,
+            'py_list_append_from_slots': self.append_from_slots,
         })
         for file, prefixes, names in (
             ('py_protocol_runtime.py', (), {'py_dict_storage_slots'}),
@@ -66,6 +73,46 @@ class NamespaceMemory(DictMemory):
                     node.decorator_list = []
                     body.append(node)
             exec(compile(ast.Module(body, []), str(path), 'exec'), self.ns)
+
+    def copy_owned_prepare(self, destination, source, plan):
+        token = self.copy_prepare(destination, source, 0, plan)
+        if token < 0:
+            return token
+        value = self.read(destination, 0)
+        if isinstance(value, Object):
+            value.leases -= token
+        return 0
+
+    def tuple_from_owned_roots(self, sources, count, output):
+        pair = self.new_tuple(count)
+        if pair is None:
+            return -1
+        self.write(output, 0, pair)
+        for index in range(count):
+            source = self.read(sources, index * abi.C_POINTER_SIZE)
+            value = self.read(source, 0)
+            if isinstance(value, Object):
+                # An owned root holds no address lease (None is immortal).
+                assert value.leases == (1000 if value is self.none else 0)
+            pair.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
+            self.write(source, 0, None)
+        return self.acquire(output)
+
+    def append_from_slots(self, destination, source, borrowed):
+        assert borrowed == 0
+        token = self.acquire(destination)
+        self.collect('callback')
+        self.lock()
+        obj, value = self.read(destination, 0), self.read(source, 0)
+        assert obj.alive and obj.leases > 0
+        count = obj.fields[abi.PYLISTOBJECT_LENGTH_OFFSET]
+        self.write(obj.fields[abi.PYLISTOBJECT_ITEMS_OFFSET], count * 8, value)
+        obj.fields[abi.PYLISTOBJECT_LENGTH_OFFSET] += 1
+        if isinstance(value, Object):
+            assert value.alive and value.refs > 0
+            value.refs += 1
+        self.unlock()
+        self.release(destination, token)
 
     def global_addr(self, name):
         # Frame maps are keyed by name; every other global is a zero cell.

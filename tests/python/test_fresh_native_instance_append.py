@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 import subprocess
 import textwrap
@@ -117,10 +118,12 @@ def test_direct_fresh_instance_append_uses_trusted_store_after_root_reloads():
         # unboxed local binding is loaded a second time from the GC root just
         # before the trusted append.  Name the receiver slot explicitly so the
         # item's own root reload cannot satisfy this assertion by accident.
+        # The slot is the local's own frame root (records.addr) or a
+        # separate GC slot (records.gc.slot), as the frame layout chooses.
         reload_window = body[item_reload_at:append_at]
-        receiver_slot_at = reload_window.index("records.gc.slot")
-        receiver_reload_at = reload_window.index("@pcc_gc_load", receiver_slot_at)
-        assert receiver_slot_at < receiver_reload_at
+        assert re.search(
+            r"@pcc_gc_load_ptr\(ptr null, ptr %records\.(addr|gc\.slot)", reload_window
+        ), reload_window
 
     # Only the list-level proof-bearing ABI is frontend-visible.  User IR must
     # never gain direct access to the lower-level trusted slot store.
@@ -207,7 +210,7 @@ def test_non_proven_constructor_append_cases_stay_on_generic_store():
         assert "@py_list_append_fresh_native_instance" not in body
 
 
-def test_trusted_append_keeps_all_gc_barriers_and_borrowed_item_accounting():
+def test_fresh_instance_append_shares_the_ordinary_append_transactions():
     py_obj = (REPO_ROOT / "pcc/runtime/py/py_obj.py").read_text(
         encoding="utf-8"
     )
@@ -218,43 +221,17 @@ def test_trusted_append_keeps_all_gc_barriers_and_borrowed_item_accounting():
         encoding="utf-8"
     )
 
-    py_store = py_obj.split(
-        'def pcc_gc_store_ptr_fresh_native_instance(owner, slot, value) -> None:', 1
-    )[1].split('@c_abi_export("pcc_gc_store_root")', 1)[0]
-    for block in (py_store,):
-        assert "pcc_gc_note_store" in block
-        assert "pcc_gc_note_relocation_read" in block
-        assert "pcc_gc_note_slot_write_barrier" in block
-        assert "old" in block
-        assert "py_decref(old)" in block
-    assert "_gc_incref_fresh_native_instance(value)" in py_store
-
-    py_incref = py_obj.split(
-        "def _gc_incref_fresh_native_instance(o) -> None:", 1
-    )[1].split('@c_abi_export("pcc_gc_store_ptr")', 1)[0]
-
-    assert "_ptr_can_have_header" not in py_incref
-    assert "pcc_gc_pointer_is_managed" not in py_incref
-    assert "py_incref(o)" in py_incref
-    assert "pcc_refcount_incref(o)" in py_incref
-    assert "PY_TYPE_USER_CLASS_START" in py_incref
-    # User class tags run up to PY_TYPE_CEXT_TAG_BASE; the old ``tag > 500``
-    # bound skipped refcounting past roughly the 440th class.
-    assert "tag >= (0x10000)" in py_incref
-    assert "tag > 500" not in py_incref
-    assert "backend == 1 or backend == 2" in py_incref
-    assert "backend == 3" in py_incref
-    assert "backend == 4" in py_incref
-    assert "PY_FLAG_IMMORTAL" in py_incref
-    assert "pcc_gc_note_relocation_read(o)" in py_incref
-
+    # The runtime is always threaded: the list retains a fresh instance as
+    # any append does, through py_list_append's transactions (GC0's
+    # container-lock append first). The unlocked trusted slot store that
+    # only a single-threaded runtime could use is gone.
     py_append = py_list.split(
         'def py_list_append_fresh_native_instance(lst, item) -> None:', 1
     )[1].split('@c_abi_export("py_list_get")', 1)[0]
-    for block in (py_append,):
-        assert "grow_if_needed" in block
-        assert "store_ptr" in block or "= NULL" in block
-        assert "pcc_gc_store_ptr_fresh_native_instance" in block
+    assert "py_list_append(lst, item)" in py_append
+    for source in (py_list, py_obj):
+        assert "pcc_gc_store_ptr_fresh_native_instance" not in source
+        assert "_gc_incref_fresh_native_instance" not in source
 
     assert '"py_list_append_fresh_native_instance"' in runtime_abi
     assert '"pcc_gc_store_ptr_fresh_native_instance"' not in runtime_abi
@@ -263,7 +240,7 @@ def test_trusted_append_keeps_all_gc_barriers_and_borrowed_item_accounting():
     # generic provenance-query path.
     py_generic = py_obj.split(
         'def pcc_gc_store_ptr(owner, slot, value) -> None:', 1
-    )[1].split('@c_abi_export("pcc_gc_store_ptr_fresh_native_instance")', 1)[0]
+    )[1].split('\n@c_abi_export(', 1)[0]
     assert "py_incref(value)" in py_generic
 
 

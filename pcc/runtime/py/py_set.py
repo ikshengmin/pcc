@@ -63,7 +63,6 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
@@ -540,48 +539,10 @@ def _rehash_find_empty_slot(
     return -1
 
 
-def _rehash_refcount_fast(s, new_capacity: int) -> int:
-    old_entries = load_ptr(s, 40)
-    old_capacity: int = load_i64(s, 24)
-    new_entries = _alloc_entries(new_capacity)
-    if ptr_is_null(new_entries) != 0:
-        return -1
-    dummy = global_load_ptr("py_set_dummy")
-    old_index: int = 0
-    new_size: int = 0
-    while old_index < old_capacity:
-        old_off: int = old_index * 16
-        key = load_ptr(old_entries, old_off + 8)
-        if ptr_is_null(key) == 0:
-            if ptr_eq(key, dummy) == 0:
-                hash_value: int = load_i64(old_entries, old_off)
-                target_slot: int = _rehash_find_empty_slot(
-                    new_entries, new_capacity, hash_value
-                )
-                if target_slot < 0:
-                    free(new_entries)
-                    return -1
-                new_off: int = target_slot * 16
-                store_i64(new_entries, new_off, hash_value)
-                store_ptr(new_entries, new_off + 8, key)
-                new_size = new_size + 1
-        old_index = old_index + 1
-    store_ptr(s, 40, new_entries)
-    store_i64(s, 24, new_capacity)
-    store_i64(s, 16, new_size)
-    store_i64(s, 32, new_size)
-    free(old_entries)
-    return 0
-
-
 def _rehash(s, new_capacity: int) -> int:
     if ptr_is_null(s) != 0 or new_capacity <= 0:
         return -1
     initial_backend: int = pcc_gc_backend()
-    # The unlocked table swap is single-threaded only: another carrier may
-    # be reading the old table under the graph lock.
-    if initial_backend == 0 and pcc_threads_enabled() == 0:
-        return _rehash_refcount_fast(s, new_capacity)
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, s)
     owner_handle = null()

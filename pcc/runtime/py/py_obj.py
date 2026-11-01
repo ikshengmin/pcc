@@ -673,42 +673,6 @@ def pcc_gc_resolve_owned_ptr(value):
     return value
 
 
-def _gc_incref_fresh_native_instance(o) -> None:
-    if ptr_is_null(o) != 0:
-        return
-    if is_tagged_int(o) != 0:
-        return
-    tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag != PY_TYPE_INSTANCE and (tag < PY_TYPE_USER_CLASS_START or tag >= (PY_TYPE_CEXT_TAG_BASE)):
-        # Keep an accidental future caller safe; the optimized frontend lane
-        # proves this exact tag and therefore never takes the generic query.
-        py_incref(o)
-        return
-    backend: int = _gc_backend_fast()
-    flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (backend == 1 or backend == 2) and flags == 0:
-        # GC0's untracked values can have no collector bits after a switch.
-        # Exact allocation provenance still admits their live owner counts.
-        if pcc_gc_pointer_is_managed(o) == 0:
-            return
-    if backend == 4 and _gc_forwarding_population() > 0 and (flags & 2048) != 0:
-        resolved = pcc_gc_note_relocation_read(o)
-        if ptr_is_null(resolved) == 0 and ptr_eq(resolved, o) == 0:
-            o = resolved
-            tag = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-            flags = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (flags & PY_FLAG_IMMORTAL) != 0:
-        return
-    if backend == 3 and (flags & 4096) != 0 and (flags & 256) != 0:
-        if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
-            return
-    if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) < 0:
-        return
-    new_rc: int = pcc_refcount_incref(o)
-    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
-        pcc_diagnostics_runtime_log_event_code(3, 1, new_rc, tag, o)
-
-
 @c_abi_export("pcc_gc_store_ptr")
 def pcc_gc_store_ptr(owner, slot, value) -> None:
     if ptr_is_null(slot):
@@ -813,29 +777,6 @@ def pcc_gc_store_field_ptr_if_empty(owner, slot, value) -> int:
         pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
     return stored
-
-
-@c_abi_export("pcc_gc_store_ptr_fresh_native_instance")
-def pcc_gc_store_ptr_fresh_native_instance(owner, slot, value) -> None:
-    if ptr_is_null(slot):
-        return
-    backend: int = _gc_backend_fast()
-    if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_store()
-    if backend == 4:
-        if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
-            value = pcc_gc_note_relocation_read(value)
-    elif backend == 3:
-        if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
-            value = pcc_gc_note_relocation_read(value)
-    if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_slot_write_barrier(owner, slot, value)
-    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
-        pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, owner)
-    old = load_ptr(slot, 0)
-    _gc_incref_fresh_native_instance(value)
-    store_ptr(slot, 0, value)
-    py_decref(old)
 
 
 @c_abi_export("pcc_gc_store_root_plan_init")

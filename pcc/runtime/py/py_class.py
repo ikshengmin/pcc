@@ -284,7 +284,6 @@ pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
 pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_container_lock_pair = extern("pcc_container_lock_pair", (c_ptr, c_ptr), c_void)
 pcc_container_unlock_pair = extern("pcc_container_unlock_pair", (c_ptr, c_ptr), c_void)
-pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
 pcc_gc_note_write_barrier = extern(
@@ -2880,12 +2879,6 @@ def _instance_field_load(inst, offset: int, out) -> int:
     moving collector the receiver and the result stay rooted across it.
     """
     store_ptr(out, 0, null())
-    if pcc_threads_enabled() == 0:
-        value = pcc_gc_load_ptr(inst, ptr_add(inst, offset))
-        if ptr_is_null(value) == 0:
-            py_incref(value)
-        store_ptr(out, 0, value)
-        return 0
     if _gc_backend_selected_fast() == 0:
         # NULL, a tagged int and the image's static singletons are never
         # freed and need no count: one word load, which sees the field
