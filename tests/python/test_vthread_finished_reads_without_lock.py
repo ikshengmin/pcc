@@ -90,7 +90,8 @@ def test_every_terminal_state_store_releases():
     source = RUNTIME.read_text()
     assert not re.search(r"(?<!atomic_)store_i64\(\w+, 32, 4\)", source)
     published = re.findall(r'atomic_store_i64\((\w+), 32, 4, "release"\)', source)
-    assert len(published) == 3
+    # The unlocked running-thread completion path is a fourth publisher.
+    assert len(published) == 4
 
 
 PROGRAM = r'''
