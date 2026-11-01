@@ -28,6 +28,41 @@ _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 
 
+def _bytes_split_operands(expr: Call):
+    """``(role, argument)`` of a bytes ``split``/``rsplit`` call in source
+    evaluation order (roles ``sep`` and ``maxsplit``), or None for a shape
+    this lowering does not take (more than two arguments, starred or
+    unknown keywords, or one argument given twice)."""
+    positional = ("sep", "maxsplit")
+    if len(expr.args) > len(positional):
+        return None
+    named = {}
+    for name, value in expr.kwargs:
+        if name not in positional or name in named:
+            return None
+        named[name] = value
+    roles = list(positional[:len(expr.args)])
+    if any(role in named for role in roles):
+        return None
+    for argument in expr.args:
+        # ``*xs`` / ``**m`` arrive as marker calls among the arguments.
+        if (isinstance(argument, Call) and isinstance(argument.func, Name)
+                and argument.func.ident in ("*", "**", "__starred__")):
+            return None
+    order = list(expr.operand_order) or (
+        [("arg", index) for index in range(len(expr.args))]
+        + [("kw", index) for index in range(len(expr.kwargs))]
+    )
+    result = []
+    for kind, index in order:
+        if kind == "arg":
+            result.append((roles[index], expr.args[index]))
+        else:
+            name, value = expr.kwargs[index]
+            result.append((name, value))
+    return result
+
+
 class MethodCallFallbackLoweringMixin:
     def _emit_method_call_fallback(self, expr: Call, attr: Attr) -> ir.Value:
         """Finish dispatch without repeating earlier receiver/operand checks."""
@@ -527,15 +562,17 @@ class MethodCallFallbackLoweringMixin:
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
-        if (
-            isinstance(obj_ty, (BytesType, ByteArrayType))
-            and attr.name == "split"
-            and len(expr.args) in (1, 2)
-            and not expr.kwargs
-        ):
-            # Both split ABIs return a NEW list. Preserve the receiver and each
-            # argument through later evaluation, then publish the list before
-            # lease release, pending-error checks, or operand disposal.
+        split_operands = (
+            _bytes_split_operands(expr)
+            if isinstance(obj_ty, (BytesType, ByteArrayType))
+            and attr.name in ("split", "rsplit") else None
+        )
+        if split_operands is not None:
+            # split/rsplit(sep=None, maxsplit=-1) return a NEW list. Preserve
+            # the receiver and each argument (in source order) through later
+            # evaluation, then publish the list before lease release,
+            # pending-error checks, or operand disposal. An omitted argument
+            # is an empty root: the runtime reads NULL as its default.
             sink = self._slot_call_result_sink(expr)
             output = sink
             roots = []
@@ -546,24 +583,35 @@ class MethodCallFallbackLoweringMixin:
             target = previous if previous is not None else self._ensure_fn_err_exit()
             saved_cleanup = self._cpy_operand_cleanup_block
             operands = []
+            roles = []
             try:
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 receiver = self._emit_slot_call_operand(attr.obj, "bytes.split.receiver")
                 roots.append(receiver)
                 operands.append(receiver)
-                for index, argument in enumerate(expr.args):
+                roles.append("receiver")
+                for role, argument in split_operands:
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                     self._cpy_operand_cleanup_block = self._try_err_block
-                    label = "bytes.split.separator" if index == 0 else "bytes.split.limit"
-                    operand = self._emit_slot_call_operand(argument, label)
+                    operand = self._emit_slot_call_operand(argument, "bytes.split." + role)
                     roots.append(operand)
                     operands.append(operand)
+                    roles.append(role)
+                for role in ("sep", "maxsplit"):
+                    if role not in roles:
+                        absent = self._new_slot_call_root("bytes.split." + role + ".default")
+                        roots.append(absent)
+                        operands.append(absent)
+                        roles.append(role)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                runtime_name = "py_bytes_split" if len(expr.args) == 1 else "py_bytes_split_max"
                 self._slot_call_runtime_call(
-                    runtime_name, tuple(operands), result_slot=output, span=expr.span,
+                    "py_bytes_split_full", tuple(operands), result_slot=output,
+                    suffix_args=(ir.Constant(_I64, 1 if attr.name == "rsplit" else 0),),
+                    argument_order=(roles.index("receiver"), roles.index("sep"),
+                                    roles.index("maxsplit"), len(operands)),
+                    span=expr.span,
                 )
                 self._guard_cpy_value_not_null(self.builder.load(output))
                 self._release_slot_call_roots(tuple(operands))

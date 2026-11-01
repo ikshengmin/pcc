@@ -125,6 +125,8 @@ py_func_display_name = extern("py_func_display_name", (c_ptr,), c_ptr)
 py_func_kind = extern("py_func_kind", (c_ptr,), c_int64)
 py_bound_method_function = extern("py_bound_method_function", (c_ptr,), c_ptr)
 py_obj_type_name = extern("py_obj_type_name", (c_ptr,), c_ptr)
+py_obj_index_i64 = extern("py_obj_index_i64", (c_ptr,), c_int64)
+py_list_reverse = extern("py_list_reverse", (c_ptr,), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
@@ -135,6 +137,7 @@ py_exc_repr = extern("py_exc_repr", (c_ptr,), c_ptr)
 py_exc_get_args = extern("py_exc_get_args", (c_ptr,), c_ptr)
 py_complex_repr = extern("py_complex_repr", (c_ptr,), c_ptr)
 py_instance_getattr = extern("py_instance_getattr", (c_ptr, c_ptr), c_ptr)
+py_obj_is_slice = extern("py_obj_is_slice", (c_ptr,), c_int64)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_mem_alloc = extern("py_mem_alloc", (c_int64,), c_ptr)
 py_mem_free = extern("py_mem_free", (c_ptr,), c_void)
@@ -2062,6 +2065,204 @@ def py_bytes_split_max(src, sep, maxsplit):
     tail = _bytes_new_same_family(src, ptr_add(data, start), n - start)
     py_list_append(out, tail)
     py_decref(tail)
+    return out
+
+
+def _bytes_is_space(byte: int) -> int:
+    # bytes.split()'s whitespace: ASCII space, \t, \n, \v, \f and \r.
+    if byte == 32 or (byte >= 9 and byte <= 13):
+        return 1
+    return 0
+
+
+def _bytes_split_piece(out, src, data, start: int, end: int) -> int:
+    part = _bytes_new_same_family(src, ptr_add(data, start), end - start)
+    if ptr_is_null(part):
+        return -1
+    py_list_append(out, part)
+    py_decref(part)
+    return 0
+
+
+def _bytes_find_at(data, n: int, start: int, sep_data, sep_n: int) -> int:
+    # The first occurrence at or after ``start``, or -1.
+    i: int = start
+    while i + sep_n <= n:
+        j: int = 0
+        while j < sep_n and load_i8(data, i + j) == load_i8(sep_data, j):
+            j = j + 1
+        if j == sep_n:
+            return i
+        i = i + 1
+    return -1
+
+
+def _bytes_rfind_before(data, end: int, sep_data, sep_n: int) -> int:
+    # The last occurrence that ends at or before ``end``, or -1.
+    i: int = end - sep_n
+    while i >= 0:
+        j: int = 0
+        while j < sep_n and load_i8(data, i + j) == load_i8(sep_data, j):
+            j = j + 1
+        if j == sep_n:
+            return i
+        i = i - 1
+    return -1
+
+
+def _bytes_split_whitespace(out, src, data, n: int, count: int) -> int:
+    # CPython's stringlib split_whitespace.
+    i: int = 0
+    done: int = 0
+    while count > 0 and done == 0:
+        count = count - 1
+        while i < n and _bytes_is_space(load_i8(data, i)) != 0:
+            i = i + 1
+        if i == n:
+            done = 1
+        else:
+            start: int = i
+            i = i + 1
+            while i < n and _bytes_is_space(load_i8(data, i)) == 0:
+                i = i + 1
+            if _bytes_split_piece(out, src, data, start, i) != 0:
+                return -1
+    if i < n:
+        # Only when the count ran out: the rest, without its leading space.
+        while i < n and _bytes_is_space(load_i8(data, i)) != 0:
+            i = i + 1
+        if i != n and _bytes_split_piece(out, src, data, i, n) != 0:
+            return -1
+    return 0
+
+
+def _bytes_rsplit_whitespace(out, src, data, n: int, count: int) -> int:
+    # CPython's stringlib rsplit_whitespace; pieces come out last first.
+    i: int = n - 1
+    done: int = 0
+    while count > 0 and done == 0:
+        count = count - 1
+        while i >= 0 and _bytes_is_space(load_i8(data, i)) != 0:
+            i = i - 1
+        if i < 0:
+            done = 1
+        else:
+            end: int = i
+            i = i - 1
+            while i >= 0 and _bytes_is_space(load_i8(data, i)) == 0:
+                i = i - 1
+            if _bytes_split_piece(out, src, data, i + 1, end + 1) != 0:
+                return -1
+    if i >= 0:
+        while i >= 0 and _bytes_is_space(load_i8(data, i)) != 0:
+            i = i - 1
+        if i >= 0 and _bytes_split_piece(out, src, data, 0, i + 1) != 0:
+            return -1
+    return 0
+
+
+def _bytes_split_sep(out, src, data, n: int, sep_data, sep_n: int, count: int) -> int:
+    # CPython's stringlib split.
+    i: int = 0
+    done: int = 0
+    while count > 0 and done == 0:
+        count = count - 1
+        found: int = _bytes_find_at(data, n, i, sep_data, sep_n)
+        if found < 0:
+            done = 1
+        else:
+            if _bytes_split_piece(out, src, data, i, found) != 0:
+                return -1
+            i = found + sep_n
+    return _bytes_split_piece(out, src, data, i, n)
+
+
+def _bytes_rsplit_sep(out, src, data, n: int, sep_data, sep_n: int, count: int) -> int:
+    # CPython's stringlib rsplit; pieces come out last first.
+    i: int = n
+    done: int = 0
+    while count > 0 and done == 0:
+        count = count - 1
+        found: int = _bytes_rfind_before(data, i, sep_data, sep_n)
+        if found < 0:
+            done = 1
+        else:
+            if _bytes_split_piece(out, src, data, found + sep_n, i) != 0:
+                return -1
+            i = found
+    return _bytes_split_piece(out, src, data, 0, i)
+
+
+def _bytes_like_required(o) -> None:
+    # CPython: "a bytes-like object is required, not 'str'".
+    message = stack_alloc(256)
+    prefix = cstr("a bytes-like object is required, not '")
+    size: int = strlen(prefix)
+    memcpy(message, prefix, size)
+    name = py_obj_type_name(o)
+    text = py_str_utf8(name)
+    length: int = strlen(text)
+    if length > 200:
+        length = 200
+    memcpy(ptr_add(message, size), text, length)
+    size = size + length
+    store_i8(message, size, 39)
+    store_i8(message, size + 1, 0)
+    py_decref(name)
+    py_raise_owned(py_exc_new(3, message))
+
+
+@c_abi_export("py_bytes_split_full")
+def py_bytes_split_full(src, sep, maxsplit, from_right: int):
+    """bytes/bytearray ``split(sep=None, maxsplit=-1)`` and ``rsplit``.
+
+    ``sep`` NULL or None splits on runs of ASCII whitespace; the unsplit
+    remainder left by ``maxsplit`` loses only its leading (rsplit: trailing)
+    whitespace. ``maxsplit`` NULL or negative is unlimited. Pieces have the
+    receiver's type. Callers keep ``src`` and ``sep`` leased: allocating a
+    piece may reach a safepoint while their payloads are read.
+    """
+    data = _bytes_data(src)
+    if ptr_is_null(data):
+        return null()
+    n: int = py_bytes_len(src)
+    count: int = 9223372036854775807
+    if ptr_is_null(maxsplit) == 0:
+        limit: int = py_obj_index_i64(maxsplit)
+        if py_err_occurred() != 0:
+            return null()
+        if limit >= 0:
+            count = limit
+    whitespace: int = 1
+    sep_data = data
+    sep_n: int = 0
+    if ptr_is_null(sep) == 0 and ptr_eq(sep, global_load_ptr("py_None")) == 0:
+        whitespace = 0
+        sep_data = _bytes_data(sep)
+        if ptr_is_null(sep_data):
+            _bytes_like_required(sep)
+            return null()
+        sep_n = py_bytes_len(sep)
+        if sep_n == 0:
+            py_raise_owned(py_exc_new(2, cstr("empty separator")))  # PY_EXC_VALUEERROR
+            return null()
+    out = py_list_new(0)
+    if ptr_is_null(out):
+        return null()
+    status: int = 0
+    if whitespace != 0 and from_right == 0:
+        status = _bytes_split_whitespace(out, src, data, n, count)
+    elif whitespace != 0:
+        status = _bytes_rsplit_whitespace(out, src, data, n, count)
+    elif from_right == 0:
+        status = _bytes_split_sep(out, src, data, n, sep_data, sep_n, count)
+    else:
+        status = _bytes_rsplit_sep(out, src, data, n, sep_data, sep_n, count)
+    if status != 0:
+        py_decref(out)
+        return null()
+    if from_right != 0:
+        py_list_reverse(out)
     return out
 
 
@@ -4345,6 +4546,37 @@ def _exception_instance_repr(o):
     return _cat_take(_cat_take(out, body), _str_lit1(41))  # ')'
 
 
+def _slice_repr(o):
+    """``slice(start, stop, step)`` with each part's repr, as in CPython."""
+    out = py_str_new(cstr("slice("), 6)
+    index: int = 0
+    while index < 3 and ptr_is_null(out) == 0:
+        name = cstr("start")
+        if index == 1:
+            name = cstr("stop")
+        elif index == 2:
+            name = cstr("step")
+        part = py_instance_getattr(o, name)
+        if ptr_is_null(part):
+            py_decref(out)
+            return null()
+        text = py_obj_repr(part)
+        py_decref(part)
+        if ptr_is_null(text):
+            py_decref(out)
+            return null()
+        if index > 0:
+            out = _cat_take(out, py_str_new(cstr(", "), 2))
+        if ptr_is_null(out):
+            py_decref(text)
+            return null()
+        out = _cat_take(out, text)
+        index = index + 1
+    if ptr_is_null(out):
+        return null()
+    return _cat_take(out, py_str_new(cstr(")"), 1))
+
+
 @c_abi_export("py_obj_repr")
 def py_obj_repr(o):
     if ptr_is_null(o):
@@ -4362,6 +4594,8 @@ def py_obj_repr(o):
         return py_exc_repr(o)
     if tag == PY_TYPE_COMPLEX:  # PY_TYPE_COMPLEX
         return py_complex_repr(o)
+    if py_obj_is_slice(o) != 0:
+        return _slice_repr(o)
     dunder = py_user_repr_dispatch(o)
     if not ptr_is_null(dunder):
         return dunder

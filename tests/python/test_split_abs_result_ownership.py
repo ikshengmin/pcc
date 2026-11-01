@@ -12,11 +12,12 @@ from tests.python.test_lambda_constructor_roots import emit, immediate_store
 
 
 @pytest.mark.parametrize('parameter, expression, runtime', [
-    ('raw: bytes', 'raw.split(b"," )', 'py_bytes_split'),
-    ('raw: bytearray', 'raw.split(b",", 1)', 'py_bytes_split_max'),
-    ('raw: bytes', 'raw.split(make(b","), make(1))', 'py_bytes_split_max'),
-    ('raw: bytes', 'make_bytes(raw).split(b",", fail())', 'py_bytes_split_max'),
-    ('raw: bytes', 'raw.split(b"\\0", 1)[0].decode("utf-8", "surrogateescape")', 'py_bytes_split_max'),
+    ('raw: bytes', 'raw.split(b"," )', 'py_bytes_split_full'),
+    ('raw: bytearray', 'raw.split(b",", 1)', 'py_bytes_split_full'),
+    ('raw: bytes', 'raw.split(make(b","), make(1))', 'py_bytes_split_full'),
+    ('raw: bytes', 'make_bytes(raw).split(b",", fail())', 'py_bytes_split_full'),
+    ('raw: bytes', 'raw.split(b"\\0", 1)[0].decode("utf-8", "surrogateescape")', 'py_bytes_split_full'),
+    ('raw: bytes', 'raw.rsplit(maxsplit=make(1))', 'py_bytes_split_full'),
     ('raw', 'abs(raw)', 'py_obj_abs'),
     ('raw: int', 'abs(raw)', 'py_obj_abs'),
     ('raw', 'abs(make(raw))', 'py_obj_abs'),
@@ -40,7 +41,9 @@ def test_split_abs_result_is_published_and_inputs_are_leased(parameter, expressi
     assert calls
     for call in calls:
         arguments = re.findall(r'ptr (%[-\w.]+)', call.group(1))
-        assert len(arguments) == (3 if runtime.endswith('_max') else 2 if runtime == 'py_bytes_split' else 1)
+        # split/rsplit pass receiver, sep and maxsplit roots (an omitted
+        # argument is an empty root), so every one is leased and released.
+        assert len(arguments) == (3 if runtime == 'py_bytes_split_full' else 1)
         for argument in arguments:
             loaded = re.search(re.escape(argument) + r' = load ptr, ptr (%[-\w.]+)', body[:call.start()])
             assert loaded is not None
