@@ -755,6 +755,12 @@ def _publish_ready_node(vthread, node) -> None:
 
 def _step_finished(vthread) -> int:
     """The carrier no longer runs ``vthread``: queue a wakeup it kept."""
+    # A thread that finished in this step had its run mark cleared by
+    # complete/fail on this carrier, after publishing FINISHED. A finished
+    # thread is never woken or queued again, so the locked check below
+    # (which acts only on a mark of 2) has nothing to do.
+    if atomic_load_i64(vthread, 32, "acquire") == 4 and load_i64(vthread, 40) == 0:
+        return 0
     if _scheduler_lock() != 0:
         return -1
     result: int = 0
