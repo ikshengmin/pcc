@@ -23,7 +23,7 @@ def _build_runtime(tmp_path: Path) -> Path:
     return cached_pcc_python_runtime()
 
 
-def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
+def _compile(tmp_path: Path, source: str) -> Path:
     work_runtime = _build_runtime(tmp_path)
     src = tmp_path / "vthread_ready_entry_pool_probe.c"
     exe = tmp_path / "vthread_ready_entry_pool_probe.out"
@@ -45,18 +45,21 @@ def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess
         timeout=60,
     )
     assert build.returncode == 0, build.stdout + build.stderr
-    return subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    return exe
 
 
 def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
     tmp_path: Path,
 ) -> None:
-    proc = _compile_and_run(
+    # The collector is fixed by the first managed allocation, so each one
+    # runs in its own process, selected before anything is allocated.
+    exe = _compile(
         tmp_path,
         """
         #include "py_runtime.h"
         #include "py_internal.h"
         #include <stdio.h>
+        #include <stdlib.h>
 
         static int check_backend(int64_t backend) {
             if (pcc_gc_set_backend(backend) != 0) return 0;
@@ -102,21 +105,17 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
             return 1;
         }
 
-        int main(void) {
-            for (int64_t backend = 0; backend <= 4; backend++) {
-                int ok = check_backend(backend);
-                printf("%lld:%d\\n", (long long)backend, ok);
-                if (!ok) return (int)(40 + backend);
-            }
-            return 0;
+        int main(int argc, char **argv) {
+            if (argc != 2) return 2;
+            int64_t backend = atoll(argv[1]);
+            int ok = check_backend(backend);
+            printf("%lld:%d\\n", (long long)backend, ok);
+            return ok ? 0 : (int)(40 + backend);
         }
         """,
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert proc.stdout.strip().splitlines() == [
-        "0:1",
-        "1:1",
-        "2:1",
-        "3:1",
-        "4:1",
-    ]
+    for backend in range(5):
+        proc = subprocess.run([str(exe), str(backend)], capture_output=True, text=True,
+                              timeout=60)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.strip() == f"{backend}:1"

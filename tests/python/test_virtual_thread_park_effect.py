@@ -369,8 +369,16 @@ def _assert_dynamic_callback_continuation_ir(ir_text: str) -> None:
     direct = re.search(r"^vthread\.call\.direct[^\n]*:\n(.*?)(?=^\S|\Z)", body, re.M | re.S)
     assert direct is not None, "direct callback result block is missing"
     # The non-continuation branch copies the authoritative child cell into a
-    # leased consumer owner. A raw reload/retain is no longer this contract.
-    assert re.search(r"\bcall\b[^\n]*@pcc_gc_root_copy_lease\(", direct.group(1)), "direct result owner lease is missing"
+    # consumer owner. A raw reload/retain is no longer this contract. The
+    # copy is a lease copy, or pcc_gc_root_copy_local when the source is
+    # this frame's private root (no lease to take and retire at once); its
+    # status is checked either way.
+    copy = re.search(
+        r"(%[-\w.]+) = call[^\n]*@pcc_gc_root_copy_(?:lease|local)\(", direct.group(1)
+    )
+    assert copy is not None, "direct result owner copy is missing"
+    assert re.search(r"icmp slt i64 " + re.escape(copy.group(1)) + r", 0", direct.group(1)), \
+        "direct result owner copy status is unchecked"
     assert "@py_gen_next(" not in direct.group(1)
 
 
@@ -400,7 +408,8 @@ def test_dynamic_callback_ir_uses_distinct_may_park_generator_marker(
     with pytest.raises(AssertionError, match="continuation predicate"):
         _assert_dynamic_callback_continuation_ir(ir_text.replace(resume, changed))
     changed = resume.replace("@pcc_gc_root_copy_lease(", "@pcc_gc_root_copy(")
-    with pytest.raises(AssertionError, match="direct result owner lease"):
+    changed = changed.replace("@pcc_gc_root_copy_local(", "@pcc_gc_root_copy(")
+    with pytest.raises(AssertionError, match="direct result owner copy"):
         _assert_dynamic_callback_continuation_ir(ir_text.replace(resume, changed))
 
 

@@ -1468,9 +1468,9 @@ def test_regex_object_bridge_is_owned_by_pcc_python(
     members = _archive_members(pcc_runtime_archive)
     assert "py_re_engine_obj.o" not in members
     assert "py_re_engine_runtime.o" in members
+    assert "py_re_bridge_entry.o" in members
 
     owners = _defined_symbol_owners(pcc_runtime_archive)
-    expected_owner = {"py_re_engine_runtime.o"}
     for symbol in (
         "py_re_engine_findall",
         "py_re_engine_sub",
@@ -1478,11 +1478,13 @@ def test_regex_object_bridge_is_owned_by_pcc_python(
         "py_re_engine_truth",
         "py_re_engine_truth_flags",
         "py_re_engine_truth_flags_from",
-        "py_re_engine_fullmatch_flags",
-        "py_re_compile_obj",
         "py_re_engine_pattern_supported",
     ):
-        assert owners[symbol] == expected_owner
+        assert owners[symbol] == {"py_re_engine_runtime.o"}, symbol
+    # e00cfc9a7 moved the guarded public entries (compile and fullmatch
+    # take checked roots and leases) into the pcc-Python bridge module.
+    for symbol in ("py_re_compile_obj", "py_re_engine_fullmatch_flags"):
+        assert owners[symbol] == {"py_re_bridge_entry.o"}, symbol
 
 
 def test_regex_core_is_owned_by_freestanding_pcc_python(
