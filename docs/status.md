@@ -161,7 +161,24 @@ and all seven selected deque/concurrency/IO integration regressions. A new
 native event probe additionally executes the join handoff on GC0-4 and reads
 back exactly one READY wakeup and the expected result, `42 1`. These are host
 pcc0/self and explicitly C-linked runtime probes, not native-pcc1 evidence.
-Whole affected-language lanes, bootstrap and paired QPS remain pending.
+Seven rotated pairs compare `2649b32ed` with `843fae806` using identical
+40,000-request inputs, concurrency 100, 200 warmups, host pcc0/self and GC0.
+Only the scheduler runtime differs between the compiler/runtime source trees.
+One-worker median QPS is 40,761 -> 40,100 (paired median -0.73%, 3/7 positive);
+four-worker QPS is 98,936 -> 104,957 (+5.80%, 4/7 positive). Paired cycles
+change +1.02% / -5.16%, and instructions +0.52% / -2.43%. The four-worker
+range is wide, so this is not a consistent win across all pairs. Same-run
+CPython asyncio medians are 92,175 / 296,545: both final throughput targets
+remain unmet. Source/runtime/program and measurement-input hashes are stable.
+
+Matched four-second one-worker profiles of those same binaries put root-store
+self samples at 6.58% / 6.42%; no-park entry/exit self samples rise from 0.23%
+to 0.72%. The candidate's calling-thread route still uses the global FIFO.
+The profiles contain about 3,000 samples each and are diagnostic, not another
+QPS comparison. They support investigating duplicate scheduler guard work and
+the planned rooted-operand/ownership changes, not claiming a precise causal
+share for the small one-worker regression. Whole affected-language lanes and
+bootstrap remain pending.
 
 The node-pool increment over `f1d8e65d3` gives ready, join and channel free
 lists separate cache-line-spaced no-park locks. Allocation, raw freeing and
