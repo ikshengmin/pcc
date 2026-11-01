@@ -473,6 +473,17 @@ def pcc_gc_borrowed_lease_acquire(slot) -> i64:
 def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
+    # Collectors 0-2 never move an object, and none can be replaced once an
+    # object exists (pcc_gc_set_backend), so an address lease there guards
+    # nothing: its mode reservation only fenced a collector switch. Every
+    # value answers 0 there, so decide before reading the slot. The refcount
+    # provenance probe keeps the checked path below.
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 2
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        return 0
     # The caller keeps its owning slot stable while leased. Collectors can
     # rewrite only object pointers: NULL/tagged words carry no address and
     # need neither relocation protection nor a backend-mode reservation.
@@ -492,16 +503,6 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
             or ptr_eq(immediate, global_addr("py_ellipsis_storage")) != 0):
         return 0
     if pcc_gc_static_literal_contains(immediate) != 0:
-        return 0
-    # Collectors 0-2 never move an object, and none can be replaced once an
-    # object exists (pcc_gc_set_backend), so an address lease there guards
-    # nothing: its mode reservation only fenced a collector switch. The
-    # refcount provenance probe keeps the checked path below.
-    if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 2
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-    ):
         return 0
     # Reserve a mode guard before reading any heap header. Only address bits
     # select its shard. A completed transition may rewrite the source before
