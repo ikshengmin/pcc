@@ -674,7 +674,14 @@ only two TLS writers). r80, seven alternating pairs `be77` -> `f903b1583`
 (load 9-12): one worker 38,987 -> 39,118 QPS, paired median +0.02% (4/7),
 cycles -0.99% (7/7), instructions -2.83%; four workers 92,556 -> 96,180,
 +4.54% (5/7), cycles -4.60%, instructions -3.37%. Same-run asyncio
-90,934 / 296,845 (about 2.3x / 3.1x).
+90,934 / 296,845 (about 2.3x / 3.1x). `a93aa8223` lets a finished
+virtual thread leave its carrier without the global scheduler lock. Plan
+item three is designed in the archive's `design/gc1-4-without-refcounts.md`:
+today GC1-4 find external roots from counts (count minus internal
+references, `pcc_gc_gray_refcount_external_roots`) because runtime locals
+are not precise roots, so dropping counts needs a conservative scan of
+runtime frames (with pinning) and export counts for C. Without the protocol
+work of P0 package 4, the remaining plan items are each a few percent.
 
 Generic Python semantics fixed on the way: `fe2d20df9` makes dict subclass
 instances dicts (isinstance/issubclass, construction through
