@@ -146,9 +146,12 @@ async request workload, each GC0-4), the five-GC running-thread regression,
 and the five-GC C-linked ready-pool root probe. The pool probe initially
 failed before compilation because it bypassed the admitted-runtime fixture;
 it now consumes that fixture and passes without rebuilding the archive.
-Four-carrier integration, independent reference comparison, whole affected-
-language lanes, bootstrap and paired QPS are not yet run for this candidate;
-this preparation makes no lock-removal or throughput claim.
+The three focused integration cases pass: four-carrier completion observers
+(three attempts on each GC), the all-GC shared-lock workload, and the C-linked
+persistent-carrier/pin-metrics probe. Independent scheduler reference
+comparison, whole affected-language lanes, bootstrap and paired QPS are not
+yet run for this candidate; this preparation makes no lock-removal or
+throughput claim.
 
 The container dead-branch removal is published in `f11a3513d`; its recorded
 host/model/IR checks do not qualify the pending native GC0-4 execution. The
@@ -268,8 +271,11 @@ Unicode token's raw spelling. A focused parser/import/Unicode selection passes
 annotation scopes and lazy aliases are not implemented yet: lifting stops
 with the mapped `PCC-PY-TYPE-PARAMS-UNIMPLEMENTED` or
 `PCC-PY-TYPE-ALIAS-UNIMPLEMENTED` diagnostic. This is parser progress, not
-runtime PEP 695 support or a completed conformance category; native parser
-execution and the affected-module rerun remain pending.
+runtime PEP 695 support or a completed conformance category. The owned parser
+probe now passes on frozen `2649b32ed`: host pcc0/self compiles and executes
+type-parameter/bound/default records and an alias node on GC0-4 with the same
+output as CPython running the unchanged probe. Native pcc1 execution and the
+affected-module rerun remain pending.
 
 The adjacent standalone-lifter export test still observes its two historical
 CPython actions (`unicodedata` import and `py_cpy_wrap_pcc_3arg`) instead of its
