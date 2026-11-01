@@ -84,6 +84,61 @@ _MIRRORED_COMPARE_OP = {
 
 
 class CompareMembershipLoweringMixin:
+    def _emit_frame_rooted_object_compare(self, expr):
+        """Compare stable local inputs without creating temporary owners.
+
+        Both expressions must be local names: evaluating a general RHS can
+        rebind the LHS (including a named expression). Mutable closure cells,
+        resumable frames and runtime raw-pointer code keep their existing
+        capture paths. The call still leases objects on its callback path.
+        """
+        if (expr.op not in ("==", "!=", "<", "<=", ">", ">=")
+                or not isinstance(expr.lhs, Name) or not isinstance(expr.rhs, Name)
+                or not getattr(self, "_gc_rooted_local_names", ())
+                or getattr(self, "_generator_ctx_stack", ())
+                or getattr(self, "_runtime_port_module", False)
+                or getattr(self, "_freestanding_module", False)
+                or getattr(self, "_python_library", False)):
+            return None
+        definition = getattr(self, "current_func_def", None)
+        if definition is not None:
+            boxed = getattr(self, "_closure_boxed_params", {}).get(definition.name, ())
+            if expr.lhs.ident in boxed or expr.rhs.ident in boxed:
+                return None
+        roots = tuple(self._frame_root_slot_for_operand(operand)
+                      for operand in (expr.lhs, expr.rhs))
+        if any(root is None for root in roots):
+            return None
+        if any(self._expr_returns_unsafe_raw_pointer(operand)
+               for operand in (expr.lhs, expr.rhs)):
+            return None
+        # Keep lease mode tied to the physical slot's ownership, including
+        # parameters promoted to owned locals. These are caller roots: no
+        # operand cleanup clears them, on either success or exception.
+        sources = tuple(self._slot_call_name_source(operand)
+                        for operand in (expr.lhs, expr.rhs))
+        if any(source is None or source[0] is not root
+               for source, root in zip(sources, roots)):
+            raise RuntimeError("frame comparison lost its authoritative operand slot")
+        borrowed_operands = self._slot_call_borrowed_operands
+        previous = []
+        try:
+            for slot, borrowed in sources:
+                previous.append((slot, borrowed_operands.get(id(slot))))
+                if borrowed:
+                    borrowed_operands[id(slot)] = slot
+                else:
+                    borrowed_operands.pop(id(slot), None)
+            return self._emit_runtime_object_compare(
+                expr, None, None, "frame", roots=roots,
+            )
+        finally:
+            for slot, original in reversed(previous):
+                if original is None:
+                    borrowed_operands.pop(id(slot), None)
+                else:
+                    borrowed_operands[id(slot)] = original
+
     def _emit_runtime_object_compare(
         self,
         expr: Compare,
@@ -622,6 +677,9 @@ class CompareMembershipLoweringMixin:
                     ):
                         exact_mixed = True
         if exact_mixed:
+            rooted = self._emit_frame_rooted_object_compare(expr)
+            if rooted is not None:
+                return rooted
             # A mixed comparison is an object boundary for an unbounded
             # Python int. Emitting it in the scaffold i64 lane first changes
             # +2**63 into -2**63 before either dynamic or float comparison.
@@ -1063,6 +1121,10 @@ class CompareMembershipLoweringMixin:
         ``dynamic_operand`` ("lhs"/"rhs") names the dynamic side of an object
         comparison whose other side is statically a str.
         """
+        if object_compare:
+            rooted = self._emit_frame_rooted_object_compare(expr)
+            if rooted is not None:
+                return rooted
         lhs = self._emit_expr_as_pcc_object(expr.lhs) if object_compare else self._emit_expr(expr.lhs)
         if not self._owned_release_needed(lhs, expr.lhs):
             # A borrowed global/field may lose its original owner when the

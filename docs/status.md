@@ -132,6 +132,21 @@ Pyperformance, micro timing and the generated README report are still pending.
 
 ### P0 takeover boundary: `f11a3513d`
 
+The comparison-operand increment over `d7494f7a0` generalizes the truth-test
+root lookup and reuses private, non-resumable local-name roots for object
+comparisons. It checks both names in evaluation order and keeps borrowed-
+parameter versus owning-local lease modes distinct. Caller roots are never
+cleared as operand temporaries; the inline tagged-int path needs no leases.
+Globals, attributes, callbacks, closure cells and resumable frames retain the
+existing capture path. Seven focused IR/static-signature checks pass, including
+truth-test non-regression and direct lease arguments naming the caller slots.
+The new unchanged-source CPython/five-GC comparison probe is not yet run.
+Runtime rooted primitive entries, leaf-call effects and the membership/
+arithmetic extensions remain open, as do whole-language and native-pcc1 gates.
+Static-method generation also exposes the pre-existing `_call_user` and
+`_emit_post_call_err_check` signature drift; this batch preserves those entries
+and adds only its two new method schemas.
+
 The deque increment over `b0a9d32e3` replaces carrier FIFOs with 256-node
 bounded deques. Local pops and FIFO stealing use one carrier lock, while
 external submissions and overflow retain the global FIFO. Periodic oldest-

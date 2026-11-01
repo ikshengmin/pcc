@@ -759,6 +759,11 @@ def _part_64(out):
     _append_method(out, '_shared_return_pinned_cleanup', (('self', 'pos', False), ('slots', 'pos', False), ('target', 'pos', False)))
 
 
+def _part_65(out):
+    _append_method(out, '_emit_frame_rooted_object_compare', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_frame_root_slot_for_operand', (('self', 'pos', False), ('expr', 'pos', False)))
+
+
 def _build_static_methods():
     out = []
     _part_0(out)
@@ -826,6 +831,7 @@ def _build_static_methods():
     _part_62(out)
     _part_63(out)
     _part_64(out)
+    _part_65(out)
     return tuple(out)
 
 L1_CODEGEN_STATIC_METHODS = _build_static_methods()

@@ -159,7 +159,7 @@ class ControlFlowLoweringMixin:
         payload = self._maybe_emit_valueclass_constructor_payload(cond_expr.ty, cond_expr)
         if payload is not None:
             return self._truthy(payload, cond_expr.ty)
-        rooted = self._frame_root_slot_for_truth(cond_expr)
+        rooted = self._frame_root_slot_for_operand(cond_expr)
         if rooted is not None:
             # The runtime reads the object from this frame's own root and
             # protects it only on the path that can run user code.
@@ -203,14 +203,15 @@ class ControlFlowLoweringMixin:
         self._gc_release(value)
         return result
 
-    def _frame_root_slot_for_truth(self, expr):
+    def _frame_root_slot_for_operand(self, expr):
         """The current activation's own root slot holding ``expr``'s object.
 
         Only a local Name of this function qualifies: a registered frame root
         that no global, class namespace, import binding or CPython value
-        shares. Nothing else rebinds such a slot during one runtime call, so
-        a truth test can pass the slot instead of a retained, pinned copy of
-        its value. Every other operand keeps the general path.
+        shares. The caller must check boundness and preserve expression
+        evaluation order before borrowing it. A consumer that retains the
+        address across a callback must also exclude resumable-frame slots.
+        Every other operand keeps the general path.
         """
         if not isinstance(expr, Name):
             return None

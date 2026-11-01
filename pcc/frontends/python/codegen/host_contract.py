@@ -789,6 +789,8 @@ L1_CODEGEN_HOST_METHODS = (
     "_guard_integer_power_operand_provenance",
     "_slot_call_power_provenance_expr",
     "_shared_return_pinned_cleanup",
+    "_emit_frame_rooted_object_compare",
+    "_frame_root_slot_for_operand",
 )
 
 
