@@ -101,6 +101,20 @@ performance and compatibility should README gain the requested "Why PCC?"
 claims. All five collectors, arbitrary-precision integers, identity, exceptions,
 finalizers, weakrefs and resurrection remain required.
 
+Frame registration from one published word (`02acaa2f5`), measured
+2026-11-01 against `c09e3c638` with sealed arms (c09b/s2f; Darwin AArch64,
+host pcc0/self/no-libpython/threaded-atomic; load average 5.0-5.4; receipts
+`r-s2f-a.json` and `r-s2f-sync-gc.json` in the 2026-10-29 claude-rounds
+archive). Handler batch on GC0, seven alternating pairs: one worker 39,474 ->
+39,605 QPS (paired median +0.33%, 4/7 up; instructions -1.25%, cycles
+-0.09%); four workers 91,812 -> 93,319 (+1.98%, 4/7 up; instructions -2.33%,
+cycles -1.30%). Same-packet CPython 3.15.0 asyncio is 89,709 / 293,195, so
+PCC remains 2.27x / 3.14x behind. `sync_payload` per request (N/2N, medians
+of three), instructions then cycles: GC0 157,822 -> 155,985 (-1.2%) and
+34,174 -> 33,940 (-0.7%); GC1 -2.2% / -1.4%; GC2 -2.1% / -1.5%; GC3 -1.5% /
+-1.8%; GC4 -3.6% / -0.7%. GC1-4 execute 4.3-5.7x GC0's instructions per
+request (676k-897k), an open cost outside this change.
+
 Fresh frozen Darwin host-pcc0/self/no-libpython/threaded-atomic measurements:
 one-worker PCC/asyncio medians 22,414/80,834 requests/s; a separate matched
 four-worker packet gives 26,742/215,139 (8.05x gap). Both use 40k validated
