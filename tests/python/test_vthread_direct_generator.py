@@ -25,7 +25,7 @@ print(vt.result(left), vt.result(right))
         monkeypatch.setenv("PCC_DIRECT_GENERATOR_TASKS", enabled)
         output = tmp_path / ("spawn_" + enabled + ".ll")
         compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                       libpython_mode="off", ir_scaffold_mode="on")
+                       ir_scaffold_mode="on")
         counts.append(len(re.findall(r"call[^\n]*@py_continuation_new_typed\(", output.read_text())))
     assert counts == [2, 1], "ordinary callbacks still need their typed captured slots"
 

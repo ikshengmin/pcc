@@ -26,7 +26,7 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO (claim boundary):
 - It does not build a pcc1 binary or compile anything.
 - It makes NO throughput / scaling / accuracy claim.
 
-The ``--python-libpython=off`` CPython-extension rejection boundary is asserted
+The the native pipeline CPython-extension rejection boundary is asserted
 through pcc's generic native-artifact linkage scanner.  The probe is real and
 fail-closed, but remains a package-boundary check rather than a pcc1 execution
 claim.  See docs/design/pcc-vllm-minimind-gates.md.
@@ -72,7 +72,7 @@ MODE_PCC_METAL_KERNEL = "pcc-metal-kernel"
 # libpython / ABI compat labels (kept distinct on purpose).
 LABEL_CPYTHON_COMPAT = "cpython-compat"      # extension built for CPython ABI
 LABEL_PCC_NATIVE = "pcc-native"              # extension built for pcc-native ABI
-LABEL_NO_LIBPYTHON = "no-libpython"          # --python-libpython=off boundary
+LABEL_NO_LIBPYTHON = "no-libpython"          # no-libpython boundary
 
 
 def cpython_extension_rejection_report(

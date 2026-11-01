@@ -8,7 +8,7 @@ the pcc-Python port (grow-failure branches raise MemoryError the same way)
 and adds the frontend post-call err-check on every generated py_list_pop
 call site (typed method, dyn method, dyn dispatch, del-subscript).
 
-Runs under --backend self --python-libpython=off on both runtime tiers:
+Runs under --backend self on both runtime tiers:
 the default tier links the pcc-Python port archive, the cc tier links the
 C sources (they had the same gap and must stay mirrored).
 """
@@ -84,8 +84,7 @@ def test_list_pop_and_del_raise_indexerror_no_libpython(tmp_path, runtime_cc):
     env.pop("PCC_RUNTIME_CC", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )
@@ -369,7 +368,7 @@ def test_pop_owned_native_semantics(tmp_path):
     source = tmp_path / "pop_owned.py"
     binary = tmp_path / "pop_owned"
     source.write_text(POP_OWNED_PROGRAM)
-    compile_python(str(source), str(binary), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(source), str(binary), ir_scaffold_mode="on")
     result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr
     assert result.stdout == POP_OWNED_EXPECTED

@@ -124,8 +124,7 @@ def _compile(
     src.write_text(source, encoding="utf-8")
     exe = tmp_path / "prog_bin"
     proc = subprocess.run(
-        ["uv", "run", "pcc", "--backend", backend, "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", backend, "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=480,
         env=_pcc_env(gc_backend, extra=env_extra),
         cwd=str(REPO_ROOT),
@@ -143,8 +142,7 @@ def _compile_result(tmp_path, source, *, backend="self", env_extra=None):
     src.write_text(source, encoding="utf-8")
     exe = tmp_path / "prog_bin"
     return subprocess.run(
-        ["uv", "run", "pcc", "--backend", backend, "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", backend, "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=480,
         env=_pcc_env(extra=env_extra),
         cwd=str(REPO_ROOT),
@@ -597,14 +595,16 @@ class TestObligation1ModeLabeling:
     """host pcc != pcc1 | cpython-compat != pcc-native | libpython != no-libpython
     | LLVM-backed != self-backed | stage1 != pcc1->pcc2->pcc3 fixed point."""
 
-    def test_cli_exposes_the_three_mode_axes(self):
+    def test_cli_exposes_the_mode_axes(self):
         src = _read("pcc/driver/cli_core.py")
-        for flag in ("--backend", "--python-libpython", "--ir-scaffold"):
+        for flag in ("--backend", "--ir-scaffold"):
             assert flag in src, f"{flag} mode axis missing from cli_core.py"
+        # The libpython fallback route is removed; no CLI may reintroduce it.
+        for path in ("pcc/driver/cli_core.py", "pcc/driver/cli_bootstrap.py"):
+            assert "--python-libpython" not in _read(path), path
 
     def test_cli_rejects_unlabeled_mode_values(self):
         src = _read("pcc/driver/cli_core.py")
-        assert "invalid --python-libpython" in src
         assert "invalid --ir-scaffold" in src
 
     def test_bootstrap_baseline_keeps_backend_modes_distinct(self):
@@ -866,7 +866,7 @@ class TestObligation3PackageRoundTrip:
 
 @pytest.mark.integration
 class TestPythonSemanticsDifferential:
-    """Conformance corpus: pcc (--backend self --python-libpython=off) must match
+    """Conformance corpus: pcc (--backend self) must match
     the CPython oracle, idiom by idiom. This is the differential/oracle testing
     that CPython's own suite and csmith/EMI embody."""
 

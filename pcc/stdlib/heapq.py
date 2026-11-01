@@ -1,9 +1,9 @@
 """pcc.stdlib.heapq - pure Python binary heap, no libpython fallback.
 
 CPython's own `heapq` opens with `from _heapq import *`, which is a star
-import of a C accelerator: under `--python-libpython=off` that resolves
-through `py_cpy_getattr` and forces the whole multi-file compile onto
-libpython. `asyncio` imports `heappush`/`heappop` from here for its timer
+import of a C accelerator: the native pipeline resolves that through
+`py_cpy_getattr`, which no CPython runtime backs, and rejects the whole
+multi-file compile. `asyncio` imports `heappush`/`heappop` from here for its timer
 queue, so that single star import was enough to keep native asyncio from
 compiling at all.
 

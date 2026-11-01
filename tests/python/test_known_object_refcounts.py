@@ -69,7 +69,7 @@ main()
 '''.replace("VERIFY_CHECKS", str(verify_checks)))
     binary = tmp_path / "known_objects"
     ir = tmp_path / "known_objects.ll"
-    options = dict(backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    options = dict(backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     compile_python(str(source), str(ir), emit_llvm_only=True, **options)
     text = ir.read_text()
     has_known = any("call " in line and "@pcc_gc_release_known(" in line for line in text.splitlines())
@@ -95,7 +95,7 @@ def sequence():
     free(pointer)
 ''')
     output = tmp_path / "raw_frame.ll"
-    compile_python(str(source), str(output), backend="self",libpython_mode="off",ir_scaffold_mode="on",emit_llvm_only=True)
+    compile_python(str(source), str(output), backend="self",ir_scaffold_mode="on",emit_llvm_only=True)
     text = output.read_text()
     assert not any("call " in line and "@py_gen_frame_set(" in line for line in text.splitlines())
     assert any("call " in line and "@py_list_set(" in line for line in text.splitlines())

@@ -214,7 +214,7 @@ def test_declared_generator_context_protocol_on_every_gc(
                               text=True, timeout=20)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / case
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     receipts = []
     for backend in range(5):
@@ -298,7 +298,7 @@ main()
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / 'generator_context'
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

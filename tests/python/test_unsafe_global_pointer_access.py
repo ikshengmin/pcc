@@ -44,7 +44,7 @@ def probe() -> i64:
     triple = host_target_triple()
     llvm_ir = tmp_path / "pointer_probe.ll"
     compile_python(str(source), str(llvm_ir), emit_llvm_only=True,
-                   python_library=True, libpython_mode="off", backend="self",
+                   python_library=True, backend="self",
                    target_triple=triple)
     text = llvm_ir.read_text()
     body = text.split("define external i64 @unsafe_pointer_probe", 1)[1].split("\n}", 1)[0]

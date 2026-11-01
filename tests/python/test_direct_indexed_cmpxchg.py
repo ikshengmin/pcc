@@ -96,7 +96,7 @@ def test_darwin_libsystem_frontend_worker_zero_fallback(monkeypatch, tmp_path):
     pipeline._write_python_frontend_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)],
         ["libsystem_probe"], [0], entry_module="libsystem_probe", sibling_inits=(),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
     )
     assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
     assert captured

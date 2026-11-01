@@ -10,7 +10,7 @@ def _run(source, tmp_path, compiler, runtime):
     path = tmp_path / "any_all_owner.py"
     path.write_text(source)
     binary = tmp_path / "any_all_owner"
-    compiler(str(path), str(binary), backend="self", libpython_mode="off",
+    compiler(str(path), str(binary), backend="self",
              runtime_archive=str(runtime))
     for backend in range(5):
         result = subprocess.run(

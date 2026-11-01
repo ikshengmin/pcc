@@ -109,7 +109,6 @@ def test_range_and_reversed_match_cpython_on_all_gc_backends(
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )

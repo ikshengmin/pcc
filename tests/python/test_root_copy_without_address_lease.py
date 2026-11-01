@@ -104,7 +104,7 @@ def test_native_dict_snapshots_keep_identity_and_finalizers_five_gc(tmp_path, pc
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "snapshot"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=25,

@@ -125,7 +125,7 @@ def test_lexists_direct_lowering_stays_owned(tmp_path):
     output = tmp_path / "lexists.ll"
     source.write_text("import os\ndef present(path):\n    return os.path.lexists(path)\n")
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text()
     body = re.search(
         r"define [^\n]*@user_[^\n]*present\([^\n]*\)\s*[^\n]*\{(.*?)\n\}",
@@ -200,7 +200,7 @@ main()
 ''')
     output = tmp_path / ("lexists-native.exe" if os.name == "nt" else "lexists-native")
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
     )
     result = run_process_group_timeout(

@@ -220,7 +220,7 @@ def _frontend_write_object(tmp_path, monkeypatch, target, *, freestanding):
     pipeline._write_python_frontend_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)],
         ["raw_write"], [0], entry_module="raw_write", sibling_inits=(),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
     )
     assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
     assert captured

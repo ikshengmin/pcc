@@ -13,7 +13,7 @@ separately DROPS the leading space at the compile-time spec-extraction stage
 docs/investigations/fstring-format-spec-gaps-altform-exponent-spacesign.md, not
 fixed here.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode
+Runs under ``--backend self`` in DEFAULT runtime mode
 (py_format.c is C in both modes).
 """
 from __future__ import annotations
@@ -31,8 +31,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

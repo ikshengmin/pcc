@@ -155,7 +155,6 @@ def fake_object_binary(tmp_path_factory) -> Path:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     return exe
 

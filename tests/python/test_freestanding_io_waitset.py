@@ -20,7 +20,6 @@ def _compile_waitset_ir(tmp_path: Path) -> Path:
         str(WAITSET_SOURCE),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return output

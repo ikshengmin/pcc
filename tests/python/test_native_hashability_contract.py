@@ -211,7 +211,6 @@ def test_mutable_builtin_hash_failures_match_cpython_without_mutation(
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(

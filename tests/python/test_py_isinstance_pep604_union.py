@@ -59,7 +59,7 @@ def _build_and_run(tmp_path: Path, name: str, source: str) -> str:
     exe = tmp_path / (name + ".out")
     src.write_text(source, encoding="utf-8")
     # No libpython: the union must lower natively, not through a fallback.
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )

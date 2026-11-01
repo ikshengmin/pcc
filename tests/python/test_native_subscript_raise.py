@@ -14,7 +14,7 @@ the post-call err check so try/except catches the raise. py_dict_get /
 py_list_get stay non-raising for dict.get()/pop()/setdefault() and other
 internal callers.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode).
 """
 from __future__ import annotations
@@ -36,7 +36,6 @@ def _compile_to_ll(tmp_path: Path, source: str, name: str) -> str:
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
     )
     return out.read_text(encoding="utf-8")
 
@@ -49,8 +48,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

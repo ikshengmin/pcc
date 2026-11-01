@@ -47,7 +47,7 @@ def test_saved_frame_pointers_link_each_frame_to_its_caller(
     source.write_text(_CHAIN_PROGRAM, encoding="utf-8")
     output = tmp_path / "chain"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=60)
@@ -65,7 +65,7 @@ def test_self_backends_read_the_frame_pointer_register(tmp_path, triple, instruc
     source.write_text(_CHAIN_PROGRAM, encoding="utf-8")
     ir = tmp_path / "chain.ll"
     pipeline.compile_python(
-        str(source), str(ir), emit_llvm_only=True, libpython_mode="off",
+        str(source), str(ir), emit_llvm_only=True,
         target_triple=triple,
     )
     text = ir.read_text(encoding="utf-8")

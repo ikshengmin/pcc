@@ -271,7 +271,7 @@ main()
     else:
         source.write_text(PROGRAM)
     output = source.with_suffix("")
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
                    link_args=link_args)
     for backend in range(5):

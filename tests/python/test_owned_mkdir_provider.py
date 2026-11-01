@@ -270,7 +270,7 @@ def probe(path: c_ptr, mode: i64, directory: i64) -> i64:
     return mkdir_at(path, mode, directory)
 ''')
     compile_python(str(source), str(out), emit_llvm_only=True, python_library=True,
-                   libpython_mode='off', target_triple=target)
+                   target_triple=target)
     text=out.read_text();verify_ir_text(text)
     assert not re.search(r'\bcall[^\n]*@py_cpy_',text)
     if 'linux' in target:
@@ -289,7 +289,7 @@ def test_complete_provider_compiles_to_owned_ir(tmp_path, target, monkeypatch):
     monkeypatch.setenv('PCC_WITH_THREADS','0')
     out=tmp_path/'py_os_mkdir.ll'
     compile_python(str(ROOT/'pcc/runtime/py/py_os_mkdir.py'), str(out),
-        emit_llvm_only=True, python_library=True, libpython_mode='off', target_triple=target)
+        emit_llvm_only=True, python_library=True, target_triple=target)
     text=out.read_text();verify_ir_text(text)
     assert re.search(r'^define[^\n]*@py_os_mkdir_function\(\)',text,re.M)
     assert re.search(r'^define[^\n]*@pcc_os_mkdir_entry\(ptr[^,]*, ptr[^)]*\)',text,re.M)

@@ -103,7 +103,7 @@ def test_plain_cli_supports_python_path_before_output_flag(tmp_path):
     assert run.stdout == "123\n"
 
 
-def test_plain_cli_python_libpython_off_supports_native_subset(tmp_path):
+def test_plain_cli_supports_native_subset(tmp_path):
     script_path = tmp_path / "main.py"
     exe_path = tmp_path / "main_bin"
     script_path.write_text(
@@ -114,7 +114,7 @@ def test_plain_cli_python_libpython_off_supports_native_subset(tmp_path):
     , encoding="utf-8")
 
     result = cli_main(
-        ["--python-libpython=off", str(script_path), "-o", str(exe_path)]
+        [str(script_path), "-o", str(exe_path)]
     )
 
     assert result == 0
@@ -130,7 +130,7 @@ def test_plain_cli_python_libpython_off_supports_native_subset(tmp_path):
     assert run.stdout == "123\n"
 
 
-def test_plain_cli_python_libpython_default_is_off(tmp_path):
+def test_cpython_fallback_script_reports_native_capability_error(tmp_path):
     repo_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
@@ -157,59 +157,8 @@ def test_plain_cli_python_libpython_default_is_off(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "requires libpython fallback" in result.stderr
-    assert "--python-libpython=auto/on" in result.stderr
-    assert not exe_path.exists()
-
-
-def test_python_libpython_resolver_defaults_to_off():
-    from pcc.frontends.python.pipeline import _resolve_libpython_mode
-
-    saved = os.environ.get("PCC_PYTHON_LIBPYTHON")
-    try:
-        os.environ.pop("PCC_PYTHON_LIBPYTHON", None)
-        assert _resolve_libpython_mode(None) == "off"
-        assert _resolve_libpython_mode("") == "off"
-        assert _resolve_libpython_mode("auto") == "auto"
-        os.environ["PCC_PYTHON_LIBPYTHON"] = "auto"
-        assert _resolve_libpython_mode(None) == "auto"
-    finally:
-        if saved is None:
-            os.environ.pop("PCC_PYTHON_LIBPYTHON", None)
-        else:
-            os.environ["PCC_PYTHON_LIBPYTHON"] = saved
-
-
-def test_python_libpython_off_reports_friendly_error_for_fallback_script(tmp_path):
-    repo_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-    script_path = tmp_path / "needs_fallback.py"
-    exe_path = tmp_path / "needs_fallback_bin"
-    script_path.write_text(
-        "import tempfile\n"
-        "print(tempfile.gettempdir())\n"
-    , encoding="utf-8")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pcc",
-            "--python-libpython=off",
-            str(script_path),
-            "-o",
-            str(exe_path),
-        ],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-
-    assert result.returncode == 1
-    assert "requires libpython fallback" in result.stderr
-    assert "--python-libpython=auto/on" in result.stderr
+    assert "cannot compile the program natively" in result.stderr
+    assert "py_cpy_* CPython bridge helpers" in result.stderr
     assert not exe_path.exists()
 
 

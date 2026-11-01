@@ -66,7 +66,6 @@ def test_function_local_class_has_per_call_identity_capture_and_errors(
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     for backend in range(5):
@@ -168,7 +167,6 @@ def test_function_local_class_super_uses_the_class_of_each_execution(
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     for backend in range(5):

@@ -65,11 +65,11 @@ def test_scaffold_result_roots_native_five_gc(tmp_path):
     source = tmp_path / "scaffold_result_roots.py"
     binary = tmp_path / "scaffold_result_roots"
     source.write_text(PROGRAM)
-    environment = dict(os.environ, PCC_PYTHON_LIBPYTHON="off", PCC_SELF_LINK="pcc",
+    environment = dict(os.environ, PCC_SELF_LINK="pcc",
                        PCC_IR_SCAFFOLD="on", PCC_NO_AUTO_PCC1="1")
     environment.pop("LC_ALL", None)
     compiled = subprocess.run(
-        [str(compiler), "--backend", "self", "--python-libpython", "off", str(source), "-o", str(binary)],
+        [str(compiler), "--backend", "self", str(source), "-o", str(binary)],
         env=environment, capture_output=True, text=True, timeout=180,
     )
     assert compiled.returncode == 0, (compiled.stdout, compiled.stderr)

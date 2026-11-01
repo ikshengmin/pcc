@@ -123,7 +123,7 @@ def test_native_shutil_which_path_keyword_matches_cpython(tmp_path):
         ).lstrip(),
         encoding="utf-8",
     )
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     native = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert native.returncode == 0, native.stderr
     ref = subprocess.run([sys.executable, str(src)], capture_output=True, text=True, timeout=20)

@@ -167,8 +167,7 @@ def test_augmented_assignment_mutates_like_cpython(tmp_path: Path) -> None:
     env.pop("LC_ALL", None)
     env.pop("PCC_WITH_THREADS", None)
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         str(source), "-o", str(executable)],
+        ["uv", "run", "pcc", "--backend", "self", str(source), "-o", str(executable)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=env,
     )
     assert build.returncode == 0, build.stderr[-4000:]

@@ -75,7 +75,7 @@ def test_mixed_float_object_local_runs_and_matches_cpython(tmp_path):
     src = tmp_path / "mixed_local.py"
     exe = tmp_path / "mixed_local.out"
     src.write_text(_SOURCE, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )
@@ -96,7 +96,6 @@ def test_the_mixed_local_never_unboxes_an_instance_as_a_float(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     body = re.search(
@@ -142,7 +141,7 @@ def test_mixed_bool_object_local_matches_cpython(tmp_path):
     src = tmp_path / "bool_mixed.py"
     exe = tmp_path / "bool_mixed.out"
     src.write_text(_BOOL_MIXED, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )
@@ -185,7 +184,7 @@ def test_other_mixed_scalar_object_locals_match_cpython(tmp_path, source, expect
     src = tmp_path / "shape.py"
     exe = tmp_path / "shape.out"
     src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )
@@ -272,6 +271,6 @@ def test_mixed_bool_object_replacement_releases_once_and_preserves_error_owner(t
     source = tmp_path / 'bool_replacement.py'
     binary = tmp_path / 'bool_replacement'
     source.write_text(_BOOL_REPLACEMENT, encoding='utf-8')
-    compile_python(str(source), str(binary), backend='self', libpython_mode='off', ir_scaffold_mode='on')
+    compile_python(str(source), str(binary), backend='self', ir_scaffold_mode='on')
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
     assert (result.returncode, result.stdout, result.stderr) == (0, 'BOOL_OBJECT_REPLACEMENT_OK\n', '')

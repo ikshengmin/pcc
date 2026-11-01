@@ -12,16 +12,16 @@ comparing INLINE-extracted keys via py_obj_lt (py_obj_getattr / py_obj_getitem
 + runtime ordering, correct for int/str/float keys). A non-simple key lambda or
 a non-lambda key (key=str.lower) still falls through to the libpython path.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
 
 
-def _run(tmp_path, source, *, python_libpython="off"):
+def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self",f"--python-libpython={python_libpython}","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30, env=env)
     assert r.returncode == 0, r.stderr
@@ -73,7 +73,6 @@ def test_sorted_key_captured_lambda_libpython_fallback(tmp_path):
         "    group_of = [1, 0, 1, 0]\n"
         "    print(sorted(range(4), key=lambda vv: (group_of[vv], vv)))\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[0] == "[1, 3, 0, 2]", out
 
@@ -92,7 +91,6 @@ def test_sorted_key_captured_index_lambda_in_nested_function(tmp_path):
         "        return out\n"
         "    print(plan_epoch(1))\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[0] == "[0, 2, 3]", out
 
@@ -104,7 +102,6 @@ def test_sorted_key_captured_index_tuple_lambda(tmp_path):
         "    group_of = [1, 0, 1, 0]\n"
         "    print(sorted(range(4), key=lambda vv: (group_of[vv], vv)))\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[0] == "[1, 3, 0, 2]", out
 
@@ -117,7 +114,6 @@ def test_sorted_key_captured_lambda_ternary_result_slice(tmp_path):
         "    ordered = sorted(range(4), key=lambda vv: (group_of[vv], vv)) if len(group_of) == 4 else list(range(4))\n"
         "    print(ordered[:2])\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[0] == "[1, 3]", out
 
@@ -134,7 +130,6 @@ def test_cpython_loop_flag_does_not_leak_into_nested_function_param(tmp_path):
         "        print(v * 2)\n"
         "    inner(3)\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[0] == "6", out
 
@@ -150,7 +145,6 @@ def test_cpython_for_target_flag_cleared_by_range_rebind(tmp_path):
         "    for v in range(3):\n"
         "        print(v % 2)\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[:3] == ["0", "1", "0"], out
 
@@ -165,7 +159,6 @@ def test_cpython_for_target_can_index_pcc_list(tmp_path):
         "    for u in ordered:\n"
         "        print(values[u])\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[:4] == ["10", "30", "20", "40"], out
 
@@ -182,7 +175,6 @@ def test_cpython_for_target_passed_to_user_function_as_pcc_arg(tmp_path):
         "    for w in ordered:\n"
         "        show(w)\n"
         "main()\n",
-        python_libpython="auto",
     )
     assert out.split("\n")[:4] == ["10", "30", "20", "40"], out
 

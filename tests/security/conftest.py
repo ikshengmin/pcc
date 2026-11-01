@@ -7,7 +7,7 @@ and (no-libpython) Python down to machine instructions, so the same classes of
 low-level hazard apply to both frontends.
 
 The Python helpers compile a program through the strict no-libpython path
-(``libpython_mode="off"``, ``ir_scaffold_mode="on"``) and run the produced
+(``ir_scaffold_mode="on"``) and run the produced
 native binary, then compare against a CPython oracle. The ``backend`` argument
 selects pcc's owned ``self`` backend, which is also the default.
 
@@ -33,7 +33,7 @@ if _REPO_ROOT not in sys.path:
 _COMPILE_CHILD = (
     "import sys\n"
     "from pcc.frontends.python.pipeline import compile_python\n"
-    "compile_python(sys.argv[1], sys.argv[2], libpython_mode='off',\n"
+    "compile_python(sys.argv[1], sys.argv[2], \n"
     "               ir_scaffold_mode='on', backend=sys.argv[3])\n"
 )
 

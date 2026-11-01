@@ -79,7 +79,6 @@ def _compile(tmp_path: Path, src_text: str) -> Path:
     src.write_text(textwrap.dedent(src_text).lstrip(), encoding="utf-8")
     cmd = [
         str(PCC1), str(src), "-o", str(exe),
-        "--python-libpython=off",
         "--ir-scaffold=on",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180.0)
@@ -349,7 +348,7 @@ def test_pcc1_runs_pytest_fixture(tmp_path):
 # assertions off, swallows exit codes, or breaks the closed-world contract.
 
 def test_pcc1_strict_mode_rejects_unsupported_idiom(tmp_path):
-    """Closed-world (--python-libpython=off) must REJECT compilation
+    """The closed-world native pipeline must REJECT compilation
     when source needs a CPython fallback. Silent fallback = Issue 1
     regression. This pins the gate."""
     src = tmp_path / "needs_cpython.py"
@@ -364,14 +363,14 @@ def test_pcc1_strict_mode_rejects_unsupported_idiom(tmp_path):
     """).lstrip(), encoding="utf-8")
     proc = subprocess.run(
         [str(PCC1), str(src), "-o", str(exe),
-         "--python-libpython=off", "--ir-scaffold=on"],
+         "--ir-scaffold=on"],
         capture_output=True, text=True, timeout=180.0,
     )
     # Either compile fails (expected) OR succeeds but the binary
     # doesn't link libpython. The contract is: no silent fallback.
     if proc.returncode == 0 and exe.exists():
         assert not _links_libpython(exe), (
-            "silent libpython fallback under --python-libpython=off"
+            "silent libpython fallback in the native pipeline"
         )
     # If compile failed, the diagnostic must mention libpython/fallback.
     else:

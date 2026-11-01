@@ -267,7 +267,6 @@ def test_tracing_gc_backend_preserves_owned_locals_and_frame_roots(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
@@ -326,7 +325,6 @@ def test_tracing_gc_backend_traces_tuple_child_from_frame_root(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
@@ -399,7 +397,6 @@ def test_tracing_gc_backend_traces_dict_and_instance_children(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
@@ -467,7 +464,6 @@ def test_tracing_gc_backend_traces_instance_class_child(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
@@ -523,7 +519,6 @@ def test_tracing_gc_backend_traces_coroutine_children(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
@@ -562,7 +557,6 @@ def test_generational_gc_surface_reports_young_allocations(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     env = {**os.environ, "PCC_GC_BACKEND": str(BACKEND_GENERATIONAL)}
     result = subprocess.run(
@@ -612,7 +606,6 @@ def test_colored_relocating_gc_read_barrier_clears_candidate(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,

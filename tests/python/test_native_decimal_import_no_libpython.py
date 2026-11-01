@@ -23,7 +23,6 @@ def test_decimal_type_identity_imports_without_libpython(tmp_path: Path) -> None
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 

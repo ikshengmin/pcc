@@ -86,7 +86,7 @@ def test_keyword_and_dynamic_regex_compile_emit_owned_calls(tmp_path):
     )
     output = tmp_path / "regex_compile.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                   ir_scaffold_mode="on", backend="self")
     text = output.read_text()
     for name in ("positional", "keyword", "all_keywords", "dynamic", "unsupported"):
         body = re.search(r"^define[^\n]*@user_regex_compile_" + name + r"\(.*?^}", text, re.M | re.S)

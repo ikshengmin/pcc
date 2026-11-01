@@ -11,7 +11,7 @@ from pcc.frontends.python.compiled_default_passes import is_compiled_default_tie
 from pcc.frontends.python.compiled_owned_passes import owns_passes, run_owned_passes
 from pcc.frontends.python.pipeline_ir_split import split_python_ir_module_for_pass_shards
 from pcc.frontends.python.pipeline_modes import normalize_native_backend_name
-from pcc.frontends.python.pipeline_pass_config import default_python_ir_pass_transport, effective_python_ir_pass_transport_is_memory, python_ir_pass_batch_size_summary, python_ir_pass_jobs, python_ir_pass_names_allow_module_sharding, python_ir_pass_should_skip_module, python_ir_pass_skip_modules_for_batch, python_ir_pass_split_large_modules_enabled, python_ir_pass_split_shard_bytes, python_ir_pass_split_threshold_bytes, python_ir_pass_strict_arg, python_ir_pass_timeout_seconds, python_ir_pass_transport_is_memory, resolve_python_ir_pass_names, seconds_debug_text, small_int_decimal
+from pcc.frontends.python.pipeline_pass_config import default_python_ir_pass_transport, effective_python_ir_pass_transport_is_memory, python_ir_pass_batch_size_summary, python_ir_pass_jobs, python_ir_pass_names_allow_module_sharding, python_ir_pass_should_skip_module, python_ir_pass_skip_modules_for_batch, python_ir_pass_split_large_modules_enabled, python_ir_pass_split_shard_bytes, python_ir_pass_split_threshold_bytes, python_ir_pass_timeout_seconds, python_ir_pass_transport_is_memory, resolve_python_ir_pass_names, seconds_debug_text, small_int_decimal
 from pcc.driver.paths import join_strings
 
 
@@ -53,9 +53,7 @@ _SINGLE_HOST_CODE = (
     "    os.environ.setdefault('PCC_SOURCE_ROOT', pcc_source_root)\n"
     "    os.environ.setdefault('PCC_REPO_ROOT', pcc_source_root)\n"
     "from pcc.frontends.python.ir_pass_pipeline import run_python_ir_pass_pipeline\n"
-    "module_name, pass_csv, ir_path, out_path, strict_text, default_transport = sys.argv[2:8]\n"
-    "if strict_text == '1':\n"
-    "    os.environ['PCC_PYTHON_IR_PASS_STRICT_NO_LIBPYTHON'] = '1'\n"
+    "module_name, pass_csv, ir_path, out_path, default_transport = sys.argv[2:7]\n"
     "if default_transport and not str(os.environ.get('PCC_PYTHON_IR_PASS_TRANSPORT', '') or '').strip():\n"
     "    os.environ['PCC_PYTHON_IR_PASS_TRANSPORT'] = default_transport\n"
     "pass_names = tuple(name.strip() for name in pass_csv.split(',') if name.strip())\n"
@@ -95,13 +93,10 @@ _BATCH_HOST_CODE = (
     "pass_csv = sys.argv[3]\n"
     "split_large_modules = sys.argv[4] == '1'\n"
     "result_path = sys.argv[5]\n"
-    "strict_text = sys.argv[6]\n"
-    "default_transport = sys.argv[7]\n"
-    "if strict_text == '1':\n"
-    "    os.environ['PCC_PYTHON_IR_PASS_STRICT_NO_LIBPYTHON'] = '1'\n"
+    "default_transport = sys.argv[6]\n"
     "if default_transport and not str(os.environ.get('PCC_PYTHON_IR_PASS_TRANSPORT', '') or '').strip():\n"
     "    os.environ['PCC_PYTHON_IR_PASS_TRANSPORT'] = default_transport\n"
-    "skip_modules = set(name for name in sys.argv[8].split(',') if name)\n"
+    "skip_modules = set(name for name in sys.argv[7].split(',') if name)\n"
     "def _module_should_skip_passes(module_name):\n"
     "    if module_name in skip_modules:\n"
     "        return True\n"
@@ -115,7 +110,7 @@ _BATCH_HOST_CODE = (
     "    if base_module != module_name and python_ir_pass_should_skip_module(base_module):\n"
     "        return True\n"
     "    return False\n"
-    "items = sys.argv[9:]\n"
+    "items = sys.argv[8:]\n"
     "pass_names = tuple(name.strip() for name in pass_csv.split(',') if name.strip())\n"
     "if len(items) % 2 != 0:\n"
     "    raise SystemExit(2)\n"
@@ -207,7 +202,6 @@ def apply_passes(
     logger=None,
     verbose: bool = False,
     default_raw: Optional[str] = None,
-    strict_no_libpython: bool = False,
 ) -> str:
     pass_names = resolve_python_ir_pass_names(default_raw=default_raw)
     if not pass_names or python_ir_pass_should_skip_module(module_name):
@@ -220,13 +214,13 @@ def apply_passes(
                 + "]: owned "
                 + join_strings(pass_names, ", ")
             )
-        return run_owned_passes(str(ir_text), pass_names, strict_no_libpython)
+        return run_owned_passes(str(ir_text), pass_names)
     if str(default_raw or "").strip().lower() == "default":
         if not owns_passes(pass_names):
             raise PassDriverError(
                 "self optimizer does not own requested passes: " + join_strings(pass_names, ", ")
             )
-        return run_owned_passes(str(ir_text), pass_names, strict_no_libpython)
+        return run_owned_passes(str(ir_text), pass_names)
     default_transport = default_python_ir_pass_transport(pass_names, default_raw)
     if verbose and logger is not None:
         logger(
@@ -249,7 +243,6 @@ def apply_passes(
             join_strings(pass_names, ","),
             ir_path,
             out_path,
-            python_ir_pass_strict_arg(strict_no_libpython=strict_no_libpython),
             str(default_transport or ""),
         ]
         timeout_seconds = python_ir_pass_timeout_seconds()
@@ -286,7 +279,6 @@ def apply_passes_many(
     logger=None,
     verbose: bool = False,
     default_raw: Optional[str] = None,
-    strict_no_libpython: bool = False,
 ) -> list[tuple[str, str]]:
     pass_names = resolve_python_ir_pass_names(default_raw=default_raw)
     if not pass_names:
@@ -303,7 +295,7 @@ def apply_passes_many(
                 out.append(
                     (
                         module_name,
-                        run_owned_passes(text, pass_names, strict_no_libpython),
+                        run_owned_passes(text, pass_names),
                     )
                 )
         if verbose and logger is not None:
@@ -323,7 +315,7 @@ def apply_passes_many(
         for module_name, ir_text in module_ir_texts:
             text = str(ir_text)
             if not python_ir_pass_should_skip_module(module_name):
-                text = run_owned_passes(text, pass_names, strict_no_libpython)
+                text = run_owned_passes(text, pass_names)
             owned_results.append((module_name, text))
         return owned_results
     default_transport = default_python_ir_pass_transport(pass_names, default_raw)
@@ -350,7 +342,6 @@ def apply_passes_many(
                     module_name=name,
                     verbose=verbose,
                     default_raw=default_raw,
-                    strict_no_libpython=strict_no_libpython,
                 ),
             )
         ]
@@ -375,7 +366,6 @@ def apply_passes_many(
             join_strings(pass_names, ","),
             "1" if split_large_modules else "0",
             result_path,
-            python_ir_pass_strict_arg(strict_no_libpython=strict_no_libpython),
             str(default_transport or ""),
             join_strings(python_ir_pass_skip_modules_for_batch(normalized), ","),
         ]

@@ -99,7 +99,7 @@ def test_a_high_tag_instance_survives_argument_tuple_round_trips(tmp_path) -> No
     src = tmp_path / "many_classes.py"
     exe = tmp_path / "many_classes.out"
     src.write_text(_program(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     env = dict(os.environ)
     env["PCC_GC_BACKEND"] = "0"
     env["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = "2"

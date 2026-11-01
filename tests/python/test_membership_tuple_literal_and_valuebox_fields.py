@@ -112,7 +112,7 @@ def _compile(tmp_path, name, source, python_program_compiler, runtime_archive):
     src.write_text(source, encoding="utf-8")
     exe = tmp_path / name
     python_program_compiler(
-        str(src), str(exe), backend="self", libpython_mode="off",
+        str(src), str(exe), backend="self",
         runtime_archive=str(runtime_archive),
     )
     return src, exe

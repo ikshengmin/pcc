@@ -93,7 +93,7 @@ def _build(tmp_path, name, text, python_program_compiler, pcc_runtime_archive):
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / name
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     return output, expected.stdout

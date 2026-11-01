@@ -155,7 +155,7 @@ def test_module_vars_namespace_native_five_gc(
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     try:
         python_program_compiler(
-            str(program), str(binary), backend="self", libpython_mode="off",
+            str(program), str(binary), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     except Exception as error:

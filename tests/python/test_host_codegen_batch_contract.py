@@ -18,7 +18,7 @@ def _env():
 
 def _limit(env, **overrides):
     options = dict(native_worker=False, indexed_split=False, checkpoint_root="",
-                   action_cache_plan=None, libpython_mode="off", artifact_dir="artifacts")
+                   action_cache_plan=None, artifact_dir="artifacts")
     options.update(overrides)
     return batch.host_codegen_batch_limit(env, **options)
 

@@ -54,7 +54,7 @@ def batch_worker(tmp_path, monkeypatch):
         "result_path": str(tmp_path / "result.tsv"), "job_kind": "codegen",
         "src_paths": [str(tmp_path / (name + ".py")) for name in ("main", "sibling")],
         "module_names": ["main", "sibling"], "entry_module": "main",
-        "sibling_inits": ["sibling"], "libpython_mode": "off",
+        "sibling_inits": ["sibling"],
         "ir_scaffold_mode": "on", "verbose": False,
         "assigned_indices": [0, 1], "ir_dir": str(tmp_path),
         "exports_path": str(tmp_path / "exports.json"), "ast_dir": str(tmp_path / "ast"),

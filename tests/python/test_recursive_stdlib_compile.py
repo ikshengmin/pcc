@@ -29,7 +29,6 @@ def _compile_to_ll(
     name: str,
     *,
     recursive: bool = True,
-    libpython_mode: str | None = None,
 ) -> str:
     from pcc.frontends.python.pipeline import compile_python
 
@@ -41,7 +40,6 @@ def _compile_to_ll(
         str(out),
         emit_llvm_only=True,
         recursive_stdlib=recursive,  # opt-in flag
-        libpython_mode=libpython_mode,
     )
     return out.read_text(encoding="utf-8")
 
@@ -111,24 +109,6 @@ def test_recursive_stdlib_does_not_expand_native_textwrap(tmp_path):
     assert "textwrap" not in mods
 
 
-def test_recursive_off_keeps_existing_libpython_path():
-    """Default (recursive=False) keeps the historical
-    ``py_cpy_import`` path for non-native builtin stdlib imports."""
-    program = textwrap.dedent("""
-        import keyword
-        def f(s: str):
-            return s
-        """)
-    ir_text = _compile_to_ll(
-        program,
-        "rec_keyword_off",
-        recursive=False,
-        libpython_mode="auto",
-    )
-    # Without the flag, status quo: py_cpy_import path is exercised
-    assert "@.cpy.mod.keyword" in ir_text
-
-
 def test_plain_emit_only_does_not_auto_expand_stdlib_closure(tmp_path):
     """A module IR probe stays single-file unless closure output is requested."""
     from pcc.frontends.python.pipeline import compile_python
@@ -146,7 +126,6 @@ def test_plain_emit_only_does_not_auto_expand_stdlib_closure(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
         profile=profile,
     )
@@ -179,7 +158,6 @@ def test_no_libpython_auto_recursive_stdlib_scans_multi_file_closure(tmp_path):
         str(main),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -347,7 +325,6 @@ def test_recursive_stdlib_uses_compiled_export_after_native_lowering_declines(
         emit_llvm_only=True,
         entry_module="class_body_regex",
         module_names=["class_body_regex", "re"],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -380,7 +357,6 @@ def test_dynamic_getattr_on_compiled_module_uses_native_registry(tmp_path):
         emit_llvm_only=True,
         entry_module="main",
         module_names=["main", "provider"],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -405,7 +381,6 @@ def test_builtin_object_and_complex_type_values_stay_native(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -429,7 +404,6 @@ def test_builtin_super_type_value_stays_native(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -458,7 +432,6 @@ def test_strict_function_value_uses_native_function_object(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -482,7 +455,6 @@ def test_os_curdir_default_value_stays_native(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -516,26 +488,3 @@ def test_cycle_detection(tmp_path):
         assert "mod_a" in mods
     finally:
         sys.path.remove(str(tmp_path))
-
-
-def test_c_extension_falls_back():
-    """A module that's a C extension (_socket, _struct, etc.) cannot
-    be parsed by pcc; should fall back to py_cpy_import gracefully
-    rather than crash."""
-    program = textwrap.dedent("""
-        import _socket
-        def f():
-            return None
-        """)
-    # Should compile without crashing; _socket import goes to py_cpy_*
-    ir_text = _compile_to_ll(
-        program,
-        "rec_socket",
-        recursive=True,
-        libpython_mode="auto",
-    )
-    # Memory-transport pass sharding namespaces module-private symbols while
-    # preserving the dynamic import edge.  Assert both supported symbol shapes
-    # and, more importantly, the actual libpython fallback call.
-    assert re.search(r"@(?:__pcp\d+_)?\.cpy\.mod\._socket\b", ir_text)
-    assert re.search(r"\bcall ptr @py_cpy_import\(", ir_text)

@@ -147,7 +147,7 @@ def test_owned_fsync_provider_native_all_collectors(
     monkeypatch.setenv('PCC_NO_AUTO_PCC1', '1')
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
     binary = tmp_path / 'native_fsync_provider'
-    python_program_compiler(str(CONTROL), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(CONTROL), str(binary), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         path = tmp_path / ('gc' + str(backend))

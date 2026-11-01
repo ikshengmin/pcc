@@ -8,7 +8,7 @@ port branch now iterates via py_obj_iter/py_obj_next (clearing a terminal
 StopIteration), so sorted(<custom iterator>) / sorted(<generator>) work in the
 default (port-linked) runtime. Also clears a spurious py_obj_len sizing error.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
@@ -18,7 +18,7 @@ from pathlib import Path
 def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     run_env = {**env, "PCC_GC_BACKEND": "4"}
     r = subprocess.run(

@@ -85,7 +85,7 @@ def test_compiled_owned_parser_reads_full_identifier_names(tmp_path, pcc_runtime
         [str(Path(text_tokens.__file__)), str(Path(ir_mutator.__file__)), str(source)],
         str(output), module_names=["pcc.ir.optimization.text_tokens", "pcc.ir.optimization.ir_mutator", "parse_names"],
         entry_module="parse_names", recursive_stdlib=True, backend="self",
-        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True,

@@ -56,7 +56,6 @@ def _compile_to_ll(source: str, name: str) -> str:
             str(out),
             emit_llvm_only=True,
             ir_scaffold_mode="on",
-            libpython_mode="off",
         )
         return out.read_text(encoding="utf-8")
 
@@ -90,7 +89,6 @@ def _run_native(tmp_path: Path, source: str) -> subprocess.CompletedProcess:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
         **runtime_options,
     )

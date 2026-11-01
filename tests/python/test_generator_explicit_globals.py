@@ -90,7 +90,7 @@ def test_wrapper_resume_global_reads_and_writes_reach_owned_emitter(tmp_path, mo
     output = tmp_path / "generator_globals.ll"
     source.write_text(PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     for name in ("values__gen_resume", "parked__gen_resume"):
         body = _body(text, name)
@@ -123,7 +123,7 @@ def test_original_condition_barrier_globals_and_caller_reach_owned_emitter(tmp_p
     output = tmp_path / "append_gate.ll"
     source.write_text(concurrent_append_source())
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     match = re.search(r"^define[^\n]*append_barrier_wait__gen_resume[^\n]*\{\n(.*?)^\}", text, re.M | re.S)
     assert match is not None
@@ -147,7 +147,7 @@ def test_native_global_bindings_survive_yield_and_park_resume(
     source = tmp_path / "generator_globals.py"
     output = tmp_path / "generator_globals"
     source.write_text(PROGRAM)
-    python_program_compiler(str(source), str(output), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(output), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,

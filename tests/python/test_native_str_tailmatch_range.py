@@ -54,7 +54,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "tailmatch"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -93,7 +93,7 @@ def main():
 main()
 ''', encoding="utf-8")
     output = tmp_path / "tailmatch_ownership"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -122,7 +122,7 @@ def test_native_preprocessor_comment_scanning(tmp_path, pcc_runtime_archive):
         [str(provider), str(source)], str(output),
         module_names=["pcc.frontends.c.preprocessor", "preprocessor_scan"],
         entry_module="preprocessor_scan", recursive_stdlib=True,
-        backend="self", libpython_mode="off",
+        backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

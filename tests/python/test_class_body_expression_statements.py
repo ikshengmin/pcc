@@ -68,7 +68,7 @@ def test_class_body_expression_statements_run_like_cpython(
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "class_body_statements"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

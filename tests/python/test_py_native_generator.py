@@ -14,7 +14,6 @@ def _compile_and_run(tmp_path, name: str, source: str) -> subprocess.CompletedPr
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     return subprocess.run(

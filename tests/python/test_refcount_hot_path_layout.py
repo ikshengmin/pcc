@@ -11,7 +11,7 @@ def test_hot_refcount_entries_keep_atomic_updates_outside_preparation_frames(tmp
     root = Path(__file__).resolve().parents[2]
     output = tmp_path / 'py_obj.ll'
     compile_python(str(root / 'pcc/runtime/py/py_obj.py'), str(output),
-                   emit_llvm_only=True, python_library=True, libpython_mode='off')
+                   emit_llvm_only=True, python_library=True)
     text = optimize_ir(output.read_text(), runtime_ir_passes(str(root / 'pcc/runtime')))
     def body(name):
         found = re.search(r'^define[^\n]*@' + re.escape(name) + r'\([^\n]*\n(.*?)^}', text, re.M | re.S)

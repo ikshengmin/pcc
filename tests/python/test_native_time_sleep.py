@@ -1,7 +1,7 @@
 """``time.sleep`` runs natively instead of resolving through CPython.
 
 There was no native lowering for it, so any function calling ``time.sleep`` was
-replaced by a fail-closed stub under ``--python-libpython=off``. asyncio's event
+replaced by a fail-closed stub under the native pipeline. asyncio's event
 loop calls it for its idle wait, which meant a loop that ever went idle died
 with ``no-libpython function unavailable: asyncio._run_once`` -- the last
 libpython dependency in the pcc-compiled asyncio benchmark.
@@ -32,7 +32,6 @@ def _build_and_run(tmp_path: Path, name: str, source: str):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     return subprocess.run([str(exe)], text=True, capture_output=True, timeout=60)

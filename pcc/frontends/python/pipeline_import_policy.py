@@ -1,7 +1,7 @@
 """Closed-world import ownership policy for the Python frontend.
 
 Keep the classification tables in one module so dependency discovery and
-libpython fallback analysis cannot silently drift apart.
+import analysis cannot silently drift apart.
 """
 
 from __future__ import annotations
@@ -164,7 +164,7 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
     # values; recognizing decorator syntax alone cannot own its imports.
     # ``json``: builtin dispatch owns ``loads``/``dumps``, but
     # ``JSONDecodeError`` is a class value.  ``except json.JSONDecodeError``
-    # left ``py_cpy_ensure_init`` in the IR, so ``--python-libpython=off``
+    # left ``py_cpy_ensure_init`` in the IR, so the native pipeline
     # replaced the whole enclosing function with a fail-closed stub, and
     # ``from json import JSONDecodeError`` raised "No module named 'json'".
     # ``pcc/tools/runtime_archive_provenance._load_json_object`` catches that
@@ -182,7 +182,7 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
     # ``pickle``: as for json, builtin dispatch owns dumps/loads while
     # ``HIGHEST_PROTOCOL``, ``DEFAULT_PROTOCOL`` and the error classes are
     # values of the compiled provider; ``range(pickle.HIGHEST_PROTOCOL + 1)``
-    # stubbed its whole function under --python-libpython=off.
+    # stubbed its whole function in the native pipeline.
     {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
      "json", "math", "time", "shlex", "pickle"}
 )

@@ -34,7 +34,6 @@ def test_dynamic_module_getattr_inside_generator_is_catchable(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

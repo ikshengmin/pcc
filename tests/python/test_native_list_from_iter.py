@@ -6,7 +6,7 @@ no len) and could not drive an iterator. Now the general-iterable arm calls the
 runtime py_obj_to_list, which uses the iterator protocol (py_obj_iter +
 py_obj_next) with a len+getitem fallback for __getitem__-only containers.
 
-Compiles + runs under --backend self --python-libpython=off and asserts output.
+Compiles + runs under --backend self and asserts output.
 """
 from __future__ import annotations
 
@@ -22,8 +22,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

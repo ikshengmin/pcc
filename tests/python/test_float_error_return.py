@@ -73,7 +73,7 @@ def test_native_float_error_return_and_adapter(
 ):
     output = tmp_path / 'float_error_return'
     python_program_compiler(str(SOURCE), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,

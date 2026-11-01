@@ -113,7 +113,7 @@ def _compile_repo_main_binary(main_py, exe):
         from pcc.frontends.python.pipeline import compile_python
 
         with mock.patch.dict(os.environ, {"PCC_PYTHON_IR_PASSES": "off"}):
-            compile_python(main_py, exe, libpython_mode="off")
+            compile_python(main_py, exe)
         return
 
     global _COMPILED_REPO_MAIN_CACHE_DIR
@@ -136,7 +136,7 @@ def _compile_repo_main_binary(main_py, exe):
         # These tests exercise the compiled CLI surface, not the LLVM IR pass
         # batch optimizer. Keep the large repo-main smoke bounded.
         with mock.patch.dict(os.environ, {"PCC_PYTHON_IR_PASSES": "off"}):
-            compile_python(main_py, cached, libpython_mode="off")
+            compile_python(main_py, cached)
         _COMPILED_REPO_MAIN_CACHE[key] = cached
     shutil.copy2(cached, exe)
 
@@ -423,7 +423,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             exe,
             module_names=["pkg.entry", "pkg.defs"],
             entry_module="pkg.entry",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -518,7 +517,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             exe,
             module_names=["pkg.entry", "pkg.helper"],
             entry_module="pkg.entry",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -680,7 +678,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         from pcc.frontends.python.pipeline import compile_python
 
         exe = os.path.join(self.td, "inherit_order.out")
-        compile_python(main_py, exe, libpython_mode="auto")
+        compile_python(main_py, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         self.assertEqual(r.stdout, "123\n")
@@ -749,32 +747,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         self.assertEqual(r.stdout, "5\n")
 
-    def test_callable_type_alias_literal_with_cpython_values(self):
-        """Type-alias literals like ``Callable[[str], str]`` should
-        build CPython containers directly instead of storing foreign
-        CPython refs inside pcc-native list/tuple objects."""
-        from pcc.frontends.python.pipeline import compile_python
-
-        main_py = self._write(
-            "callable_alias.py",
-            """
-            from collections.abc import Callable
-
-            SelfAsmEmitter = Callable[[str], str]
-            print(1)
-        """,
-        )
-        exe = os.path.join(self.td, "callable_alias.out")
-        compile_python(main_py, exe, libpython_mode="auto")
-        r = subprocess.run(
-            [exe],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        self.assertEqual(r.returncode, 0, msg=f"exe={exe}\nstderr={r.stderr}")
-        self.assertEqual(r.stdout, "1\n")
-
     def test_import_from_native_submodule_binds_module_object(self):
         """``from pkg import submod`` should bind the submodule object
         itself when the imported name is another compiled sibling
@@ -837,40 +809,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         """,
         )
         exe = os.path.join(self.td, "package_init_relative.out")
-        compile_python(main_py, exe, libpython_mode="auto")
-        r = subprocess.run(
-            [exe],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        self.assertEqual(r.returncode, 0, msg=r.stderr)
-        self.assertEqual(r.stdout, "123\n")
-
-    def test_getattr_default_on_cpython_submodule_binding(self):
-        """Built-in ``getattr(obj, name, default)`` should work when
-        ``obj`` is a CPython-backed sibling submodule object imported
-        through the native multi-file closure."""
-        from pcc.frontends.python.pipeline import compile_python
-
-        main_py = self._write(
-            "pkg/__main__.py",
-            """
-            from .ast import c_ast
-
-            print(getattr(c_ast, "Pragma", 123))
-        """,
-        )
-        self._write("pkg/__init__.py", "")
-        self._write("pkg/ast/__init__.py", "")
-        self._write(
-            "pkg/ast/c_ast.py",
-            """
-            VALUE = 1
-        """,
-        )
-        exe = os.path.join(self.td, "getattr_default_submodule.out")
-        compile_python(main_py, exe, libpython_mode="auto")
+        compile_python(main_py, exe)
         r = subprocess.run(
             [exe],
             capture_output=True,
@@ -1177,8 +1116,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             [
                 sys.executable,
                 os.path.join(repo_root, "scripts", "pcc_multi.py"),
-                "--python-libpython",
-                "off",
                 "--entry",
                 "bootstrap.pcc_multi",
                 "--out",
@@ -1246,8 +1183,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 pair,
                 "--entry",
                 "toypkg.main",
-                "--python-libpython",
-                "off",
                 "--out",
                 toy_bin,
                 toy_entry + "=toypkg.main",
@@ -1485,30 +1420,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "False\nFalse\n")
 
-    def test_libpython_link_flags_prefer_explicit_python_ldflags_env(self):
-        """An explicit ``PCC_PYTHON_LDFLAGS`` suppresses any fallback
-        ``python3-config`` probe when libpython linkage is requested. This
-        keeps compiled bootstrap stages bound to the intended interpreter's
-        embed flags. (The clang link wrapper that used to apply them was
-        removed with every LLVM path; the flags reach the self link.)"""
-        from pcc.frontends.python import pipeline
-
-        env = dict(os.environ)
-        env["PCC_PYTHON_LDFLAGS"] = "-L/test/python -lpython9.9"
-        env["PCC_PYTHON_CONFIG"] = "/definitely/missing/python-config"
-
-        cmd = ["link"]
-        with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch(
-                "pcc.frontends.python.pipeline_libpython.subprocess.check_output"
-            ) as check_output_mock:
-                pipeline._append_libpython_link_flags(cmd)
-
-        check_output_mock.assert_not_called()
-        self.assertIn("-L/test/python", cmd)
-        self.assertIn("-lpython9.9", cmd)
-        self.assertNotIn("/definitely/missing/python-config", " ".join(cmd))
-
     def test_ensure_runtime_passes_absolute_host_python_to_make(self):
         from pcc.frontends.python import pipeline
 
@@ -1534,9 +1445,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                         str(path).endswith("Makefile")
                         or (
                             built["done"]
-                            and str(path).endswith(
-                                "libpy_runtime_pcc_py_libpython.a"
-                            )
+                            and str(path).endswith("libpy_runtime_pcc_py.a")
                         )
                     )
                     with mock.patch(
@@ -1545,22 +1454,19 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                     ):
                         with mock.patch(
                             "pcc.frontends.python.pipeline."
-                            "_runtime_archive_c_bundle_valid",
-                            return_value=True,
+                            "_runtime_archive_requires_provenance",
+                            return_value=False,
                         ):
                             with mock.patch(
                                 "pcc.frontends.python.pipeline."
                                 "_write_runtime_archive_target_stamp"
                             ):
-                                # The owned builder has no libpython; Make
-                                # is the explicitly selected host reference.
+                                # Make is the explicitly selected host
+                                # reference builder.
                                 with mock.patch.dict(
                                     os.environ, {"PCC_RUNTIME_BUILD": "make"},
                                 ):
-                                    pipeline._ensure_runtime(
-                                        verbose=False,
-                                        needs_libpython=True,
-                                    )
+                                    pipeline._ensure_runtime(verbose=False)
 
         self.assertEqual(len(make_cmds), 1)
         python_args = [arg for arg in make_cmds[0] if arg.startswith("PYTHON=")]
@@ -1634,51 +1540,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 pipeline._native_extension_export_link_flags(True),
                 ["-Wl,-export_dynamic"],
             )
-
-    def test_libpython_link_hides_pcc_capi_from_dynamic_extensions(self):
-        from pcc.frontends.python import pipeline
-
-        archive = "/tmp/libpy_runtime_pcc_py_libpython.a"
-        with mock.patch(
-            "pcc.frontends.python.pipeline._capi_export_anchor_symbols",
-            return_value=["_PyCapsule_New", "__Py_NoneStruct"],
-        ):
-            with mock.patch("pcc.frontends.python.pipeline.sys.platform", "darwin"):
-                self.assertEqual(
-                    pipeline._libpython_capi_isolation_link_flags(archive, True),
-                    [
-                        "-Wl,-unexported_symbol,_PyCapsule_New",
-                        "-Wl,-unexported_symbol,__Py_NoneStruct",
-                    ],
-                )
-            with mock.patch("pcc.frontends.python.pipeline.sys.platform", "linux"):
-                self.assertEqual(
-                    pipeline._libpython_capi_isolation_link_flags(archive, True),
-                    ["-Wl,--exclude-libs,libpy_runtime_pcc_py_libpython.a"],
-                )
-        self.assertEqual(
-            pipeline._libpython_capi_isolation_link_flags(archive, False), []
-        )
-
-    def test_libpython_rejects_pcc_native_extension_object_model(self):
-        from pcc.frontends.python import pipeline
-
-        with self.assertRaisesRegex(
-            pipeline.PyPipelineError,
-            "pcc-native extension imports cannot be combined with libpython mode",
-        ):
-            pipeline._reject_mixed_extension_object_models(
-                needs_libpython=True,
-                needs_native_extension_exports=True,
-            )
-        pipeline._reject_mixed_extension_object_models(
-            needs_libpython=False,
-            needs_native_extension_exports=True,
-        )
-        pipeline._reject_mixed_extension_object_models(
-            needs_libpython=True,
-            needs_native_extension_exports=False,
-        )
 
     def test_absolute_from_import_detects_native_extension_alias(self):
         from pcc.frontends.python.py_lift import parse_and_lift
@@ -3060,14 +2921,13 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             runtime,
             verbose,
             *,
-            needs_libpython=False,
             needs_native_extension_exports=False,
             extra_link_inputs=(),
             extra_link_args=(),
             tmp_dir=None,
             profile=None,
         ):
-            linked.append((ir_texts, out_path, runtime, needs_libpython))
+            linked.append((ir_texts, out_path, runtime))
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write("linked")
 
@@ -3088,14 +2948,12 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                             main_py,
                             exe,
                             backend="self",
-                            libpython_mode="off",
                         )
 
         text_link_mock.assert_called_once()
         path_link_mock.assert_not_called()
         self.assertEqual(linked[0][1], exe)
         self.assertEqual(linked[0][2], "/tmp/fake_runtime.a")
-        self.assertFalse(linked[0][3])
         self.assertEqual(len(linked[0][0]), 1)
         self.assertIn("define", linked[0][0][0])
 
@@ -3187,7 +3045,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         compile_mock.assert_called_once()
         self.assertEqual(compile_mock.call_args.kwargs["backend"], "self")
-        self.assertEqual(compile_mock.call_args.kwargs["libpython_mode"], "off")
+        self.assertNotIn("libpython_mode", compile_mock.call_args.kwargs)
         self.assertEqual(compile_mock.call_args.kwargs["ir_scaffold_mode"], "on")
 
     def test_bootstrap_cli_dispatches_self_backend_emit_batch_worker(self):
@@ -3288,7 +3146,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             """,
         )
         exe = os.path.join(self.td, "dataclass_field_off.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
 
         r = subprocess.run(
             [exe],
@@ -3309,24 +3167,24 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             self.assertNotIn("Python", lk.stdout)
             self.assertNotIn("libpython", lk.stdout)
 
-    def test_compile_python_libpython_off_rejects_fallback_program(self):
+    def test_compile_python_rejects_cpython_fallback_program(self):
         from pcc.frontends.python.pipeline import PyPipelineError, compile_python
 
         src = self._write(
-            "needs_libpython.py",
+            "needs_cpython.py",
             """
             import tempfile
 
             print(tempfile.gettempdir())
             """,
         )
-        exe = os.path.join(self.td, "needs_libpython.out")
+        exe = os.path.join(self.td, "needs_cpython.out")
 
         with self.assertRaises(PyPipelineError) as ctx:
-            compile_python(src, exe, libpython_mode="off")
+            compile_python(src, exe)
 
-        self.assertIn("requires libpython fallback", str(ctx.exception))
-        self.assertIn("auto/on", str(ctx.exception))
+        self.assertIn("cannot compile the program natively", str(ctx.exception))
+        self.assertIn("py_cpy_* CPython bridge helpers", str(ctx.exception))
 
     def test_types_module_self_compiles_without_libpython(self):
         """The frontend type helpers should stay off-safe instead of
@@ -3339,7 +3197,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
 )
         src = os.path.join(repo_root, "pcc", "frontends", "python", "types.py")
         out_ll = os.path.join(self.td, "types_off.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
@@ -3366,7 +3224,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 src,
                 out_ll,
                 emit_llvm_only=True,
-                libpython_mode="off",
             )
             self.assertTrue(os.path.isfile(out_ll), msg=src)
 
@@ -3386,7 +3243,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             module_names=["pcc.frontends.python.py_parse", "pcc.frontends.python.py_lex"],
             entry_module="pcc.frontends.python.py_parse",
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
@@ -3414,7 +3270,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             ],
             entry_module="pcc.frontends.python.py_lift",
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
@@ -3455,7 +3310,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             ],
             entry_module="pcc.frontends.python.type_infer",
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
@@ -3501,7 +3355,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         out_ll = os.path.join(self.td, "unsafe_probe.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
@@ -3510,7 +3364,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@py_mem_", ir_text)
 
         exe = os.path.join(self.td, "unsafe_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "42\nTrue\nTrue\n")
@@ -3775,7 +3629,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             """,
         )
         out_ll = os.path.join(self.td, "variadic_call_ir.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
@@ -3798,7 +3652,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             """,
         )
         out_ll = os.path.join(self.td, "c_abi_i32_ternary.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
         self.assertIn("sext i32", ir_text)
@@ -3896,7 +3750,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             """,
         )
         exe = os.path.join(self.td, "variadic_call_run.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         result = subprocess.run(
             [exe],
             capture_output=True,
@@ -3924,7 +3778,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             src,
             out_ll,
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
         )
         self.assertTrue(os.path.isfile(out_ll))
@@ -3944,7 +3797,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             reg_src,
             reg_ll,
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
         )
         self._assert_no_libpython_fallback_calls(reg_ll)
@@ -3976,7 +3828,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             src,
             out_ll,
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
         )
         self.assertTrue(os.path.isfile(out_ll))
@@ -4013,7 +3864,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             src,
             out_ll,
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
         )
         self.assertTrue(os.path.isfile(out_ll))
@@ -4051,7 +3901,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         exe = os.path.join(self.td, "gc_telemetry_split_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         self.assertEqual(r.stdout, "0\n0\n0\n0\n-1\n")
@@ -4102,7 +3952,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
         out_ll = os.path.join(self.td, "py_obj_ops_mod.ll")
 
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
 
@@ -4139,7 +3989,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         exe = os.path.join(self.td, "obj_mod_split_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "1\nhello world\n")
@@ -4155,7 +4005,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             src = os.path.join(repo_root, "pcc", "runtime", "py", name)
             out_ll = os.path.join(self.td, name + ".ll")
 
-            compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+            compile_python(src, out_ll, emit_llvm_only=True)
             self.assertTrue(os.path.isfile(out_ll))
             self._assert_no_libpython_fallback_calls(out_ll)
 
@@ -4205,7 +4055,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         exe = os.path.join(self.td, "list_set_slice_split_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "1\n8\n9\n10\n4\n7\n8\n")
@@ -4219,7 +4069,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             src = os.path.join(repo_root, "pcc", "runtime", "py", name)
             out_ll = os.path.join(self.td, name + ".ll")
 
-            compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+            compile_python(src, out_ll, emit_llvm_only=True)
             self.assertTrue(os.path.isfile(out_ll))
             self._assert_no_libpython_fallback_calls(out_ll)
 
@@ -4298,7 +4148,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         exe = os.path.join(self.td, "slice_split_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         # The program prints "héllo"[1:4] -> "éll" (UTF-8 0xc3 0xa9); decode the
         # captured output as UTF-8 explicitly so it does not depend on the
         # ambient locale (LC_ALL=C would otherwise pick ASCII and raise
@@ -4331,7 +4181,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         out_ll = os.path.join(self.td, "unsafe_tagged_int_probe.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
@@ -4340,7 +4190,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn("ptrtoint", ir_text)
 
         exe = os.path.join(self.td, "unsafe_tagged_int_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "True\n123\n-45\n")
@@ -4366,7 +4216,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         out_ll = os.path.join(self.td, "unsafe_f64_probe.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
@@ -4375,7 +4225,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn("load double", ir_text)
 
         exe = os.path.join(self.td, "unsafe_f64_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "3.0\n")
@@ -4425,7 +4275,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         out_ll = os.path.join(self.td, "unsafe_libc_probe.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
@@ -4435,7 +4285,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@py_mem_", ir_text)
 
         exe = os.path.join(self.td, "unsafe_libc_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "OK\nAAAAAA\n")
@@ -4479,7 +4329,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         out_ll = os.path.join(self.td, "unsafe_env_probe.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
@@ -4489,7 +4339,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@py_mem_", ir_text)
 
         exe = os.path.join(self.td, "unsafe_env_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "False\n90\n2\n0\nTrue\n")
@@ -4518,7 +4368,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         )
 
         out_ll = os.path.join(self.td, "unsafe_global_probe.ll")
-        compile_python(src, out_ll, emit_llvm_only=True, libpython_mode="off")
+        compile_python(src, out_ll, emit_llvm_only=True)
         self.assertTrue(os.path.isfile(out_ll))
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
@@ -4527,7 +4377,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertNotIn("@py_mem_", ir_text)
 
         exe = os.path.join(self.td, "unsafe_global_probe.out")
-        compile_python(src, exe, libpython_mode="off")
+        compile_python(src, exe)
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "False\n")
@@ -4554,7 +4404,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             store_src,
             store_ll,
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         self.assertTrue(os.path.isfile(store_ll))
         self._assert_no_libpython_fallback_calls(store_ll)

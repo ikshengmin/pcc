@@ -18,7 +18,6 @@ def test_str_join_pins_sequence_across_allocating_runtime_call(tmp_path):
         str(src),
         str(out),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )

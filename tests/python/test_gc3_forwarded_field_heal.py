@@ -228,7 +228,7 @@ def test_healed_dict_values_match_cpython_under_small_minor_heaps(tmp_path, thre
     assert expected.returncode == 0, expected.stderr
     executable = tmp_path / "healed_fields"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     runs = [(backend, None, None) for backend in (0, 1, 2, 4)]
     runs += [(3, heap, limit) for heap, limit in MINOR_HEAPS]

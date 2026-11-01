@@ -71,7 +71,6 @@ def test_numpy_l5_array_add_through_pcc1_all_gc_backends(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

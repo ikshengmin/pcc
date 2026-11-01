@@ -208,7 +208,7 @@ def test_class_decorators_match_cpython_on_five_collectors(
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "class_decorators"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -228,7 +228,7 @@ def test_static_unittest_runner_honours_skips(
     source.write_text(RUNNER_PROGRAM, encoding="utf-8")
     binary = tmp_path / "unittest_skips"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

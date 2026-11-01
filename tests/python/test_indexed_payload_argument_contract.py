@@ -85,7 +85,7 @@ def test_integer_and_tuple_payload_calls_execute_all_collectors(tmp_path, monkey
     source.write_text(PAYLOAD_PROGRAM)
     output = tmp_path / "payload"
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
-    python_program_compiler(str(source), str(output), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(source), str(output), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2", PATH="/nonexistent"))

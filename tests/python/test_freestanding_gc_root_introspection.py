@@ -51,7 +51,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> tuple[Path, str]:
         str(ROOT_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")

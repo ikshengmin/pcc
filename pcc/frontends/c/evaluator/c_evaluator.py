@@ -1462,7 +1462,7 @@ class CEvaluator(object):
         # This checks actual archive/member/source/compiler/target/configuration
         # identities and honors the no-provisioning guard. Never create a second
         # archive view or interpret absent member configuration as defaults.
-        return _ensure_runtime(False, needs_libpython=False, target_triple=self.target_triple)
+        return _ensure_runtime(False, target_triple=self.target_triple)
 
     def emit_executable(self, compiled_units, output: str, *, optimize=True,
                         link_args=None, freestanding_libc=False):
@@ -1518,7 +1518,7 @@ class CEvaluator(object):
                     paths.append(path)
                 if runtime is None:
                     if self.target_triple == host_target_triple():
-                        runtime = _ensure_runtime(False, needs_libpython=False)
+                        runtime = _ensure_runtime(False)
                     else:
                         runtime_root = os.path.join(resolve_pcc_dir_from_environment(__file__), "runtime")
                         runtime = ensure_target_runtime(runtime_root, self.target_triple)
@@ -1743,10 +1743,7 @@ class CEvaluator(object):
         pass_names = list(PYTHON_IR_PASS_DEFAULT_TIER)
         prepared_units = []
         for unit_name, ir_text, unit_return_type, external_defs in compiled_units:
-            # C IR carries no `py_cpy_*` calls, so the strict-no-libpython
-            # bailout cannot apply here; pass it off rather than leave the
-            # decision to a value that means something else on this path.
-            optimized = run_owned_passes(str(ir_text), pass_names, False)
+            optimized = run_owned_passes(str(ir_text), pass_names)
             prepared_units.append(
                 (unit_name, optimized, unit_return_type, external_defs)
             )
@@ -1810,7 +1807,7 @@ class CEvaluator(object):
         if "darwin" in triple or "apple" in triple:
             from pcc.frontends.python.pipeline import _ensure_runtime
 
-            runtime_archive = _ensure_runtime(False, needs_libpython=False)
+            runtime_archive = _ensure_runtime(False)
             if not runtime_archive:
                 raise RuntimeError(
                     "--freestanding-libc could not build the shared "
@@ -1852,7 +1849,6 @@ class CEvaluator(object):
             source,
             ir_path,
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
             backend="self",
             target_triple=self.target_triple,
@@ -1872,7 +1868,6 @@ class CEvaluator(object):
                 module_source,
                 module_ir_path,
                 emit_llvm_only=True,
-                libpython_mode="off",
                 python_library=True,
                 backend="self",
                 target_triple=self.target_triple,

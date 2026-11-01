@@ -35,7 +35,6 @@ def test_top_level_lru_cache_user_function_is_not_noop(tmp_path: Path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="auto",
     )
     run = subprocess.run(
         [str(exe)],

@@ -22,7 +22,6 @@ def test_call_to_function_with_unused_varargs_does_not_overrun_abi(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -57,7 +56,6 @@ def test_generator_forward_unpack_with_kwonly_separator_compiles(tmp_path, monke
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert exe.is_file()

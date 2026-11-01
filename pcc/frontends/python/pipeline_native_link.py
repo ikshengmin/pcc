@@ -134,30 +134,6 @@ def runtime_archive_link_args_for_owner(
     return reference_link_args(runtime_archive, needs_native_extension_exports)
 
 
-def libpython_capi_isolation_link_flags(
-    runtime_archive: Optional[str],
-    needs_libpython: bool,
-    *,
-    anchor_symbols,
-    platform: Optional[str] = None,
-) -> list[str]:
-    if not needs_libpython or runtime_archive is None:
-        return []
-    selected = sys.platform if platform is None else str(platform)
-    if selected == "darwin":
-        symbols = anchor_symbols(runtime_archive)
-        if not symbols:
-            raise NativeLinkError(
-                "libpython mode requires a non-empty runtime C-API symbol inventory"
-            )
-        return [f"-Wl,-unexported_symbol,{symbol}" for symbol in symbols]
-    if selected.startswith("linux"):
-        return ["-Wl,--exclude-libs," + os.path.basename(runtime_archive)]
-    raise NativeLinkError(
-        "libpython C-API symbol isolation is unsupported on " + selected
-    )
-
-
 def runtime_archive_link_args_for_native_extensions(
     runtime_archive: str,
     needs_native_extension_exports: bool = False,

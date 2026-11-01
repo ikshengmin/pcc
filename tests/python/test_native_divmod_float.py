@@ -5,7 +5,7 @@ divmod(7.5, 2) truncated to (3, 1) instead of (3.0, 1.5). Now a float branch
 (when either arg is FloatType) computes (floor(a/b), a - floor(a/b)*b) as floats,
 with the matching tuple[float, float] return type in type_infer.py.
 
-Compiles + runs under --backend self --python-libpython=off and asserts output.
+Compiles + runs under --backend self and asserts output.
 
 NOTE: this asserts divmod's own result (direct use + unpack-then-print). It does
 NOT assert arithmetic on unpacked float elements (e.g. `q, r = divmod(7.5, 2);
@@ -28,8 +28,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

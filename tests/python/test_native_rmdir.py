@@ -24,7 +24,7 @@ def main():
 main()
 ''')
     output = tmp_path / "remove_dir"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         directory = tmp_path / ("directory-" + str(gc))

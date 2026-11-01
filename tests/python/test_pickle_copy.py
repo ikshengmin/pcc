@@ -32,7 +32,6 @@ def _compile_and_run(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend=backend,
     )
     return subprocess.run(

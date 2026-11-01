@@ -2,7 +2,7 @@
 
 ``math.isqrt`` was a libpython fallback: ``_emit_native_math_value_call`` handled
 only {prod,gcd,factorial,floor,ceil,sqrt,pow,trunc}, so ``math.isqrt(n)`` fell
-through to the CPython fallback (rejected under ``--python-libpython=off``).
+through to the CPython fallback (rejected under the native pipeline).
 
 Fix: a C-only runtime helper (``py_int_isqrt`` in ``py_int_modexp.c``, an
 OBJ_PY_CC_HELPERS file with no pcc-Python port — the same pattern as
@@ -13,7 +13,7 @@ double). The frontend routes both ``math.isqrt(n)`` and ``from math import
 isqrt`` to it, and checks ``py_err_occurred()`` after the call so the
 ValueError for a negative argument reaches the handler.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode
+Runs under ``--backend self`` in DEFAULT runtime mode
 (the C-only helper is linked into the no-libpython archive regardless of tier).
 """
 from __future__ import annotations
@@ -34,7 +34,6 @@ def _run(tmp_path, source):
         [
             "uv", "run", "pcc",
             "--backend", "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src), "-o", str(exe),
         ],

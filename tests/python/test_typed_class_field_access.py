@@ -102,7 +102,6 @@ def test_local_typed_class_field_access_uses_slot_load(tmp_path):
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     text = out.read_text(encoding="utf-8")
     m_fn = re.search(
@@ -148,7 +147,6 @@ def test_instance_field_precedes_same_named_annotated_class_slot(tmp_path):
         str(exe),
         backend="self",
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     run = subprocess.run(
         [str(exe)],

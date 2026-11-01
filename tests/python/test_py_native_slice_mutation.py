@@ -35,7 +35,6 @@ def test_list_slice_assignment_and_delete_stay_native(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -72,7 +71,6 @@ def test_list_extended_slice_assignment_and_delete_stay_native(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -129,7 +127,6 @@ def test_list_slice_delete_converts_mutating_index_bounds_once(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run_env = {**os.environ, "PCC_GC_BACKEND": "4"}
@@ -199,7 +196,6 @@ def test_list_set_slice_snapshots_self_and_converts_mutating_bounds_once(tmp_pat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run_env = {**os.environ, "PCC_GC_BACKEND": "4"}
@@ -256,7 +252,6 @@ def test_list_extended_slice_size_mismatch_raises_value_error(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     for backend in range(5):

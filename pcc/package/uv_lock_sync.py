@@ -648,7 +648,7 @@ def _build_key(package: dict[str, object], environment: dict[str, object]) -> st
         "pcc_native_abi": environment["pcc_native_abi"],
         "package_abi_mode": environment["package_abi_mode"],
         "target_triple": environment["target_triple"],
-        "build_options": {"backend": "pcc1", "libpython": "off"},
+        "build_options": {"backend": "pcc1"},
     }
     data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return _sha256_bytes(data)

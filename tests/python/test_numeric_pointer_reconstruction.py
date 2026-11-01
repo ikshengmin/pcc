@@ -30,7 +30,7 @@ def test_cold_granule_lookup_preserves_numeric_pointer_provenance(tmp_path, emit
     target = host_target_triple()
     ir = tmp_path / "allocator.ll"
     compile_python(str(ALLOCATOR), str(ir), emit_llvm_only=True,
-                   python_library=True, backend="self", libpython_mode="off",
+                   python_library=True, backend="self",
                    target_triple=target)
     assert "getelementptr i8, ptr null, i64" not in ir.read_text()
     obj = tmp_path / "allocator.o"

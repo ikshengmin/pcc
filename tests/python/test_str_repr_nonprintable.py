@@ -89,7 +89,7 @@ def test_native_repr_and_ascii_match_cpython(tmp_path, pcc_runtime_archive):
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True, timeout=30)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / "repr_nonprintable"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, timeout=30,

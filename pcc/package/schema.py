@@ -419,7 +419,7 @@ def declarative_python_source_build(text: str) -> bool:
 
 
 def execution_mode(abi_mode: str) -> str:
-    if abi_mode == "libpython" or abi_mode == "cpython-compat":
+    if abi_mode == "cpython-compat":
         return "cpython-compat"
     return "pcc-native"
 

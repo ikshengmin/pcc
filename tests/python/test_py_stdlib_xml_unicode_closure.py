@@ -139,7 +139,6 @@ print("find", parsed.find(".//testcase[@result]").text)
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",
@@ -434,7 +433,7 @@ def test_html_owned_native_subclass_execution(
     monkeypatch.delenv('LC_ALL', raising=False)
     monkeypatch.setenv('PCC_HOST_PYTHON', sys.executable)
     compile_python(str(source), str(executable), backend='self',
-                   libpython_mode='off', ir_scaffold_mode='on',
+                   ir_scaffold_mode='on',
                    runtime_archive=str(pcc_runtime_archive))
     binary_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
     receipts = []

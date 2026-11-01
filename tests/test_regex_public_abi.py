@@ -106,7 +106,7 @@ def test_real_export_ir_and_elf_have_matching_public_widths(tmp_path, monkeypatc
     output = source.with_suffix(".ll")
     source.write_bytes(CORE.read_bytes())
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", python_library=True,
+                   backend="self", python_library=True,
                    target_triple=target)
     text = output.read_text()
     run_flags_body = re.search(

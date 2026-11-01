@@ -133,7 +133,7 @@ def test_escaping_closures_see_import_bindings_on_every_gc(
     assert expected.stdout == "('module', 4)\n10 12 21\n9 6\n9\n(18, -9)\n"
     output = tmp_path / "import_bindings"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

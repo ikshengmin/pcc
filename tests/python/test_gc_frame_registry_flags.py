@@ -137,7 +137,7 @@ def frame_flag_program(tmp_path_factory):
     source.write_text(_PROGRAM, encoding="utf-8")
     executable = work / "frame_registry_flags.out"
     compile_python(str(source), str(executable), backend="self",
-                   ir_scaffold_mode="on", libpython_mode="off")
+                   ir_scaffold_mode="on")
     return executable
 
 

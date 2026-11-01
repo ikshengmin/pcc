@@ -26,7 +26,6 @@ def test_class_method_symbol_avoids_top_level_wrapper_collision(tmp_path):
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ir_text = out.read_text(encoding="utf-8")
 
@@ -74,7 +73,6 @@ def test_extern_class_method_symbol_preserves_wrapper_collision(tmp_path):
         entry_module="main",
         module_names=["lib", "main"],
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ir_text = out.read_text(encoding="utf-8")
 
@@ -137,7 +135,6 @@ def test_extern_subclass_preserves_untyped_inherited_slot_order(tmp_path):
         entry_module="main",
         module_names=["ir_mod", "main"],
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ir_text = out.read_text(encoding="utf-8")
 

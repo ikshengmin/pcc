@@ -29,7 +29,6 @@ def _compile_to_ll(tmp_path: Path, source: str, name: str) -> str:
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     return out.read_text(encoding="utf-8")
@@ -186,66 +185,6 @@ def test_mixed_domain_for_target_joins_only_when_the_pre_value_is_dead(
         return
     with pytest.raises(L1CodegenError, match="for-target"):
         _compile_to_ll(tmp_path, source, "join_" + case)
-
-
-def test_mixed_domain_for_target_join_matches_cpython_at_runtime(tmp_path):
-    """Both join directions, on the zero- and nonzero-iteration edge.
-
-    Compiled against libpython so the CPython arm actually runs rather than
-    being replaced by a fail-closed stub, and compared to CPython on the same
-    file -- the drop is only correct if the observable answer is unchanged.
-    """
-    from pcc.frontends.python.pipeline import compile_python
-
-    source = textwrap.dedent(
-        '''
-        import fnmatch
-
-
-        def native_after_cpython(values: list) -> list:
-            token = fnmatch.filter(["x.py", "y.txt"], "*.py")
-            out = []
-            for token in values:
-                out.append(token)
-            return out
-
-
-        def cpython_after_native(values: list) -> list:
-            out = []
-            for token in values:
-                out.append(token)
-            for token in fnmatch.filter(["p.py", "q.txt"], "*.py"):
-                out.append(token)
-            return out
-
-
-        def main() -> None:
-            print(native_after_cpython(["a", "b"]))
-            print(cpython_after_native(["a"]))
-            print(native_after_cpython([]))
-            print(cpython_after_native([]))
-
-
-        main()
-        '''
-    )
-    src = tmp_path / "for_target_join_domains.py"
-    exe = tmp_path / "for_target_join_domains.out"
-    src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="on")
-    run = subprocess.run(
-        [str(exe)], text=True, capture_output=True, timeout=180, check=True
-    )
-    reference = subprocess.run(
-        ["python3", str(src)], text=True, capture_output=True, timeout=180, check=True
-    )
-    assert run.stdout == reference.stdout
-    assert run.stdout.splitlines() == [
-        "['a', 'b']",
-        "['a', 'p.py']",
-        "[]",
-        "['p.py']",
-    ]
 
 
 def test_zero_iteration_preserves_prior_target_and_owned_root(tmp_path):
@@ -556,7 +495,6 @@ def test_enumerate_i64_target_rebound_from_dyn_list_verifies_and_runs(
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

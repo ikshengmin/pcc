@@ -151,7 +151,6 @@ def test_compiler_int_arena_self_backend_lowers_native_payload(tmp_path) -> None
         str(arena_source),
         str(llvm_path),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         target_triple="arm64-apple-darwin23.6.0",

@@ -37,7 +37,7 @@ def emitted_ir(tmp_path_factory):
             # default pass pipeline as the native observer's compile. It
             # stops before runtime selection, object emission and linking.
             compile_python(str(path), str(output), emit_llvm_only=True,
-                           backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                           backend="self", ir_scaffold_mode="on",
                            target_triple=host_target_triple())
             cache[source] = output.read_text(encoding="utf-8")
         return cache[source]

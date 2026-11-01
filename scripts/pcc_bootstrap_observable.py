@@ -18,7 +18,6 @@ def main(argv=None) -> int:
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--emit-llvm", action="store_true")
     parser.add_argument("--backend", default=None)
-    parser.add_argument("--python-libpython", default=None)
     parser.add_argument("--ir-scaffold", default=None)
     parser.add_argument("--diagnostic-format", default="text")
     parser.add_argument("--profile-json", default=None)
@@ -32,7 +31,6 @@ def main(argv=None) -> int:
                 ns.path,
                 ns.output,
                 emit_llvm_only=ns.emit_llvm,
-                libpython_mode=ns.python_libpython,
                 ir_scaffold_mode=ns.ir_scaffold,
                 backend=ns.backend,
                 recursive_stdlib=False,

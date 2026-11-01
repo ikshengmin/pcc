@@ -151,7 +151,7 @@ def test_function_root_groups_native_all_gc(tmp_path, pcc_runtime_archive, monke
     dump = tmp_path / "ir"
     dump.mkdir()
     monkeypatch.setenv("PCC_DEBUG_SELF_IR_DUMP_DIR", str(dump))
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     emitted = "\n".join(path.read_text() for path in dump.glob("*.ll"))
     grouped_roles = {role: "fn.roots." + role + "." in emitted

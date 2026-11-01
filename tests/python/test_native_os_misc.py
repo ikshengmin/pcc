@@ -122,7 +122,7 @@ def test_urandom_runtime_no_libpython(
         ).lstrip(),
         encoding="utf-8",
     )
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "8\nbytes\n"

@@ -143,7 +143,7 @@ def test_bounded_tuple_unpack_native_five_gc(tmp_path, python_program_compiler, 
     (tmp_path / "expected.stdout").write_text(reference.stdout)
     binary = tmp_path / "bounded_tuple_unpack"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

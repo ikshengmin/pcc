@@ -36,7 +36,6 @@ def _compile_allocator_ir(tmp_path: Path) -> Path:
         str(ALLOCATOR_SOURCE),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return out
@@ -462,7 +461,6 @@ def test_default_pcc_python_runtime_uses_allocator_under_all_gc_backends(
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         runtime_archive=str(pcc_runtime_archive),
     )
 

@@ -198,7 +198,6 @@ def test_metal_runtime_python_port_emits_through_self_backend(tmp_path: Path) ->
         str(PORT_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     assembly.write_text(
@@ -602,7 +601,6 @@ def test_no_libpython_pcc_program_calls_metal_runtime_c_shim(tmp_path: Path) -> 
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],

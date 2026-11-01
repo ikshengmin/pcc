@@ -176,7 +176,7 @@ def test_module_reads_on_four_carriers_and_five_collectors(tmp_path, threaded_pc
     source.write_text(MAIN, encoding="utf-8")
     executable = tmp_path / "nscache_main"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     expected = str([2000 * (seed * 3 + 50) for seed in range(6)]) + "\nb 21\n"
     for backend in range(5):

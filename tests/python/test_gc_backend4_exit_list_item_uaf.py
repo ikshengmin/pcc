@@ -37,7 +37,6 @@ def backend4_churn_binary(tmp_path_factory):
     compile_python(
         str(CHURN_SRC),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -63,7 +62,7 @@ def _failure_message(
     completed = any(line.startswith("done,") for line in stdout.splitlines())
     boundary = (
         "backend4 exit-list-item UAF boundary: "
-        "backend=self python-libpython=off ir-scaffold=on "
+        "backend=self ir-scaffold=on "
         f"PCC_GC_BACKEND=4 {CHURN_SRC.name} {CHURN_ROUNDS}"
     )
     if completed:

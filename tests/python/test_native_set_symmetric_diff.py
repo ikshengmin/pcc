@@ -5,7 +5,7 @@ The set binop lowering (binary_op_lowering.py) handled |, &, - for sets but NOT
 Added runtime py_set_symmetric_difference (py_set.c) + the `^` branch in the set
 binop block.
 
-Compiles + runs under --backend self --python-libpython=off and asserts output.
+Compiles + runs under --backend self and asserts output.
 """
 from __future__ import annotations
 
@@ -24,8 +24,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # symmetric_difference is mirrored in both py_set.c and py_set.py.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

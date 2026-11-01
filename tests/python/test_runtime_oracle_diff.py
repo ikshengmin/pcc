@@ -67,7 +67,6 @@ def test_corpus_program_matches_cpython(tmp_path, program, pcc_runtime_archive):
     compiled = subprocess.run(
         [
             _pcc_binary(),
-            "--python-libpython=off",
             str(program),
             "-o",
             str(executable),

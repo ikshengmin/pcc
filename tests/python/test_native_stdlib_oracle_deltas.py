@@ -160,7 +160,7 @@ def test_native_providers_print_the_cpython_3150_output(tmp_path, pcc_runtime_ar
     source = tmp_path / "oracle_deltas.py"
     output = tmp_path / "oracle_deltas"
     source.write_text(PROGRAM)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True,
                    runtime_archive=str(pcc_runtime_archive))
     work = tmp_path / "work"

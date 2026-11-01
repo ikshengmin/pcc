@@ -256,7 +256,7 @@ def test_descriptor_type_values_emit_native_factory_calls(tmp_path):
     source = tmp_path / "descriptor_identity.py"
     output = tmp_path / "descriptor_identity.ll"
     source.write_text(PROGRAM)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     text = output.read_text()
     assert not re.search(r"\bcall[^\n]*@py_cpy_", text)
@@ -270,7 +270,7 @@ def test_descriptor_global_shadowing_preserves_actual_module_value(tmp_path, nam
     source = tmp_path / "descriptor_shadow.py"
     output = tmp_path / "descriptor_shadow.ll"
     source.write_text(name + " = 123\ndef descriptor_shadow():\n    return " + name + "\n")
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     body = next(body for symbol, body in function_bodies(output.read_text())
                 if symbol.endswith("_descriptor_shadow"))
@@ -283,7 +283,7 @@ def test_descriptor_assignment_alias_materializes_canonical_type(tmp_path, name,
     source = tmp_path / "descriptor_alias.py"
     output = tmp_path / "descriptor_alias.ll"
     source.write_text("def assigned_descriptor():\n    constructor = " + name + "\n    return constructor\n")
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     body = next(body for symbol, body in function_bodies(output.read_text())
                 if symbol.endswith("_assigned_descriptor"))

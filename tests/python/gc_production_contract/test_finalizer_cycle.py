@@ -56,8 +56,7 @@ def _cycfin_exe(tmp_path_factory):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert build.returncode == 0, build.stdout + build.stderr

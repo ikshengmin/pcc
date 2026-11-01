@@ -275,7 +275,7 @@ def test_inherited_default_reads_class_declaration_ir(case, tmp_path, monkeypatc
     output = tmp_path / 'declaration.ll'
     source.write_text(PROGRAMS[case][0])
     compile_python(str(source), str(output), emit_llvm_only=True, backend='self',
-                   libpython_mode='off', ir_scaffold_mode='on')
+                   ir_scaffold_mode='on')
     text = output.read_text()
     assert '__pcc_dataclass_defaults__' in text
     assert 'dataclass.base.declaration' in text
@@ -293,7 +293,7 @@ def test_factory_declaration_capture_ir(case, tmp_path, monkeypatch):
     output = tmp_path / 'factory_declaration.ll'
     source.write_text(factories[case][0])
     compile_python(str(source), str(output), emit_llvm_only=True, backend='self',
-                   libpython_mode='off', ir_scaffold_mode='on')
+                   ir_scaffold_mode='on')
     text = output.read_text()
     assert '__pcc_dataclass_defaults__' in text
     assert 'dataclass.declaration.defaults' in text

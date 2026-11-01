@@ -66,7 +66,7 @@ def _compile(tmp_path: Path, name: str, source: str, *, emit_llvm: bool):
     src = tmp_path / f"{name}.py"
     src.write_text(source, encoding="utf-8")
     out = tmp_path / (f"{name}.ll" if emit_llvm else f"{name}.bin")
-    cmd = ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", "--ir-scaffold=on"]
+    cmd = ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on"]
     cmd += [f"--emit-llvm={out}", str(src)] if emit_llvm else [str(src), "-o", str(out)]
     proc = subprocess.run(cmd, text=True, capture_output=True, timeout=420, env=_env())
     assert proc.returncode == 0, proc.stderr
@@ -133,7 +133,7 @@ from pcc.extern import c_abi_export
 def literal_marker(value: str) -> bool:
     return value == "marker"
 ''')
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True, target_triple=target)
     text = output.read_text()
     assert re.search(r"call i64(?: \(ptr\))? @pcc_gc_pointer_register\(", text)
@@ -155,7 +155,7 @@ def test_importable_library_keeps_counted_literal_registration(tmp_path):
     source = tmp_path / "importable_literals.py"
     output = tmp_path / "importable_literals.ll"
     source.write_text('def marker():\n    return "unloadable literal"\n')
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     assert re.search(r"call i64(?: \(ptr\))? @pcc_gc_pointer_register\(", text)
@@ -170,7 +170,7 @@ def test_runtime_regex_literals_have_provenance_on_every_backend(
     binary = tmp_path / "regex_literal_owner"
     source.write_text(INLINE_REGEX_PROGRAM)
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

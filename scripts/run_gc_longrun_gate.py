@@ -146,7 +146,6 @@ def build_workload(*, timeout: int) -> tuple[Path, str, str]:
                 sys.executable,
                 "-m",
                 "pcc",
-                "--python-libpython=off",
                 "--ir-scaffold=on",
                 "--backend",
                 "self",

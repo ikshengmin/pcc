@@ -1,7 +1,7 @@
 """CPython parity for ``str`` methods, ported from
 ``Lib/test/test_str.py`` and ``Lib/test/test_unicode.py``.
 
-All tests use ``libpython_mode="off"`` so we exercise pcc's native
+All tests use the native pipeline so we exercise pcc's native
 ``str`` runtime, not CPython's ``PyUnicode_*``.
 
 Reference contract (from CPython):
@@ -30,7 +30,6 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
 
 

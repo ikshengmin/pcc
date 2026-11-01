@@ -5,7 +5,7 @@ Phase D2 in ``docs/issues/python-data-model-gaps.md`` originally flagged the
 generator state machine as mostly absent. These tests are now live regression
 coverage for the implemented generator/async subset.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython):
   * ``def f(): ... yield x`` returns a generator that implements
@@ -29,7 +29,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 
@@ -359,151 +359,6 @@ def test_async_def_basic(tmp_path, monkeypatch):
     assert _run(exe).strip() == "hi"
 
 
-def test_generator_for_over_cpython_iterable_compiles_and_runs(tmp_path):
-    # Failure LADDER regression for a generator body iterating a
-    # CPython-fallback iterable (e.g. itertools.chain under
-    # --python-libpython=auto). History: raw-SSA cpy iterator -> LLVM
-    # verifier "does not dominate" crash; slot spill alone -> runtime
-    # SIGSEGV (entry allocas are rebuilt per resume call) -> clear
-    # diagnostic guard. J1 now boxes the iterator handle as a pcc int in
-    # the persisted __pcc_for_iter_* frame slot and excludes the cpy
-    # loop target from frame saves (raw libpython pointers must never
-    # enter the frame py_list), so this shape COMPILES AND RUNS — the
-    # loop variable is never read after a yield suspension here.
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "gen_cpy_iter.py"
-    exe = tmp_path / "gen_cpy_iter"
-    src.write_text(
-        "import itertools\n"
-        "\n"
-        "def gen(items):\n"
-        "    for line in itertools.chain(items, ['end']):\n"
-        "        yield line\n"
-        "\n"
-        "def main():\n"
-        "    for v in gen(['a', 'b']):\n"
-        "        print(v)\n"
-        "\n"
-        "main()\n",
-        encoding="utf-8",
-    )
-    compile_python(
-        str(src),
-        str(exe),
-        libpython_mode="auto",
-        ir_scaffold_mode="on",
-    )
-    out = _run(Path(exe))
-    assert out.splitlines() == ["a", "b", "end"]
-
-
-def test_generator_cpy_loop_var_read_across_yield_runs(tmp_path):
-    # J2': the cpy loop variable lives in its slot as a CpyHandle box
-    # (frame-safe pcc object; the central name-load helper unboxes), so
-    # reading it AFTER a yield suspension now compiles and runs with
-    # CPython-equal output — this exact shape was J1's guarded boundary.
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "gen_cpy_cross.py"
-    exe = tmp_path / "gen_cpy_cross"
-    src.write_text(
-        "import itertools\n"
-        "\n"
-        "def gen(items):\n"
-        "    for line in itertools.chain(items, ['end']):\n"
-        "        yield 1\n"
-        "        print(line)\n"
-        "\n"
-        "def main():\n"
-        "    for v in gen(['a']):\n"
-        "        print(v)\n"
-        "\n"
-        "main()\n",
-        encoding="utf-8",
-    )
-    compile_python(
-        str(src),
-        str(exe),
-        libpython_mode="auto",
-        ir_scaffold_mode="on",
-    )
-    out = _run(Path(exe))
-    assert out.splitlines() == ["1", "a", "1", "end"]
-
-
-def test_generator_cpy_flat_unpack_across_yield_runs(tmp_path):
-    # J2' stage 2: FLAT tuple-unpack cpy targets (the os.walk
-    # dirpath/dirnames/filenames shape) are extracted via the cpy
-    # bridge and boxed like the single-name target, so reading them
-    # after a yield suspension compiles and runs CPython-equal.
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "gen_cpy_unpack.py"
-    exe = tmp_path / "gen_cpy_unpack"
-    src.write_text(
-        "import itertools\n"
-        "\n"
-        "def gen(items):\n"
-        "    for a, b in itertools.zip_longest(items, items):\n"
-        "        yield 1\n"
-        "        print(a, b)\n"
-        "\n"
-        "def main():\n"
-        "    for v in gen(['x', 'y']):\n"
-        "        print(v)\n"
-        "\n"
-        "main()\n",
-        encoding="utf-8",
-    )
-    compile_python(
-        str(src),
-        str(exe),
-        libpython_mode="auto",
-        ir_scaffold_mode="on",
-    )
-    out = _run(Path(exe))
-    assert out.splitlines() == ["1", "x x", "1", "y y"]
-
-
-def test_generator_cpy_nested_unpack_across_yield_still_guarded(tmp_path):
-    # J2' boundary: NESTED tuple-unpack cpy targets keep the J1
-    # skip-save + precise cross-yield guard naming the variable —
-    # never a verifier crash or a heap-corrupting binary.
-    import pytest
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "gen_cpy_nested.py"
-    exe = tmp_path / "gen_cpy_nested"
-    src.write_text(
-        "import itertools\n"
-        "\n"
-        "def gen(items):\n"
-        "    for (a, b), c in itertools.zip_longest(\n"
-        "        itertools.zip_longest(items, items), items\n"
-        "    ):\n"
-        "        yield 1\n"
-        "        print(a, b, c)\n"
-        "\n"
-        "def main():\n"
-        "    for v in gen(['x']):\n"
-        "        print(v)\n"
-        "\n"
-        "main()\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(Exception) as exc_info:
-        compile_python(
-            str(src),
-            str(exe),
-            libpython_mode="auto",
-            ir_scaffold_mode="on",
-        )
-    msg = str(exc_info.value)
-    assert "yield" in msg or "unpack" in msg.lower()
-    assert "dominate" not in msg
-
-
 def test_generator_native_protocol_for_resumes(tmp_path, monkeypatch):
     # Regression for the SECOND dominance site of the same ladder (numpy
     # linalg/lapack_lite/fortran.py): a generator body iterating a
@@ -571,42 +426,6 @@ def test_generator_native_protocol_for_resumes(tmp_path, monkeypatch):
     assert out.splitlines() == ["6", "[11, 21, 22]"]
 
 
-def test_generator_cpy_flat_unpack_arity_mismatch_raises(tmp_path):
-    # J2' stage-2 arity check: unpacking a 3-element cpy item into two
-    # names raises ValueError like CPython (py_cpy_len-based; unsized
-    # items conservatively skip the check). The DYN-protocol unpack
-    # path's missing arity check is a separate pre-existing behavior.
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "gen_cpy_arity.py"
-    exe = tmp_path / "gen_cpy_arity"
-    src.write_text(
-        "import itertools\n"
-        "\n"
-        "def bad(seqs):\n"
-        "    for a, b in itertools.chain(seqs):\n"
-        "        yield a\n"
-        "\n"
-        "def main():\n"
-        "    try:\n"
-        "        for w in bad([(1, 2, 3)]):\n"
-        "            print(w)\n"
-        "    except ValueError:\n"
-        "        print('arity-error')\n"
-        "\n"
-        "main()\n",
-        encoding="utf-8",
-    )
-    compile_python(
-        str(src),
-        str(exe),
-        libpython_mode="auto",
-        ir_scaffold_mode="on",
-    )
-    out = _run(Path(exe))
-    assert out.splitlines() == ["arity-error"]
-
-
 def test_generator_throw_close_exception_routing(tmp_path):
     # Audit Review 4: gen.throw/send/close emission sites had no
     # post-call err-check (a thrown-in ValueError printed "throw-ok"
@@ -648,7 +467,6 @@ def test_generator_throw_close_exception_routing(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -702,7 +520,6 @@ def test_contextmanager_swallow_and_propagate(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

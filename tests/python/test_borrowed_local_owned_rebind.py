@@ -27,7 +27,7 @@ def test_owned_rebind_preserves_borrowed_source_on_all_gc_backends(tmp_path, pcc
     source.write_text(SOURCE)
     expected = subprocess.check_output([sys.executable, str(source)], text=True, timeout=10)
     binary = tmp_path / "borrowed_rebind"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -59,7 +59,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "borrowed_loop"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
@@ -99,7 +99,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "loop_finalizers"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

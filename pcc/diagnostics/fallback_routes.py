@@ -2,7 +2,7 @@
 
 The pipeline already has import classification functions. This module turns
 those individual decisions into user-visible events with stable reasons so the
-CLI can report why libpython was required or avoided.
+CLI can report which imports have a native provider and which do not.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def route_from_classification(module: str, classification: str) -> FallbackRoute
         "native_user_module": "compiled as part of source closure",
         "builtin_native_dispatch": "lowered by built-in native dispatch",
         "native_stdlib": "resolved to pcc/stdlib provider",
-        "cpython_fallback": "no native provider found; libpython required unless disabled",
+        "cpython_fallback": "no native provider found; the native pipeline rejects this import",
     }.get(classification, "unknown import route")
     return FallbackRoute(module, classification, reason, native)
 

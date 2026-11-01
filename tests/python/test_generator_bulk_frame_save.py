@@ -26,7 +26,7 @@ print(next(iterator))
     for enabled in ("0", "1"):
         monkeypatch.setenv("PCC_BULK_GENERATOR_FRAME_SAVE", enabled)
         output = tmp_path / ("save_" + enabled + ".ll")
-        compile_python(str(source), str(output), backend="self", libpython_mode="off",
+        compile_python(str(source), str(output), backend="self",
                        ir_scaffold_mode="on", emit_llvm_only=True)
         text = output.read_text()
         body = re.search(r"define[^\n]*suspended__gen_resume[^\n]*\{\n(.*?)\n\}", text, re.S)

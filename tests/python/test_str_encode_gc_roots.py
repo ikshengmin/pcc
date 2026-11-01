@@ -251,7 +251,7 @@ def mutable(value: str):
     return bytearray(value, "latin1")
 ''')
     output = tmp_path / "encode_leases.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -370,7 +370,7 @@ def test_native_gc3_encoder_movement_and_finalizers(
     source = tmp_path / "encoder_gc3.py"
     source.write_text(_GC3_SOURCE)
     binary = tmp_path / "encoder_gc3"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
         env=dict(os.environ, PCC_GC_BACKEND="3", PCC_GC_MINOR_ALLOC_MAX="4096",
@@ -464,7 +464,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "encoder_direct"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_diagnostic_runtime_archive), link_args=(str(helper),))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
@@ -480,7 +480,7 @@ def test_deferred_native_controls_have_verified_ir(tmp_path):
     source = tmp_path / "encoder_movement_control.py"
     source.write_text(_GC3_SOURCE)
     output = tmp_path / "encoder_movement_control.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)

@@ -196,7 +196,6 @@ def test_cext_mapping_assignment_for_vander_shaped_keys(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

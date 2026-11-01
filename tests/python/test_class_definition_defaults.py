@@ -256,7 +256,7 @@ def test_prepared_namespace_reference_and_ir(tmp_path, monkeypatch, source_text,
     output = tmp_path / "prepared_control.ll"
     source.write_text(source_text)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     assert "class.definition.namespace.prepared" in text
     assert "namespace.body.lease" in text
@@ -328,7 +328,7 @@ def test_class_defaults_ir_captures_factories_only_in_definition_order(tmp_path,
     output = tmp_path / "class_defaults.ll"
     source.write_text(PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     initializer = _body(text, "_pcc_py_module_init_class_defaults")
     probe = _body(text, "user_class_defaults_probe")
@@ -382,7 +382,7 @@ def test_prepared_namespace_reuses_method_signatures(tmp_path, monkeypatch):
     output = tmp_path / "prepared_defaults.ll"
     source.write_text(PREPARED)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     for symbol in ("main", "_pcc_py_module_init_prepared_defaults"):
         body = _body(text, symbol)
@@ -414,7 +414,7 @@ def captured(builder: Builder):
     return builder.opaque()
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     direct = _body(text, "user_direct_defaults_direct")
     assert "@user_direct_defaults_Builder_publish" in direct
@@ -438,7 +438,7 @@ def test_definition_default_leases_reach_owned_object_emitter(tmp_path, monkeypa
     output = tmp_path / "lease_joins.ll"
     source.write_text(source_text)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     object_bytes = emit_owned_object(output.read_text(), "arm64-apple-darwin23.6.0")
     assert object_bytes[:4] == b"\xcf\xfa\xed\xfe"
 
@@ -469,7 +469,7 @@ except ValueError:
     print("DEFAULT_FAILED")
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     ir_text = output.read_text()
     # The partial signature tuples and the class body unwind before the
     # handler joins. Only a prepared namespace still pins its method objects;
@@ -488,7 +488,7 @@ def test_failed_signature_releases_partial_default_owners_at_emitter(tmp_path, m
     output = tmp_path / "failed_default_owners.ll"
     source.write_text(FAILED_DEFAULTS)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple="arm64-apple-darwin23.6.0")
     ir_text = output.read_text()
     assert "func.signature.tuples.unwind" in ir_text
@@ -507,7 +507,7 @@ def test_inherited_signature_null_guard_retires_nested_roots(tmp_path, monkeypat
     output = tmp_path / "inherited_signatures.ll"
     source.write_text(source_text)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     ir_text = output.read_text()
     initializer = _body(ir_text, "_pcc_py_module_init_inherited_signatures")
@@ -557,7 +557,7 @@ def test_inherited_signature_roots_reach_direct_object_worker(tmp_path, monkeypa
     workers.write_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)],
         ["inherited_signatures"], [0], entry_module="inherited_signatures",
-        sibling_inits=(), libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        sibling_inits=(), ir_scaffold_mode="on", verbose=False,
     )
     assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
     object_path = tmp_path / "module_0.direct.pco"
@@ -578,7 +578,7 @@ def test_native_class_definition_defaults(tmp_path, pcc_runtime_archive, python_
     binary = tmp_path / "class_defaults"
     source.write_text(source_text)
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         environment.pop("LC_ALL", None)

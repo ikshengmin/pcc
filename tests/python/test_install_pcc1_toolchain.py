@@ -112,7 +112,6 @@ def test_copied_runtime_preserves_static_abi_exports(tmp_path):
         python_library=True,
         emit_llvm_only=True,
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert "@installed_runtime_header = " in output.read_text()

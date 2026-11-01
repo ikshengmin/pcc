@@ -373,7 +373,7 @@ def test_exception_cache_publication_reaches_owned_emitter(tmp_path, monkeypatch
     # precise stack-map analysis can resolve an explicitly registered slot.
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", runtime_ir_passes(str(PORT_DIR.parent)))
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple=triple)
     ir_text = output.read_text()
     assert "load atomic i64" in ir_text and "acquire" in ir_text
@@ -455,7 +455,7 @@ def test_native_cold_exception_identity_and_matching_all_gcs(
     source = tmp_path / "cold_exception_cache.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "cold_exception_cache"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     import os
     for backend in range(5):

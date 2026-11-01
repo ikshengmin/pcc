@@ -21,7 +21,6 @@ def _emit_ir(tmp_path: Path) -> str:
         str(ERRNO_SOURCE),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return output.read_text(encoding="utf-8")

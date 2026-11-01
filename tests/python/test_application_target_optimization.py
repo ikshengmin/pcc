@@ -240,7 +240,7 @@ def test_frontend_worker_routes_use_the_same_optimizer(
     manifest = {
         "result_path": str(result), "src_paths": [str(tmp_path / "app.py")],
         "module_names": ["app"], "entry_module": "app", "sibling_inits": (),
-        "libpython_mode": "off", "ir_scaffold_mode": "on", "verbose": False,
+        "ir_scaffold_mode": "on", "verbose": False,
         "assigned_indices": [0], "ir_dir": str(tmp_path),
     }
     status = worker.run_codegen_worker(

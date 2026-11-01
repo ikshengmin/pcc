@@ -98,9 +98,7 @@ def _build_and_run(tmp_path: Path, name: str, source: str) -> str:
     src = tmp_path / (name + ".py")
     exe = tmp_path / (name + ".out")
     src.write_text(source, encoding="utf-8")
-    # libpython is linked so the CPython arm runs rather than being replaced
-    # by a fail-closed stub.
-    compile_python(str(src), str(exe), libpython_mode="on")
+    compile_python(str(src), str(exe))
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )

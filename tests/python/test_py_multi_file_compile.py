@@ -83,7 +83,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pcc.consumer",
             emit_llvm_only=True,
             ir_scaffold_mode="on",
-            libpython_mode="off",
             recursive_stdlib=False,
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
@@ -245,7 +244,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry", "pkg.lib"],
                 backend="self",
-                libpython_mode="off",
                 ir_scaffold_mode="on",
                 profile=profile,
             )
@@ -304,7 +302,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry", "pkg.lib"],
                 backend="self",
-                libpython_mode="off",
                 ir_scaffold_mode="on",
                 profile=profile,
             )
@@ -356,7 +353,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry", "pkg.lib"],
                 backend="self",
-                libpython_mode="off",
                 ir_scaffold_mode="on",
             )
 
@@ -408,7 +404,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 src,
                 exe,
                 backend="self",
-                libpython_mode="off",
                 ir_scaffold_mode="on",
             )
         result = subprocess.run(
@@ -504,7 +499,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry", "pkg.lib"],
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -545,7 +539,6 @@ class MultiFileCompileTests(unittest.TestCase):
             src,
             exe,
             backend="self",
-            libpython_mode="off",
             ir_scaffold_mode="on",
         )
         env = os.environ.copy()
@@ -588,7 +581,6 @@ class MultiFileCompileTests(unittest.TestCase):
             out_ll,
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
             ir_scaffold_mode="on",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
@@ -727,7 +719,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="entry",
             module_names=module_names,
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -742,7 +733,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="entry",
             module_names=module_names,
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -801,7 +791,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="entry",
             module_names=module_names,
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -821,7 +810,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="entry",
             module_names=module_names,
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -878,7 +866,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="entry",
             module_names=module_names,
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -891,7 +878,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="entry",
             module_names=module_names,
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -934,7 +920,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=module_names,
             emit_llvm_only=True,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -952,7 +937,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="pkg.entry",
             module_names=module_names,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -1000,7 +984,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="entry",
             module_names=module_names,
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1012,7 +995,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="entry",
             module_names=module_names,
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -1053,7 +1035,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry", "pkg.tables"],
             emit_llvm_only=True,
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1068,7 +1049,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="pkg.entry",
             module_names=["pkg.entry", "pkg.tables"],
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -1104,7 +1084,6 @@ class MultiFileCompileTests(unittest.TestCase):
             exe,
             entry_module="pkg.entry",
             module_names=["pkg.entry", "pkg.values"],
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -1180,39 +1159,6 @@ class MultiFileCompileTests(unittest.TestCase):
         self.assertNotIn("Python", r.stdout)
         self.assertNotIn("libpython", r.stdout)
 
-    def test_relative_import_fallback_uses_absolute_module_name(self):
-        """Relative ``from . import helper`` should resolve to the
-        package name before falling back to CPython import. Otherwise
-        codegen emits ``py_cpy_import('')`` and leaves a pending
-        ``ValueError`` behind at runtime."""
-        from pcc.frontends.python.pipeline import compile_python_multi
-
-        td = tempfile.mkdtemp(prefix="pcc_multi_ir_")
-        self.addCleanup(self._rmtree, td)
-        entry = os.path.join(td, "entry.py")
-        with open(entry, "w", encoding="utf-8") as fh:
-            fh.write("def run() -> None:\n" "    from . import helper\n\n" "run()\n")
-        out_ll = os.path.join(td, "entry.ll")
-        compile_python_multi(
-            [entry],
-            out_ll,
-            entry_module="pkg.entry",
-            module_names=["pkg.entry"],
-            emit_llvm_only=True,
-            libpython_mode="auto",
-        )
-        with open(out_ll, "r", encoding="utf-8") as fh:
-            ir_text = fh.read()
-        self.assertRegex(
-            ir_text,
-            r'@[\w.$]*\.cpy\.mod\.pkg = (?:internal )?constant \[4 x i8\] c"pkg\\00"',
-        )
-        self.assertIn("%cpy.fromimport.pkg", ir_text)
-        self.assertNotRegex(
-            ir_text,
-            r"@[\w.$]*\.cpy\.mod\. = (?:internal )?constant",
-        )
-
     def test_relative_package_attribute_pulls_init_into_native_closure(self):
         """``from . import Name`` may import an ``__init__.py`` attribute.
 
@@ -1244,7 +1190,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1280,7 +1225,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg", "pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
@@ -1294,7 +1238,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg", "pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1326,7 +1269,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
@@ -1340,7 +1282,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1371,7 +1312,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.sub",
             module_names=["pkg.sub"],
             backend="self",
-            libpython_mode="off",
         )
         result = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, msg=result.stderr)
@@ -1385,7 +1325,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.sub"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1418,7 +1357,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry", "pkg.helper"],
             backend="self",
-            libpython_mode="off",
         )
         result = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, msg=result.stderr)
@@ -1459,7 +1397,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         result = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, msg=result.stderr)
@@ -1473,7 +1410,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1508,7 +1444,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry"],
                 backend="self",
-                libpython_mode="off",
             )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -1522,7 +1457,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1557,7 +1491,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry"],
                 backend="self",
-                libpython_mode="off",
             )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -1571,7 +1504,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1616,7 +1548,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry"],
                 backend="self",
-                libpython_mode="off",
             )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -1630,7 +1561,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1682,7 +1612,6 @@ class MultiFileCompileTests(unittest.TestCase):
                 entry_module="pkg.entry",
                 module_names=["pkg.entry"],
                 backend="self",
-                libpython_mode="off",
             )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, msg=r.stderr)
@@ -1699,7 +1628,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1742,7 +1670,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg", "pkg.types", "pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
@@ -1774,7 +1701,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
@@ -1788,7 +1714,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1822,7 +1747,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
@@ -1836,7 +1760,6 @@ class MultiFileCompileTests(unittest.TestCase):
             module_names=["pkg.entry"],
             emit_llvm_only=True,
             backend="self",
-            libpython_mode="off",
         )
         with open(out_ll, "r", encoding="utf-8") as fh:
             ir_text = fh.read()
@@ -1877,7 +1800,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.provider", "pkg.facade", "pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         run = subprocess.run(
             [exe],
@@ -1907,7 +1829,6 @@ class MultiFileCompileTests(unittest.TestCase):
             entry_module="pkg.entry",
             module_names=["pkg.provider", "pkg.entry"],
             backend="self",
-            libpython_mode="off",
         )
         run = subprocess.run(
             [exe],
@@ -2006,7 +1927,7 @@ class MultiFileCompileTests(unittest.TestCase):
                     return stored_gen
             """).lstrip())
         exe = os.path.join(td, "prog.ll")
-        compile_python(src, exe, libpython_mode="off", emit_llvm_only=True)
+        compile_python(src, exe, emit_llvm_only=True)
 
 
 if __name__ == "__main__":

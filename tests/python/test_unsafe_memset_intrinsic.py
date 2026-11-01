@@ -63,7 +63,7 @@ def compile_ir(tmp_path, target):
     source.write_text(source_text())
     output = tmp_path / "fills.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", target_triple=target)
+                   backend="self", target_triple=target)
     return output.read_text()
 
 
@@ -150,7 +150,7 @@ def main():
 main()
 ''')
     output = tmp_path / "address_result"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         run = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

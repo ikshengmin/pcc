@@ -19,7 +19,6 @@ from pathlib import Path
 from pcc.driver import cli_bootstrap
 
 _KEY_ARGS = {
-    "python_libpython": "off",
     "python_library": False,
     "ir_scaffold": "on",
     "backend": "self",

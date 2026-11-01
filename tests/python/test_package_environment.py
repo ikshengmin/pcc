@@ -113,7 +113,6 @@ def test_locked_resource_default_helper_is_callable_in_strict_self_mode(
         module_names=["locked_resource_defaults", "pcc.package.environment"],
         entry_module="locked_resource_defaults",
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run_env = _base_env(tmp_path)

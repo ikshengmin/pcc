@@ -113,7 +113,7 @@ def test_dynamic_list_method_results_are_released_under_five_collectors(
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "dynamic_method_results"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

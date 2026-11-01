@@ -124,7 +124,7 @@ def test_cancellation_and_state_on_four_carriers_and_five_collectors(tmp_path, t
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "cancel_state"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     expected = str([(True, True, True, True, True)] * 6) + "\n"
     for backend in range(5):

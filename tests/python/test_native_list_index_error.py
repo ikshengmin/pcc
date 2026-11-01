@@ -8,7 +8,7 @@ keep the NULL-returning py_list_get) + the frontend err-check on the list
 subscript-load paths (exact_int_lowering._emit_subscript_load_object and
 subscript_lowering).
 
-Compiles + runs under --backend self --python-libpython=off and asserts output.
+Compiles + runs under --backend self and asserts output.
 """
 from __future__ import annotations
 
@@ -24,8 +24,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

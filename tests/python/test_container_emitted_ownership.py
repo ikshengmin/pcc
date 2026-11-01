@@ -39,7 +39,7 @@ def main():
 main()
 '''.replace("STORE", store).replace("READ", read))
     binary = tmp_path / "nullable_container"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
@@ -91,7 +91,7 @@ def main():
 main()
 '''.replace("BODY", body))
     binary = tmp_path / "container_owners"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="0"),
                          capture_output=True, text=True, timeout=15)
@@ -129,7 +129,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "literal_errors"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -176,7 +176,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "set_errors"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

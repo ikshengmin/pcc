@@ -270,7 +270,7 @@ def test_shift_runtime_owned_library_ir(path, tmp_path, monkeypatch):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     output = tmp_path / (path.stem + ".ll")
     compile_python(str(path), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     verify_ir_text(text)
@@ -357,7 +357,7 @@ def test_wide_shift_fixture_owned_ir_keeps_count_boxed(tmp_path, monkeypatch):
     output = source.with_suffix(".ll")
     source.write_text(PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     verify_ir_text(text)
@@ -377,7 +377,7 @@ def test_wide_shift_counts_native_all_gc(tmp_path, monkeypatch, pcc_runtime_arch
     source = tmp_path / "wide_shifts.py"
     executable = source.with_suffix("")
     source.write_text(PROGRAM)
-    python_program_compiler(str(source), str(executable), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(executable), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30,

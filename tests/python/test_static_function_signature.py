@@ -96,7 +96,7 @@ def _main_instructions(tmp_path, source_text, name):
     source = tmp_path / (name + ".py")
     source.write_text(source_text, encoding="utf-8")
     output = tmp_path / (name + ".ll")
-    pipeline.compile_python(str(source), str(output), emit_llvm_only=True, libpython_mode="off")
+    pipeline.compile_python(str(source), str(output), emit_llvm_only=True)
     text = output.read_text(encoding="utf-8")
     body = _function_body(text, "main")
     return text, [line for line in body.splitlines() if line.startswith("  ")]
@@ -151,7 +151,7 @@ def test_static_signatures_match_cpython_on_five_collectors(
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "signatures"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

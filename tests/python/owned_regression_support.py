@@ -110,7 +110,6 @@ def assert_owned_program(
         "compiler_fixture_parameter": requested_compiler_mode,
         "compiler_mode": compiler_mode,
         "backend": "self",
-        "libpython": "off",
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "runtime_archive": str(archive),
         "runtime_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
@@ -124,7 +123,6 @@ def assert_owned_program(
             str(source),
             str(binary),
             backend="self",
-            libpython_mode="off",
             ir_scaffold_mode="on",
             runtime_archive=str(archive),
         )

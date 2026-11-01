@@ -177,7 +177,7 @@ def test_snapshot_native_lowering_calls_owned_runtime_directly(tmp_path):
 
     output = tmp_path / "phase.ll"
     compile_python(str(Path(timing.__file__)), str(output), emit_llvm_only=True,
-                   libpython_mode="off", python_library=True,
+                   python_library=True,
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     direct_backend = bool(re.search(r'call i64 (?:\([^\n]*?\) )?@"?pcc_gc_backend"?\(', text))

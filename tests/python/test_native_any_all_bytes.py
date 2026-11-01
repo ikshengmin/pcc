@@ -24,7 +24,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "any_bytes"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -52,7 +52,7 @@ def main():
 main()
 ''', encoding="utf-8")
     output = tmp_path / "any_owner"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                             env=dict(os.environ, PCC_GC_BACKEND="0"))

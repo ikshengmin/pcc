@@ -48,7 +48,7 @@ main()
         [str(Path(macho_codesign.__file__)), str(source)], str(output),
         module_names=["pcc.backend.macho_codesign", "validate_signature"],
         entry_module="validate_signature", recursive_stdlib=True,
-        backend="self", libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        backend="self", runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         result = subprocess.run([str(output), str(target)], capture_output=True, text=True,

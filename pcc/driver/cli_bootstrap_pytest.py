@@ -424,7 +424,6 @@ def run_pcc1_pytest(argv, executable: str, timeout_seconds: int) -> int:
                     runner_src,
                     "-o",
                     exe,
-                    "--python-libpython=off",
                     "--ir-scaffold=on",
                 ],
                 timeout_seconds,

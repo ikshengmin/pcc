@@ -18,7 +18,6 @@ def _run_on_five_collectors(tmp_path, stem, source, expected):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     for backend in range(5):

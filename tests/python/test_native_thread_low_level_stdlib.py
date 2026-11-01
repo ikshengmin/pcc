@@ -22,7 +22,6 @@ def test_low_level_thread_get_ident_is_native_without_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

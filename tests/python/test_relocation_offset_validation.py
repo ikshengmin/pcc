@@ -178,7 +178,7 @@ def main():
 main()
 ''')
     output = tmp_path / "offsets"
-    python_program_compiler(str(source), str(output), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(output), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

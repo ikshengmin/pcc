@@ -24,7 +24,7 @@ def emit(tmp_path,monkeypatch,program,*,port=None,target=None):
     output=tmp_path/'consumer.ll';profile={}
     compile_python_multi([str(source),str(port or ROOT/'pcc/stdlib/os.py')],str(output),
         module_names=['consumer','os'],entry_module='consumer',backend='self',
-        libpython_mode='off',ir_scaffold_mode='on',emit_llvm_only=True,
+        ir_scaffold_mode='on',emit_llvm_only=True,
         target_triple=target,profile=profile)
     # The two supplied modules can discover further native dependencies
     # (for example os.fsync imports warnings). Count the input contract and

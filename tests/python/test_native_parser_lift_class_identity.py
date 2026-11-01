@@ -48,7 +48,7 @@ def test_native_parser_lift_preserves_both_class_families(
     source.write_text(PROGRAM)
     binary = tmp_path / "parser_lift"
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", ir_scaffold_mode="on",
+                            ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,

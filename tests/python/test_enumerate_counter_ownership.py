@@ -51,7 +51,7 @@ def test_enumerate_counters_are_owned_across_iteration_and_resume(
     expected = subprocess.check_output([sys.executable, str(source)], text=True, timeout=15)
     binary = tmp_path / 'enumerate_owners'
     python_program_compiler(
-        str(source), str(binary), backend='self', libpython_mode='off',
+        str(source), str(binary), backend='self',
         ir_scaffold_mode=scaffold, runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

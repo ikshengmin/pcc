@@ -197,8 +197,7 @@ def test_stage1_function_smoke_compiles_then_runs_the_program(tmp_path: Path) ->
 
     work = tmp_path / "work"
     assert ab.commands == [
-        [str(tmp_path / "pcc1"), "--backend", "self", "--python-libpython", "off",
-         "--ir-scaffold", "on", str(work / "stage1_function_smoke.py"),
+        [str(tmp_path / "pcc1"), "--backend", "self", "--ir-scaffold", "on", str(work / "stage1_function_smoke.py"),
          "-o", str(work / "stage1_function_smoke")],
         [str(work / "stage1_function_smoke")],
     ]

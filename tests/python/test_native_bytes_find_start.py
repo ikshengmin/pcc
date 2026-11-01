@@ -13,7 +13,7 @@ def _compile(tmp_path: Path, source: str, archive: Path) -> Path:
     path.write_text(source, encoding="utf-8")
     output = tmp_path / "find_start"
     compile_python(
-        str(path), str(output), backend="self", libpython_mode="off",
+        str(path), str(output), backend="self",
         runtime_archive=str(archive),
     )
     return output

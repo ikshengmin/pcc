@@ -596,7 +596,6 @@ def write_worker_manifest(
     *,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     job_kind: str = "codegen",
@@ -626,7 +625,6 @@ def write_worker_manifest(
         stream.write(job_kind + "\n")
         stream.write(ast_dir + "\n")
         stream.write(entry_module + "\n")
-        stream.write(libpython_mode + "\n")
         stream.write(ir_scaffold_mode + "\n")
         stream.write("1\n" if verbose else "0\n")
         stream.write(str(len(sibling_inits)) + "\n")
@@ -727,8 +725,6 @@ def read_worker_manifest(path: str):
             position += 1
         entry_module = lines[position]
         position += 1
-        libpython_mode = lines[position]
-        position += 1
         ir_scaffold_mode = lines[position]
         position += 1
         verbose = lines[position] == "1"
@@ -808,7 +804,6 @@ def read_worker_manifest(path: str):
         "ast_dir": ast_dir,
         "job_kind": job_kind,
         "entry_module": entry_module,
-        "libpython_mode": libpython_mode,
         "ir_scaffold_mode": ir_scaffold_mode,
         "verbose": verbose,
         "sibling_inits": tuple(sibling_inits),

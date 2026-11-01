@@ -44,7 +44,7 @@ def test_live_import_namespace_native_five_gc(tmp_path, monkeypatch, pcc_runtime
     binary = tmp_path / ('live-import-' + scenario)
     compile_python_multi(
         paths, str(binary), module_names=names, entry_module='live_entry',
-        backend='self', libpython_mode='off', ir_scaffold_mode='on',
+        backend='self', ir_scaffold_mode='on',
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

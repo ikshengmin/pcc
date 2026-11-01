@@ -14,7 +14,7 @@ def _compile_ir(tmp_path, source):
     path = tmp_path / "from_bytes_binding.py"
     path.write_text(source)
     output = tmp_path / "from_bytes_binding.ll"
-    compile_python(str(path), str(output), backend="self", libpython_mode="off",
+    compile_python(str(path), str(output), backend="self",
                    python_library=True, emit_llvm_only=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -153,7 +153,7 @@ def test_binding_and_signed_conversion_execute_all_collectors(
     oracle = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, timeout=15)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / "from_bytes_binding"
-    python_program_compiler(str(path), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(path), str(binary), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         actual = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -166,7 +166,7 @@ def test_signed_runtime_helper_is_owned_and_preserves_unsigned_abi(tmp_path):
     from pathlib import Path
     source = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_int_convert.py"
     output = tmp_path / "py_int_convert.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    python_library=True, emit_llvm_only=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -232,7 +232,7 @@ def test_keyword_argument_errors_release_owners(
     oracle = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, timeout=15)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / "from_bytes_cleanup"
-    python_program_compiler(str(path), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(path), str(binary), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         actual = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

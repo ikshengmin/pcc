@@ -5,7 +5,7 @@ round(0.5)==0, round(-1.5)==-2. pcc's round() lowering used floor(x + 0.5)
 (round half away from zero), so round(2.5) gave 3. Now lowered via libm rint()
 (default FP mode = round to nearest, ties to even), matching CPython.
 
-Compiles + runs under --backend self --python-libpython=off and asserts exact
+Compiles + runs under --backend self and asserts exact
 output.
 """
 from __future__ import annotations
@@ -34,8 +34,7 @@ def _run_pcc_program(
         env["PCC_RUNTIME_ARCHIVE"] = str(runtime_archive)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

@@ -120,7 +120,7 @@ def _compile_and_run_all_collectors(tmp_path, name, program, compiler, archive):
     source.write_text(program, encoding="utf-8")
     binary = tmp_path / name
     compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(archive),
     )
     outputs = []

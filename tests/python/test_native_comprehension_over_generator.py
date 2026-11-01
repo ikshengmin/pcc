@@ -2,7 +2,7 @@
 no-libpython (run-based).
 
 Before this fix, ``[x for x in gen()]`` produced ``[]`` under
-``--python-libpython=off``: ``comprehension_lowering._emit_comprehension_generator``
+the native pipeline: ``comprehension_lowering._emit_comprehension_generator``
 routed a ``DynType`` iterable to ``_emit_comprehension_obj_indexed`` (a
 ``py_obj_len`` + integer ``py_obj_getitem`` loop), which runs zero times for an
 iterator-only object such as a generator (no length / ``__getitem__``). The
@@ -17,7 +17,7 @@ are fixed in follow-up slices; this test covers the comprehension site.)
 
 Includes regression cases (comprehension over a list literal and a string) to
 guard the broadened DynType -> iterator-protocol routing. Runs under
-``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 
@@ -34,8 +34,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

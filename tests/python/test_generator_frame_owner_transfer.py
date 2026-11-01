@@ -47,7 +47,7 @@ print(sorted(events))
         'print(backend())\n' + source.read_text())
     monkeypatch.setenv("PCC_MOVE_GENERATOR_FRAME_OWNERS", enabled)
     executable = tmp_path / "frame_finalizers"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15,
@@ -98,7 +98,7 @@ def test_resumed_generator_frame_does_not_keep_rebound_locals(tmp_path, pcc_runt
     oracle = subprocess.run([sys.executable, str(source)], text=True, capture_output=True,
                             check=True, timeout=10)
     executable = tmp_path / "resumed_rebind"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15,
@@ -122,7 +122,7 @@ print(next(iterator))
         monkeypatch.setenv("PCC_MOVE_GENERATOR_FRAME_OWNERS", enabled)
         output = tmp_path / ("owner_" + enabled + ".ll")
         compile_python(str(source), str(output), emit_llvm_only=True,
-                       backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                       backend="self", ir_scaffold_mode="on")
         body = re.search(r"define[^\n]*worker__gen_resume[^\n]*\{\n(.*?)\n\}", output.read_text(), re.S)
         assert body is not None
         calls = re.findall(r"call[^\n]*@py_list_set_from_owned_root\([^\n]+", body.group(1))

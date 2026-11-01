@@ -21,7 +21,7 @@ def _production_closure(program):
     from pcc.frontends.python import pipeline
     module = pipeline._module_name_from_src(str(program))
     sources, modules, recursive = pipeline._prepare_single_source_compile_closure(
-        str(program), module, emit_llvm_only=False, libpython_mode="off",
+        str(program), module, emit_llvm_only=False,
         ir_scaffold_mode="on", recursive_stdlib=False, python_library=False,
     )
     sources, modules = pipeline._prepare_multi_source_compile_closure(
@@ -55,8 +55,7 @@ def test_shlex_functions_and_aliases_have_owned_complete_bodies(tmp_path):
     from pcc.frontends.python.pipeline_context import compile_contextual_per_module_fallback_counts
     module, sources, modules = _production_closure(CONTROL)
     counts = compile_contextual_per_module_fallback_counts(
-        sources, modules, [module, "shlex"], ir_scaffold_mode="on",
-        strict_no_libpython=True, emit_ir_dir=str(tmp_path), entry_module=module,
+        sources, modules, [module, "shlex"], ir_scaffold_mode="on", emit_ir_dir=str(tmp_path), entry_module=module,
     )
     assert counts == {module: 0, "shlex": 0}
     for owner, functions in ((module, ("check_words", "main")), ("shlex", ("quote", "join", "split"))):
@@ -72,7 +71,7 @@ def test_original_resource_command_bodies_use_the_owned_shlex_provider(tmp_path)
     module, sources, modules = _production_closure(RESOURCE_CONTROL)
     assert "shlex" in modules
     counts = compile_contextual_per_module_fallback_counts(
-        sources, modules, [module], ir_scaffold_mode="on", strict_no_libpython=True,
+        sources, modules, [module], ir_scaffold_mode="on",
         emit_ir_dir=str(tmp_path), entry_module=module,
     )
     assert counts == {module: 0}
@@ -110,7 +109,7 @@ def test_shlex_provider_native_five_collectors(
     save()
     try:
         python_program_compiler(
-            str(CONTROL), str(binary), backend="self", libpython_mode="off",
+            str(CONTROL), str(binary), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     except BaseException as error:

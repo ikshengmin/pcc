@@ -214,7 +214,7 @@ def test_divmod_program_reaches_owned_emitter(tmp_path, monkeypatch,
     output = tmp_path / "divmod_protocol.ll"
     source.write_text(source_text)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     bodies = re.findall(r'^define[^\n]*\{\n(.*?)^\}', text, re.M | re.S)
     callers = [body for body in bodies if '@py_obj_divmod(' in body]
@@ -266,7 +266,7 @@ def main():
 main()
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     data = emit_owned_object(output.read_text(), "arm64-apple-darwin23.6.0")
     assert data[:4] == b"\xcf\xfa\xed\xfe"
 
@@ -277,7 +277,7 @@ def test_dynamic_divmod_owner_is_consumed_on_delete_rebind_and_discard(tmp_path,
     output = tmp_path / "divmod_owner.ll"
     source.write_text(OWNER_LIFETIMES)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     for function in ("deleted", "rebound"):
         body = re.search(r'^define[^\n]*@user_divmod_owner_' + function +
@@ -320,7 +320,6 @@ def test_native_divmod_protocol(tmp_path, pcc_runtime_archive,
     binary = tmp_path / "divmod_protocol"
     source.write_text(source_text)
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))

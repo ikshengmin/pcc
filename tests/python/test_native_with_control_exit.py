@@ -30,7 +30,7 @@ def main():
 main()
 ''', encoding='utf-8')
     binary = tmp_path / 'with_bindings'
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                             runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
@@ -104,7 +104,7 @@ main()
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / 'with_control'
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

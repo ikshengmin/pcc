@@ -25,7 +25,7 @@ print(vt.result(task))
 ''')
     output = tmp_path / "factory_shape.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     ir = output.read_text()
     factory = re.search(r"define[^\n]*Gate_choose\([^\n]*\{\n(.*?)\n\}", ir, re.S)
     assert factory and "@py_gen_completed" in factory.group(1)
@@ -51,7 +51,7 @@ def test_factory_boundaries_fail_closed(tmp_path, body):
     source.write_text(source_text)
     with pytest.raises(Exception, match="factory|resumable|generator"):
         compile_python(str(source), str(tmp_path / "invalid.ll"), emit_llvm_only=True,
-                       backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                       backend="self", ir_scaffold_mode="on")
 
 
 def test_factory_fast_slow_and_error_paths_across_collectors(tmp_path, pcc_runtime_archive):
@@ -108,7 +108,7 @@ print(vt.result(task))
 ''')
     executable = tmp_path / "factories"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True,

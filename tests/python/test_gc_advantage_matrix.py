@@ -29,7 +29,6 @@ def gc_advantage_binary(tmp_path_factory):
     compile_python(
         str(PROGRAM),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

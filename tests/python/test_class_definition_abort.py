@@ -320,7 +320,7 @@ def test_abort_freestanding_source_emits_unboxed_transaction(tmp_path, monkeypat
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
     monkeypatch.setenv('PCC_WITH_THREADS', '1')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend='self', libpython_mode='off', ir_scaffold_mode='on',
+                   backend='self', ir_scaffold_mode='on',
                    python_library=True)
     text = output.read_text()
     matches = re.findall(r'^define [^\n]*@pcc_class_abort_definition_slots\([^\n]*\).*?^}', text, re.M | re.S)
@@ -394,7 +394,7 @@ def test_native_original_failure_program(tmp_path, pcc_runtime_archive, python_p
     assert hashlib.sha256(ORIGINAL.read_bytes()).hexdigest() == ORIGINAL_SHA256
     binary = tmp_path / 'ordinary_failure'
     python_program_compiler(str(ORIGINAL), str(binary), backend='self',
-                            libpython_mode='off', runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         environment.pop('LC_ALL', None)

@@ -76,7 +76,7 @@ def test_same_module_call_branches_on_null_result(tmp_path):
     source = tmp_path / "null_result.py"
     source.write_text(PROGRAM, encoding="utf-8")
     output = tmp_path / "null_result.ll"
-    compile_python(str(source), str(output), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(source), str(output), emit_llvm_only=True)
     main = _body(output.read_text(encoding="utf-8"), "user_null_result_main")
     call = re.search(r"(%pick_ret[\w.]*) = call ptr \(ptr, ptr\) @user_null_result_pick\(", main)
     assert call is not None
@@ -91,7 +91,7 @@ def test_null_result_errors_propagate_on_five_collectors(tmp_path, pcc_runtime_a
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "null_result"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                   runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

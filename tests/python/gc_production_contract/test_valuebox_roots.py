@@ -481,7 +481,6 @@ def _valuebox_exe(tmp_path_factory):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

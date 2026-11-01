@@ -78,7 +78,7 @@ def test_finalizers_still_run_on_every_backend(tmp_path):
     src = tmp_path / "finalizer_gate.py"
     src.write_text(PROGRAM, encoding="utf-8")
     exe = tmp_path / "finalizer_gate.bin"
-    cmd = ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", "--ir-scaffold=on", str(src), "-o", str(exe)]
+    cmd = ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)]
     proc = subprocess.run(cmd, text=True, capture_output=True, timeout=600, env=_env())
     assert proc.returncode == 0, proc.stderr
     expected = _expected(src)
@@ -96,7 +96,7 @@ def test_finalizers_still_run_with_the_c_runtime_mirror(tmp_path, monkeypatch):
     src = tmp_path / "finalizer_gate_cc.py"
     exe = tmp_path / "finalizer_gate_cc.out"
     src.write_text(PROGRAM, encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on", backend="self")
     expected = _expected(src)
     env = _env()
     for backend in ("0", "3", "4"):

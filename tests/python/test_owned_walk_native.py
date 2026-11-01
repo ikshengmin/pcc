@@ -89,7 +89,6 @@ def test_owned_walk_matches_reference_on_observed_collectors(
             str(source),
             str(binary),
             backend="self",
-            libpython_mode="off",
             ir_scaffold_mode="on",
             runtime_archive=str(explicit_owned_runtime),
         )

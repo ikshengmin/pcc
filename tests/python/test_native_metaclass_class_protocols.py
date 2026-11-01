@@ -97,7 +97,6 @@ def test_class_protocols_dispatch_to_the_metaclass(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     for backend in range(5):
         native = subprocess.run(

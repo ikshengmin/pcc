@@ -93,7 +93,7 @@ def test_check_output_text_stderr_stdout_dispatches_to_native_helper():
 
 def test_check_output_without_text_lowers_native_bytes():
     # Previously a bare (no text=) check_output kept the CPython fallback —
-    # which made the program uncompilable under --python-libpython=off. The
+    # which made the program uncompilable in the native pipeline. The
     # native helper already returns a real bytes object (verified equal to
     # CPython for print/len/.decode()), so the no-text form now lowers to
     # py_subprocess_check_output too; downstream bytes methods stay native

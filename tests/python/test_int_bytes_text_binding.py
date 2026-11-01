@@ -288,7 +288,7 @@ def scalar(value: bytes) -> int:
     return int(value)
 ''')
     target = tmp_path / "int_text.ll"
-    compile_python(str(source), str(target), backend="self", libpython_mode="off",
+    compile_python(str(source), str(target), backend="self",
                    python_library=True, emit_llvm_only=True)
     text = target.read_text()
     verify_ir_text(text)
@@ -305,7 +305,7 @@ def test_int_text_runtime_ir_preserves_existing_abi(tmp_path):
     from pcc.frontends.python.pipeline import compile_python
     from tests.owned_ir_validation import verify_ir_text
     target = tmp_path / "py_int_parse.ll"
-    compile_python(str(RUNTIME), str(target), backend="self", libpython_mode="off",
+    compile_python(str(RUNTIME), str(target), backend="self",
                    python_library=True, emit_llvm_only=True)
     text = target.read_text()
     verify_ir_text(text)
@@ -385,7 +385,7 @@ def test_int_text_executes_all_collectors(tmp_path, pcc_diagnostic_runtime_archi
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / "int_text_program"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for collector in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

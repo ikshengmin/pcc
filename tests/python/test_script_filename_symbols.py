@@ -39,7 +39,7 @@ def test_script_filename_punctuation_does_not_break_import_publication(
     source = tmp_path / filename
     source.write_text(program)
     output = tmp_path / "program"
-    python_program_compiler(str(source), str(output), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(output), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr

@@ -67,7 +67,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "finditer"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -100,7 +100,7 @@ def test_native_preprocessor_macro_scan(tmp_path, pcc_runtime_archive):
     compile_python_multi(
         [str(path) for path in providers.values()] + [str(source)], str(output),
         module_names=[*providers, "macro_scan"], entry_module="macro_scan",
-        recursive_stdlib=True, backend="self", libpython_mode="off",
+        recursive_stdlib=True, backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

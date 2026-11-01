@@ -13,7 +13,7 @@ Fix: the DynType method-call path (method_call_expression_lowering) now handles
 .is_integer()/.bit_length() natively via py_float_is_integer / py_int_bit_length
 (which read the object by type tag) before the getattr-based dispatch.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode).
 """
 from __future__ import annotations
@@ -31,8 +31,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

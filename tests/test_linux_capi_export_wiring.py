@@ -361,7 +361,7 @@ def test_snapshot_digest_is_checked_on_the_same_bytes_that_are_parsed(owned, tmp
 @pytest.mark.parametrize("options", [
     {"target_triple": "aarch64-unknown-linux-gnu"},
     {"target_triple": "x86_64-pc-windows-msvc"},
-    {"needs_libpython": True}, {"extra_link_args": ("-rdynamic",)},
+    {"extra_link_args": ("-rdynamic",)},
     {"semantic_layout_policy": "layout"},
 ])
 def test_invalid_routes_fail_before_inventory(owned, monkeypatch, options):

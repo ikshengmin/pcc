@@ -52,7 +52,7 @@ def _compile(tmp_path, source, name="raw_probe"):
     path.write_text(source)
     out = path.with_suffix(".ll")
     pipeline.compile_python(str(path), str(out), emit_llvm_only=True,
-                            python_library=True, libpython_mode="off", backend="self",
+                            python_library=True, backend="self",
                             target_triple="x86_64-unknown-linux-gnu")
     return out.read_text()
 
@@ -144,7 +144,7 @@ def test_opaque_raw_pointer_executes_on_all_gc_backends(tmp_path, pcc_runtime_ar
     controls = "\ndef managed(value: str) -> str:\n    return value\ndef scalar(value: float) -> float:\n    return value + 0.25\nprint(run(), run_opaque(), managed(str(run())), scalar(2.0))\n"
     source.write_text(HEADER + POINTER_PROGRAM + controls)
     output = tmp_path / "raw_native"
-    pipeline.compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    pipeline.compile_python(str(source), str(output), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15,
@@ -221,7 +221,7 @@ def test_cross_module_raw_call_ir_uses_callee_ownership_signature(tmp_path):
     output = tmp_path / "cross.ll"
     pipeline.compile_python_multi([str(provider), str(consumer)], str(output),
         module_names=["provider", "consumer"], entry_module="consumer",
-        backend="self", libpython_mode="off", emit_llvm_only=True)
+        backend="self", emit_llvm_only=True)
     body = _body(output.read_text(), "user_consumer_bridge")
     assert not re.search(r"call[^\n]*@pcc_gc_(?!safepoint)", body), body
 

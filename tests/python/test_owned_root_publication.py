@@ -126,10 +126,10 @@ main()
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=20)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, "OWNED_ROOT_PUBLICATION_OK\n", "")
     output = tmp_path / "publication.ll"
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off")
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self")
     assert "call.slot.publish.lease" in output.read_text()
     binary = tmp_path / "publication"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

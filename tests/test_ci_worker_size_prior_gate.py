@@ -2621,7 +2621,7 @@ def test_strict_closure_releases_verified_inputs_before_next_consumer(tmp_path, 
 
     def compile_multi(paths, destination, **kwargs):
         assert paths == [str(root / (name.replace(".", "/") + ".py")) for name in names]
-        assert kwargs["module_names"] == list(names) and kwargs["libpython_mode"] == "off"
+        assert kwargs["module_names"] == list(names) and "libpython_mode" not in kwargs
         assert kwargs["emit_llvm_only"] and kwargs["backend"] == "self"
         events.append("compile")
         profile = kwargs["profile"]

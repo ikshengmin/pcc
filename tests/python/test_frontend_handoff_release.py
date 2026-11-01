@@ -108,7 +108,6 @@ def test_handoff_collects_once_after_final_owners_before_publication(monkeypatch
         "module_names": ["consumer"],
         "entry_module": "consumer",
         "sibling_inits": (),
-        "libpython_mode": "off",
         "ir_scaffold_mode": "on",
         "verbose": False,
         "assigned_indices": [0],

@@ -2,7 +2,7 @@
 """Per-operation cost table: pcc-compiled runtime versus CPython.
 
 Each benchmark isolates ONE Python operation inside a counted loop.  The same
-source runs (a) compiled by pcc (``--backend self --python-libpython=off``, the
+source runs (a) compiled by pcc (``--backend self``, the
 pcc runtime that pcc1 itself executes) and (b) under CPython.  Both are timed
 with ``/usr/bin/time -lp`` at two loop counts, N and 2N; the difference
 removes process startup and any per-run fixed cost, so
@@ -346,7 +346,7 @@ def _run_timed(cmd: list[str], env: dict[str, str], timeout: int) -> tuple[dict[
 def compile_pcc(src: Path, exe: Path, env: dict[str, str]) -> None:
     proc = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
+            "uv", "run", "pcc", "--backend", "self",
             "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         capture_output=True, text=True, timeout=600, env=env, cwd=str(REPO_ROOT), check=False,

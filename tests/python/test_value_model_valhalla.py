@@ -70,7 +70,7 @@ def test_valueclass_compiles_and_keeps_frozen_semantics(tmp_path):
         "p = Point(4, 5)\n"
         "print(p.x + p.y)\n"
     , encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run([str(exe)], text=True, capture_output=True, check=True, timeout=30)
     assert proc.stdout.strip() == "9"
 

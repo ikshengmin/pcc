@@ -102,7 +102,7 @@ def test_dyn_starred_and_keyword_calls_keep_parameters_dynamic(
     )
     output = tmp_path / "self_method_overrides"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

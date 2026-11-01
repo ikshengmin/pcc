@@ -150,7 +150,7 @@ def _compile_runtime_module(name, source, ir_path, target):
         if suppress_polls:
             os.environ["PCC_IMPLICIT_THREAD_SAFEPOINTS"] = "0"
         compile_python(source, ir_path, emit_llvm_only=True, python_library=True,
-                       libpython_mode="off", backend="self", target_triple=target)
+                       backend="self", target_triple=target)
         return frontend_prefix
     finally:
         for key, value in previous.items():

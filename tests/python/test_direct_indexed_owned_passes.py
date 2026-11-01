@@ -81,7 +81,7 @@ print(choose(True), choose(False))
         pipeline._write_python_frontend_worker_manifest(
             str(manifest), str(result), str(output), "", "", [str(source)],
             ["probe"], [0], entry_module="probe", sibling_inits=(),
-            libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+            ir_scaffold_mode="on", verbose=False,
         )
         assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
         assert len(captures) == (1 if mode == "off" else 0)
@@ -119,7 +119,7 @@ def test_direct_worker_rejects_unowned_pass_instead_of_ignoring_it(tmp_path, mon
     pipeline._write_python_frontend_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)],
         ["probe"], [0], entry_module="probe", sibling_inits=(),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
     )
     assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 1
     assert "self optimizer does not own requested passes: unsupported-pass" in result.read_text()

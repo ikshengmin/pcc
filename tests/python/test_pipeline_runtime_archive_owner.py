@@ -32,10 +32,7 @@ def test_runtime_archive_path_and_mode_helpers_have_one_owner():
 def test_non_production_archive_bundle_policy_is_basename_scoped():
     assert runtime_archive.requires_provenance("/tmp/libpy_runtime_pcc_py.a")
     assert not runtime_archive.requires_provenance("/tmp/foreign.a")
-    assert runtime_archive.requires_c_bundle_validation(
-        "/tmp/libpy_runtime_pcc_py_libpython.a"
-    )
-    assert not runtime_archive.requires_c_bundle_validation("/tmp/foreign.a")
+    assert not hasattr(runtime_archive, "requires_c_bundle_validation")
 
 
 def test_codegen_freshness_checker_runs_the_owned_verifier(
@@ -72,25 +69,3 @@ def test_codegen_freshness_checker_runs_the_owned_verifier(
         pcc_source_root=lambda: "/source/root",
         host_python_command=lambda: "/host/python",
     )
-
-
-def test_c_bundle_inventory_is_checked_without_ar_nm_or_python(tmp_path, monkeypatch):
-    from pcc.backend.ar_writer import write_archive
-    from pcc.backend.arm64_asm_driver import assemble_file
-    from pcc.backend.macho_obj import emit_object
-
-    sections, undefined = assemble_file(
-        ".section __TEXT,__text,regular,pure_instructions\n.globl _PyOwned\n_PyOwned:\n ret\n"
-    )
-    archive = tmp_path / "libpy_runtime_pcc_py_libpython.a"
-    archive.write_bytes(write_archive([("owned.o", emit_object(sections, undefined=undefined))]))
-    inventory = Path(str(archive) + ".capi_syms")
-    inventory.write_text("_PyOwned\n")
-    def forbidden(*args, **kwargs):
-        pytest.fail("archive validation delegated to an external tool")
-    monkeypatch.setattr(runtime_archive.subprocess, "run", forbidden)
-    assert runtime_archive.c_bundle_valid(str(archive), host_python_command=forbidden)
-    inventory.write_text("_PyMissing\n")
-    assert not runtime_archive.c_bundle_valid(str(archive), host_python_command=forbidden)
-    archive.write_bytes(archive.read_bytes()[:-1])
-    assert not runtime_archive.c_bundle_valid(str(archive), host_python_command=forbidden)

@@ -76,7 +76,7 @@ def test_native_os_errors_match_cpython(tmp_path, pcc_runtime_archive, python_pr
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "os_errno_errors"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

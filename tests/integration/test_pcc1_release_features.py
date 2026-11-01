@@ -43,7 +43,7 @@ def compile_and_run(source: Path, compiler: Path) -> str:
     output = source.with_suffix("")
     # No backend/scaffold/libpython flags: exercise the ordinary native defaults.
     env = os.environ.copy()
-    for name in ("LC_ALL", "PCC_BACKEND", "PCC_PYTHON_LIBPYTHON", "PCC_IR_SCAFFOLD"):
+    for name in ("LC_ALL", "PCC_BACKEND", "PCC_IR_SCAFFOLD"):
         env.pop(name, None)
     built = subprocess.run(
         [str(compiler), str(source), "-o", str(output)],

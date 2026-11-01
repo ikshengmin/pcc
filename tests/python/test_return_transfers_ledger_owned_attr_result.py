@@ -100,8 +100,7 @@ def test_return_of_attribute_frees_the_attribute_like_cpython(tmp_path):
     exe = tmp_path / "prog_bin"
     build = _run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         timeout=600,
     )

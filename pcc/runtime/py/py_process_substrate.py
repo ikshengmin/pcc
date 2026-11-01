@@ -507,7 +507,7 @@ def py_subprocess_run_env(argv, capture_output: int, env_map) -> int:
 
     ``run_runtime_make`` -- the only way pcc1 can rebuild its own runtime
     archive -- passes ``env=``, so without this the archive rebuild could
-    never run under ``--python-libpython=off``.
+    never run in the native pipeline.
     """
     if ptr_is_null(env_map):
         return py_subprocess_run(argv, capture_output)

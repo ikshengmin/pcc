@@ -348,7 +348,7 @@ def test_tuple_transfer_preserves_aliases_finalizers_and_reachable_cycles(
     source = tmp_path / 'tuple_transfer.py'
     source.write_text(program)
     binary = tmp_path / 'tuple_transfer'
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(

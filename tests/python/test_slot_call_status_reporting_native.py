@@ -393,7 +393,7 @@ def test_production_callsite_temporaries_exception_and_gc(
         # An explicit host target selects the supported in-process frontend
         # branch for the full ordinary import closure. Default multi-module
         # worker subprocesses would not inherit these observation wrappers.
-        python_program_compiler(str(source), str(executable), backend="self", libpython_mode="off",
+        python_program_compiler(str(source), str(executable), backend="self",
                                 ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
                                 target_triple=target)
     finally:

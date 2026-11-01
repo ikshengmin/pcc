@@ -219,7 +219,7 @@ def test_string_descriptor_runtime_strict_ir(tmp_path):
     scoped.parent.mkdir(parents=True)
     scoped.write_text(ast.unparse(tree))
     output=tmp_path/'str_descriptor.ll'
-    compile_python(str(scoped), str(output), backend='self', libpython_mode='off',
+    compile_python(str(scoped), str(output), backend='self',
                    emit_llvm_only=True, python_library=True)
     text=output.read_text()
     verify_ir_text(text)
@@ -249,7 +249,7 @@ def test_full_class_runtime_strict_ir(tmp_path):
     from pcc.frontends.python.pipeline import compile_python
     output=tmp_path/'py_class.ll'
     compile_python(str(ROOT/'pcc/runtime/py/py_class.py'),str(output),
-                   backend='self',libpython_mode='off',emit_llvm_only=True,python_library=True)
+                   backend='self',emit_llvm_only=True,python_library=True)
     text=output.read_text()
     verify_ir_text(text)
     has_stub='strict.nolib.stub' in text
@@ -274,7 +274,7 @@ def test_full_dispatch_runtime_strict_ir(tmp_path):
     from pcc.frontends.python.pipeline import compile_python
     output=tmp_path/'py_obj_ops_dispatch.ll'
     compile_python(str(ROOT/'pcc/runtime/py/py_obj_ops_dispatch.py'),str(output),
-                   backend='self',libpython_mode='off',emit_llvm_only=True,python_library=True)
+                   backend='self',emit_llvm_only=True,python_library=True)
     text=output.read_text()
     verify_ir_text(text)
     has_stub='strict.nolib.stub' in text

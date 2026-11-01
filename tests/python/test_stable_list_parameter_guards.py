@@ -101,7 +101,7 @@ def test_stable_list_guards_preserve_dynamic_semantics_five_gc(tmp_path, pcc_run
     assert reference.returncode == 0, reference.stderr
     assert "[3, 1] ['lookup', ('append', 2), 'lookup', ('append', 0)]" in reference.stdout
     output = tmp_path / "list_guards"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

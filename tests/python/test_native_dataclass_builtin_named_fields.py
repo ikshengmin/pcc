@@ -48,7 +48,7 @@ main()
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "records"
     python_program_compiler(str(source), str(output), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=10,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

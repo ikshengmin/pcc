@@ -80,7 +80,7 @@ def test_keyword_method_calls_match_cpython_on_every_gc(
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "kw_method_calls"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

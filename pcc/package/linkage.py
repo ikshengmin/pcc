@@ -2,7 +2,7 @@
 
 The scanner enforces the pcc-native no-libpython claim at the package boundary:
 link commands and produced native artifacts must not mention libpython or
-Python.framework unless the package is explicitly installed in libpython mode.
+Python.framework.
 """
 
 from __future__ import annotations
@@ -295,14 +295,14 @@ def linkage_report(
         and not uses_cpython_extension_abi
         and abi_mode == "pcc-native"
     )
-    abi_allows_cpython_extension = abi_mode in ("libpython", "cpython-compat")
+    abi_allows_cpython_extension = abi_mode == "cpython-compat"
     # PKG-P0-ABI-MODE-LABELS: every import/linkage result carries explicit
-    # execution-mode labels so an A-mode (libpython / cpython-compat)
+    # execution-mode labels so an A-mode (cpython-compat)
     # compatibility SUCCESS can never silently promote to a B-mode
     # (no-libpython / pcc-native) package claim. These labels are additive;
     # existing keys (abi_mode, links_libpython, diagnostics, ...) are untouched.
     # Mapping (generic, from the abi mode -- no package name special-cases):
-    #   abi_mode in (libpython, cpython-compat) -> execution_mode=cpython-compat,
+    #   abi_mode == cpython-compat -> execution_mode=cpython-compat,
     #       native_package_claim=False (a compat import never claims native).
     #   abi_mode == pcc-native -> execution_mode=pcc-native; native_package_claim
     #       is True only when the artifact actually passed the pcc-native gate
@@ -328,7 +328,7 @@ def linkage_report(
         )
     return {
         "ok": (
-            (not links_libpython or abi_mode == "libpython")
+            not links_libpython
             and (not uses_cpython_extension_abi or abi_allows_cpython_extension)
         ),
         "abi_mode": abi_mode,

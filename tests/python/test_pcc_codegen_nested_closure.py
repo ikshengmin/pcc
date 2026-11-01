@@ -23,7 +23,6 @@ def _compile_and_run(tmp_path: Path, source: str) -> list[str]:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     proc = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30)

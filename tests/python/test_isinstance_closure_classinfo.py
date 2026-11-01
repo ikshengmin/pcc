@@ -133,7 +133,7 @@ def _compile(tmp_path, output, **options):
         _sources(tmp_path), str(output),
         module_names=['classinfo_provider', 'classinfo_main'],
         entry_module='classinfo_main', backend='self',
-        libpython_mode='off', ir_scaffold_mode='on', **options,
+        ir_scaffold_mode='on', **options,
     )
 
 

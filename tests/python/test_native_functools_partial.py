@@ -7,7 +7,7 @@ captured args with the call args); the function argument is emitted with
 ``_prefer_native_callable_values`` so a top-level Dyn-typed ``def`` boxes into a
 native PyFuncObject (the path closures/lambdas use), not a libpython callable.
 
-These tests COMPILE + RUN under ``--backend self --python-libpython=off`` (which
+These tests COMPILE + RUN under ``--backend self`` (which
 hard-errors on any residual ``py_cpy_*`` fallback), so a green run proves the
 whole path is native end-to-end and produces the right value.
 
@@ -32,8 +32,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )
@@ -203,7 +202,6 @@ def test_functools_partial_compiled_sibling_function_no_libpython(tmp_path):
             str(exe),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(pkg / "__main__.py") + "=pkg.__main__",
             str(pkg / "consumer.py") + "=pkg.consumer",
@@ -264,8 +262,7 @@ def test_package_method_default_async_function_partial_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(pkg / "__main__.py"), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(pkg / "__main__.py"), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )
@@ -307,8 +304,7 @@ def test_package_main_method_default_async_function_partial_no_libpython(tmp_pat
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(pkg / "__main__.py"), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(pkg / "__main__.py"), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

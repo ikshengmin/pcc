@@ -10,7 +10,7 @@ Fix (frontend): accept a literal utf-8 encoding ("utf-8"/"UTF-8"/"utf8",
 positional or `encoding=` kwarg) and an optional "strict" errors arg, routing to
 the existing py_bytes_decode; any other encoding / error mode still falls back.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

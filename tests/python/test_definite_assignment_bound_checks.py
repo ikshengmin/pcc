@@ -213,7 +213,7 @@ def test_unbound_local_semantics_match_cpython_natively(tmp_path):
     expected = subprocess.run([sys.executable, str(source)], text=True, capture_output=True,
                               check=True, timeout=30).stdout
     exe = tmp_path / "unbound_semantics"
-    compile_python(str(source), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self")
+    compile_python(str(source), str(exe), ir_scaffold_mode="on", backend="self")
     actual = subprocess.run([str(exe)], text=True, capture_output=True, check=True, timeout=30).stdout
     assert actual == expected
 
@@ -235,7 +235,7 @@ def test_bound_locals_emit_no_unbound_error_blocks(tmp_path):
         main()
     '''), encoding="utf-8")
     ll = tmp_path / "bound_ir.ll"
-    compile_python(str(source), str(ll), libpython_mode="off", ir_scaffold_mode="on", backend="self",
+    compile_python(str(source), str(ll), ir_scaffold_mode="on", backend="self",
                    emit_llvm_only=True)
     text = ll.read_text()
     body = re.search(r"^define [^\n]*@user_bound_ir_work\(.*?^}", text, re.M | re.S).group(0)

@@ -76,7 +76,6 @@ def test_int_bytes_forms_match_cpython(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

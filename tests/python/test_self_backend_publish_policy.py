@@ -69,7 +69,7 @@ def test_bootstrap_stage_barrier_exec_smokes_published_stage_binary(
     smoke = calls[1]
     assert "--ir-scaffold=on" in smoke
     assert smoke[smoke.index("--backend") + 1] == "self"
-    assert smoke[smoke.index("--python-libpython") + 1] == "off"
+    assert "--python-libpython" not in smoke
     assert calls[2] == [smoke[smoke.index("-o") + 1]]
     assert not list(options.out_dir.glob("stage-smoke.*")), "smoke dir left behind"
 

@@ -31,7 +31,6 @@ def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
         str(src), str(out),
         emit_llvm_only=True,
         ir_scaffold_mode=mode,
-        libpython_mode="auto",
     )
     return out.read_text(encoding="utf-8")
 

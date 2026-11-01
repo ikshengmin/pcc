@@ -39,7 +39,6 @@ def test_dynamic_receiver_truediv_compiles_dunder_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert exe.exists()
@@ -78,7 +77,6 @@ def test_pcc1_dynamic_truediv_unknown_receiver_compile_only(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "--emit-llvm=" + str(out),
@@ -118,7 +116,6 @@ def test_int_builtin_on_class_instance_compiles_dunder_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert exe.exists()
@@ -156,7 +153,6 @@ def test_pcc1_int_builtin_on_class_instance_compile_only(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "--emit-llvm=" + str(out),
@@ -193,7 +189,6 @@ def test_class_instance_numeric_rhs_uses_dynamic_mul_dunder_self_backend(tmp_pat
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert exe.exists()
@@ -231,7 +226,6 @@ def test_pcc1_class_instance_numeric_rhs_compile_only(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "--emit-llvm=" + str(out),

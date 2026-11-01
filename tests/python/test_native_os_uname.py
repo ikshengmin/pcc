@@ -47,7 +47,6 @@ def test_native_os_uname_matches_host_and_supports_named_field(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     run = subprocess.run(
         [str(exe)],

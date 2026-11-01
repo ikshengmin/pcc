@@ -62,7 +62,7 @@ def compile_program(name: str, outdir: Path, runtime_archive: str | None) -> Pat
     binary = outdir / name
     compile_python(
         str(PROGRAMS / (name + ".py")), str(binary), backend="self",
-        libpython_mode="off", ir_scaffold_mode="on",
+        ir_scaffold_mode="on",
         runtime_archive=runtime_archive,
     )
     return binary

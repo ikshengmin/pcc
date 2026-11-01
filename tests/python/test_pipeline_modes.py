@@ -15,10 +15,6 @@ def test_pipeline_facade_reexports_mode_contracts():
         is pipeline_modes.resolve_native_backend
     )
     assert (
-        pipeline._resolve_libpython_mode
-        is pipeline_modes.resolve_libpython_mode
-    )
-    assert (
         pipeline._resolve_ir_scaffold_mode
         is pipeline_modes.resolve_ir_scaffold_mode
     )
@@ -43,19 +39,3 @@ def test_default_api_backend_is_owned_self(monkeypatch):
     monkeypatch.delenv("PCC_BACKEND", raising=False)
     assert pipeline_modes.resolve_native_backend(None) == "self"
     assert pipeline_modes.resolve_native_backend("") == "self"
-
-
-def test_mixed_extension_object_models_fail_closed():
-    with pytest.raises(
-        pipeline_modes.PyPipelineError,
-        match="cannot be combined",
-    ):
-        pipeline_modes.reject_mixed_extension_object_models(
-            needs_libpython=True,
-            needs_native_extension_exports=True,
-        )
-
-    pipeline_modes.reject_mixed_extension_object_models(
-        needs_libpython=False,
-        needs_native_extension_exports=True,
-    )

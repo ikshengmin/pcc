@@ -475,7 +475,7 @@ def _single_int_shape(plan, byteorder: str):
 
     ``sign_bit``/``modulus`` are precomputed because ``int.from_bytes`` cannot
     take ``signed=`` here: that keyword leaves a ``py_cpy_*`` call in the IR and
-    ``--python-libpython=off`` then replaces the whole function with a
+    the native pipeline then replaces the whole function with a
     fail-closed stub.  A literal or dynamic ``byteorder`` argument stays native.
     """
     if len(plan) != 1:

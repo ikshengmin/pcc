@@ -80,7 +80,6 @@ def _compile_and_run_gc_matrix(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

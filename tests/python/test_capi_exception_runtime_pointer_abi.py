@@ -89,5 +89,5 @@ def test_unproven_pointer_argument_reports_source_location(tmp_path, runtime_por
     with pytest.raises(NotImplementedError, match="raw pointer cannot cross") as error:
         compile_python(str(source), str(tmp_path / "unproven.ll"),
                        emit_llvm_only=True, python_library=True,
-                       libpython_mode="off", backend="self", target_triple=TARGET)
+                       backend="self", target_triple=TARGET)
     assert str(source) + ":7:" in str(error.value)

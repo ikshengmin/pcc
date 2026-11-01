@@ -21,7 +21,7 @@ def test_guarded_regex_fullmatch_threads_and_all_collectors(
     source.write_text(fixture.read_text() + "\ntry:\n    re.compile('a').fullmatch(string='a')\nexcept TypeError as error:\n    assert str(error) == 'native function does not accept keywords'\nelse:\n    raise AssertionError('unsupported keyword silently accepted')\n")
     executable = tmp_path / 'regex_fullmatch_owned'
     python_program_compiler(str(source), str(executable), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(explicit_owned_runtime))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='',

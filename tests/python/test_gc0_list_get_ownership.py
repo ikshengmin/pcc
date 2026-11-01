@@ -36,7 +36,7 @@ def test_getter_owners_preserve_finalizers_weakrefs_and_index_errors(
     binary = tmp_path / "list_get_lifetime"
     compile_python(
         str(ROOT / "tests/fixtures/native/list_get_owner_lifetime.py"), str(binary),
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         runtime_archive=str(threaded_pcc_runtime_archive),
     )
     for backend in range(5):

@@ -114,7 +114,7 @@ def test_native_target_type_identity_and_layout(tmp_path, monkeypatch, pcc_runti
     assert reference.returncode == 0, reference.stderr
     assert reference.stdout == 'IR_TARGET_TYPES_OK\n'
     python_program_compiler(str(source), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], env=dict(os.environ, PCC_GC_BACKEND=str(gc)),

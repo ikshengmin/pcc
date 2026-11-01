@@ -1,7 +1,7 @@
 """Relative imports + cross-module class in a pure-Python package, no-libpython.
 
 Confirms two common real-package shapes compile AND run fully native under
-``--backend self --python-libpython=off`` (no C-ext, no libpython fallback):
+``--backend self`` (no C-ext, no libpython fallback):
 - relative imports inside ``__init__.py``: ``from .core import answer`` and
   ``from . import util`` (re-export / submodule binding);
 - a class defined in a submodule, re-exported by ``__init__`` and used via
@@ -27,8 +27,7 @@ def _compile_run(tmp_path, build, main_src):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

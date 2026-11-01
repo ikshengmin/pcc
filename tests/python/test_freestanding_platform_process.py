@@ -18,7 +18,6 @@ def _compile_platform_ir(tmp_path: Path) -> Path:
         str(PLATFORM_SOURCE),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return out
@@ -359,7 +358,6 @@ def test_default_runtime_sys_exit_uses_platform_process_owner(
         str(executable),
         backend="self",
         ir_scaffold_mode="on",
-        libpython_mode="off",
         runtime_archive=str(pcc_runtime_archive),
     )
     run = subprocess.run(

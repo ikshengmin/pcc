@@ -261,7 +261,6 @@ def test_runtime_library_codegen_inlines_generated_abi_constant_imports(tmp_path
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -295,7 +294,6 @@ def test_imported_abi_tag_can_initialize_unsafe_native_global(tmp_path):
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -318,7 +316,6 @@ def test_generated_type_tag_preserves_allocator_i32_abi(tmp_path):
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")

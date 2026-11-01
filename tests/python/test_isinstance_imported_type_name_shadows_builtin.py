@@ -102,7 +102,7 @@ def _compile_and_run(tmp_path: Path) -> str:
     try:
         os.chdir(tmp_path)
         compile_python(
-            str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off"
+            str(src), str(exe), ir_scaffold_mode="on"
         )
     finally:
         os.chdir(cwd)

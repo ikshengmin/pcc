@@ -41,7 +41,7 @@ def test_float_typed_object_call_results_match_cpython(tmp_path, pcc_runtime_arc
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "float_object_calls"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

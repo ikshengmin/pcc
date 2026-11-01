@@ -95,7 +95,7 @@ def test_explicit_collect_releases_store_buffer_values_on_five_collectors(
     assert expected.stdout == "128 160\n"
     binary = tmp_path / "store_buffer_hold"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

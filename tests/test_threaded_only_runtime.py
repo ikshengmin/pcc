@@ -82,7 +82,7 @@ def test_thread_start_runs_the_target_on_another_native_thread(tmp_path):
     env.pop("LC_ALL", None)
     env.pop("PCC_WITH_THREADS", None)
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=ROOT, text=True, capture_output=True, timeout=600, env=env,
     )
     assert build.returncode == 0, build.stderr

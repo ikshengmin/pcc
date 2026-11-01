@@ -30,7 +30,6 @@ def _compile_page_probe(tmp_path: Path) -> Path:
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return llvm_ir

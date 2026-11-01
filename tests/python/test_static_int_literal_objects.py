@@ -56,7 +56,7 @@ def test_big_literals_are_static_objects_in_ir(tmp_path):
     source = tmp_path / "int_literals.py"
     source.write_text(_PROGRAM, encoding="utf-8")
     ll = tmp_path / "int_literals.ll"
-    compile_python(str(source), str(ll), libpython_mode="off", ir_scaffold_mode="on", backend="self",
+    compile_python(str(source), str(ll), ir_scaffold_mode="on", backend="self",
                    emit_llvm_only=True)
     text = ll.read_text()
     for name in ("big", "lane_edge", "above_i64", "negative"):
@@ -72,7 +72,7 @@ def test_static_int_literals_match_cpython_under_every_collector(tmp_path, pcc_r
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True,
                               timeout=30, check=True).stdout
     binary = tmp_path / "int_literals"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
@@ -113,7 +113,7 @@ def test_static_int_literals_are_registered_managed_objects(tmp_path):
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True,
                               timeout=30, check=True).stdout
     binary = tmp_path / "module_ints"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on")
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,

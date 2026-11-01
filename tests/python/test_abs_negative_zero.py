@@ -47,7 +47,7 @@ def test_abs_of_negative_zero_is_positive_zero(
     assert reference.stdout == EXPECTED
     binary = tmp_path / "abs_negative_zero"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

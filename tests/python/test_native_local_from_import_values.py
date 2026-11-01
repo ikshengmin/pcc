@@ -228,7 +228,7 @@ def test_function_import_real_ir_binds_owned_local(tmp_path, monkeypatch, scaffo
     compile_python_multi(_sources(tmp_path, False), str(output),
                          module_names=["import_provider", "import_second", "import_entry"],
                          entry_module="import_entry", emit_llvm_only=True,
-                         backend="self", libpython_mode="off", ir_scaffold_mode=scaffold)
+                         backend="self", ir_scaffold_mode=scaffold)
     text = output.read_text()
     function = re.search(r"^define[^\n]*@[^\n(]*_fetch\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)
     assert function is not None
@@ -263,7 +263,7 @@ def test_host_emitted_local_import_scopes_and_owners(tmp_path, monkeypatch, expl
     binary = tmp_path / "imports"
     compile_python_multi(_sources(tmp_path, lifetime), str(binary),
                          module_names=["import_provider", "import_second", "import_entry"],
-                         entry_module="import_entry", backend="self", libpython_mode="off",
+                         entry_module="import_entry", backend="self",
                          ir_scaffold_mode=scaffold, runtime_archive=str(explicit_runtime))
     expected = "local-from-import-lifetimes-ok\n" if lifetime else "local-from-import-bindings-ok\n"
     for backend in (1, 4):

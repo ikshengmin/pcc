@@ -70,8 +70,7 @@ def test_direct_subscript_print_still_prints_correctly(tmp_path):
     exe = tmp_path / "prog_bin"
     build = _run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         timeout=600,
     )
@@ -87,8 +86,7 @@ def test_release_is_added_for_direct_and_not_duplicated_for_bound(tmp_path):
     out = tmp_path / "ir.ll"
     build = _run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", "--python-library", f"--emit-llvm={out}",
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", "--python-library", f"--emit-llvm={out}",
             str(src),
         ],
         timeout=600,

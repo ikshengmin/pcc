@@ -124,7 +124,7 @@ def test_host_built_native_fragments_execute_reload_helpers(tmp_path):
         [str(consumer), *sources], str(output),
         entry_module="pcc.backend.fragment_canary",
         module_names=["pcc.backend.fragment_canary", *_MODULES],
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
         recursive_stdlib=False, target_triple="arm64-apple-darwin23.6.0",
         runtime_archive=str(archive),
     )

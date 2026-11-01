@@ -170,7 +170,7 @@ def test_format_matches_cpython(tmp_path):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=60,

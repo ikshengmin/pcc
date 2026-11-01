@@ -69,7 +69,6 @@ def test_cross_module_set_export_keeps_native_operator_lowering(tmp_path) -> Non
         module_names=["pkg.entry", "pkg.provider"],
         entry_module="pkg.entry",
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -103,7 +102,6 @@ def test_generator_expression_iterates_first_class_set_type(tmp_path) -> None:
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -138,7 +136,6 @@ def test_list_and_singleton_unpack_accept_first_class_set_type(tmp_path) -> None
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -172,7 +169,6 @@ def test_set_unpack_rejects_wrong_arity(tmp_path) -> None:
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -203,7 +199,6 @@ def test_dict_keys_view_union_with_set_is_set_operation(tmp_path) -> None:
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -261,7 +256,7 @@ def test_dict_keys_set_operators_preserve_order_and_object_results(
         capture_output=True, timeout=30,
     ).stdout
     python_program_compiler(
-        str(source), str(executable), backend="self", libpython_mode="off",
+        str(source), str(executable), backend="self",
         runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -300,7 +295,6 @@ def test_set_augassign_accepts_dynamic_set_and_preserves_identity(tmp_path) -> N
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(

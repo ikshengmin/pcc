@@ -117,7 +117,7 @@ def test_actual_runtime_helper_publishes_new_before_any_callback(tmp_path):
     selected[1:1] = [ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=ast.Constant(value=getattr(abi,name))) for name in dir(abi) if name.isupper() and type(getattr(abi,name)) is int]
     selected = [ast.fix_missing_locations(n) for n in selected]
     probe=root/'constructor_runtime_probe.py'; probe.write_text(ast.unparse(ast.Module(body=selected,type_ignores=[])))
-    compile_python(str(probe),str(root/'constructor_runtime_probe.ll'),emit_llvm_only=True,ir_scaffold_mode='on',libpython_mode='off')
+    compile_python(str(probe),str(root/'constructor_runtime_probe.ll'),emit_llvm_only=True,ir_scaffold_mode='on')
     text = (root/'constructor_runtime_probe.ll').read_text()
     verify_parsed_module(parse_self_backend_module(text))
     body = re.search(r'^define [^\n]*@py_func_new_signature_slots\([^\n]*\).*?^}', text, re.M | re.S).group(0)

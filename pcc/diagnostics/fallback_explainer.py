@@ -1,4 +1,4 @@
-"""Explain why imports/features fall back to CPython/libpython."""
+"""Explain why imports/features have no native implementation."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,5 +55,5 @@ def explain_import(module: str, classification: str) -> FallbackReason | None:
         feature=f"import {module}",
         phase="import-resolution",
         reason="module is not native-builtin, native-user, or pcc stdlib",
-        suggestion="add pcc/stdlib port or enable --python-libpython=auto",
+        suggestion="add a pcc/stdlib port",
     )

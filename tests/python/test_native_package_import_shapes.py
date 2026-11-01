@@ -1,7 +1,7 @@
 """More pure-Python package-import shapes, no-libpython.
 
 B-P0-PKG capability locks: three further common shapes that already compile AND
-run fully native under ``--backend self --python-libpython=off``. NOT gap fixes
+run fully native under ``--backend self``. NOT gap fixes
 (these already work); they widen the regression net while probing the
 package-import surface.
 
@@ -32,8 +32,7 @@ def _compile_run(tmp_path, build, main_src):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

@@ -122,7 +122,7 @@ def _compile(tmp_path: Path, name: str, source: str) -> tuple[Path, Path]:
     src = tmp_path / f"{name}.py"
     src.write_text(source, encoding="utf-8")
     out = tmp_path / f"{name}.bin"
-    cmd = ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", "--ir-scaffold=on", str(src), "-o", str(out)]
+    cmd = ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(out)]
     proc = subprocess.run(cmd, text=True, capture_output=True, timeout=600, env=_env())
     assert proc.returncode == 0, proc.stderr
     return src, out
@@ -145,7 +145,7 @@ def test_dict_semantics_match_cpython_with_the_c_runtime_mirror(tmp_path, monkey
     src = tmp_path / "dict_semantics_cc.py"
     exe = tmp_path / "dict_semantics_cc.out"
     src.write_text(DICT_SEMANTICS, encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on", backend="self")
     expected = subprocess.run([sys.executable, str(src)], text=True, capture_output=True, timeout=60).stdout
     env = _env()
     for backend in ("0", "3", "4"):

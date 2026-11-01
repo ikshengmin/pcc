@@ -97,7 +97,6 @@ def test_inherited_body_dispatches_on_the_actual_receiver(tmp_path):
         [
             sys.executable, "-m", "pcc",
             "--ir-scaffold=on", "--backend", "self",
-            "--python-libpython", "off",
             str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT),
@@ -148,7 +147,6 @@ def test_hashlib_sha256_matches_cpython(tmp_path):
         [
             sys.executable, "-m", "pcc",
             "--ir-scaffold=on", "--backend", "self",
-            "--python-libpython", "off",
             str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT),

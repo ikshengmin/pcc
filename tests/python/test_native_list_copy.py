@@ -4,13 +4,13 @@ Previously the native list-method fast paths in list_method_lowering.py covered
 extend/insert/remove/index/count/sort/append/pop/clear/reverse but NOT copy, and
 ``py_list_copy`` was absent from py_list.c / py_list.py / runtime_abi.py. So
 ``lst.copy()`` fell through to dynamic getattr and was rejected under
-``--python-libpython=off`` (PCC-PY-COMPILE-001). Fix: a shallow-copy runtime
+the native pipeline (PCC-PY-COMPILE-001). Fix: a shallow-copy runtime
 helper ``py_list_copy(src)`` (py_list.c + the pcc-Python port py_list.py) that
 allocates a fresh list and incref-copies each element; both frontend list-method
 lowering sites (the typed-list path and the dyn path in list_method_lowering.py)
 now route ``copy`` through it.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode, so
+Runs under ``--backend self`` in DEFAULT runtime mode, so
 the linked implementation is the pcc-Python PORT (not the cc C source) — that is
 what proves the port mirror is correct.
 """
@@ -29,8 +29,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

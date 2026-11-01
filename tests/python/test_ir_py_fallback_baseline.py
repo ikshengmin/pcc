@@ -86,7 +86,6 @@ def ir_py_contextual_text(tmp_path_factory) -> str:
         mods,
         {"pcc.ir.ir"},
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
         emit_ir_dir=str(output),
     )
     assert counts == {"pcc.ir.ir": 0}

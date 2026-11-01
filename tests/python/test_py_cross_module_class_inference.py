@@ -14,7 +14,7 @@ Gap 2 — ``@property`` return-type propagation. A property declared
 ``n.rfind(".")`` etc. on a property result falls back to dyn dispatch
 and the binary pulls libpython.
 
-The Gap 1 regression also exercises ``--python-libpython=off``
+The Gap 1 regression also exercises the native pipeline
 multi-file compile; an unresolved cross-module class would surface as
 ``Python pipeline requires libpython fallback for multi-file compile``.
 
@@ -76,7 +76,6 @@ class CrossModuleClassInferenceTests(unittest.TestCase):
             entry_module=entry_module,
             emit_llvm_only=True,
             ir_scaffold_mode="on",
-            libpython_mode="off",
             recursive_stdlib=True,
         )
         compile_python_multi(
@@ -85,7 +84,6 @@ class CrossModuleClassInferenceTests(unittest.TestCase):
             entry_module=entry_module,
             backend="self",
             ir_scaffold_mode="on",
-            libpython_mode="off",
             recursive_stdlib=True,
         )
         r = subprocess.run([exe], capture_output=True, text=True, timeout=20)

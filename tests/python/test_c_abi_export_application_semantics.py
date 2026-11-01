@@ -49,7 +49,7 @@ def test_application_export_keeps_python_error_edges(tmp_path):
     source = tmp_path / "export_application.py"
     output = source.with_suffix(".ll")
     source.write_text(SOURCE)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True)
     text = output.read_text()
     for symbol in ("user_export_application_ordinary_fail", "application_exported_fail",
@@ -73,7 +73,7 @@ def probe() -> int:
     helper()
     return current_error()
 ''')
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     body = re.search(r"^define[^\n]*@runtime_transport_probe\([^\n]*\)[^\n]*\{\n(.*?)^\}",
@@ -87,7 +87,7 @@ def test_application_export_exceptions_execute_all_collectors(tmp_path, pcc_runt
     source = tmp_path / "export_application.py"
     output = source.with_suffix("")
     source.write_text(SOURCE)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for collector in range(5):
         env = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

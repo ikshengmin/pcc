@@ -84,7 +84,6 @@ def test_codegen_trace_no_host_pcc1_enabled(tmp_path):
             str(source),
             "-o",
             str(exe),
-            "--python-libpython=off",
             "--ir-scaffold=on",
         ],
         capture_output=True,

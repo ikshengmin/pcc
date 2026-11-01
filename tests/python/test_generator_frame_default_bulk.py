@@ -65,7 +65,7 @@ def test_default_bulk_factory_and_explicit_legacy_control_emit_distinct_ir(tmp_p
         else:
             monkeypatch.setenv('PCC_DISABLE_BULK_GENERATOR_FRAME_INIT', disabled)
         output = tmp_path / ('factory-' + str(disabled) + '.ll')
-        compile_python(str(source), str(output), backend='self', libpython_mode='off',
+        compile_python(str(source), str(output), backend='self',
                        ir_scaffold_mode='on', emit_llvm_only=True)
         observed.append(len(re.findall(r'call[^\n]*@py_gen_(?:inline_)?frame_new\(', output.read_text())))
     assert observed[0] > 0 and observed[0] == observed[2]
@@ -80,7 +80,7 @@ def test_default_factory_preserves_closures_aliases_and_finalization(tmp_path, p
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, 'BULK_FRAME_DEFAULT_OK\n', '')
     binary = tmp_path / 'factory'
-    compile_python(str(source), str(binary), backend='self', libpython_mode='off',
+    compile_python(str(source), str(binary), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent')

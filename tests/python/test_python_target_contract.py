@@ -144,7 +144,6 @@ def test_host_pcc_emits_native_python_target_contract_with_c_runtime(
         str(source),
         str(output),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         recursive_stdlib=True,
     )

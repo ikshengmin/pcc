@@ -5,13 +5,13 @@ forms ``lst.index(x, start)`` / ``lst.index(x, start, end)`` had len(args) != 1
 so both frontend lowering sites (the dyn path and the typed-list path in
 list_method_lowering.py) returned None and fell back to the libpython
 py_cpy_* surface — a hard PCC-PY-COMPILE-001 error under
-``--python-libpython=off``. Fix: a range-aware runtime helper
+the native pipeline. Fix: a range-aware runtime helper
 ``py_list_index_range(lst, item, start, end)`` (py_list.c + the pcc-Python port
 py_list.py) that CPython-clamps the bounds, scans the half-open window
 [start, end), and raises ValueError when absent; both frontend index sites now
 route the 2/3-arg forms through it and check py_err_occurred() after the call.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode,
+Runs under ``--backend self`` in DEFAULT runtime mode,
 so the linked implementation is the pcc-Python PORT (not the cc C source) —
 that is what proves the port mirror is correct.
 """
@@ -30,8 +30,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

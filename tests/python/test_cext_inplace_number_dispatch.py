@@ -212,7 +212,6 @@ def test_cext_inplace_true_divide_and_fallback(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

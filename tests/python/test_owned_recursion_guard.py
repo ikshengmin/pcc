@@ -67,7 +67,7 @@ def test_from_sys_recursion_limit_reaches_owned_emitter(tmp_path, monkeypatch):
                       "print(read_limit())\n")
     output = tmp_path / "recursion_alias.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     ir_text = output.read_text()
     calls = [line for line in ir_text.splitlines() if "call " in line]
     assert any("call i64" in line and "@py_sys_getrecursionlimit(" in line for line in calls)
@@ -83,7 +83,7 @@ def test_native_recursion_unwinds_methods_generators_and_errors(
     source.write_text(PROGRAM)
     output = tmp_path / "native"
     python_program_compiler(str(source), str(output), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], timeout=30, capture_output=True, text=True,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

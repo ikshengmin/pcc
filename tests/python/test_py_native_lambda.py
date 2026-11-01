@@ -26,7 +26,6 @@ def test_lambda_literal_in_dict_materializes_native_callable(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -62,7 +61,6 @@ def test_lambda_capture_callable_list_comprehension_self_backend(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

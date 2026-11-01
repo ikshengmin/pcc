@@ -274,7 +274,6 @@ def test_binary_dunder_dispatch_and_err_check(tmp_path, monkeypatch, runtime_cc)
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -357,7 +356,7 @@ def test_classtype_augassign_dispatches_inplace_dunder(tmp_path, monkeypatch, ru
     src = tmp_path / "aug_probe.py"
     exe = tmp_path / "aug_probe"
     src.write_text(dedent(_AUGASSIGN_SOURCE), encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off",
+    compile_python(str(src), str(exe),
                    ir_scaffold_mode="on", backend="self")
     proc = subprocess.run([str(exe)], text=True, capture_output=True,
                           check=True, timeout=30)

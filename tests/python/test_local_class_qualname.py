@@ -54,7 +54,7 @@ def test_local_class_names_match_cpython_under_five_collectors(tmp_path, pcc_run
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "local_class"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

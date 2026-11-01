@@ -375,7 +375,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                 compiler_digest = _digest(compiler[0])
                 output = out_dir / ("pcc" + str(stage) + suffix)
                 stage_env = _stage_compiler_environment(environment, out_dir, stage, gc_backend)
-                command = compiler + ["--backend", "self", "--python-libpython", "off",
+                command = compiler + ["--backend", "self",
                                       "--ir-scaffold=on", str(ROOT / "pcc" / "__main__.py"), "-o", str(output)]
                 print(f"GC{gc_backend} stage{stage}: {' '.join(command)}", flush=True)
                 if shared is not None and stage == 1:
@@ -450,7 +450,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                 # file and line to the canary log; success is unaffected.
                 smoke_env["PCC_DEBUG_WORKER_RERAISE"] = "1"
                 canary_compile = guarded(
-                    compiler + [str(canary), "-o", str(executable), "--backend", "self", "--python-libpython", "off"],
+                    compiler + [str(canary), "-o", str(executable), "--backend", "self"],
                     cwd=ROOT, env=smoke_env, log_path=out_dir / f"canary{stage}-compile.log",
                     timeout=timeout, rss_limit=rss_limit, native=True)
                 if not executable.is_file() or executable.stat().st_size == 0:

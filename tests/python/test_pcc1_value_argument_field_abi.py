@@ -145,8 +145,7 @@ run()
     env.pop("LC_ALL", None)
     executable = tmp_path / "abi_canary.out"
     result = subprocess.run(
-        [str(compiler), "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(entry), "-o", str(executable)],
+        [str(compiler), "--backend", "self", "--ir-scaffold=on", str(entry), "-o", str(executable)],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
     )
     (tmp_path / "compile.stdout").write_text(result.stdout)

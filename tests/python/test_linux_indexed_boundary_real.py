@@ -114,7 +114,7 @@ def boundary_answer() -> i64:
     ir_path = tmp_path / "raw_boundary.ll"
     source_path.write_text(source)
     pipeline.compile_python(str(source_path), str(ir_path), emit_llvm_only=True,
-                            libpython_mode="off", python_library=True,
+                            python_library=True,
                             target_triple=TARGET)
     return ir_path.read_text()
 

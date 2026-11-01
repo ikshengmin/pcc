@@ -12,7 +12,7 @@ expression part is stripped. Completes the space-sign option for f-strings
 (the runtime `format_int_builtin` half is fix #31; `format_float_builtin`
 already had it).
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

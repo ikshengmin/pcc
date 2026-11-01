@@ -13,7 +13,7 @@ def _ir(tmp_path, body):
     source = tmp_path / "to_bytes_binding.py"
     source.write_text(body)
     target = tmp_path / "to_bytes_binding.ll"
-    compile_python(str(source), str(target), backend="self", libpython_mode="off",
+    compile_python(str(source), str(target), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = target.read_text()
     verify_ir_text(text)
@@ -53,7 +53,7 @@ def excess(value: int):
 def test_runtime_encoder_exports_keep_unsigned_abi(tmp_path):
     source = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_int_convert.py"
     target = tmp_path / "py_int_convert.ll"
-    compile_python(str(source), str(target), backend="self", libpython_mode="off",
+    compile_python(str(source), str(target), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = target.read_text()
     verify_ir_text(text)
@@ -165,7 +165,7 @@ def test_bindings_and_signed_widths_execute_all_collectors(
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=30)
     assert oracle.returncode == 0, oracle.stderr
     target = tmp_path / "to_bytes_binding"
-    python_program_compiler(str(source), str(target), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(target), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for collector in range(5):
         result = subprocess.run([str(target)], capture_output=True, text=True, timeout=30,
@@ -248,7 +248,7 @@ def test_argument_owners_and_result_survive_callbacks_all_collectors(
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=30)
     assert oracle.returncode == 0, oracle.stderr
     target = tmp_path / "to_bytes_cleanup"
-    python_program_compiler(str(source), str(target), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(target), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for collector in range(5):
         result = subprocess.run([str(target)], capture_output=True, text=True, timeout=30,

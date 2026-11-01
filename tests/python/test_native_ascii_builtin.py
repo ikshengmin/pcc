@@ -44,7 +44,6 @@ def test_native_ascii_escapes_non_ascii_in_any_repr(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     native = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert native.returncode == 0, native.stderr

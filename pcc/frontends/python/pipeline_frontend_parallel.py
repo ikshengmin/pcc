@@ -236,7 +236,6 @@ def _build_vthread_effect_summaries(
     *,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     max_parallel: int,
@@ -289,7 +288,6 @@ def _build_vthread_effect_summaries(
             assigned,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             job_kind="summary",
@@ -419,7 +417,6 @@ def build_shared_exports(
     *,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     max_parallel: int,
@@ -480,7 +477,6 @@ def build_shared_exports(
             chunk,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             job_kind="export",
@@ -631,7 +627,6 @@ def build_shared_exports(
             worker_prefix,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             max_parallel=max_parallel,
@@ -767,7 +762,7 @@ def _codegen_safe_worker_jobs(jobs: int, native_owned_lanes: bool,
 
 def _prepare_stage1_checkpoint_graph(
     root, build_digest, src_paths, module_names, chunks, exports_path,
-    ast_dir, entry_module, sibling_inits, libpython_mode, ir_scaffold_mode,
+    ast_dir, entry_module, sibling_inits, ir_scaffold_mode,
     worker_prefix, jobs,
 ):
     """Bind the newly generated full graph before admitting any old object."""
@@ -804,7 +799,6 @@ def _prepare_stage1_checkpoint_graph(
         "sources": sources,
         "entry_module": entry_module,
         "sibling_inits": list(sibling_inits),
-        "libpython_mode": libpython_mode,
         "ir_scaffold_mode": ir_scaffold_mode,
         "worker_prefix": list(worker_prefix),
         "jobs": jobs,
@@ -829,7 +823,6 @@ def compile_parallel(
     jobs: int,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     profile: Optional[dict] = None,
@@ -862,7 +855,6 @@ def compile_parallel(
                 jobs=jobs,
                 entry_module=entry_module,
                 sibling_inits=sibling_inits,
-                libpython_mode=libpython_mode,
                 ir_scaffold_mode=ir_scaffold_mode,
                 verbose=verbose,
                 profile=profile,
@@ -876,7 +868,6 @@ def compile_parallel(
                 jobs=jobs,
                 entry_module=entry_module,
                 sibling_inits=sibling_inits,
-                libpython_mode=libpython_mode,
                 ir_scaffold_mode=ir_scaffold_mode,
                 verbose=verbose,
                 profile=profile,
@@ -891,7 +882,6 @@ def compile_parallel(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -905,7 +895,6 @@ def compile_parallel(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -920,7 +909,6 @@ def compile_parallel(
         host_python=host_python_command(),
         entry_module=entry_module,
         sibling_inits=sibling_inits,
-        libpython_mode=libpython_mode,
         ir_scaffold_mode=ir_scaffold_mode,
         source_root=source_root(),
     )
@@ -954,7 +942,6 @@ def compile_parallel(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -987,7 +974,6 @@ def compile_parallel_uncached(
     jobs: int,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     profile: Optional[dict] = None,
@@ -1063,8 +1049,7 @@ def compile_parallel_uncached(
 
         require_host_indexed_split(
             os.environ, checkpoint_root=checkpoint_root,
-            action_cache_plan=action_cache_plan, libpython_mode=libpython_mode,
-            artifact_dir=artifact_dir,
+            action_cache_plan=action_cache_plan, artifact_dir=artifact_dir,
         )
         host_indexed_split = True
     from pcc.frontends.python.pipeline_frontend_host_batch import (
@@ -1075,7 +1060,7 @@ def compile_parallel_uncached(
     host_batch_limit = host_codegen_batch_limit(
         os.environ, native_worker=native_owned_lanes, indexed_split=host_indexed_split,
         checkpoint_root=checkpoint_root, action_cache_plan=action_cache_plan,
-        libpython_mode=libpython_mode, artifact_dir=artifact_dir,
+        artifact_dir=artifact_dir,
     )
     if checkpoint_root:
         if (
@@ -1083,7 +1068,6 @@ def compile_parallel_uncached(
             or os.environ.get("PCC_STAGE1_CHECKPOINT_STAGE") != "1"
             or not checkpoint_build_digest
             or not artifact_dir
-            or libpython_mode != "off"
             or action_cache_plan is not None
             or str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", ""))
             .strip().lower() not in ("1", "true", "yes", "on")
@@ -1193,7 +1177,6 @@ def compile_parallel_uncached(
             worker_prefix,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             max_parallel=jobs,
@@ -1326,7 +1309,7 @@ def compile_parallel_uncached(
             checkpoint_graph_digest = _prepare_stage1_checkpoint_graph(
                 checkpoint_root, checkpoint_build_digest, src_paths,
                 module_names, chunks, exports_path, ast_dir, entry_module,
-                sibling_inits, libpython_mode, ir_scaffold_mode,
+                sibling_inits, ir_scaffold_mode,
                 worker_prefix, jobs,
             )
             for chunk in scheduled_chunks:
@@ -1420,7 +1403,6 @@ def compile_parallel_uncached(
                 chunk,
                 entry_module=entry_module,
                 sibling_inits=sibling_inits,
-                libpython_mode=libpython_mode,
                 ir_scaffold_mode=ir_scaffold_mode,
                 verbose=verbose,
                 checkpoint_root=checkpoint_root,
@@ -1504,7 +1486,6 @@ def compile_parallel_uncached(
                     chunk,
                     entry_module=entry_module,
                     sibling_inits=sibling_inits,
-                    libpython_mode=libpython_mode,
                     ir_scaffold_mode=ir_scaffold_mode,
                     verbose=verbose,
                 )

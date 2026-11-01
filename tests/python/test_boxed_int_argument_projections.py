@@ -56,7 +56,7 @@ def test_boxed_parameter_roots_owned_ir(tmp_path, monkeypatch):
     source.write_text(ROOTS)
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text()
     for name in ("function", "Methods_static", "Methods_instance"):
         body = re.search(r"(?ms)^define [^\n]*@user_boxed_roots_" + name + r"\(.*?\n\}", text).group(0)
@@ -85,7 +85,7 @@ def test_boxed_parameter_roots_native(tmp_path, monkeypatch, pcc_runtime_archive
     source = tmp_path / "boxed_roots.py"
     source.write_text(ROOTS)
     binary = source.with_suffix("")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
@@ -131,7 +131,7 @@ def test_boxed_argument_owned_ir(tmp_path, monkeypatch, shape):
     source.write_text(_source(shape))
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text()
     body = re.search(r"(?ms)^define [^\n]*@user_[^\n]*_probe\(.*?\n\}", text).group(0)
     assert "@py_int_to_i64_lane" not in body
@@ -146,7 +146,7 @@ def test_boxed_argument_native(tmp_path, monkeypatch, pcc_runtime_archive,
     source = tmp_path / ("boxed_argument_" + shape + ".py")
     source.write_text(_source(shape))
     binary = source.with_suffix("")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

@@ -151,7 +151,7 @@ def test_taken_arguments_match_cpython_on_five_collectors(tmp_path, threaded_pcc
     assert expected.returncode == 0, expected.stderr
     executable = tmp_path / "takes"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,

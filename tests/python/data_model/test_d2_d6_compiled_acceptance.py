@@ -19,12 +19,10 @@ def _compile_and_run(tmp_path: Path, source: str, *, backend: str = "0") -> list
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         **runtime_options,
     )
     env = os.environ.copy()
     env["PCC_GC_BACKEND"] = backend
-    env["PCC_PYTHON_LIBPYTHON"] = "off"
     proc = subprocess.run(
         [str(exe)],
         text=True,

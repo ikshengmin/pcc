@@ -76,7 +76,6 @@ def test_pcc1_compiles_and_runs_function_definitions(
                 str(pcc1),
                 "--backend",
                 "self",
-                "--python-libpython=off",
                 "--ir-scaffold=on",
                 str(src),
                 "-o",

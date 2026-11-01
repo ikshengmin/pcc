@@ -39,7 +39,6 @@ def test_compiled_free_name_analysis_stays_in_closed_world(tmp_path):
         mods,
         {_MODULE},
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
         emit_ir_dir=str(ir_dir),
     )
     assert counts == {_MODULE: 0}

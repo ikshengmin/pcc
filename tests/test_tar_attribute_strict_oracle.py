@@ -794,7 +794,7 @@ def _check_real_three_argument_method_bindings_use_both_signature_representation
     output = tmp_path / 'methods.ll'
     compile_python_multi([str(probe)], str(output), module_names=[oracle._UNSAFE],
                          entry_module=oracle._UNSAFE, emit_llvm_only=True, target_triple=host_target_triple(),
-                         libpython_mode='off', ir_scaffold_mode='on', backend='self', recursive_stdlib=False)
+                         ir_scaffold_mode='on', backend='self', recursive_stdlib=False)
     assert 0 < output.stat().st_size < 2 * 1024 * 1024
     section = output.read_text()
     verify_ir_text(section)

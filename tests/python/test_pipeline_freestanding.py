@@ -126,7 +126,7 @@ main()
     output = path.with_suffix("")
     path.write_text(source)
     pipeline.compile_python(str(path), str(output), backend="self",
-                            libpython_mode="off", ir_scaffold_mode="on",
+                            ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
     for collector in range(5):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

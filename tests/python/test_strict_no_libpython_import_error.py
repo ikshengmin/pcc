@@ -27,7 +27,6 @@ def test_unresolved_import_raises_native_importerror_no_libpython(tmp_path: Path
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

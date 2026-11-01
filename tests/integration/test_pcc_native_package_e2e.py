@@ -4,7 +4,7 @@ Takes a second, unrelated, pure-Python distribution (`wheel`) all the way
 through the acquire/build/run package model (docs/design/pcc-package-model.md):
 
     pcc-native install (local wheel, no index/network) -> site
-    -> pcc1 --backend self --python-libpython=off  compiles  `import wheel`
+    -> pcc1 --backend self  compiles  `import wheel`
     -> the produced binary runs, prints wheel.__version__, links no libpython.
 
 This is the "prove it is generic, not a numpy special case" rung of

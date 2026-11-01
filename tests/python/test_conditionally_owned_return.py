@@ -38,7 +38,7 @@ def test_conditionally_owned_return_keeps_caller_source_alive(tmp_path, pcc_diag
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "owned_return"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
@@ -79,7 +79,7 @@ print(DELS[0])
     assert reference.returncode == 0, reference.stderr
     assert reference.stdout == "1 1\n1\n1 2\n3\n"
     binary = tmp_path / "return_finalizers"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,

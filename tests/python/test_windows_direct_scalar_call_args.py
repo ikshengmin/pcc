@@ -504,7 +504,7 @@ def test_native_fixture_compiles_and_encodes_without_a_runtime(tmp_path):
     source.write_text(MANAGED_CALLBACK_SOURCE)
     compile_python(
         str(source), str(output), emit_llvm_only=True, backend="self",
-        libpython_mode="off", ir_scaffold_mode="on", target_triple=TARGET,
+        ir_scaffold_mode="on", target_triple=TARGET,
     )
     ir = output.read_text()
     module = verify_ir_text(ir)
@@ -554,7 +554,7 @@ def test_native_win64_home_space_and_rooted_callback_five_collectors(tmp_path, e
     record = {
         "schema": "pcc.win64-home-callback.v1", "status": "RUNNING",
         "run_id": os.environ.get("PCC_NATIVE_OBJECT_GATE_RUN_ID", ""),
-        "compiler_mode": "host-pcc0", "backend": "self", "libpython": "off",
+        "compiler_mode": "host-pcc0", "backend": "self",
         "target": TARGET, "source_sha256": digest(source),
         "helper_assembly_sha256": hashlib.sha256(HOME_CALLBACK_ASM.encode()).hexdigest(),
         "helper_sha256": digest(helper),
@@ -570,7 +570,7 @@ def test_native_win64_home_space_and_rooted_callback_five_collectors(tmp_path, e
     try:
         try:
             compile_python(
-                str(source), str(executable), backend="self", libpython_mode="off",
+                str(source), str(executable), backend="self",
                 ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
                 object_inputs=(str(helper),), target_triple=TARGET,
             )

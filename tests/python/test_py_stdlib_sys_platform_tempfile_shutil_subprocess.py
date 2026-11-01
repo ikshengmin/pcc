@@ -53,7 +53,6 @@ def test_platform_provider_compiles_as_top_level_module_no_libpython(tmp_path):
         entry_module="entry",
         module_names=["platform", "sys", "entry"],
         backend="self",
-        libpython_mode="off",
     )
     run = subprocess.run(
         [str(exe)],

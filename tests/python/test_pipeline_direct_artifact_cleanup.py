@@ -85,7 +85,7 @@ def _case(tmp_path, monkeypatch, route):
     def compile_case(**kwargs):
         pipeline.compile_python_multi(
             [str(source)], str(output), module_names=["entry"],
-            backend="self", libpython_mode="off", ir_scaffold_mode="on", **kwargs,
+            backend="self", ir_scaffold_mode="on", **kwargs,
         )
 
     case.compile = compile_case
@@ -95,7 +95,7 @@ def _case(tmp_path, monkeypatch, route):
 _FAILURES = [
     (route, failure)
     for route in ("direct", "native-objects")
-    for failure in ("runtime", "explicit-runtime", "environment-runtime", "libpython", "emit-only", "missing", "link")
+    for failure in ("runtime", "explicit-runtime", "environment-runtime", "emit-only", "missing", "link")
 ] + [("direct", "checkpoint"), ("direct", "unknown-kind")]
 
 
@@ -120,8 +120,6 @@ def test_pre_handoff_failures_remove_only_owned_directory(tmp_path, monkeypatch,
     elif failure == "environment-runtime":
         monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(case.archive))
         monkeypatch.setattr(pipeline, "_ensure_runtime", reject)
-    elif failure == "libpython":
-        case.needs_libpython = True
     elif failure == "emit-only":
         kwargs["emit_llvm_only"] = True
     elif failure == "missing":

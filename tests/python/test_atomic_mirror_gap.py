@@ -186,7 +186,6 @@ def test_gc_ports_emit_ordering_explicit_intrinsics_not_c_helpers(
         str(source),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = output.read_text(encoding="utf-8")

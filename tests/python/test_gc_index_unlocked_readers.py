@@ -170,7 +170,6 @@ def _index_object(tmp_path: Path) -> Path:
         str(INDEX_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple=host_target_triple(),
     )

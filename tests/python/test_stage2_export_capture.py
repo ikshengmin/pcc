@@ -24,7 +24,7 @@ def make_manifest(tmp_path, monkeypatch):
         str(manifest_path), str(result_path), str(tmp_path), "",
         str(tmp_path / "ast"), paths, names, [137],
         entry_module="fixture.module_0", sibling_inits=[],
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
         job_kind="export",
     )
     return directory, manifest_path, result_path, names

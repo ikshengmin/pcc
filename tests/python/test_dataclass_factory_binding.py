@@ -479,7 +479,7 @@ def test_factories_compile_as_callable_signature_defaults(tmp_path, monkeypatch,
     source = tmp_path / (name + ".py")
     output = tmp_path / (name + ".ll")
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "_pcc_py_module_init_" + name)
     assert "func.sig.factory" in initializer
@@ -502,7 +502,7 @@ def test_runtime_field_is_not_exported_as_a_dataclass_factory(tmp_path, monkeypa
     source.write_text(ORDINARY)
     from pcc.frontends.python.pipeline import compile_python_multi
     provider = Path(__file__).resolve().parents[2] / "pcc" / "stdlib" / "dataclasses.py"
-    compile_python_multi([str(source), str(provider)], str(output), module_names=["ordinary", "dataclasses"], entry_module="ordinary", emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python_multi([str(source), str(provider)], str(output), module_names=["ordinary", "dataclasses"], entry_module="ordinary", emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "main")
     assert "func.sig.factory" not in initializer
@@ -533,7 +533,7 @@ def test_raw_negative_default_keeps_direct_abi(tmp_path, monkeypatch, marker, an
         + "    return helper()\n"
     )
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+                   backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     caller = _body(text, "raw_default")
     callee = "raw_helper" if marker == "freestanding" else "user_raw_defaults_helper"
@@ -580,7 +580,7 @@ def test_prepared_factory_fields_use_runtime_names(tmp_path, monkeypatch):
     output = tmp_path / "prepared_fields.ll"
     source.write_text(PREPARED_ORDER)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+                   ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "user_prepared_fields_Box___init__")
     caller = _body(text, "user_prepared_fields_main")
@@ -609,7 +609,7 @@ def test_prepared_layout_proof_reaches_imported_and_inherited_fields(tmp_path, m
     assert exports["model"]["Box"]["field_names"] == ("value", "chosen")
     assert exports["app"]["Child"]["field_names"] == ("value", "chosen")
     compile_python_multi(paths, str(output), module_names=names, entry_module="app",
-                         emit_llvm_only=True, backend="self", libpython_mode="off",
+                         emit_llvm_only=True, backend="self",
                          ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     for function in ("project", "inherited"):
@@ -629,7 +629,7 @@ def test_definition_publishes_reassigned_function_slot_before_class_capture(tmp_
     source = tmp_path / "promotion.py"
     output = tmp_path / "promotion.ll"
     source.write_text(CUSTOM)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     entry = _body(text, "main")
     class_creation = entry.find("@py_class_new(")
@@ -666,7 +666,7 @@ def test_factory_execution_controls_reach_owned_emitter(tmp_path, monkeypatch, n
     source = tmp_path / ("factory_" + name + ".py")
     output = tmp_path / ("factory_" + name + ".ll")
     source.write_text(PROGRAMS[name][0])
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     assert emit_owned_object(output.read_text(), _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"
 
 
@@ -694,7 +694,7 @@ def test_factory_identity_capture_follows_field_definition_order(tmp_path, monke
     source = tmp_path / "factory_order.py"
     output = tmp_path / "factory_order.ll"
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     initializer = _body(text, "_pcc_py_module_init_factory_order")
     calls = list(re.finditer(r"call ptr[^\n]*@user_factory_order_mark\(", initializer))
@@ -732,7 +732,7 @@ main()
     else:
         program = BUILTINS
     source.write_text(program)
-    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     entry = _body(text, "user_factory_entry_main" if local else "main")
     capture_count = entry.count("class.factory.capture")
@@ -769,7 +769,7 @@ def main():
     print("DATACLASS_CROSS_OK")
 main()
 ''')
-    compile_python_multi([str(app), str(model)], str(output), module_names=["app", "model"], entry_module="app", emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
+    compile_python_multi([str(app), str(model)], str(output), module_names=["app", "model"], entry_module="app", emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
     caller = _body(text, "user_app_main")
     _assert_owned_dynamic_calls(text, "user_app_main", expected_count=7)
@@ -788,7 +788,7 @@ def test_native_prepared_layout_projection(tmp_path, pcc_runtime_archive):
     model.write_text(PREPARED_ORDER.replace("main()\n", ""))
     app.write_text(PREPARED_PROJECTION)
     compile_python_multi([str(app), str(model)], str(binary), module_names=["app", "model"],
-                         entry_module="app", backend="self", libpython_mode="off",
+                         entry_module="app", backend="self",
                          ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
@@ -826,7 +826,7 @@ def main():
     print("DATACLASS_CROSS_OK")
 main()
 ''')
-    compile_python_multi([str(app), str(model)], str(binary), module_names=["app", "model"], entry_module="app", backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    compile_python_multi([str(app), str(model)], str(binary), module_names=["app", "model"], entry_module="app", backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)
@@ -841,7 +841,7 @@ def test_native_factory_binding(tmp_path, pcc_runtime_archive, python_program_co
     source = tmp_path / ("factory_" + name + ".py")
     binary = tmp_path / "factory"
     source.write_text(PROGRAMS[name][0])
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)

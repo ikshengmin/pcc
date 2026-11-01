@@ -144,7 +144,6 @@ def test_linux_durable_file_intrinsics_use_raw_syscalls(
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple="x86_64-unknown-linux-gnu",
     )

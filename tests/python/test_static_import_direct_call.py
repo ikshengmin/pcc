@@ -168,7 +168,7 @@ def test_cpython_reference_output(tmp_path):
 def test_live_import_calls_native(tmp_path, pcc_runtime_archive):
     main = _write(tmp_path)
     output = tmp_path / "sicall_main"
-    compile_python(str(main), str(output), backend="self", libpython_mode="off",
+    compile_python(str(main), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

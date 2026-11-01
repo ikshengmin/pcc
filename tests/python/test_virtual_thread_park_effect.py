@@ -194,7 +194,6 @@ def _compile_host(
         str(output),
         emit_llvm_only=emit_llvm_only,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     return output
 
@@ -1162,7 +1161,6 @@ def test_cross_module_may_park_uses_generator_abi_and_resumes(
         module_names=["park_effect_leaf", "park_effect_main"],
         entry_module="park_effect_main",
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ran = subprocess.run(
         [str(executable)],
@@ -1191,7 +1189,6 @@ def test_cross_module_may_park_method_uses_generator_abi_and_resumes(
         module_names=["park_method_leaf", "park_method_main"],
         entry_module="park_method_main",
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ran = subprocess.run(
         [str(executable)],
@@ -1324,7 +1321,6 @@ def test_cross_module_may_park_import_keeps_call_semantics(tmp_path: Path) -> No
         module_names=["park_shapes_leaf", "park_shapes_main"],
         entry_module="park_shapes_main",
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     expected = [
         "43",
@@ -1423,7 +1419,6 @@ def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_ab
         ],
         entry_module="entry",
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
         emit_llvm_only=True,
         profile=profile,
@@ -1443,7 +1438,6 @@ def test_parallel_cross_shard_two_init_reexports_preserve_function_and_method_ab
         ],
         entry_module="entry",
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     ran = subprocess.run(
@@ -1477,7 +1471,6 @@ def test_current_pcc1_self_no_libpython_transitive_park_resume(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",
@@ -1525,7 +1518,6 @@ def test_current_pcc1_self_no_libpython_method_park_resume(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

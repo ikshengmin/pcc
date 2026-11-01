@@ -83,7 +83,7 @@ def test_raw_storage_real_owned_native_process(tmp_path, monkeypatch):
         for source in inputs:
             ir_path = tmp_path / (source.stem + ".ll")
             compile_python(str(source), str(ir_path), emit_llvm_only=True,
-                           libpython_mode="off", python_library=True,
+                           python_library=True,
                            backend="self", target_triple=TARGET)
             ir = ir_path.read_text()
             ir_by_name[source.stem] = ir

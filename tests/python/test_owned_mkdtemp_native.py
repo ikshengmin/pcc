@@ -77,7 +77,7 @@ def test_mkdtemp_public_binding_all_collectors(tmp_path,monkeypatch,
     source=tmp_path/'mkdtemp.py';source.write_text(PROGRAM)
     binary=tmp_path/'mkdtemp'
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES','off')
-    python_program_compiler(str(source),str(binary),backend='self',libpython_mode='off',
+    python_program_compiler(str(source),str(binary),backend='self',
         ir_scaffold_mode='on',runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         root=tmp_path/('gc'+str(backend));root.mkdir()

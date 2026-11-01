@@ -57,10 +57,10 @@ def _single_scalar_pass(text: str, name: str) -> str:
     return "".join(out)
 
 
-def run_owned_passes(text: str, names: list[str], strict_no_libpython: bool) -> str:
+def run_owned_passes(text: str, names: list[str]) -> str:
     if not owns_passes(names):
         raise ValueError("unsupported owned optimizer pass list")
-    if strict_no_libpython and _has_py_cpy_call(text):
+    if _has_py_cpy_call(text):
         return text
     current = text
     index = 0
@@ -70,7 +70,7 @@ def run_owned_passes(text: str, names: list[str], strict_no_libpython: bool) -> 
             if name == "mem2reg" and index + 1 < len(names) and names[index + 1] == "sroa":
                 current, _changed = mem2reg_text(current)
                 current = run_compiled_default_tier(
-                    current, ["mem2reg", "sroa"], strict_no_libpython=strict_no_libpython
+                    current, ["mem2reg", "sroa"]
                 )
                 index += 1
             elif name == "mem2reg":

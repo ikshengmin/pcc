@@ -46,7 +46,7 @@ def test_immortal_stream_and_class_operands_lease_on_every_collector(
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "stream_operand"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

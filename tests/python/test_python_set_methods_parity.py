@@ -1,7 +1,7 @@
 """CPython parity for ``set`` methods, ported from
 ``Lib/test/test_set.py``.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython):
   * ``set`` is unordered, mutable, no duplicate members
@@ -24,7 +24,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 

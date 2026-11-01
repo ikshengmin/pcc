@@ -97,7 +97,7 @@ def test_no_libpython_runtime_selector_defaults_to_pcc_python_archive():
                 return_value=False,
             ):
                 archive = pipeline._ensure_runtime(
-                    False, needs_libpython=False,
+                    False,
                 )
 
     assert Path(archive).name == "libpy_runtime_pcc_py.a"
@@ -119,13 +119,9 @@ def test_runtime_selector_ignores_retired_c_runtime_selectors():
                 _make_reference_env(PCC_RUNTIME_CC="cc", PCC_RUNTIME_HIGH="c"),
                 clear=True,
             ):
-                archive = pipeline._ensure_runtime(False, needs_libpython=False)
-                libpython_archive = pipeline._ensure_runtime(
-                    False, needs_libpython=True,
-                )
+                archive = pipeline._ensure_runtime(False)
 
     assert Path(archive).name == "libpy_runtime_pcc_py.a"
-    assert Path(libpython_archive).name == "libpy_runtime_pcc_py_libpython.a"
 
 
 def test_resolve_pcc_binary_prefers_current_stage_binary(tmp_path):
@@ -526,7 +522,6 @@ def test_pcc_python_codegen_checksum_staleness_forces_full_rebuild(tmp_path):
                                 ):
                                     selected = pipeline._ensure_runtime(
                                         False,
-                                        needs_libpython=False,
                                     )
 
     assert selected == str(archive)
@@ -589,7 +584,6 @@ def test_pcc_python_rebuild_fails_if_codegen_freshness_remains_unprovable(
                                         ):
                                             pipeline._ensure_runtime(
                                                 False,
-                                                needs_libpython=False,
                                             )
 
     write_stamp.assert_not_called()
@@ -617,7 +611,7 @@ def test_explicit_pcc_python_archive_does_not_compare_current_codegen(tmp_path):
                 "_runtime_archive_codegen_stale",
                 side_effect=AssertionError("explicit archive must not compare checkout"),
             ):
-                selected = pipeline._ensure_runtime(False, needs_libpython=False)
+                selected = pipeline._ensure_runtime(False)
 
     assert selected == str(archive)
 
@@ -654,48 +648,7 @@ def test_pcc_python_runtime_build_rejects_missing_provenance(tmp_path):
                             pipeline.PyPipelineError,
                             match="missing provenance manifest",
                         ):
-                            pipeline._ensure_runtime(False, needs_libpython=False)
-
-
-def test_libpython_pcc_python_archive_staleness_tracks_libpython_bridge(tmp_path):
-    from pcc.frontends.python import pipeline
-
-    runtime_dir = tmp_path / "py_runtime"
-    src_dir = runtime_dir / "src"
-    include_dir = runtime_dir / "include"
-    py_dir = runtime_dir / "py"
-    src_dir.mkdir(parents=True)
-    include_dir.mkdir()
-    py_dir.mkdir()
-
-    base_archive = runtime_dir / "libpy_runtime_pcc_py.a"
-    archive = runtime_dir / "libpy_runtime_pcc_py_libpython.a"
-    base_archive.write_text("base archive", encoding="utf-8")
-    archive.write_text("archive", encoding="utf-8")
-    (runtime_dir / "Makefile").write_text("all:\n", encoding="utf-8")
-    (include_dir / "py_runtime.h").write_text("/* header */\n", encoding="utf-8")
-    (src_dir / "py_libpython.c").write_text("/* optional bridge */\n", encoding="utf-8")
-
-    stamp = Path(pipeline._runtime_archive_target_stamp(str(archive)))
-    stamp.write_text(pipeline._runtime_archive_target_id() + "\n", encoding="utf-8")
-
-    old = 1_700_000_000
-    current = old + 10
-    newer = current + 10
-    for path in [
-        runtime_dir / "Makefile",
-        include_dir / "py_runtime.h",
-        base_archive,
-        archive,
-        stamp,
-    ]:
-        os.utime(path, (old, old))
-    os.utime(archive, (current, current))
-    os.utime(src_dir / "py_libpython.c", (newer, newer))
-
-    with mock.patch.object(pipeline, "_PY_RUNTIME_DIR", str(runtime_dir)):
-        with mock.patch.object(pipeline, "_PY_RUNTIME_ARCHIVE_PCC_PY", str(base_archive)):
-            assert pipeline._runtime_archive_stale(str(archive)) is True
+                            pipeline._ensure_runtime(False)
 
 
 def _production_runtime_ir() -> list[tuple[str, str]]:
@@ -923,84 +876,6 @@ def test_python_library_copied_runtime_source_suppresses_implicit_frame_roots(
 
     ir_text = out_ll.read_text(encoding="utf-8")
     assert "call void @pcc_gc_frame_enter" not in ir_text
-
-
-def test_pcc_python_libpython_archive_adds_only_bridge_object(tmp_path):
-    archive = PY_RUNTIME_DIR / "libpy_runtime_pcc_py_libpython.a"
-    base_archive = PY_RUNTIME_DIR / "libpy_runtime_pcc_py.a"
-    if not archive.exists():
-        pytest.fail(f"runtime archive missing: {archive}")
-
-    result = subprocess.run(
-        ["ar", "t", str(archive)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        cwd=str(REPO_ROOT),
-    )
-    assert result.returncode == 0, result.stderr
-    members = set(result.stdout.splitlines())
-    base_result = subprocess.run(
-        ["ar", "t", str(base_archive)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        cwd=str(REPO_ROOT),
-        check=True,
-    )
-    base_members = set(base_result.stdout.splitlines())
-    assert "py_substrate.o" in members
-    assert "py_int.o" in members
-    assert "py_libpython.o" in members
-    assert "py_capi_shim.o" not in members
-    assert "py_extension_loader_runtime.o" not in members
-    assert members == (
-        base_members - {"py_extension_loader_runtime.o"}
-    ) | {"py_libpython.o"}
-    assert {member for member in members if member.startswith("py_capi_")}
-
-    subprocess.run(
-        ["ar", "x", str(archive), "py_libpython.o"],
-        check=True,
-        timeout=30,
-        cwd=str(tmp_path),
-    )
-    undefined_result = subprocess.run(
-        ["nm", "-u", "py_libpython.o"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-        cwd=str(tmp_path),
-    )
-    undefined = {
-        fields[-1][1:] if fields[-1].startswith("_") else fields[-1]
-        for line in undefined_result.stdout.splitlines()
-        if (fields := line.split())
-    }
-    assert not {
-        symbol
-        for symbol in undefined
-        if symbol.startswith("Py") or symbol.startswith("_Py")
-    }, "the bridge must resolve every CPython symbol from its named handle"
-    assert undefined.isdisjoint(
-        {
-            "Py_Initialize",
-            "Py_Finalize",
-            "Py_IsInitialized",
-            "_Py_NoneStruct",
-            "PyBool_Type",
-            "PyLong_Type",
-            "PyFloat_Type",
-            "PyUnicode_Type",
-            "PyList_Type",
-            "PyTuple_Type",
-            "PyDict_Type",
-            "PySet_Type",
-            "PyExc_SystemExit",
-            "PyExc_RuntimeError",
-        }
-    )
 
 
 def _assert_member_compiled_from_source(archive, module: str, tmp_path) -> str:
@@ -1576,7 +1451,7 @@ def colliding_hash_outputs(tmp_path_factory):
     )
     binary = work / "colliding_hashes.out"
     compile_python(str(source), str(binary), backend="self",
-                   ir_scaffold_mode="on", libpython_mode="off")
+                   ir_scaffold_mode="on")
     native = subprocess.run(
         [str(binary)], capture_output=True, text=True, timeout=120,
         env=dict(os.environ, PATH="/nonexistent"),

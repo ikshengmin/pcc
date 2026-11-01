@@ -57,7 +57,6 @@ def _numeric_ir(
         str(NUMERIC_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple=target_triple,
     )
@@ -545,7 +544,6 @@ def _errno_ir(tmp_path: Path) -> Path:
         str(ERRNO_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return llvm_ir

@@ -248,7 +248,7 @@ def test_native_context_constructor_shape_reaches_owned_emitter(tmp_path, monkey
     output = tmp_path / "c_context_owner.ll"
     source.write_text(C_CONTEXT_PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on", target_triple=target)
+                   ir_scaffold_mode="on", target_triple=target)
     text = output.read_text()
     constructor = _body(text, "user_c_context_owner_TranslationUnit___init__")
     assert "@user_pcc_ir_ir_scaffold_Module___init__(" in constructor

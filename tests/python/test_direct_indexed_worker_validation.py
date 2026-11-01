@@ -51,7 +51,7 @@ def _validation_worker(
     pipeline._write_python_frontend_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)],
         ["probe"], [0], entry_module="probe", sibling_inits=(),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
     )
     return manifest, result
 

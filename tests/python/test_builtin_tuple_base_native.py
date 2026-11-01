@@ -68,7 +68,7 @@ def test_builtin_tuple_base_native(tmp_path, source, stdout, error):
     path = tmp_path / 'tuple_base_native.py'
     binary = tmp_path / 'tuple_base_native'
     path.write_text(source)
-    compile_python(str(path), str(binary), backend='self', libpython_mode='off',
+    compile_python(str(path), str(binary), backend='self',
                    ir_scaffold_mode='on', **options)
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

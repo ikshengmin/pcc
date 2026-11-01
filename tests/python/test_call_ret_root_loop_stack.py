@@ -57,7 +57,6 @@ def test_rooted_call_loop_survives_5m_iterations(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=120,

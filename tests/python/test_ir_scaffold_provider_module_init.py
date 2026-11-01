@@ -108,7 +108,6 @@ def _build_and_run(name: str, program: str) -> str:
         [
             sys.executable, "-m", "pcc",
             "--ir-scaffold=on", "--backend", "self",
-            "--python-libpython", "off",
             str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT),

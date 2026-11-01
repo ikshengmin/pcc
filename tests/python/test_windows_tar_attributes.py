@@ -1134,7 +1134,7 @@ def apply(path: c_ptr, times: c_ptr) -> i64:
 ''')
     output = tmp_path / "route.ll"
     pipeline.compile_python(str(source), str(output), emit_llvm_only=True,
-                            libpython_mode="off", python_library=True, target_triple=target)
+                            python_library=True, target_triple=target)
     text = output.read_text()
     if "windows" in target:
         assert "@pcc_win_chmod_file(" in text and "@pcc_win_utime_file(" in text
@@ -1175,7 +1175,7 @@ def test_windows_tar_attrs_owned_coff_abi_and_static_mode_route(tmp_path):
     # Compile the real changed managed consumer, not merely the provider.
     consumer = tmp_path / "tarfile.ll"
     pipeline.compile_python(str(TARFILE), str(consumer), emit_llvm_only=True,
-                            libpython_mode="off", python_library=True, target_triple=TARGET)
+                            python_library=True, target_triple=TARGET)
     consumer_text = consumer.read_text()
     assert "@pcc_win_chmod_file(" in consumer_text
     assert "@pcc_win_utime_file(" in consumer_text
@@ -1261,7 +1261,7 @@ def test_windows_tar_attrs_native_files_directories_unicode_and_negative_epoch(
     source = tmp_path / "metadata.py"
     source.write_text(_tar_attrs_native_program(import_style, source_tar, destination, control_paths), encoding="utf-8")
     executable = tmp_path / "metadata.exe"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime))
     captured = capfd.readouterr()
     (tmp_path / "compiler.stdout").write_text(captured.out)

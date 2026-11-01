@@ -55,7 +55,6 @@ def _run_once(args: argparse.Namespace, index: int) -> dict[str, Any]:
     env["PCC_BOOTSTRAP_PROFILE_DIR"] = str(profile_dir)
     env.setdefault("PCC_BOOTSTRAP_RUNTIME_CC", "pcc")
     env.setdefault("PCC_BOOTSTRAP_RUNTIME_HIGH", "py")
-    env.setdefault("PCC_BOOTSTRAP_PYTHON_LIBPYTHON", "off")
     if args.debug_runtime:
         env["PCC_DEBUG_RUNTIME"] = "1"
     if "LC_ALL" in env:

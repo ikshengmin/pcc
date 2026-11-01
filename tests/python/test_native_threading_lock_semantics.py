@@ -412,7 +412,7 @@ def _compile_program(tmp_path: Path, name: str) -> Path:
     src.write_text(PROGRAMS[name], encoding="utf-8")
     exe = tmp_path / name
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr
@@ -466,7 +466,7 @@ def test_typed_lock_calls_pass_arguments_to_the_runtime(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     out = tmp_path / "lock_calls.ll"
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     text = out.read_text(encoding="utf-8")
     # Event.wait and Semaphore.acquire may park, so ``calls`` lowers to a
     # resumable body; match the emitted calls wherever that body lives.

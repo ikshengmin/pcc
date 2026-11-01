@@ -45,7 +45,7 @@ def test_module_str_constant_methods_match_cpython(tmp_path):
     src = tmp_path / "module_str_constants.py"
     exe = tmp_path / "module_str_constants.out"
     src.write_text(PROGRAM)
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     native = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert native.returncode == 0, native.stderr
     python3 = shutil.which("python3")

@@ -471,7 +471,6 @@ def test_branch_and_loop_shapes_still_execute_after_promotion(tmp_path: Path) ->
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

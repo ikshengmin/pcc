@@ -95,7 +95,7 @@ def test_ascii_and_unicode_values_survive_native_index_iteration_collection(
     binary = tmp_path / "ascii_values"
     source.write_text(PROGRAM)
     compile_python(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

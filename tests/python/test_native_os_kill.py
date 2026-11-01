@@ -22,7 +22,7 @@ def test_os_kill_uses_owned_integer_protocol(tmp_path):
     )
     compile_python(
         str(source), str(output), emit_llvm_only=True,
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
     )
     text = output.read_text(encoding="utf-8")
     assert "call ptr (ptr, ptr) @py_os_kill(" in text
@@ -76,7 +76,7 @@ def test_os_kill_native_zero_signal_and_checked_arguments(
     ''').lstrip(), encoding="utf-8")
     compile_python(
         str(source), str(output), backend="self",
-        libpython_mode="off", ir_scaffold_mode="on",
+        ir_scaffold_mode="on",
     )
     expected = "True\nTrue\nTrue\nmissing\noverflow\noverflow\noverflow\noverflow\ntype\ntype\n"
     for gc in range(5):
@@ -165,7 +165,7 @@ def test_os_kill_roots_direct_temporaries_and_releases_error_operands(
         main()
     ''').lstrip(), encoding="utf-8")
     compile_python(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     expected = (

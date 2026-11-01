@@ -431,7 +431,7 @@ main()
     source.parent.chmod(0o555)
     binary = tmp_path / "restore_native"
     monkeypatch.chdir(snapshot)
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         restored = tmp_path / ("restored-" + str(backend) + ".pidx")

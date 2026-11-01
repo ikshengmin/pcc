@@ -57,7 +57,6 @@ def test_enumerate_value_forms_match_cpython(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -106,7 +105,6 @@ def test_enumerate_value_custom_iterator_reenters_gc4(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

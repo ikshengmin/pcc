@@ -7,7 +7,7 @@ also could not drive a generator/range. Now non-list/tuple/set iterables use the
 iterator protocol (py_obj_iter + py_obj_next), so sorted() works for dict (keys),
 generator, range, etc.; list/tuple/set keep their existing paths.
 
-Compiles + runs under --backend self --python-libpython=off and asserts output.
+Compiles + runs under --backend self and asserts output.
 """
 from __future__ import annotations
 
@@ -29,8 +29,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # indexable cases; full-iterator port is a follow-on).
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

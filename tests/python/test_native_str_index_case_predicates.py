@@ -1,7 +1,7 @@
 """str.index() / str.isupper() / str.islower() under strict no-libpython.
 
 These three str methods had no native lowering, so under
-``--backend self --python-libpython=off`` they fell back to py_cpy_* helpers
+``--backend self`` they fell back to py_cpy_* helpers
 and the compile hard-errored (PCC-PY-COMPILE-001). Added:
   - runtime py_str_isupper / py_str_islower (py_str_accessors.c + port .py):
     ASCII cased-character predicates (True iff >=1 cased char and none of the
@@ -12,7 +12,7 @@ and the compile hard-errored (PCC-PY-COMPILE-001). Added:
     predicate group) and index (alongside find), in both the StrType fast path
     and the DynType path.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode) and asserts CPython-exact output.
 """
 from __future__ import annotations
@@ -32,8 +32,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # islower/index_of are mirrored in py_str_accessors.c and the port .py.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )
@@ -89,8 +88,7 @@ def test_str_index_not_found_raises_valueerror_no_libpython(tmp_path):
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

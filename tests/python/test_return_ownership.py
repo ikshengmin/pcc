@@ -21,7 +21,7 @@ def test_runtime_library_helpers_preserve_manual_return_ownership(tmp_path, help
     output = tmp_path / "module_attrs.ll"
     compile_python(
         str(source), str(output), emit_llvm_only=True,
-        libpython_mode="off", python_library=True,
+        python_library=True,
     )
     ir_text = output.read_text(encoding="utf-8")
     body = re.search(
@@ -65,7 +65,7 @@ def test_returning_borrowed_parameter_retains_for_owned_call_result(tmp_path):
         encoding="utf-8",
     )
     ll = tmp_path / "return_borrowed_param.ll"
-    compile_python(str(src), str(ll), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(ll), emit_llvm_only=True)
     ir_text = ll.read_text(encoding="utf-8")
     identity_ir = re.search(
         r"define\s+[^@]*@user_[^(]*identity[^{]*\{.*?\n\}",
@@ -76,7 +76,7 @@ def test_returning_borrowed_parameter_retains_for_owned_call_result(tmp_path):
     assert "pcc_gc_retain" in identity_ir.group(0)
 
     exe = tmp_path / "return_borrowed_param.out"
-    compile_python(str(src), str(exe), libpython_mode="off")
+    compile_python(str(src), str(exe))
 
     env = os.environ.copy()
     env["PCC_DEBUG_RUNTIME"] = "1"
@@ -109,7 +109,7 @@ def test_c_abi_raw_scaffold_returning_borrowed_parameter_still_retains(tmp_path)
         encoding="utf-8",
     )
     ll = tmp_path / "return_borrowed_c_abi.ll"
-    compile_python(str(src), str(ll), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(ll), emit_llvm_only=True)
     ir_text = ll.read_text(encoding="utf-8")
     identity_ir = re.search(
         r"define\s+[^@]*@identity_export[^{]*\{.*?\n\}",

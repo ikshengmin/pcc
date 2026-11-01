@@ -49,7 +49,7 @@ gc.collect()
 print(events)
 ''')
     compile_python(str(source), str(executable), backend="self",
-                   ir_scaffold_mode="on", libpython_mode="off",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     expected = ["[1]", "[8]", "[1, 2]", "[8, 9]", "stop", "[1, 8]"]
     for backend in range(5):
@@ -77,7 +77,7 @@ print(next(g))
         monkeypatch.setenv("PCC_GENERATOR_FIRST_ENTRY_INIT", enabled)
         output = tmp_path / ("entry_" + enabled + ".ll")
         compile_python(str(source), str(output), emit_llvm_only=True,
-                       libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                       ir_scaffold_mode="on", backend="self")
         ir = output.read_text()
         resume = re.search(r"define[^\n]*worker__gen_resume[^\n]*\{\n(.*?)\n\}", ir, re.S)
         assert resume, "the test must emit the actual generator resume body"

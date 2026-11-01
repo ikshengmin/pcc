@@ -328,7 +328,7 @@ def test_native_thread_lifecycle_logging_five_gc(python_program_compiler, reques
                'executions': []}
     receipt_path = tmp_path / 'thread-log-receipt.json'
     try:
-        python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+        python_program_compiler(str(source), str(binary), backend='self',
                                 ir_scaffold_mode='on', runtime_archive=str(archive))
         magic = binary.read_bytes()[:4]
         assert magic in (b'\x7fELF', b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf') or magic[:2] == b'MZ'

@@ -203,7 +203,7 @@ def test_inherited_new_program_reaches_owned_emitter(tmp_path, monkeypatch,
     ir_path = tmp_path / "inherited_new.ll"
     source.write_text(source_text)
     compile_python(str(source), str(ir_path), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = ir_path.read_text()
     assert "@user_inherited_new_main(" in text
     assert "@py_obj_load_method" in text
@@ -245,7 +245,6 @@ def test_native_inherited_new(tmp_path, pcc_runtime_archive,
     binary = tmp_path / "inherited_new"
     source.write_text(source_text)
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))

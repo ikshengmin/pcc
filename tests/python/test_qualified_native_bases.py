@@ -96,7 +96,7 @@ def test_qualified_base_ir_preserves_native_mro(tmp_path):
 
     output = tmp_path / "qualified.ll"
     compile_python_multi(_sources(tmp_path), str(output), module_names=MODULES,
-                         entry_module="consumer", backend="self", libpython_mode="off",
+                         entry_module="consumer", backend="self",
                          ir_scaffold_mode="on", emit_llvm_only=True)
     ir_text = output.read_text()
     for name in ("Left", "Right", "External", "ImportedDiamond"):
@@ -112,7 +112,7 @@ def test_qualified_base_identity_and_inherited_methods_execute_natively(tmp_path
 
     output = tmp_path / "qualified"
     compile_python_multi(_sources(tmp_path), str(output), module_names=MODULES,
-                         entry_module="consumer", backend="self", libpython_mode="off",
+                         entry_module="consumer", backend="self",
                          ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -152,7 +152,7 @@ def test_invalid_qualified_owned_base_is_diagnosed(tmp_path, monkeypatch, capfd,
     with pytest.raises((ClassLoweringError, L1CodegenError, RuntimeError)) as caught:
         compile_python_multi([str(provider), str(source)], str(tmp_path / "invalid.ll"),
                              module_names=["alpha", "invalid"], entry_module="invalid",
-                             backend="self", libpython_mode="off", emit_llvm_only=True)
+                             backend="self", emit_llvm_only=True)
     diagnostic = type(caught.value).__name__ + ": " + str(caught.value) + capfd.readouterr().err
     detail = "is unavailable" if base == "MISSING" else "is not a class"
     assert "ClassLoweringError: native class base " + detail + ": alpha." + base in diagnostic

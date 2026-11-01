@@ -23,7 +23,6 @@ def test_no_init_class_call_accepts_keyword_attrs_without_libpython(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     out = subprocess.check_output([str(exe)], text=True).splitlines()
@@ -48,7 +47,6 @@ def test_no_init_field_class_accepts_extra_keyword_attrs_without_libpython(tmp_p
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     out = subprocess.check_output([str(exe)], text=True).splitlines()
@@ -86,7 +84,6 @@ def test_self_dunder_class_constructor_starstar_kwargs_without_libpython(tmp_pat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     out = subprocess.check_output([str(exe)], text=True).splitlines()

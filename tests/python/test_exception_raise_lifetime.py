@@ -23,7 +23,6 @@ def _compile_and_collect_events(tmp_path: Path, source: str):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

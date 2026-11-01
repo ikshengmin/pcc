@@ -27,7 +27,7 @@ main()
 ''')
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     body = re.search(r"(?ms)^define [^\n]*@user_field_local_probe\(.*?\n\}", output.read_text()).group(0)
     assert re.search(r"%value\.addr[^ ]* = alloca ptr", body)
     assert "@py_int_to_i64_lane" not in body
@@ -123,7 +123,7 @@ def test_eight_module_export_shards_preserve_provider_and_caller_abi(tmp_path, m
         pipeline._write_python_frontend_worker_manifest(
             str(manifest), str(result), str(ir_dir), str(wire), str(ast_dir),
             paths, names, [index], entry_module="consumer", sibling_inits=(),
-            libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+            ir_scaffold_mode="on", verbose=False,
         )
         assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
     provider_ir = (ir_dir / "module_8.ll").read_text()
@@ -144,7 +144,7 @@ def test_cross_module_large_integer_native(tmp_path, monkeypatch, pcc_runtime_ar
     binary = tmp_path / "cross_module_integer"
     compile_python_multi([str(provider), str(consumer)], str(binary),
                          module_names=["provider", "consumer"], entry_module="consumer",
-                         backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                         backend="self", ir_scaffold_mode="on",
                          runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

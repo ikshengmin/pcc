@@ -38,7 +38,6 @@ def test_bound_method_signature_cache_preserves_call_semantics(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -55,7 +54,6 @@ def test_bound_method_signature_cache_is_emitted_for_default_free_method(tmp_pat
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )
@@ -88,7 +86,6 @@ def test_native_function_adapter_uses_known_tuple_arg_getter(tmp_path):
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )
@@ -127,7 +124,6 @@ def test_bound_method_varargs_no_kwargs_fast_call_preserves_semantics(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

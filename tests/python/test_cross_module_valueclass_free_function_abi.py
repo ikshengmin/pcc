@@ -117,7 +117,7 @@ def test_cross_module_valueclass_function_positional_and_keyword_calls_use_paylo
 
     paths, names = valueclass_function_modules
     counts = compile_contextual_per_module_fallback_counts(
-        paths, names, names, ir_scaffold_mode="on", strict_no_libpython=True,
+        paths, names, names, ir_scaffold_mode="on",
         emit_ir_dir=str(tmp_path),
     )
     assert counts == {name: 0 for name in names}

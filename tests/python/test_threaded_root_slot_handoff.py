@@ -392,7 +392,7 @@ def main():
 main()
 ''')
     output = source.with_suffix("")
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
                    object_inputs=(str(helper),))
     for backend in (3, 4):

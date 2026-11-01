@@ -51,7 +51,7 @@ def test_local_imports_survive_suspend_collection_and_rebinding(tmp_path, pcc_ru
                                text=True, timeout=15)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, EXPECTED, "")
     output = tmp_path / "import_consumer"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

@@ -37,7 +37,7 @@ def test_float_of_bignum_matches_cpython(tmp_path, monkeypatch):
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,

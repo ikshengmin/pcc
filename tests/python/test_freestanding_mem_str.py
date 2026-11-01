@@ -33,7 +33,6 @@ def _compile_mem_str_ir(tmp_path: Path) -> Path:
         str(MEM_STR_SOURCE),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return out

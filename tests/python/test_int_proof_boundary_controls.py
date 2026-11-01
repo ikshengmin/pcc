@@ -29,7 +29,7 @@ main()
 ''')
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text()
     body = re.search(r"(?ms)^define [^\n]*@user_explicit_field_read\(.*?\n\}", text).group(0)
     assert re.search(r"%local\.addr[^ ]* = alloca i64", body)
@@ -49,7 +49,7 @@ assert sum_ints([1, 2, 3]) == 6
 ''')
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     assert re.search(r"define (?:external )?ptr @user_library_int_sum_ints\(ptr", text)
     body = re.search(r"(?ms)^define [^\n]*@user_library_int_sum_ints\(.*?\n\}", text).group(0)
@@ -79,7 +79,7 @@ def main():
 main()
 ''')
     binary = source.with_suffix("")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

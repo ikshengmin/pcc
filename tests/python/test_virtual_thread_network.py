@@ -172,7 +172,6 @@ def test_darwin_sequential_tcp_contract(tmp_path: Path, monkeypatch) -> None:
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     text = llvm_ir.read_text(encoding="utf-8")
@@ -250,7 +249,6 @@ def test_sequential_tcp_gc_matrix(
     compile_python(
         str(source),
         str(executable),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     for backend in range(5):
@@ -293,7 +291,6 @@ def test_current_pcc1_self_no_libpython_sequential_tcp_echo(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

@@ -147,7 +147,7 @@ def test_native_recursion_limit_boundaries_direct_alias_and_index(
     source.write_text(BOUNDARY_PROGRAM.replace("SETTER", setter), encoding="utf-8")
     executable = tmp_path / "recursion_boundary"
     python_program_compiler(str(source), str(executable), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(executable)], capture_output=True, text=True,
                                 timeout=30, env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

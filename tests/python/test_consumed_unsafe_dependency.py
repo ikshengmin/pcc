@@ -95,7 +95,7 @@ def test_direct_indexed_canary_stays_pruned_at_production_admission(
     with pytest.raises(AdmissionObserved):
         pipeline.compile_python(
             str(entry), str(directory / "not-produced"), backend="self",
-            libpython_mode="off", ir_scaffold_mode="on",
+            ir_scaffold_mode="on",
             recursive_stdlib=recursive_stdlib,
         )
     assert captured == [(str(entry), "canary")]
@@ -426,7 +426,7 @@ def test_canary_codegen_retains_real_backend_query_and_runtime_work(tmp_path):
     output = tmp_path / "canary.ll"
     entry.write_text(_canary_source())
     compile_python(str(entry), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     ir = output.read_text()
     verify_ir_text(ir)
     assert "@pcc_gc_backend(" in ir

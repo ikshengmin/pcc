@@ -100,7 +100,6 @@ def test_owned_method_results_are_released(tmp_path, backend, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(

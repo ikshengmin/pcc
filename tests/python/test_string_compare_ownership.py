@@ -41,7 +41,7 @@ def main():
 main()
 '''.replace("OPERATOR", operator).replace("CONTAINER", repr(container)))
     binary = tmp_path / "string_operand"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="0"),
                          capture_output=True, text=True, timeout=15)
@@ -91,7 +91,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "string_order"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -127,7 +127,7 @@ def main():
 main()
 '''.replace("OPERATOR", operator))
     binary = tmp_path / "string_error"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="0"),
                          capture_output=True, text=True, timeout=15)
@@ -164,7 +164,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "dynamic_equality"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

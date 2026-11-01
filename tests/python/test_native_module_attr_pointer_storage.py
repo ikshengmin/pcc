@@ -171,7 +171,7 @@ def test_pointer_attribute_real_ir_uses_provider_cell(tmp_path, monkeypatch, sca
     output = tmp_path / "module-storage.ll"
     compile_python_multi(_sources(tmp_path), str(output),
                          module_names=["storage_provider", "storage_observer", "storage_entry"],
-                         entry_module="storage_entry", backend="self", libpython_mode="off",
+                         entry_module="storage_entry", backend="self",
                          ir_scaffold_mode=scaffold, emit_llvm_only=True)
     text = output.read_text()
     assert "module.attr.publish" in text
@@ -225,7 +225,7 @@ def test_raw_module_attribute_mutation_fails_explicitly(tmp_path, monkeypatch, c
     with pytest.raises(Exception) as caught:
         compile_python_multi([str(provider), str(entry)], str(tmp_path / "reject.ll"),
                              module_names=["raw_provider", "entry"], entry_module="entry",
-                             backend="self", libpython_mode="off", ir_scaffold_mode="on", emit_llvm_only=True)
+                             backend="self", ir_scaffold_mode="on", emit_llvm_only=True)
     diagnostic = str(caught.value) + "\n" + capfd.readouterr().err
     assert 'compiled module attribute assignment to raw typed storage is not supported' in diagnostic, diagnostic
 
@@ -249,7 +249,7 @@ def test_host_emitted_pointer_module_attributes(tmp_path, monkeypatch, explicit_
     binary = tmp_path / "module-storage"
     compile_python_multi(_sources(tmp_path, lifetime), str(binary),
                          module_names=["storage_provider", "storage_observer", "storage_entry"],
-                         entry_module="storage_entry", backend="self", libpython_mode="off",
+                         entry_module="storage_entry", backend="self",
                          ir_scaffold_mode=scaffold, runtime_archive=str(explicit_runtime))
     expected = "module-pointer-lifetime-ok\n" if lifetime else "module-pointer-storage-ok\n"
     for backend in (1, 4):
@@ -273,7 +273,7 @@ def test_unsafe_provider_pointer_is_not_a_managed_mutation_target(tmp_path, monk
     output = tmp_path / "raw-provider.ll"
     compile_python_multi([str(provider), str(control)], str(output),
                          module_names=["raw_owner", "control"], entry_module="control",
-                         backend="self", libpython_mode="off", emit_llvm_only=True)
+                         backend="self", emit_llvm_only=True)
     text = output.read_text()
     # This producer exposes raw addresses as i64 (the export's shallow Dyn
     # descriptor does not authorize treating those bits as a PyObject).
@@ -289,7 +289,7 @@ def test_unsafe_provider_pointer_is_not_a_managed_mutation_target(tmp_path, monk
     with pytest.raises(Exception) as caught:
         compile_python_multi([str(provider), str(control)], str(tmp_path / "reject-raw-owner.ll"),
                              module_names=["raw_owner", "control"], entry_module="control",
-                             backend="self", libpython_mode="off", emit_llvm_only=True)
+                             backend="self", emit_llvm_only=True)
     diagnostic = str(caught.value) + "\n" + capfd.readouterr().err
     assert 'requires proven managed provider storage' in diagnostic, diagnostic
 
@@ -304,6 +304,6 @@ def test_unsafe_rhs_cannot_become_a_managed_module_pointer(tmp_path, monkeypatch
     with pytest.raises(Exception) as caught:
         compile_python_multi([str(provider), str(entry)], str(tmp_path / "reject-raw-rhs.ll"),
                              module_names=["object_owner", "entry"], entry_module="entry",
-                             backend="self", libpython_mode="off", emit_llvm_only=True)
+                             backend="self", emit_llvm_only=True)
     diagnostic = str(caught.value) + "\n" + capfd.readouterr().err
     assert 'cannot store an unsafe raw pointer as a Python object' in diagnostic, diagnostic

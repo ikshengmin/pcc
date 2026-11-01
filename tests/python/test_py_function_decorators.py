@@ -74,7 +74,6 @@ def test_module_global_decorator_factory_call_is_metadata_noop(tmp_path):
         str(entry),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -107,7 +106,6 @@ def test_noop_decorated_function_with_kwargs_uses_direct_call(tmp_path):
         str(entry),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -139,7 +137,6 @@ def test_native_decorated_function_call_accepts_kwargs_for_codegen(tmp_path):
         str(entry),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -178,7 +175,6 @@ def test_imported_bare_decorator_is_metadata_noop(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="auto",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -219,7 +215,6 @@ def test_same_module_bare_decorator_still_applies(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="auto",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -257,7 +252,6 @@ def test_same_module_decorator_varargs_wrapper_forwards_args_self_backend(tmp_pa
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -305,7 +299,6 @@ def test_module_global_partial_decorator_factory_replaces_function_self_backend(
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -365,7 +358,6 @@ def test_cross_module_calls_use_partial_decorator_replacement_self_backend(
         entry_module="entry",
         module_names=["provider", "entry"],
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

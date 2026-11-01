@@ -14,7 +14,7 @@ py_os_env.py) with CPython mapping semantics:
   (and child processes), matching CPython's putenv-backed __setitem__
 - ``os.environ.get`` / ``os.getenv`` keep the non-raising default path
 
-Compiles + runs under ``--backend self --python-libpython=off`` in
+Compiles + runs under ``--backend self`` in
 DEFAULT runtime mode (pcc-Python ports — the goal mode) and diffs the
 program output against python3 running the same source.
 """
@@ -89,7 +89,6 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

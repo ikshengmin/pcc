@@ -26,7 +26,6 @@ def _compile_and_run(tmp_path: Path, source: str) -> list[str]:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     proc = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30)
     assert proc.returncode == 0, proc.stdout + proc.stderr

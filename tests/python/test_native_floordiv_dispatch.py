@@ -82,7 +82,7 @@ def test_user_floordiv_dispatch_matches_cpython_on_five_collectors(tmp_path: Pat
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=60)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "floordiv"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

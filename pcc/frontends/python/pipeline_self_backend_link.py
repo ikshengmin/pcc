@@ -119,7 +119,6 @@ def link_paths(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -150,7 +149,6 @@ def link_paths(
             normalized_out,
             normalized_runtime,
             verbose,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=needs_native_extension_exports,
             extra_link_inputs=extra_link_inputs,
             extra_link_args=extra_link_args,
@@ -596,7 +594,6 @@ def run_link_command(
     verbose,
     *,
     extra_link_args: tuple[str, ...] = (),
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     pcc_asm_inputs: tuple[str, ...] = (),
     pcc_native_object_inputs: tuple[str, ...] = (),
@@ -619,7 +616,6 @@ def run_link_command(
     from pcc.backend.self_backend_target_match import target_os_name
     selected_target = target_triple or host_target_triple()
     selected_mode = resolve_self_link_mode(
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_args=extra_link_args,
     )
@@ -660,7 +656,6 @@ def run_link_command(
     if needs_native_extension_exports:
         validate_pcc_self_link_surface(
             extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=True,
             target_triple=selected_target,
             export_table_only=True,
@@ -682,7 +677,6 @@ def run_link_command(
     else:
         validate_pcc_self_link_surface(
             extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=False,
         )
     from pcc.backend.self_backend_target_match import is_aarch64_linux_triple, is_x86_64_linux_triple, is_x86_64_windows_triple
@@ -868,7 +862,6 @@ def link_ir_texts_run(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -886,9 +879,7 @@ def link_ir_texts_run(
     emit_objects,
     runtime_archive_link_args,
     native_extension_export_flags,
-    libpython_isolation_flags,
     platform_link_flags,
-    append_libpython_link_flags,
     log,
     join_strings,
     run_self_link_command,
@@ -907,7 +898,6 @@ def link_ir_texts_run(
             raise SelfBackendLinkError("cannot link modules with different targets")
         selected_target = target
     signature_owned_by_pcc = resolve_self_link_mode(
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_args=extra_link_args,
     ) == "pcc"
@@ -927,11 +917,10 @@ def link_ir_texts_run(
     link_profile = "link_self_pcc" if signature_owned_by_pcc else "link_self_cc"
     validate_pcc_self_link_surface(
         extra_link_args=extra_link_args,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         target_triple=selected_target,
     )
-    export_pcc_capi = needs_native_extension_exports and not needs_libpython
+    export_pcc_capi = needs_native_extension_exports
     asm_modules: list[str] = []
     needs_subsections_via_symbols = False
     input_ir_texts: list[str] = []
@@ -1005,12 +994,9 @@ def link_ir_texts_run(
         cmd.extend(["-o", tmp_out_path, "-lm"])
         cmd.extend(extra_link_args)
         cmd.extend(native_extension_export_flags(export_pcc_capi))
-        cmd.extend(libpython_isolation_flags(runtime_archive, needs_libpython))
         if sys.platform == "darwin" and needs_subsections_via_symbols:
             cmd.append("-Wl,-dead_strip")
         cmd.extend(platform_link_flags())
-        if needs_libpython:
-            append_libpython_link_flags(cmd)
         log(verbose, "self link: " + join_strings(cmd, " "))
         # Emit workers assemble owned-link modules into packed native objects
         # (``.pco``); the in-process fallback still hands over assembly.
@@ -1030,7 +1016,6 @@ def link_ir_texts_run(
                 extra_link_inputs,
                 verbose,
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=export_pcc_capi,
                 pcc_asm_inputs=(
                     tuple(obj_paths)
@@ -1097,9 +1082,6 @@ def link_ir_texts_run(
             runtime_archive, export_pcc_capi, owned_link=signature_owned_by_pcc,
             reference_link_args=runtime_archive_link_args,
         )
-    cmd.extend(libpython_isolation_flags(runtime_archive, needs_libpython))
-    if needs_libpython:
-        append_libpython_link_flags(cmd)
     log(verbose, "self link: " + join_strings(cmd, " "))
     try:
         total_started = profile_begin(profile)
@@ -1112,7 +1094,6 @@ def link_ir_texts_run(
             extra_link_inputs,
             verbose,
             extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=export_pcc_capi,
             semantic_layout_policy=semantic_layout_policy,
             target_triple=selected_target,
@@ -1143,7 +1124,6 @@ def link_ir_texts(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -1164,7 +1144,6 @@ def link_ir_texts(
                 normalized_out,
                 normalized_runtime,
                 verbose,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 extra_link_inputs=extra_link_inputs,
                 extra_link_args=extra_link_args,
@@ -1178,7 +1157,6 @@ def link_ir_texts(
         normalized_out,
         normalized_runtime,
         verbose,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_inputs=extra_link_inputs,
         extra_link_args=extra_link_args,

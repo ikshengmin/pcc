@@ -82,8 +82,7 @@ def test_pathlib_provider_methods_match_cpython(tmp_path):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     built = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(source), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(source), "-o", str(exe)],
         text=True, capture_output=True, timeout=600, env=env,
     )
     assert built.returncode == 0, built.stderr

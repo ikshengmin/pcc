@@ -6,7 +6,7 @@ where ``sub`` is a SUBMODULE file (``pkg/sub.py``), not a name defined in
 (Compare ``from os import path``, ``from numpy import linalg``.)
 
 Before the fix this fell back to libpython (PCC-PY-COMPILE-001 under
-``--python-libpython=off``): the top-level import-discovery
+the native pipeline): the top-level import-discovery
 (``_top_level_import_targets`` in pcc/frontends/python/pipeline.py) only added the
 PACKAGE (``pkg``) to the native compile set for a ``from pkg import sub``
 statement, never the submodule (``pkg.sub``). So ``pkg.sub`` was absent from
@@ -37,8 +37,7 @@ def _compile_run(tmp_path, build, main_src):
     env["PCC_PACKAGE_SITE"] = str(site)
     # Strict no-libpython: a CPython fallback would error PCC-PY-COMPILE-001.
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

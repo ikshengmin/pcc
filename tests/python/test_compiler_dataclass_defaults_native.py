@@ -76,7 +76,7 @@ def test_original_compiler_dataclass_defaults_native(module_name, program, expec
     compile_python_multi([str(consumer), module_source], str(binary),
                          module_names=['default_consumer', module_name],
                          entry_module='default_consumer', backend='self',
-                         libpython_mode='off', ir_scaffold_mode='on',
+                         ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
     for collector in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

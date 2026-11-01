@@ -24,7 +24,7 @@ def _compile(tmp_path, body, directive=""):
     output = tmp_path / "string_args.ll"
     source.write_text(directive + HEADER + body)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   python_library=True, backend="self", libpython_mode="off",
+                   python_library=True, backend="self",
                    ir_scaffold_mode="on")
     text = output.read_text()
     verify_ir_text(text)
@@ -414,7 +414,7 @@ def test_c_string_native_regression_shape_compiles_to_verified_ir(tmp_path):
     output = tmp_path / "string_native.ll"
     source.write_text(_NATIVE_SOURCE)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     verify_ir_text(text)
     assert "@test_cstr_callback_read(" in text
@@ -434,7 +434,7 @@ def test_c_string_arguments_execute_all_collectors(tmp_path, pcc_runtime_archive
     source.write_text(_NATIVE_SOURCE)
     target = host_target_triple()
     callee.write_bytes(emit_owned_object('target triple = "' + target + '"\n' + _NATIVE_CALLEES, target))
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
                    link_args=(str(callee),))
     expected = "5\n13\n7\n1\nTrue\nforeign\nTrue\n13\nTrue\nTrue\nTrue\nlater\nTrue\nTrue\nTrue\n" + "type\n" * 5 + "4\n"
@@ -626,7 +626,7 @@ def test_callback_alias_shape_exercises_legacy_unpin_before_collection(tmp_path)
     output = tmp_path / "callback_alias.ll"
     source.write_text(_NATIVE_SOURCE)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     verify_ir_text(text)
     match = re.search(r"^define[^\n]*@test_cstr_callback\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)

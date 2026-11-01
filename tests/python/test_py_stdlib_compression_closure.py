@@ -174,7 +174,6 @@ write_artifact("lzma.bin", lzma.compress(PAYLOAD, preset=3))
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

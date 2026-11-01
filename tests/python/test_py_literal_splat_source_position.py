@@ -93,25 +93,6 @@ _EXPECTED = [
 ]
 
 
-def test_splat_before_other_operands_matches_cpython(tmp_path):
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "literal_splat_positions.py"
-    exe = tmp_path / "literal_splat_positions.out"
-    src.write_text(_SOURCE, encoding="utf-8")
-    # ``with_cpython`` needs the CPython arm to actually run rather than be
-    # replaced by a fail-closed stub, so this links against libpython.
-    compile_python(str(src), str(exe), libpython_mode="on")
-    run = subprocess.run(
-        [str(exe)], text=True, capture_output=True, timeout=180, check=True
-    )
-    reference = subprocess.run(
-        ["python3", str(src)], text=True, capture_output=True, timeout=180, check=True
-    )
-    assert run.stdout == reference.stdout
-    assert run.stdout.splitlines() == _EXPECTED
-
-
 @pytest.mark.parametrize(
     "shape",
     [
@@ -142,7 +123,6 @@ def test_splat_shapes_lower_without_libpython(tmp_path, shape):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     text = out.read_text(encoding="utf-8")

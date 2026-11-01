@@ -27,7 +27,7 @@ def test_dynamic_bool_attribute_survives_constructor_call(tmp_path: Path, pcc_ru
     source = tmp_path / 'bool_argument.py'
     source.write_text(PROGRAM)
     binary = tmp_path / 'bool_argument'
-    compile_python(str(source), str(binary), backend='self',libpython_mode='off',ir_scaffold_mode='on',runtime_archive=str(pcc_runtime_archive))
+    compile_python(str(source), str(binary), backend='self',ir_scaffold_mode='on',runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)],env=dict(os.environ,PCC_GC_BACKEND=str(backend)),capture_output=True,text=True,timeout=15)
         assert result.returncode == 0, result.stderr

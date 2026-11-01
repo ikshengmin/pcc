@@ -98,7 +98,6 @@ def test_dunder_class_construction_uses_the_runtime_class(tmp_path):
         [
             sys.executable, "-m", "pcc",
             "--ir-scaffold=on", "--backend", "self",
-            "--python-libpython", "off",
             str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT),

@@ -28,7 +28,7 @@ def pending_exception_program(tmp_path_factory):
     source.write_text(_PROGRAM, encoding="utf-8")
     executable = work / "pending_exception.out"
     compile_python(str(source), str(executable), backend="self",
-                   ir_scaffold_mode="on", libpython_mode="off")
+                   ir_scaffold_mode="on")
     return executable
 
 

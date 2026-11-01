@@ -8,7 +8,7 @@ distinct from the existing direct-submodule-import coverage
 common package-usage shape.
 
 This is a B-P0-PKG capability lock (real multi-module pure-Python package import
-compiles AND runs fully native under ``--backend self --python-libpython=off``,
+compiles AND runs fully native under ``--backend self``,
 with no C-extension and no libpython fallback). It is NOT a gap fix — the
 capability already works; this regression-locks the facade variant.
 """
@@ -59,8 +59,7 @@ def test_facade_package_import_native(tmp_path):
     env["PCC_PACKAGE_SITE"] = str(site)
     # Strict no-libpython: a CPython fallback would error PCC-PY-COMPILE-001.
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

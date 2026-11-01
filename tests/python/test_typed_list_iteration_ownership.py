@@ -52,7 +52,7 @@ def main():
 main()
 '''.replace("ACTION", action))
     binary = tmp_path / "typed_field_loop"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="0"),
                          capture_output=True, text=True, timeout=15)
@@ -93,7 +93,7 @@ main()
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True,
                             text=True, check=True, timeout=10)
     binary = tmp_path / "list_rebind"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -186,7 +186,7 @@ def test_typed_list_loop_observes_live_mutations(
                             text=True, check=True, timeout=10)
     assert oracle.stdout == expected
     binary = tmp_path / "mutating_list"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

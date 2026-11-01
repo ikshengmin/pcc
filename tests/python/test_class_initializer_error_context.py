@@ -130,7 +130,7 @@ def test_class_initializer_nested_errors_reach_owned_emitter(tmp_path, monkeypat
     output = tmp_path / "class_initializers.ll"
     source.write_text(source_text)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     assert "class.body.unwind" in text
     bodies = re.findall(r'^define[^\n]*\{\n(.*?)^\}', text, re.M | re.S)
@@ -153,7 +153,7 @@ def test_class_literal_controls_reach_owned_emitter(tmp_path, monkeypatch, kind)
     source.write_text("class Holder:\n    values = " + expression +
                       "\ndef main():\n    assert len(Holder.values) == 2\nmain()\n")
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     data = emit_owned_object(output.read_text(), "arm64-apple-darwin")
     assert data[:4] == b"\xcf\xfa\xed\xfe"
 
@@ -166,7 +166,7 @@ def test_native_class_initializer_error_context(tmp_path, pcc_runtime_archive,
     binary = tmp_path / "class_initializers"
     source.write_text(source_text)
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,
                                 timeout=30, env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

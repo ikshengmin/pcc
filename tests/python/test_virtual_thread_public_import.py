@@ -146,7 +146,7 @@ def _compile_ir(tmp_path, source):
     path.write_text(source, encoding="utf-8")
     compile_python(
         str(path), str(output), emit_llvm_only=True, backend="self",
-        libpython_mode="off", ir_scaffold_mode="on",
+        ir_scaffold_mode="on",
     )
     return output.read_text(encoding="utf-8")
 
@@ -205,7 +205,7 @@ def test_public_import_continuation_runs_natively(
     )
     path.write_text(source, encoding="utf-8")
     compile_python(
-        str(path), str(executable), backend="self", libpython_mode="off",
+        str(path), str(executable), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
     )
     run = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)

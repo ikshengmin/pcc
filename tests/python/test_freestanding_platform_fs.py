@@ -28,7 +28,6 @@ def _compile_platform_ir(tmp_path: Path) -> Path:
         str(PLATFORM_SOURCE),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return out
@@ -350,7 +349,6 @@ def test_default_runtime_routes_path_queries_through_platform_fs_object(
         str(executable),
         backend="self",
         ir_scaffold_mode="on",
-        libpython_mode="off",
         runtime_archive=str(pcc_runtime_archive),
     )
     symbols = subprocess.run(
@@ -383,7 +381,7 @@ def test_complete_platform_module_owns_new_export(tmp_path, target):
     from tests.owned_ir_validation import verify_ir_text
     source=PLATFORM_SOURCE
     output=tmp_path/'platform.ll'
-    compile_python(str(source),str(output),emit_llvm_only=True,python_library=True,libpython_mode='off',target_triple=target)
+    compile_python(str(source),str(output),emit_llvm_only=True,python_library=True,target_triple=target)
     text=output.read_text();verify_ir_text(text)
     assert re.search(r'define[^\n]*i64 @pcc_platform_mkstemp_suffix\(ptr ',text)
     assert not re.search(r'\bcall[^\n]*@py_cpy_',text)

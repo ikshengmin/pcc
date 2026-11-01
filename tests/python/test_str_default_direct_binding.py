@@ -95,7 +95,7 @@ def _main_ir(tmp_path: Path) -> str:
     compile_python_multi(
         [str(entry.parent / "lib.py"), str(entry)], str(output),
         module_names=["pkg.lib", "pkg.main"], entry_module="pkg.main",
-        emit_llvm_only=True, backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        emit_llvm_only=True, backend="self", ir_scaffold_mode="on",
         recursive_stdlib=False,
     )
     return output.read_text(encoding="utf-8")
@@ -129,7 +129,7 @@ def test_str_defaults_keep_identity_on_five_collectors(tmp_path: Path, pcc_runti
                               capture_output=True, text=True, timeout=60)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "main"
-    compile_python(str(entry), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(entry), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

@@ -72,7 +72,7 @@ def test_finalizer_resurrection_matches_python_under_every_backend(
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "finalizer_resurrection"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

@@ -69,7 +69,7 @@ def test_unpack_preserves_values_and_target_order_across_parking(
     output = tmp_path / 'unpack_targets'
     source.write_text(program, encoding='utf-8')
     python_program_compiler(
-        str(source), str(output), backend='self', libpython_mode='off',
+        str(source), str(output), backend='self',
         runtime_archive=str(pcc_runtime_archive),
     )
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)

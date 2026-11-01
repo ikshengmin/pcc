@@ -7,7 +7,6 @@ from pcc.driver.cli_contract import (
     DEFAULT_EMIT_LL,
     DIAGNOSTIC_FORMAT_CHOICES,
     IR_SCAFFOLD_CHOICES,
-    PYTHON_LIBPYTHON_CHOICES,
     cli_input_path,
 )
 from pcc.package.environment import apply_locked_environment_resource_defaults, environment_info_json, environment_info_text, package_site_roots
@@ -28,7 +27,6 @@ Options:
   inspect PATH [--json]     Inspect a native artifact without executing it.
   bindgen HEADER [-o PATH]  Generate extern declarations from expanded C prototypes.
   -m MODULE [ARGS...]       Run a host Python module through pcc's safe module shim.
-  --python-libpython MODE   off (default), auto, or on for Python fallback linkage.
   --python-library          For .py inputs, emit a library module without @main.
   --ir-scaffold MODE        on (default), off, or auto. Enables Path A
                             closed-world IR-builder lowering (Issue 1).
@@ -169,7 +167,6 @@ def _python_link_input_groups(backend, link_args):
 def _python_run_cache_key(
     src_path: str,
     *,
-    python_libpython: str,
     python_library: bool,
     ir_scaffold: str,
     backend: str,
@@ -183,7 +180,6 @@ def _python_run_cache_key(
     for part in (
         _PY_RUN_CACHE_VERSION,
         os.path.abspath(src_path),
-        str(python_libpython or ""),
         str(bool(python_library)),
         str(ir_scaffold or ""),
         str(backend or ""),
@@ -248,7 +244,6 @@ def _python_run_cache_key(
 def _python_run_cache_path(
     src_path: str,
     *,
-    python_libpython: str,
     python_library: bool,
     ir_scaffold: str,
     backend: str,
@@ -271,7 +266,6 @@ def _python_run_cache_path(
         return None
     key = _python_run_cache_key(
         src_path,
-        python_libpython=python_libpython,
         python_library=python_library,
         ir_scaffold=ir_scaffold,
         backend=backend,
@@ -465,15 +459,6 @@ def _warn_if_self_backend_opt_level_clamped(
         _write_text(message, err=True)
 
 
-def _parse_python_libpython(value):
-    lowered = (value or "").strip().lower()
-    if lowered not in PYTHON_LIBPYTHON_CHOICES:
-        raise ValueError(
-            "invalid --python-libpython " f"{value!r}; expected auto, on, or off"
-        )
-    return lowered
-
-
 def _parse_ir_scaffold(value):
     lowered = (value or "").strip().lower()
     if lowered not in IR_SCAFFOLD_CHOICES:
@@ -596,7 +581,6 @@ def parse_cli_args(argv=None):
     output_path = None
     backend = None
     gpu_backend = None
-    python_libpython = None
     python_library = False
     ir_scaffold = None
     verbose = False
@@ -859,24 +843,6 @@ def parse_cli_args(argv=None):
                 return None, 2, str(exc)
             i += 2
             continue
-        if arg.startswith("--python-libpython="):
-            try:
-                python_libpython = _parse_python_libpython(
-                    _option_value(arg, "--python-libpython=")
-                )
-            except ValueError as exc:
-                return None, 2, str(exc)
-            i += 1
-            continue
-        if arg == "--python-libpython":
-            if i + 1 >= len(argv):
-                return None, 2, "--python-libpython requires a value"
-            try:
-                python_libpython = _parse_python_libpython(argv[i + 1])
-            except ValueError as exc:
-                return None, 2, str(exc)
-            i += 2
-            continue
         if arg.startswith("--ir-scaffold="):
             try:
                 ir_scaffold = _parse_ir_scaffold(_option_value(arg, "--ir-scaffold="))
@@ -958,7 +924,6 @@ def parse_cli_args(argv=None):
             output_path,
             backend,
             gpu_backend,
-            python_libpython,
             python_library,
             ir_scaffold,
             verbose,
@@ -1013,7 +978,6 @@ def _execute_python_path(
     output_path,
     target_triple,
     backend,
-    python_libpython,
     python_library,
     ir_scaffold,
     gpu_backend,
@@ -1031,7 +995,6 @@ def _execute_python_path(
         compile_output,
         compile_verbose,
         compile_emit_llvm_only,
-        compile_libpython_mode,
         compile_python_library,
         compile_ir_scaffold_mode,
         compile_gpu_backend,
@@ -1052,7 +1015,6 @@ def _execute_python_path(
                 metadata={"entry": "cli_core"},
                 verbose=compile_verbose,
                 emit_llvm_only=compile_emit_llvm_only,
-                libpython_mode=compile_libpython_mode,
                 python_library=compile_python_library,
                 ir_scaffold_mode=compile_ir_scaffold_mode,
                 gpu_backend=compile_gpu_backend,
@@ -1079,7 +1041,6 @@ def _execute_python_path(
                 ll_out,
                 verbose,
                 True,
-                python_libpython,
                 python_library,
                 ir_scaffold,
                 gpu_backend,
@@ -1096,7 +1057,6 @@ def _execute_python_path(
                 output_path,
                 verbose,
                 False,
-                python_libpython,
                 python_library,
                 ir_scaffold,
                 gpu_backend,
@@ -1111,7 +1071,6 @@ def _execute_python_path(
 
     cache_path = _python_run_cache_path(
         src_path,
-        python_libpython=python_libpython,
         python_library=python_library,
         ir_scaffold=ir_scaffold,
         backend=backend,
@@ -1142,7 +1101,6 @@ def _execute_python_path(
                 exe_path,
                 verbose,
                 False,
-                python_libpython,
                 python_library,
                 ir_scaffold,
                 gpu_backend,
@@ -1169,7 +1127,6 @@ def _execute_python_path(
                 exe_path,
                 verbose,
                 False,
-                python_libpython,
                 python_library,
                 ir_scaffold,
                 gpu_backend,
@@ -1213,7 +1170,6 @@ def execute_cli(
     output_path=None,
     backend=None,
     gpu_backend=None,
-    python_libpython=None,
     python_library=False,
     ir_scaffold=None,
     verbose=False,
@@ -1248,7 +1204,6 @@ def execute_cli(
             output_path=output_path,
             target_triple=target_triple,
             backend=backend,
-            python_libpython=python_libpython,
             python_library=python_library,
             ir_scaffold=ir_scaffold,
             gpu_backend=gpu_backend,
@@ -1565,7 +1520,6 @@ def _cli_main_impl(argv=None) -> int:
         output_path_raw,
         backend_raw,
         gpu_backend_raw,
-        python_libpython_raw,
         python_library_raw,
         ir_scaffold_raw,
         verbose_raw,
@@ -1610,7 +1564,6 @@ def _cli_main_impl(argv=None) -> int:
             compile_output,
             compile_verbose,
             compile_emit_llvm_only,
-            compile_libpython_mode,
             compile_python_library,
             compile_ir_scaffold_mode,
             compile_backend,
@@ -1632,7 +1585,6 @@ def _cli_main_impl(argv=None) -> int:
                     metadata={"entry": "cli_core"},
                     verbose=compile_verbose,
                     emit_llvm_only=compile_emit_llvm_only,
-                    libpython_mode=compile_libpython_mode,
                     python_library=compile_python_library,
                     ir_scaffold_mode=compile_ir_scaffold_mode,
                     backend=compile_backend,
@@ -1657,7 +1609,6 @@ def _cli_main_impl(argv=None) -> int:
                     ll_out,
                     verbose,
                     True,
-                    python_libpython_raw,
                     bool(python_library_raw),
                     ir_scaffold_raw,
                     backend_raw,
@@ -1675,7 +1626,6 @@ def _cli_main_impl(argv=None) -> int:
                     output_path,
                     verbose,
                     False,
-                    python_libpython_raw,
                     bool(python_library_raw),
                     ir_scaffold_raw,
                     backend_raw,
@@ -1691,7 +1641,6 @@ def _cli_main_impl(argv=None) -> int:
 
         cache_path = _python_run_cache_path(
             path,
-            python_libpython=python_libpython_raw,
             python_library=bool(python_library_raw),
             ir_scaffold=ir_scaffold_raw,
             backend=backend_raw,
@@ -1722,7 +1671,6 @@ def _cli_main_impl(argv=None) -> int:
                     exe_path,
                     verbose,
                     False,
-                    python_libpython_raw,
                     bool(python_library_raw),
                     ir_scaffold_raw,
                     backend_raw,
@@ -1750,7 +1698,6 @@ def _cli_main_impl(argv=None) -> int:
                     exe_path,
                     verbose,
                     False,
-                    python_libpython_raw,
                     bool(python_library_raw),
                     ir_scaffold_raw,
                     backend_raw,
@@ -1789,7 +1736,6 @@ def _cli_main_impl(argv=None) -> int:
     emit_asm = _normalize_cli_optional_text(emit_asm_raw)
     backend = _normalize_cli_optional_text(backend_raw)
     gpu_backend = _normalize_cli_optional_text(gpu_backend_raw)
-    python_libpython = _normalize_cli_optional_text(python_libpython_raw)
     python_library = _normalize_cli_flag(python_library_raw)
     ir_scaffold = _normalize_cli_optional_text(ir_scaffold_raw)
     return execute_cli(
@@ -1819,7 +1765,6 @@ def _cli_main_impl(argv=None) -> int:
         output_path=output_path,
         backend=backend,
         gpu_backend=gpu_backend,
-        python_libpython=python_libpython,
         python_library=python_library,
         ir_scaffold=ir_scaffold,
         verbose=verbose,

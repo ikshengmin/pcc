@@ -48,7 +48,6 @@ def test_hoisted_sibling_function_call_is_not_captured(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -71,7 +70,6 @@ def _compile_to_ll(source: str, name: str) -> str:
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     return out.read_text(encoding="utf-8")
@@ -127,7 +125,6 @@ def test_nested_hoist_free_name_analysis_is_cached(monkeypatch, tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert profile.exists()
@@ -221,7 +218,6 @@ def test_nested_hoist_caches_reject_reused_object_id(monkeypatch, tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

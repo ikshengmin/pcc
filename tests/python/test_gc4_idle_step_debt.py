@@ -47,7 +47,7 @@ def test_idle_gc4_steps_do_not_repeat_at_every_safepoint(tmp_path):
     source = tmp_path / "idle_debt.py"
     source.write_text(_PROGRAM, encoding="utf-8")
     binary = tmp_path / "idle_debt"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on")
     outputs = {}
     for collector in ("0", "3", "4"):

@@ -276,7 +276,7 @@ def py_time_sleep(delay):
 
     There was no native lowering for it, so any module calling ``time.sleep``
     resolved the call through CPython -- which fail-closes the whole enclosing
-    function under ``--python-libpython=off``. asyncio's event loop uses it for
+    function in the native pipeline. asyncio's event loop uses it for
     its idle wait, so a loop that ever went idle died with "no-libpython
     function unavailable: asyncio._run_once".
 

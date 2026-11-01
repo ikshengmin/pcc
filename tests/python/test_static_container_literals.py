@@ -42,7 +42,7 @@ def test_static_container_emission_preserves_values_and_fresh_nested_objects(
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "static_containers"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
@@ -58,7 +58,7 @@ def test_static_container_probe_reaches_each_counter(tmp_path, monkeypatch):
     source = tmp_path / "static_containers.py"
     source.write_text(PROGRAM)
     output = tmp_path / "static_containers.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     text = output.read_text()
     for name in (".pcc.static.dict.1", ".pcc.static.dict.2", ".pcc.static.list.1",
@@ -66,6 +66,6 @@ def test_static_container_probe_reaches_each_counter(tmp_path, monkeypatch):
         assert "@" + name + " =" in text, name
     monkeypatch.setenv("PCC_STATIC_AGGREGATE", "off")
     plain_output = tmp_path / "plain_containers.ll"
-    compile_python(str(source), str(plain_output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(plain_output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     assert "@.pcc.static.agg." not in plain_output.read_text()

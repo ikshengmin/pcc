@@ -13,7 +13,7 @@ resolver sets the *args slot to tuple(star_src) (tuple(<seq>) is a working
 builtin). Splats that also fill fixed slots / co-occur with **kwargs keep the
 old static path. Blast radius is contained — calls with no unpack early-return.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
@@ -22,7 +22,7 @@ import os, subprocess
 def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30, env=env)
     assert r.returncode == 0, r.stderr
@@ -84,7 +84,6 @@ def test_runtime_splat_tuple_materialization_is_helper_call(tmp_path, monkeypatc
         str(src),
         str(ll),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         emit_llvm_only=True,
     )
     ir_text = ll.read_text(encoding="utf-8")

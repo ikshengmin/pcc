@@ -91,7 +91,6 @@ def test_for_tuple_targets_bind_and_match_cpython(tmp_path, name, program, expec
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(

@@ -17,7 +17,7 @@ def test_host_worker_emits_final_native_instructions(tmp_path, monkeypatch):
     workers.write_worker_manifest(
         str(manifest), str(tmp_path / "result.tsv"), str(tmp_path), "", "",
         [str(source)], ["probe"], [0], entry_module="probe", sibling_inits=(),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
     )
     observed = []
     emit = emitter.emit_aarch64_darwin_indexed_transport

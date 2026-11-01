@@ -43,7 +43,7 @@ def main():
 main()
 '''.replace("BODY", consume))
     binary = tmp_path / "callback_owner"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
@@ -76,7 +76,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "expression_result"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,

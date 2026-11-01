@@ -55,7 +55,6 @@ def test_native_subprocess_timeout_kills_child_process_group(tmp_path: Path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",
@@ -110,7 +109,6 @@ def test_native_subprocess_timeout_passes_owned_environment_to_child(tmp_path: P
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",
@@ -133,45 +131,3 @@ def test_native_subprocess_timeout_passes_owned_environment_to_child(tmp_path: P
         env=env,
     )
     assert run.returncode == 0, run.stdout + run.stderr
-
-
-def test_pcc1_bootstrap_wrapper_enforces_timeout(tmp_path: Path):
-    pcc1 = find_current_pcc1(REPO_ROOT)
-    if pcc1 is None:
-        skip_or_fail_no_current_pcc1(
-            "no current pcc1 binary for bootstrap subprocess timeout gate"
-        )
-
-    slow_python = tmp_path / "slow-python"
-    leaked_marker = tmp_path / "pcc1-leaked.txt"
-    slow_python.write_text(
-        "#!/bin/sh\n"
-        "sleep 5\n"
-        "printf leaked > \"$PCC_TIMEOUT_LEAK_MARKER\"\n",
-        encoding="utf-8",
-    )
-    slow_python.chmod(0o755)
-
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_COMPAT_PYTHON"] = str(slow_python)
-    env["PCC_BOOTSTRAP_SUBPROCESS_TIMEOUT_SECONDS"] = "1"
-    env["PCC_TIMEOUT_LEAK_MARKER"] = str(leaked_marker)
-
-    started = time.monotonic()
-    run = subprocess.run(
-        [str(pcc1), "--python-libpython=auto", "-m", "ignored"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env=env,
-    )
-    elapsed = time.monotonic() - started
-
-    assert run.returncode != 0
-    assert elapsed < 4.0
-    assert "PCC1_COMPAT_RUNNER_MANIFEST:" in run.stderr
-    assert "pcc1 CPython compatibility runner failed" in run.stderr
-    time.sleep(0.25)
-    assert not leaked_marker.exists(), "pcc1 timed-out process group survived"

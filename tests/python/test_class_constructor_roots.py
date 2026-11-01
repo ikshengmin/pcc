@@ -337,7 +337,6 @@ main()
         str(output),
         emit_llvm_only=True,
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         target_triple=target_triple,
     )
@@ -360,7 +359,7 @@ def test_class_constructor_roots_reach_owned_emitter(tmp_path,monkeypatch,triple
     monkeypatch.setenv("PCC_WITH_THREADS","1")
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES",runtime_ir_passes(str(PORT.parent.parent)))
     compile_python(str(source),str(output),emit_llvm_only=True,python_library=True,
-                   backend="self",libpython_mode="off",ir_scaffold_mode="on",target_triple=triple)
+                   backend="self",ir_scaffold_mode="on",target_triple=triple)
     text=output.read_text()
     assert "@pcc_class_construct_owned_frame_map" in text
     assert "@pcc_class_construct_borrowed_frame_map" in text

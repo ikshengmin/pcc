@@ -9,7 +9,7 @@ and repetition doubles a filled prefix, so totals that are not a power of
 two exercise its last partial copy.
 
 The native program's output is compared with CPython running the same
-source. Runs under ``--backend self --python-libpython=off`` in DEFAULT
+source. Runs under ``--backend self`` in DEFAULT
 runtime mode.
 """
 from __future__ import annotations
@@ -72,8 +72,7 @@ def _run(tmp_path, source):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     built = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert built.returncode == 0, built.stderr

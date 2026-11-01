@@ -161,7 +161,6 @@ def test_bounded_mpsc_oneshot_select2_sequential_contract(
     compile_python(
         str(source),
         str(executable),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ran = subprocess.run(
@@ -196,7 +195,6 @@ def test_current_pcc1_self_no_libpython_channels(
         str(pcc1),
         "--backend",
         "self",
-        "--python-libpython=off",
         "--ir-scaffold=on",
         str(source),
         "-o",

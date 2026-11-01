@@ -44,7 +44,7 @@ def _require_pcc1():
     if not PCC1.exists() or not os.access(PCC1, os.X_OK):
         pytest.fail(
             f"pcc1 binary not available at {PCC1}; build via "
-            f"`uv run pcc --backend self --python-libpython=off --ir-scaffold=on "
+            f"`uv run pcc --backend self --ir-scaffold=on "
             f"pcc/__main__.py -o pcc1`"
         )
 
@@ -58,7 +58,6 @@ def _compile_with_pcc1(tmp_path: Path, source: str) -> Path:
             str(PCC1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

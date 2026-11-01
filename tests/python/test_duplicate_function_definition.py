@@ -70,7 +70,6 @@ def test_duplicate_function_definitions_emit_distinct_verified_bodies(
         str(source),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
     )
     ir_text = output.read_text(encoding="utf-8")
     verify_ir_text(ir_text)
@@ -118,7 +117,6 @@ def test_duplicate_function_definition_rebind_preserves_escaped_callable(
         str(source),
         str(output),
         backend=backend,
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(output)],
@@ -148,7 +146,6 @@ def test_control_flow_duplicate_definition_rebinds_only_on_executed_path(
         str(source),
         str(output),
         backend=backend,
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(output)],

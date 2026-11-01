@@ -52,7 +52,6 @@ def _compile_threaded(
         str(src_path),
         str(exe_path),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
 
 

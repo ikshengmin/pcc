@@ -286,7 +286,7 @@ def test_globals_owned_result_ir(tmp_path, monkeypatch, target):
         path.write_text(source)
         output = path.with_suffix(".ll")
         compile_python(str(path), str(output), emit_llvm_only=True, python_library=True,
-                       libpython_mode="off", ir_scaffold_mode="on", backend="self", target_triple=target)
+                       ir_scaffold_mode="on", backend="self", target_triple=target)
         text = output.read_text()
         verify_ir_text(text)
         if label == "globals_owner":

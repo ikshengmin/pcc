@@ -174,7 +174,6 @@ with lzma.open(%(lzma_path)r, "rb") as stream:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

@@ -242,7 +242,7 @@ def test_concat_existing_roots_native_all_gc(tmp_path, monkeypatch, threaded_pcc
     source = tmp_path / 'concat_owned.py'
     source.write_text(CONCAT_PROGRAM)
     binary = source.with_suffix('')
-    compile_python(str(source), str(binary), backend='self', libpython_mode='off',
+    compile_python(str(source), str(binary), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=40,

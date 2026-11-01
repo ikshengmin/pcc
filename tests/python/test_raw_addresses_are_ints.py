@@ -233,7 +233,6 @@ def test_raw_addresses_execute_as_ints_on_the_self_backend(tmp_path: Path) -> No
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -264,7 +263,7 @@ def main():
     print("ADDRESS_DIFFERENCE_OK")
 main()
 ''')
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on",
+    compile_python(str(src), str(exe), ir_scaffold_mode="on",
                    backend="self", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         done = subprocess.run([str(exe)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -325,7 +324,7 @@ def test_runtime_port_sibling_keeps_the_pointer_lane_when_compiled_in_a_closure(
         encoding="utf-8",
     )
     exe = tmp_path / "app"
-    compile_python(str(app), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self")
+    compile_python(str(app), str(exe), ir_scaffold_mode="on", backend="self")
     done = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
     assert done.stdout == "10\n"

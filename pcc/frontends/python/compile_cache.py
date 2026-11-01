@@ -138,8 +138,8 @@ def parse_plan_input(path):
     pos += 1
     identity, platform, machine, compiler_path = lines[pos:pos + 4]
     pos += 4
-    entry, libpython_mode, scaffold = lines[pos:pos + 3]
-    pos += 3
+    entry, scaffold = lines[pos:pos + 2]
+    pos += 2
     sibling_count = int(lines[pos]); pos += 1
     siblings = lines[pos:pos + sibling_count]; pos += sibling_count
     env_count = int(lines[pos]); pos += 1
@@ -168,7 +168,6 @@ def parse_plan_input(path):
         "compiler_sha256": sha256_file(compiler_path),
         "entry_module": entry,
         "sibling_inits": siblings,
-        "libpython_mode": libpython_mode,
         "ir_scaffold_mode": scaffold,
         "codegen_environment": environment,
         "sources": sources,
@@ -287,7 +286,6 @@ if mode == "plan":
             "codegen_environment": material["codegen_environment"],
             "entry_module": material["entry_module"],
             "ir_scaffold_mode": material["ir_scaffold_mode"],
-            "libpython_mode": material["libpython_mode"],
             "sibling_inits": material["sibling_inits"],
         }
         options_digest = hashlib.sha256(
@@ -570,7 +568,6 @@ def plan_python_frontend_ir_cache(
     host_python: str,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     source_root: str = "",
 ):
@@ -590,7 +587,6 @@ def plan_python_frontend_ir_cache(
             stream.write(_safe_field(_machine_name()) + "\n")
             stream.write(_safe_field(os.path.abspath(compiler_executable)) + "\n")
             stream.write(_safe_field(entry_module) + "\n")
-            stream.write(_safe_field(libpython_mode) + "\n")
             stream.write(_safe_field(ir_scaffold_mode) + "\n")
             stream.write(str(len(sibling_inits)) + "\n")
             for name in sibling_inits:

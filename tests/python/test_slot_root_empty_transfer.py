@@ -89,7 +89,7 @@ def test_native_cleanup_keeps_exception_identity_and_owned_result(tmp_path, pcc_
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, "EMPTY_TRANSFER_OK\n", "")
     output = tmp_path / "empty_transfer"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

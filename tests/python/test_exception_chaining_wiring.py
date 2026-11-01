@@ -66,7 +66,6 @@ def test_nested_unhandled_traceback_is_outermost_first_with_source(tmp_path):
     compile_python(
         str(source_path),
         str(executable),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -116,7 +115,6 @@ def test_unhandled_implicit_chain_keeps_the_original_failure(tmp_path):
     compile_python(
         str(source_path),
         str(executable),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

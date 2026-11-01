@@ -235,7 +235,7 @@ def run_runtime_probe(
             runtime_dir,
             work_runtime,
             ignore=shutil.ignore_patterns(
-                "build", "build_pcc", "build_py", "build_libpython", "*.a",
+                "build", "build_pcc", "build_py", "*.a",
                 "*.a.*", "_native", "__pycache__",
             ),
         )

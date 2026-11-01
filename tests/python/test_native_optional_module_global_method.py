@@ -64,7 +64,6 @@ def test_guarded_optional_imported_class_global_method_runs_natively(tmp_path):
             "pcc.backend.optional_arena",
             "pcc.backend.optional_state",
         ],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         recursive_stdlib=False,

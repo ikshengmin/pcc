@@ -56,7 +56,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "static_lookup"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

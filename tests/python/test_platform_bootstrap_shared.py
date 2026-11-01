@@ -201,7 +201,7 @@ def test_stage_environment_drives_real_indexed_worker(tmp_path, monkeypatch, tar
     pipeline._write_python_frontend_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)],
         ["probe"], [0], entry_module="probe", sibling_inits=(),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
     )
     assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
     object_path = tmp_path / "module_0.direct.pco"

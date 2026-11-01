@@ -74,7 +74,7 @@ def test_synchronous_call_roots_survive_collection_and_later_parking(
                       "backend = extern('pcc_gc_backend', (), c_int64)\n"
                       "print('backend', backend())\n", encoding='utf-8')
     binary = tmp_path / 'synchronous_call'
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                             runtime_archive=str(pcc_runtime_archive))
     (tmp_path / 'expected.stdout').write_text(expected)
     for backend in range(5):

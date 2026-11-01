@@ -36,7 +36,7 @@ def _compile(paths, names, output, **options):
     from pcc.frontends.python.pipeline import compile_python_multi
     compile_python_multi(
         paths, str(output), entry_module=names[0], module_names=names,
-        backend='self', libpython_mode='off', ir_scaffold_mode='on',
+        backend='self', ir_scaffold_mode='on',
         recursive_stdlib=False, **options,
     )
 

@@ -128,7 +128,7 @@ def test_checked_entry_emits_raw_status_abi_without_managed_prologue(tmp_path):
 
     output = tmp_path / "checked_frame.ll"
     compile_python(str(SOURCE), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", backend="self", target_triple="x86_64-unknown-linux-gnu")
+                   backend="self", target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     entry = re.search(
         r"^define (?:external )?i64 @pcc_gc_note_frame_enter_checked\(ptr [^,]+, ptr [^)]+\).*?^}",

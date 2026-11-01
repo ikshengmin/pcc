@@ -2,7 +2,7 @@
 
 A bool-literal ``flush=`` kwarg on ``print`` used to force the CPython
 fallback (PCC-PY-COMPILE-001 "requires libpython fallback" under
-``--python-libpython=off``): the kwarg gate in _emit_print_call only
+the native pipeline): the kwarg gate in _emit_print_call only
 accepted ``sep`` / ``end`` and rejected everything else, and
 _try_emit_native_file_stream_print also declined ``flush``.
 
@@ -15,7 +15,7 @@ never emits a dead truthiness value. A non-literal ``flush=<expr>`` still falls
 back (evaluating it for truthiness could have side effects). ``file=`` still
 forces fallback regardless of flush.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode
+Runs under ``--backend self`` in DEFAULT runtime mode
 (links the pcc-Python runtime ports), then diffs stdout against CPython.
 """
 from __future__ import annotations
@@ -28,8 +28,7 @@ def _run(tmp_path, source):
     src = tmp_path / "pf.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "pf_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stderr
@@ -92,7 +91,6 @@ def test_native_scalar_print_ir_has_no_printf_calls(tmp_path):
         str(out),
         emit_llvm_only=True,
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     llvm_ir = out.read_text(encoding="utf-8")

@@ -185,7 +185,7 @@ def test_native_generator_statement_lifetimes_all_collectors(
     source.write_text(PROGRAM)
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert (expected.returncode, expected.stdout, expected.stderr) == (0, "STATEMENT_ROOTS_OK\n", "")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
@@ -201,7 +201,7 @@ def test_native_vthread_statement_lifetimes_all_collectors(
     source = tmp_path / "vthread_statement_roots.py"
     binary = tmp_path / "vthread_statement_roots"
     source.write_text(VTHREAD_PROGRAM)
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

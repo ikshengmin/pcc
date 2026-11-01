@@ -65,7 +65,7 @@ main()
 '''.replace("DEFINITION", definition).replace("CALL", call))
     binary = tmp_path / "rebound_owner"
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
@@ -137,7 +137,7 @@ main()
 ''')
     binary = tmp_path / "parameter_edges"
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))

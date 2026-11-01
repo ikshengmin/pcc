@@ -1,7 +1,7 @@
 """CPython parity for ``dict`` methods, ported from
 ``Lib/test/test_dict.py``.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython 3.7+):
   * ``dict`` preserves insertion order
@@ -23,7 +23,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 
@@ -150,7 +150,7 @@ def test_dict_items_for_loop_direct_lowering(tmp_path, monkeypatch):
 
     compile_python(
         str(src), str(ll),
-        ir_scaffold_mode="on", libpython_mode="off", emit_llvm_only=True,
+        ir_scaffold_mode="on", emit_llvm_only=True,
     )
     ir_text = ll.read_text(encoding="utf-8")
     assert "py_dict_entries_used" in ir_text
@@ -160,7 +160,7 @@ def test_dict_items_for_loop_direct_lowering(tmp_path, monkeypatch):
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
     assert _run(exe).strip().splitlines() == ["abc", "6", "9"]
 
@@ -205,7 +205,6 @@ def test_dict_union_operator_self_backend(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert _run(exe).strip().splitlines() == ["1", "20", "3", "2"]
@@ -237,7 +236,6 @@ def test_dict_union_optional_dict_pattern_self_backend(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert _run(exe).strip().splitlines() == ["1", "20", "20"]
@@ -265,7 +263,6 @@ def test_chained_assignment_to_dict_subscript_self_backend(tmp_path, monkeypatch
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert _run(exe).strip().splitlines() == ["gfortran", "gfortran", "2"]

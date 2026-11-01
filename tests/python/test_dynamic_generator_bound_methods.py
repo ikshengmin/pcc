@@ -62,7 +62,7 @@ def test_dynamic_generator_bound_methods_native_five_gc(tmp_path, pcc_runtime_ar
                                text=True, timeout=15)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, EXPECTED, "")
     output = tmp_path / "generator_consumer"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

@@ -61,7 +61,7 @@ def test_value_array_c_like_owned_frontend_keeps_aggregate_and_slow_paths(tmp_pa
     emitted = tmp_path / "value_array_c_like.ll"
     compile_python(
         str(PY_SOURCE), str(emitted), emit_llvm_only=True,
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     text = emitted.read_text(encoding="utf-8")
     signature = _manifest()["ir_shape"]["function_signature"]
@@ -144,7 +144,6 @@ def test_value_array_c_like_source_matches_host_default_and_explicit_self(tmp_pa
         compile_python(
             str(PY_SOURCE),
             str(executable),
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend=backend,
         )

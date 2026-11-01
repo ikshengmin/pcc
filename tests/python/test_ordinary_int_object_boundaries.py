@@ -111,10 +111,10 @@ def exported(value: int) -> int:
         # retaining that explicit diagnostic is part of its machine contract.
         with pytest.raises(RuntimeError, match="freestanding module functions require @c_abi_export: private_helper"):
             compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                           backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                           backend="self", ir_scaffold_mode="on")
         return
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     for symbol in ("user_manual_abi_private_helper", "manual_probe"):
         signature = re.search(r"^define [^\n]*@" + symbol + r"\([^\n]*", text, re.M)
@@ -166,7 +166,7 @@ main()
 ''')
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     signature = re.search(r"^define [^\n]*@user_[^\n]*_Machine___init__\([^\n]*", text, re.M)
@@ -200,7 +200,7 @@ print(sum_ints([1, 2, 3, 4]))
     assert restored["bounded"]["sum_ints"]["box_int_abi"] is False
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text()
     body = re.search(r"(?ms)^define [^\n]*@user_bounded_sum_ints\(.*?\n\}", text).group(0)
     assert re.search(r"define (?:external )?i64 @user_bounded_sum_ints\(ptr", body)
@@ -224,7 +224,7 @@ def test_ordinary_int_boundaries_owned_ir(tmp_path, monkeypatch, name):
     output = source.with_suffix(".ll")
     source.write_text(PROGRAMS[name])
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     if name == "constructors":
@@ -257,7 +257,7 @@ def test_ordinary_int_boundaries_native(tmp_path, monkeypatch, pcc_runtime_archi
     source = tmp_path / ("ordinary_int_" + name + ".py")
     binary = source.with_suffix("")
     source.write_text(PROGRAMS[name])
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

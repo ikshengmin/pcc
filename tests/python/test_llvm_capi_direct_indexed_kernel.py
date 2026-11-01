@@ -1239,7 +1239,6 @@ def test_direct_publication_uses_exact_static_abi_in_stage1_context(tmp_path):
         mods,
         targets,
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
         emit_ir_dir=str(tmp_path),
     )
     assert counts == {module_name: 0 for module_name in targets}

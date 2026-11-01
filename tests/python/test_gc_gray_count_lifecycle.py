@@ -121,8 +121,7 @@ def gray_count_native_probe(request, tmp_path_factory, gray_count_native_toolcha
     )
     identities = {str(path): _sha256(path) for path in (compiler, archive, source)}
     result = _run(
-        [str(compiler), "--backend", "self", "--python-libpython", "off",
-         "--ir-scaffold", "on", str(source), "-o", str(executable)],
+        [str(compiler), "--backend", "self", "--ir-scaffold", "on", str(source), "-o", str(executable)],
         directory=directory, environment=environment, prefix="compile", timeout=90,
     )
     assert result.returncode == 0, (shape, result.stdout, result.stderr)

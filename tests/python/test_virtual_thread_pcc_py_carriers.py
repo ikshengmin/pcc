@@ -339,7 +339,6 @@ def test_current_pcc1_self_no_libpython_multicarrier_gc_matrix(
         str(pcc1),
         "--backend",
         "self",
-        "--python-libpython=off",
         "--ir-scaffold=on",
         str(source),
         "-o",

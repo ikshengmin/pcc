@@ -402,7 +402,6 @@ def test_collector_identity_getter_uses_owned_tls_in_host_ir(tmp_path):
         str(ROOT / "pcc/runtime/py/freestanding_gc_public_collection.py"),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_THREAD_LOCAL_GLOBALS

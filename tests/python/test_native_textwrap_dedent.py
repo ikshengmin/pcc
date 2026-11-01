@@ -24,7 +24,6 @@ def test_runtime_textwrap_dedent_stays_native_for_dynamic_string(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

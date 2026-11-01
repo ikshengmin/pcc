@@ -97,7 +97,7 @@ def _compile(tmp_path: Path, archive, name: str, program: str):
     )
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / name
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(archive))
     return binary, expected.stdout
 

@@ -18,7 +18,7 @@ different paths and remain separate follow-ups (documented in
 docs/investigations/sequence-builtins-len-getitem-not-iterator-protocol.md's
 sibling notes). This test covers ``+`` only.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode
+Runs under ``--backend self`` in DEFAULT runtime mode
 (pcc-Python ports; py_obj_stubs is a PY_MODULES port).
 """
 from __future__ import annotations
@@ -36,8 +36,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

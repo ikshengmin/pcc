@@ -43,7 +43,7 @@ def _emit_probe(tmp_path, source, mode):
     output = tmp_path / "owner_case.ll"
     path.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
     compile_python(str(path), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode=mode)
+                   backend="self", ir_scaffold_mode=mode)
     return _owner_probe_body(output.read_text(encoding="utf-8"))
 
 
@@ -153,11 +153,10 @@ def test_native_compiler_distinguishes_user_builder_and_ir_provider(tmp_path):
     source.write_text(textwrap.dedent(_NATIVE_SOURCE).lstrip(), encoding="utf-8")
     environment = dict(os.environ)
     environment.pop("LC_ALL", None)
-    environment.update(PCC_PYTHON_LIBPYTHON="off", PCC_SELF_LINK="pcc",
+    environment.update(PCC_SELF_LINK="pcc",
                        PCC_IR_SCAFFOLD="on", PCC_NO_AUTO_PCC1="1")
     compiled = subprocess.run(
-        [str(compiler), "--backend", "self", "--python-libpython", "off",
-         str(source), "-o", str(binary)],
+        [str(compiler), "--backend", "self", str(source), "-o", str(binary)],
         env=environment, capture_output=True, text=True, timeout=180,
     )
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr

@@ -396,7 +396,7 @@ class PyStartupArgsTests(unittest.TestCase):
             """,
         )
         exe = os.path.join(self.td, "argparse.out")
-        compile_python(src, exe, libpython_mode="auto")
+        compile_python(src, exe)
         run = subprocess.run(
             [exe, "--x", "hello"],
             capture_output=True,

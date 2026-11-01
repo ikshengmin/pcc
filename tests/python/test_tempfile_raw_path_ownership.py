@@ -100,7 +100,7 @@ def managed_join(first: str, second: str, flag: bool) -> str:
     output = source.with_suffix(".ll")
     compile_python(
         str(source), str(output), emit_llvm_only=True, python_library=True,
-        libpython_mode="off", backend="self", target_triple="arm64-apple-darwin",
+        backend="self", target_triple="arm64-apple-darwin",
     )
     text = output.read_text()
     verify_ir_text(text)

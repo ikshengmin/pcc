@@ -1060,7 +1060,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
 
     def link(*args, **kwargs):
         assert args == (artifacts, "out", runtime, False)
-        expected = dict(needs_libpython=False, needs_native_extension_exports=False,
+        expected = dict(needs_native_extension_exports=False,
                         extra_link_inputs=object_inputs, extra_link_args=("flag",), profile=None,
                         target_triple=None)
         if enabled:
@@ -1069,7 +1069,7 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
         operation("link")
 
     namespace = dict(
-        emit_llvm_only=False, native_backend="self", libpython_mode="off", any_needs_libpython=False,
+        emit_llvm_only=False, native_backend="self", any_needs_libpython=False,
         any_needs_native_extension_exports=False, runtime_archive="runtime", target_triple=None,
         module_direct_artifacts=artifacts, module_ir_texts=[("sample", "")],
         object_inputs=object_inputs,
@@ -1249,7 +1249,7 @@ def test_mock_executable_publication_keeps_calls_and_failed_boundary(monkeypatch
 
     def link(*args, **kwargs):
         assert args == (["cc", "object", "extra.o", "-o", "out.tmp"], None, "out.tmp", "runtime", ("extra.o",), False)
-        expected = dict(extra_link_args=("flag",), needs_libpython=False,
+        expected = dict(extra_link_args=("flag",),
                         needs_native_extension_exports=False,
                         pcc_internal_input_manifest="temporary/internal-inputs.txt", link_profile_path=None,
                         target_triple=target)
@@ -1270,7 +1270,7 @@ def test_mock_executable_publication_keeps_calls_and_failed_boundary(monkeypatch
 
     namespace = dict(
         artifacts=[("sample", "PCO", "object")], out_path="out", runtime_archive="runtime",
-        verbose=False, needs_libpython=False, needs_native_extension_exports=False,
+        verbose=False, needs_native_extension_exports=False,
         extra_link_inputs=("extra.o",), extra_link_args=("flag",), profile=None, coordinator_timing=timer,
         target_triple=target,
         _macho_semantic_layout_enabled=lambda: False, _validate_pcc_self_link_surface=lambda **kwargs: None,
@@ -1322,7 +1322,7 @@ def test_parallel_direct_forwarding_preserves_untimed_exact_kwargs(direct, enabl
 
     namespace = {"os": types.SimpleNamespace(environ={"PCC_DIRECT_INDEXED_KERNEL_EMIT": "1" if direct else "0"})}
     invoke = _mocked_source_function("pcc/frontends/python/pipeline_frontend_parallel.py", "compile_parallel", namespace)
-    kwargs = dict(jobs=0, entry_module="sample", sibling_inits=[], libpython_mode="off",
+    kwargs = dict(jobs=0, entry_module="sample", sibling_inits=[],
                   ir_scaffold_mode="off", verbose=False, profile=None, artifact_dir="artifacts",
                   coordinator_timing=timer, compile_uncached=uncached)
     for name in ("can_spawn_worker", "worker_command_prefix", "plan_cache", "load_cache", "acquire_cache",
@@ -1330,7 +1330,7 @@ def test_parallel_direct_forwarding_preserves_untimed_exact_kwargs(direct, enabl
                  "profile_begin", "profile_end", "profile_counter"):
         kwargs[name] = forbidden
     assert invoke(paths, modules, **kwargs) is output
-    expected = dict(jobs=0, entry_module="sample", sibling_inits=[], libpython_mode="off",
+    expected = dict(jobs=0, entry_module="sample", sibling_inits=[],
                     ir_scaffold_mode="off", verbose=False, profile=None, artifact_dir="artifacts")
     if direct:
         expected["action_cache_plan"] = None

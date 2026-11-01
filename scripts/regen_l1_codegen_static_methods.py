@@ -8,8 +8,8 @@ assembled) and emits a pure-data Python module that the bootstrap-safe
 Why this layer of indirection: ``layer1_support.py`` is in the no-libpython
 bootstrap closure for ``pcc1``.  ``inspect.signature`` and friends aren't
 natively lowered by the pcc-Python frontend, so any direct use of them in
-layer1_support.py forces a libpython fallback and aborts the strict
-``--python-libpython=off`` build.  Generating the static data offline keeps
+layer1_support.py forces a CPython fallback and aborts the native
+build.  Generating the static data offline keeps
 the runtime module data-only and bootstrap-safe.
 
 Run when ``host_contract.py::L1_CODEGEN_HOST_METHODS`` changes or the

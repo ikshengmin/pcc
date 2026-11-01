@@ -26,7 +26,6 @@ def _compile_linux_ir(tmp_path: Path, monkeypatch) -> str:
         str(SOURCE),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         backend="self",
         target_triple=LINUX_TRIPLE,

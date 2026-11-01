@@ -248,7 +248,7 @@ def test_public_callback_compile_reaches_owned_pe_link_with_object(tmp_path, mon
     monkeypatch.setattr(owned_pe_link, "link_inputs", link)
     observed_compile(
         _compile, entry, source, output, options=ObservabilityOptions(),
-        backend="self", libpython_mode="off", ir_scaffold_mode="on", target_triple=TARGET,
+        backend="self", ir_scaffold_mode="on", target_triple=TARGET,
         runtime_archive=str(runtime), object_inputs=(str(helper),),
     )
     assert len(calls) == len(archives) == 1
@@ -264,7 +264,7 @@ def test_raw_link_args_are_not_reclassified_as_object_inputs(tmp_path, monkeypat
     monkeypatch.setattr(pipeline, "_explicit_runtime_archive", lambda path, **_kwargs: path)
     with pytest.raises(pipeline.PyPipelineError, match="does not support link arguments"):
         pipeline.compile_python(
-            str(source), str(tmp_path / "out.exe"), backend="self", libpython_mode="off",
+            str(source), str(tmp_path / "out.exe"), backend="self",
             target_triple=TARGET, runtime_archive=str(tmp_path / "runtime.a"),
             object_inputs=(str(helper),), link_args=(argument,),
         )

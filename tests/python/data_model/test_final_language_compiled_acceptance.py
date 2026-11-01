@@ -21,9 +21,8 @@ def _compile_and_run(
         p = tmp_path / name
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     env = os.environ.copy()
-    env["PCC_PYTHON_LIBPYTHON"] = "off"
     proc = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=30, cwd=tmp_path, env=env
     )

@@ -113,7 +113,6 @@ def test_calling_a_class_whose_base_name_collides_still_compiles(tmp_path):
         str(tmp_path / "consumer.ll"),
         entry_module="consumer",
         module_names=["consumer", "colliding_provider"],
-        libpython_mode="off",
         emit_llvm_only=True,
         ir_scaffold_mode="on",
     )
@@ -133,7 +132,6 @@ def test_both_same_named_classes_keep_their_own_behaviour(tmp_path):
         str(exe),
         entry_module="consumer",
         module_names=["consumer", "colliding_provider"],
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -202,7 +200,7 @@ def test_string_valued_enum_members_expose_value(tmp_path):
     src = tmp_path / "string_enum.py"
     exe = tmp_path / "string_enum.out"
     src.write_text(_STRING_ENUM, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )

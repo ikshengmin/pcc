@@ -143,7 +143,7 @@ def test_subprocess_status_native_five_gc(tmp_path, monkeypatch, pcc_runtime_arc
     source = tmp_path / 'subprocess_status.py'
     binary = source.with_suffix('')
     source.write_text(NATIVE_SOURCE)
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

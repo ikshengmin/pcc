@@ -28,7 +28,7 @@ def test_native_threading_preserves_branch_string_owners(tmp_path, pcc_diagnosti
     else:
         driver = Path(__file__).resolve().parents[2] / "pcc/backend/owned_target_pass_driver.py"
         binary = tmp_path / "target-pass"
-        compile_python(str(driver), str(binary), backend="self", libpython_mode="off",
+        compile_python(str(driver), str(binary), backend="self",
                        ir_scaffold_mode="on", runtime_archive=str(pcc_diagnostic_runtime_archive))
     source, edges = tmp_path / "input.s", tmp_path / "edges.txt"
     source.write_text(_SOURCE)

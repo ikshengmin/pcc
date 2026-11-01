@@ -5,7 +5,7 @@ lowering, so `bin(5)` / `hex(255)` / `oct(8)` raised `NameError` at runtime unde
 `--python-libpython=off`. Now lowered to runtime `py_builtin_bin/hex/oct`
 (py_dunder.c), which produce CPython-exact base-prefixed strings.
 
-Compiles + runs under `--backend self --python-libpython=off` and asserts the
+Compiles + runs under `--backend self` and asserts the
 exact output.
 """
 from __future__ import annotations
@@ -25,8 +25,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # mirrored in both py_dunder.c and py_dunder.py.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

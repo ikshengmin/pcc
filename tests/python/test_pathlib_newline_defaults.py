@@ -73,7 +73,7 @@ def test_path_text_defaults_execute_real_native_provider(tmp_path, pcc_runtime_a
     data = tmp_path / 'input'
     data.write_bytes(b'a\r\nb\rc\n')
     output = tmp_path / 'program'
-    compile_python(str(source), str(output), backend='self', libpython_mode='off',
+    compile_python(str(source), str(output), backend='self',
                    runtime_archive=str(pcc_runtime_archive))
     result = subprocess.run([str(output), str(data), str(tmp_path / 'output')],
                             capture_output=True, text=True, timeout=30,

@@ -32,7 +32,6 @@ def test_instance_field_callable_call_compiles_to_dynamic_attribute_call(tmp_pat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert exe.exists()
@@ -60,7 +59,6 @@ def test_local_callable_shadows_same_named_function_for_codegen(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert exe.exists()
@@ -88,7 +86,6 @@ def test_unhinted_module_global_dunder_new_does_not_bind_unrelated_class(tmp_pat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert exe.exists()
@@ -112,7 +109,6 @@ def test_class_call_uses_dunder_new_when_init_is_absent(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -150,7 +146,6 @@ def test_dunder_new_private_class_attribute_uses_mangled_name(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -194,7 +189,6 @@ def test_super_dunder_new_walks_through_intermediate_base(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -223,7 +217,6 @@ def test_builtin_type_dunder_new_is_a_native_callable_value(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -260,7 +253,6 @@ def test_method_default_resolves_preceding_class_literal(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -302,7 +294,6 @@ def test_dyn_receiver_dunder_new_does_not_bind_unrelated_class_method_self_backe
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert exe.exists()
@@ -329,7 +320,6 @@ def test_native_module_alias_call_does_not_bind_unrelated_class_method(tmp_path)
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert exe.exists()

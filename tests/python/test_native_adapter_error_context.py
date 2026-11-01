@@ -40,7 +40,7 @@ def test_adapter_error_edges_stay_in_the_adapter(tmp_path, monkeypatch, direct):
     source.write_text(PROGRAM)
     output = tmp_path / "adapter_scope.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple="arm64-apple-darwin")
     text = output.read_text()
     assert "native.adapter.input.unwind" in text
@@ -55,7 +55,7 @@ def test_native_adapter_propagates_argument_type_error(
     source.write_text(PROGRAM)
     output = tmp_path / "adapter_scope"
     python_program_compiler(str(source), str(output), backend="self",
-                            libpython_mode="off", runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))

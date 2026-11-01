@@ -16,7 +16,7 @@ float (_emit_binop_float + static `/`), and the low_ir pure-leaf scaffold
 (variable-divisor `//`/`%`/`/` bails to the guarded full path). Message matches
 Python 3.14's unified "division by zero".
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import ast
@@ -27,7 +27,7 @@ from pathlib import Path
 def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30, env=env)
     assert r.returncode == 0, r.stderr

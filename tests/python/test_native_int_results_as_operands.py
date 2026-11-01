@@ -45,7 +45,7 @@ def test_native_int_results_are_slot_call_operands(
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "native_int_operands"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

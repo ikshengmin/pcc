@@ -417,7 +417,7 @@ def test_worker_uses_structured_linux_elf_and_preserves_other_routes(tmp_path, t
     receipt = tmp_path / "route.json"
     pipeline._write_python_frontend_worker_manifest(
         str(manifest), str(result), str(tmp_path), "", "", [str(source)], ["probe"], [0],
-        entry_module="probe", sibling_inits=(), libpython_mode="off",
+        entry_module="probe", sibling_inits=(),
         ir_scaffold_mode="on", verbose=False,
     )
     env = {name: value for name, value in os.environ.items() if not name.startswith("PCC_")}

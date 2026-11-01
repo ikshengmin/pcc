@@ -77,7 +77,7 @@ def test_attribute_classinfo_matches_cpython(tmp_path, mode):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        libpython_mode="off", ir_scaffold_mode=mode, backend="self",
+        ir_scaffold_mode=mode, backend="self",
     )
     for backend in ("0", "1", "2", "3", "4"):
         run = subprocess.run(
@@ -140,7 +140,7 @@ def test_imported_class_named_like_a_builtin_type_in_a_tuple(tmp_path, mode):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        libpython_mode="off", ir_scaffold_mode=mode, backend="self",
+        ir_scaffold_mode=mode, backend="self",
     )
     for backend in ("0", "4"):
         run = subprocess.run(

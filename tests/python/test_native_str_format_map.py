@@ -15,7 +15,7 @@ libpython fallback). Format specs (``{n:>5}``, ``{x:.2f}``), literal braces
 ``{{`` / ``}}`` and repeated fields go through the existing ``py_obj_format`` /
 ``py_str_concat`` path, so they match ``.format()``.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode). No runtime/ABI change was
 needed; this is a pure frontend lowering.
 """
@@ -34,8 +34,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

@@ -70,7 +70,7 @@ def test_parking_calls_from_synchronous_callers_match_python(
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "may_park_sync"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

@@ -36,7 +36,6 @@ def test_hoisted_closure_reads_self_fields_with_the_host_layout(tmp_path):
         mods,
         {_MODULE},
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
         emit_ir_dir=str(ir_dir),
     )
     assert counts == {_MODULE: 0}

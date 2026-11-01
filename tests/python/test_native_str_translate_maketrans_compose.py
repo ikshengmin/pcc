@@ -10,7 +10,7 @@ unchanged.
 Both frontend lowering paths route single-arg ``translate`` to the runtime
 ``py_str_translate`` (py_str_accessors.c + its pcc-Python port), and
 ``str.maketrans`` (2-arg) to ``py_str_maketrans``. Compiles + runs under
-``--backend self --python-libpython=off`` in DEFAULT runtime mode (pcc-Python
+``--backend self`` in DEFAULT runtime mode (pcc-Python
 ports — the goal mode).
 """
 from __future__ import annotations
@@ -28,8 +28,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

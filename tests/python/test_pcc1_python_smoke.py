@@ -113,7 +113,6 @@ def _compile_and_run(
     src_text: str,
     *,
     timeout: float = 30.0,
-    libpython_mode: str = "off",
     compile_env: dict[str, str] | None = None,
 ) -> str:
     """Use the compiled pcc1 binary to compile ``src_text`` to a native
@@ -130,7 +129,6 @@ def _compile_and_run(
         str(src),
         "-o",
         str(exe),
-        f"--python-libpython={libpython_mode}",
         "--ir-scaffold=on",
     ]
     compile_proc = subprocess.run(
@@ -216,8 +214,6 @@ def test_pcc1_mixed_oversized_asm_and_safe_pco_handoff(tmp_path: Path):
             str(profile_path),
             "--backend",
             "self",
-            "--python-libpython",
-            "off",
             "--ir-scaffold",
             "on",
             str(package / "__main__.py"),
@@ -267,7 +263,6 @@ def test_pcc1_help_lists_bootstrap_cli_options():
     assert result.returncode == 0, result.stderr
     for option in (
         "--backend",
-        "--python-libpython",
         "--python-library",
         "--ir-scaffold",
         "--emit-llvm",
@@ -294,7 +289,6 @@ def test_pcc1_native_subprocess_preserves_child_returncode(tmp_path):
             str(current_pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
         ],
@@ -625,7 +619,6 @@ def test_pcc1_accepts_host_pass_cli_for_python_inputs(tmp_path):
         str(PCC1),
         "--backend",
         "self",
-        "--python-libpython=off",
         "--ir-scaffold=on",
         "--pass",
         "called-value-prop",
@@ -672,7 +665,6 @@ def test_pcc1_python_library_emit_llvm_cli(tmp_path):
             str(PCC1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             "--python-library",
             "--emit-llvm=" + str(ll),
@@ -758,7 +750,6 @@ def test_pcc1_emit_llvm_and_profile_json_cli(tmp_path):
             str(PCC1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             "--emit-llvm=" + str(ll),
             "--profile-json",
@@ -805,7 +796,6 @@ def test_pcc1_diagnostic_format_json_on_compile_error(tmp_path):
             str(PCC1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             "--diagnostic-format=json",
             str(src),
@@ -1036,7 +1026,6 @@ def test_pcc1_pcc_python_runtime_keeps_py_lex_token_constructor_args(tmp_path):
     compile_cmd = [
         str(PCC1),
         "--emit-llvm",
-        "--python-libpython=off",
         "--ir-scaffold=on",
         str(REPO / "pcc" / "frontends" / "python" / "py_lex.py"),
         "-o",

@@ -22,7 +22,7 @@ def test_owned_output_writer_changed_shape_all_collectors(
     monkeypatch.setenv('PCC_TEST_NO_NATIVE_PROVISIONING', '1')
     monkeypatch.setenv('PCC_NO_AUTO_PCC1', '1')
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         path = tmp_path / ('gc' + str(backend))

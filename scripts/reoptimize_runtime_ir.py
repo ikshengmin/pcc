@@ -108,7 +108,7 @@ def main():
             shutil.copyfile(ir_path, ir_path.with_suffix(".input.ll"))
             verify_parsed_module(parse_self_backend_module(before))
             triple = record["target_triple"]
-            optimized = run_owned_passes(before, owned_passes, True)
+            optimized = run_owned_passes(before, owned_passes)
             verify_parsed_module(parse_self_backend_module(optimized))
             ir_path.write_text(optimized)
             object_bytes, emitted_triple, emitter = _emit_object_with_triple(optimized, target_triple=triple)

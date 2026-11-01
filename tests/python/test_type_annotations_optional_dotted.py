@@ -86,7 +86,6 @@ def test_class_type_from_dotted_has_no_libpython_fallback(tmp_path):
         module_names=["pcc.frontends.python.py_ast", "pcc.frontends.python.types"],
         entry_module="pcc.frontends.python.types",
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ir_text = out.read_text(encoding="utf-8")
     match = re.search(

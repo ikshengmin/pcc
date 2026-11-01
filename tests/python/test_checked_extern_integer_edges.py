@@ -62,7 +62,7 @@ def _compile_ir(tmp_path, monkeypatch, source, threads):
     ir_path = tmp_path / "checked_extern.ll"
     path.write_text(source)
     compile_python(str(path), str(ir_path), emit_llvm_only=True,
-                   python_library=True, backend="self", libpython_mode="off",
+                   python_library=True, backend="self",
                    ir_scaffold_mode="on")
     return ir_path.read_text()
 
@@ -143,7 +143,7 @@ def test_native_checked_integer_edges_preserve_callee_and_buffer_state(
     source = tmp_path / "checked_extern.py"
     binary = tmp_path / ("checked_extern.exe" if os.name == "nt" else "checked_extern")
     source.write_text(EDGE_SOURCE)
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

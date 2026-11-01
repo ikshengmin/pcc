@@ -105,7 +105,7 @@ def test_unresolved_local_annotation_compiles_direct_aggregate_storage(tmp_path,
 
     paths, names, _, _, _ = _context(tmp_path, annotation)
     result = compile_contextual_per_module_fallback_counts(
-        paths, names, ["consumer"], ir_scaffold_mode="on", strict_no_libpython=True,
+        paths, names, ["consumer"], ir_scaffold_mode="on",
         emit_ir_dir=str(tmp_path),
     )
     assert result == {"consumer": 0}

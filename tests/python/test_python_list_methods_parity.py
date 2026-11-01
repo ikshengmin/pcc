@@ -1,7 +1,7 @@
 """CPython parity for ``list`` methods, ported from
 ``Lib/test/test_list.py``.
 
-All tests use ``libpython_mode="off"`` so we exercise pcc's native
+All tests use the native pipeline so we exercise pcc's native
 ``list`` runtime.
 
 Reference contract (from CPython):
@@ -23,7 +23,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 

@@ -228,7 +228,6 @@ env -u LC_ALL uv run pcc \
   --backend=self \
   --target {X86_64_LINUX_TRIPLE} \
   --python-library \
-  --python-libpython=off \
   --emit-llvm="$ll" \
   "$src"
 grep -F 'target triple = "{X86_64_LINUX_TRIPLE}"' "$ll" >/dev/null
@@ -481,7 +480,6 @@ PCC_HOST_PYTHON="$python_bin" env -u LC_ALL "$pcc_bin" \
   --backend=self \
   --target __PCC_TARGET__ \
   --python-library \
-  --python-libpython=off \
   --ir-scaffold=on \
   --emit-llvm="$app_ll" \
   "$app_src"
@@ -489,7 +487,6 @@ PCC_HOST_PYTHON="$python_bin" env -u LC_ALL "$pcc_bin" \
   --backend=self \
   --target __PCC_TARGET__ \
   --python-library \
-  --python-libpython=off \
   --ir-scaffold=on \
   --emit-llvm="$start_ll" \
   "$start_src"
@@ -909,7 +906,6 @@ PYEOF
     --backend=self \
     --target __PCC_TARGET__ \
     --python-library \
-    --python-libpython=off \
     --ir-scaffold=on \
     --emit-llvm="$diag_ll" \
     "$diag_src" >"$work/list-call-diagnostic.compile.log" 2>&1; then
@@ -1044,7 +1040,7 @@ EOF
 
 PATH="$wrapper:$PATH" \
 PCC_RUNTIME_BUILD=owned PCC_SELF_OBJ=pcc PCC_SELF_LINK=pcc \
-PCC_IR_TO_OBJ_EMITTER=pcc PCC_PYTHON_LIBPYTHON=off \
+PCC_IR_TO_OBJ_EMITTER=pcc \
 PCC_PYTHON_IR_PASSES=off \
 env -u LC_ALL uv run pcc \
   --backend=self \

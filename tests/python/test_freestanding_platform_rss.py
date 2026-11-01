@@ -22,7 +22,6 @@ def _compile_platform_ir(tmp_path: Path) -> Path:
         str(PLATFORM_SOURCE),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return out

@@ -42,7 +42,7 @@ def test_call_node_score_executes_natively_under_all_collectors(
     )
     binary = tmp_path / "ast_score"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -147,7 +147,7 @@ def _frontend_commands(tmp_path, sizes, exports=None):
         worker_policy.write_worker_manifest(
             str(path), str(tmp_path / (str(index) + ".result")),
             str(tmp_path / "ir"), str(exports), str(tmp_path), sources, names, [index],
-            entry_module=names[0], sibling_inits=(), libpython_mode="off",
+            entry_module=names[0], sibling_inits=(),
             ir_scaffold_mode="on", verbose=False,
         )
         manifests.append(str(path))
@@ -418,7 +418,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "pco_admission"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(

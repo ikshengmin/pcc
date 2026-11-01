@@ -1,7 +1,7 @@
 """``from package import *`` star import, no-libpython.
 
 ``from pkg import *`` fell back to libpython under
-``--backend self --python-libpython=off``: the textual import-discovery
+``--backend self``: the textual import-discovery
 (``_append_source_import_from_spec`` in pcc/frontends/python/pipeline.py) dropped any
 ``*``-only from-import statement entirely (it filtered ``*`` out of the imported
 names and then skipped the spec because no names remained), so the package was
@@ -28,8 +28,7 @@ def _compile_run(tmp_path, build, main_src):
     env.pop("LC_ALL", None)
     env["PCC_PACKAGE_SITE"] = str(site)
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

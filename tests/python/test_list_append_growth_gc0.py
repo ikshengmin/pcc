@@ -219,7 +219,7 @@ def test_growing_appends_on_four_carriers_and_five_collectors(tmp_path, threaded
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "append_growth"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     expected = ("[(5000, '0:0', '0:4999', 28890), (5000, '1:0', '1:4999', 28890), "
                 "(5000, '2:0', '2:4999', 28890), (5000, '3:0', '3:4999', 28890), 0, 1, 2, 3]\n"

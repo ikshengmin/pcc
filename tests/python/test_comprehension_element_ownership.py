@@ -41,7 +41,7 @@ def main():
 main()
 '''.replace("EXPRESSION", expression))
     binary = tmp_path / "comp_elements"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="0"),
                          capture_output=True, text=True, timeout=15)
@@ -90,7 +90,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "comp_errors"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -139,7 +139,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "iterator_owners"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,

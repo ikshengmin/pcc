@@ -21,7 +21,6 @@ def test_list_unpack_assignment_target_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

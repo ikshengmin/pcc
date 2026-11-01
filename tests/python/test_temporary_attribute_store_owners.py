@@ -119,7 +119,7 @@ def test_temporary_attribute_native_all_gc(tmp_path, monkeypatch, threaded_pcc_r
     source = tmp_path / 'attribute_owned.py'
     source.write_text(PROGRAM)
     binary = source.with_suffix('')
-    compile_python(str(source), str(binary), backend='self', libpython_mode='off', ir_scaffold_mode='on',
+    compile_python(str(source), str(binary), backend='self', ir_scaffold_mode='on',
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

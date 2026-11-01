@@ -32,7 +32,7 @@ def test_extern_owned_result_publication_executes_all_collectors(
     receipt_path = tmp_path / 'extern-result-execution.json'
     receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
     python_program_compiler(
-        str(source), str(output), backend='self', libpython_mode='off',
+        str(source), str(output), backend='self',
         ir_scaffold_mode='on', runtime_archive=str(explicit_owned_runtime),
     )
     receipt['executable_sha256'] = hashlib.sha256(output.read_bytes()).hexdigest()

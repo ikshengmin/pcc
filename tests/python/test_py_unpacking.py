@@ -27,7 +27,6 @@ def test_starred_unpack_from_sys_version_info_tuple(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -58,7 +57,6 @@ def test_starred_unpack_from_dynamic_sequence(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

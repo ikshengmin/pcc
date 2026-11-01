@@ -47,7 +47,7 @@ def test_missing_module_raises_module_not_found_error_on_five_collectors(
     )
     binary = tmp_path / "missing_module"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

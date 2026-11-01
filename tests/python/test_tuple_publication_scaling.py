@@ -44,7 +44,7 @@ def test_native_tuple_from_list_preserves_contents(tmp_path):
     binary = tmp_path / "tuple_growth"
     compile_python_multi(
         [str(source)], str(binary), entry_module="tuple_growth",
-        module_names=["tuple_growth"], libpython_mode="off",
+        module_names=["tuple_growth"],
         ir_scaffold_mode="on", backend="self", recursive_stdlib=False,
         target_triple="arm64-apple-darwin23.6.0", runtime_archive=str(archive),
     )

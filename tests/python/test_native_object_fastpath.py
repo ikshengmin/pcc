@@ -89,7 +89,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "strings"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     expected = str(len(_build_string_table(["_symbol_" + str(i) for i in range(40000)])[1]))
     for backend in range(5):
@@ -623,7 +623,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "link_lifetime"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
@@ -764,7 +764,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "fixed_pco_reads"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(
@@ -786,7 +786,7 @@ def test_packed_relocation_native_link_executes_under_all_collectors(
     linker = tmp_path / "native-linker"
     python_program_compiler(
         str(Path(owned_link_driver.__file__)), str(linker), backend="self",
-        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     caller = tmp_path / "caller.pco"
     helper = tmp_path / "helper.pco"

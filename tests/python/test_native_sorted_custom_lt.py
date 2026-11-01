@@ -16,7 +16,7 @@ list.sort() uses (_emit_list_sort_with_dunder_lt), on a COPY of the list
 (sorted() is non-mutating). This sidesteps the runtime comparison primitive
 entirely. Non-class / int / str lists keep py_obj_sorted.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
@@ -26,7 +26,7 @@ from pathlib import Path
 def _run(tmp_path, source, runtime_env=None):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     run_env = env.copy()
     if runtime_env:

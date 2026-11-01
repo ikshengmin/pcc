@@ -41,7 +41,7 @@ def main():
 main()
 '''.replace("KEY", key).replace("SOURCE", source))
     binary = tmp_path / "dynamic_item"
-    compile_python(str(program), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(program), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="0"),
                          capture_output=True, text=True, timeout=15)

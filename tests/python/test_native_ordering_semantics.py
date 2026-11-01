@@ -279,7 +279,7 @@ def test_native_ordering_matches_cpython(tmp_path):
         assert ref.returncode == 0 and ref.stderr == "", ref.stderr
         compile_python(
             str(src), str(exe), backend="self", ir_scaffold_mode="on",
-            libpython_mode="off", runtime_archive=str(archive),
+            runtime_archive=str(archive),
         )
         record["binary_sha256"] = sha(exe)
         for backend in range(5):

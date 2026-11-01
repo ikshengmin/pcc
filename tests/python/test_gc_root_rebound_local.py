@@ -85,7 +85,6 @@ def _compile_and_dump(tmp_path: Path) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

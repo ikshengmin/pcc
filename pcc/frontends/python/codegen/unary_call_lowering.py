@@ -56,7 +56,7 @@ _CPY_BUILTIN_TYPE_NAMES = frozenset(
 # Members the builtin bases' native namespaces provide (py_class.py,
 # _builtin_namespace_names). ``dict.get(d, k)``, ``Exception.__str__(e)``
 # and the like resolve them on the native type object; another name keeps
-# the CPython route, which --python-libpython=off reports at compile time.
+# the CPython route, which the native pipeline reports at compile time.
 NATIVE_EXCEPTION_NAMESPACE_MEMBERS = frozenset(("__init__", "__str__", "__repr__", "add_note"))
 NATIVE_DICT_NAMESPACE_MEMBERS = frozenset((
     "__init__", "__getitem__", "__setitem__", "__delitem__", "__contains__",
@@ -1060,8 +1060,7 @@ class UnaryCallLoweringMixin:
             and not expr.kwargs
         ):
             # Native float.fromhex(str) — parses a hexadecimal floating-point
-            # string exactly like CPython (see py_float_fromhex.c). Avoids the
-            # libpython fallback so it works under --python-libpython=off.
+            # string exactly like CPython (see py_float_fromhex.c), natively.
             # Raises ValueError / OverflowError through the owned operand
             # runtime call's error path.
             return self._emit_owned_operand_runtime_call(expr, "py_float_fromhex", 1)

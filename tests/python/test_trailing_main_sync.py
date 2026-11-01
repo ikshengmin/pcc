@@ -137,7 +137,7 @@ def test_trailing_main_real_entry_ir(tmp_path, monkeypatch, case):
     source = _source(tmp_path, case)
     output = tmp_path / "trailing.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     ir_text = output.read_text()
     entry = re.search(r"^define\s+(?:external\s+)?i32\s+@main\([^\n]*\)[^\n]*\{\n(.*?)^\}",
                       ir_text, re.M | re.S)
@@ -211,7 +211,7 @@ def test_host_compiled_trailing_main_executes(tmp_path, monkeypatch, supplied_th
         "runtime_archive": str(archive), "source_sha256": before,
         "threads": 1, "scaffold": "on", "python_ir_passes": "off",
     })
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(archive))
     assert {path: _sha(path) for path in before} == before
     _execute(binary, environment, tmp_path, case, gc_backend)
@@ -234,8 +234,7 @@ def test_native_compiled_trailing_main_executes(tmp_path, monkeypatch, supplied_
     source = _source(tmp_path, case, runtime_gc=gc_backend)
     binary = tmp_path / "trailing"
     before = {str(path): _sha(path) for path in (compiler, archive, source)}
-    command = [str(compiler), "--backend", "self", "--python-libpython", "off",
-               "--ir-scaffold", "on", str(source), "-o", str(binary)]
+    command = [str(compiler), "--backend", "self", "--ir-scaffold", "on", str(source), "-o", str(binary)]
     _write_json(tmp_path / "compile.json", {"producer": "explicit native compiler", "command": command,
                                             "input_sha256": before})
     result = subprocess.run(command, cwd=tmp_path, env=environment,

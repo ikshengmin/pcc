@@ -126,7 +126,7 @@ def test_tuple_structseq_reaches_owned_object(tmp_path, monkeypatch):
     source.write_text('class Record(tuple):\n    __slots__ = ()\n    __pcc_struct_sequence__ = True\ndef main():\n    print("entered")\nmain()\n')
     output = tmp_path / 'tuple_base.ll'
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend='self', libpython_mode='off', ir_scaffold_mode='on',
+                   backend='self', ir_scaffold_mode='on',
                    target_triple='x86_64-unknown-linux-gnu')
     text = output.read_text()
     _assert_physical_tuple_base(text, 'Record')

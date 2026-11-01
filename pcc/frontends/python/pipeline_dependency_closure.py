@@ -68,21 +68,14 @@ _py_ast_field_value = _pipeline_libpython.ast_field_value
 ) = _pipeline_paths.resolve_runtime_paths(__file__)
 
 
-def _validate_package_site_no_libpython_abi(
-    src_paths: list[str],
-    *,
-    libpython_mode: str,
-) -> None:
-    """Reject installed packages that cannot satisfy a no-libpython compile.
+def _validate_package_site_native_abi(src_paths: list[str]) -> None:
+    """Reject installed packages that a native compile cannot satisfy.
 
     The package installer records pcc-native metadata, but older installs may
     have been produced before the CPython-extension-ABI gate existed. Re-scan
-    installed package roots here so ``pcc --python-libpython=off`` fails at the
-    package boundary instead of generating thousands of opaque ``py_cpy_*``
-    fallback calls later in codegen.
+    installed package roots here so a compile fails at the package boundary
+    instead of generating opaque ``py_cpy_*`` calls later in codegen.
     """
-    if libpython_mode != "off":
-        return
     roots: list[str] = []
     seen: set[str] = set()
     for src in src_paths:
@@ -139,7 +132,7 @@ def _validate_package_site_no_libpython_abi(
             + ": installed package cannot be used by pcc-native no-libpython import: "
             + path
             + "; reinstall with --abi=pcc-native from source, or choose an explicit "
-            + "--abi=libpython / --abi=cpython-compat mode"
+            + "--abi=cpython-compat mode"
         )
 
 

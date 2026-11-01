@@ -119,7 +119,6 @@ def test_negative_aligned_keys_are_never_dropped(tmp_path, kind):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(
@@ -211,7 +210,6 @@ def test_negative_aligned_keys_survive_the_c_mirror(tmp_path, monkeypatch, kind)
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(

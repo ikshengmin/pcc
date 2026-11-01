@@ -21,7 +21,6 @@ def _plan(tmp_path, monkeypatch, *, compiler_text="compiler"):
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert plan is not None
@@ -53,7 +52,6 @@ def test_frontend_ir_cache_key_is_gc_invariant_but_codegen_sensitive(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert second is not None
@@ -67,7 +65,6 @@ def test_frontend_ir_cache_key_is_gc_invariant_but_codegen_sensitive(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert third is not None
@@ -88,7 +85,6 @@ def test_frontend_ir_cache_identity_is_independent_from_object_emitter_identity(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     monkeypatch.setenv("PCC_PY_FRONTEND_IR_CACHE_IDENTITY", "source-tree-b")
@@ -99,7 +95,6 @@ def test_frontend_ir_cache_identity_is_independent_from_object_emitter_identity(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -121,7 +116,6 @@ def test_frontend_ir_cache_key_includes_compiler_and_source_bytes(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert compiler_changed is not None
@@ -136,7 +130,6 @@ def test_frontend_ir_cache_key_includes_compiler_and_source_bytes(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     assert source_changed is not None
@@ -156,7 +149,6 @@ def test_frontend_ir_cache_key_uses_compiler_bytes_not_copy_path(tmp_path, monke
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -203,7 +195,6 @@ def test_frontend_ir_cache_coordinates_byte_identical_compiler_copies(
         host_python="python3",
         entry_module="entry",
         sibling_inits=("helper",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = (
@@ -274,7 +265,6 @@ def test_parallel_frontend_cache_wrapper_publishes_and_reuses(monkeypatch):
         jobs=2,
         entry_module="entry",
         sibling_inits=(),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         verbose=False,
     )

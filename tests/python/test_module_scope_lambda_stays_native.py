@@ -4,7 +4,7 @@
 lowered to ``operator.attrgetter`` / ``itemgetter`` / ``methodcaller`` by
 importing CPython's ``operator`` module.  That is a reasonable shortcut when a
 CPython callable is what the consumer wants, but it claimed the shape even
-under ``--python-libpython=off``, where a native function object
+under the native pipeline, where a native function object
 (``_maybe_emit_native_lambda_func``) was already available and was simply
 tried second.
 
@@ -59,7 +59,7 @@ def test_module_scope_lambdas_run_and_match_cpython(tmp_path):
     src = tmp_path / "module_lambdas.py"
     exe = tmp_path / "module_lambdas.out"
     src.write_text(_SOURCE, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )
@@ -80,7 +80,6 @@ def test_module_scope_lambdas_emit_no_cpython_operator(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     text = out.read_text(encoding="utf-8")
@@ -110,30 +109,3 @@ def test_passes_base_lowers_with_no_fallbacks():
     assert re.search(r"\bcall [^\n]*@py_cpy_", ir_text) is None
     assert "cpy.operator_modname" not in ir_text
     assert os.path.basename(str(path)) == "base.py"
-
-
-@pytest.mark.parametrize("mode", ["auto", "on"])
-def test_operator_shortcut_is_kept_when_cpython_callables_are_wanted(tmp_path, mode):
-    """The shortcut still applies where a CPython callable is the point."""
-    from pcc.frontends.python.pipeline import compile_python
-
-    src = tmp_path / "sort_key.py"
-    out = tmp_path / "sort_key.ll"
-    src.write_text(
-        '''
-def ranked(rows: list) -> list:
-    return sorted(rows, key=lambda row: row[1])
-''',
-        encoding="utf-8",
-    )
-    compile_python(
-        str(src),
-        str(out),
-        emit_llvm_only=True,
-        libpython_mode=mode,
-        ir_scaffold_mode="on",
-    )
-    # Nothing is asserted about which lowering wins here -- only that the
-    # non-strict modes still compile the shape at all, so the reordering did
-    # not narrow them.
-    assert out.read_text(encoding="utf-8").count("define ") > 0

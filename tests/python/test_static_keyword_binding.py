@@ -266,7 +266,7 @@ def test_keyword_binding_matches_cpython_on_five_gcs(tmp_path, monkeypatch, pcc_
     binary = tmp_path / "kwbind"
     compile_python_multi(
         paths, str(binary), module_names=names, entry_module="kwbind",
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

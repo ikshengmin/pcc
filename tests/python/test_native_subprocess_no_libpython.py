@@ -29,7 +29,6 @@ def test_subprocess_check_output_and_check_call_no_libpython(tmp_path: Path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",
@@ -83,7 +82,6 @@ def test_subprocess_check_true_preserves_called_process_error_fields_no_libpytho
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",
@@ -133,7 +131,7 @@ def test_discarded_run_computed_capture_starred_argv_and_timeout_native(tmp_path
         0, "visibleNATIVE_SUBPROCESS_KWARGS_OK\n", "",
     )
     binary = tmp_path / "computed_run"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

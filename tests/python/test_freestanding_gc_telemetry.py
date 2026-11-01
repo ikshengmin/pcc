@@ -80,7 +80,6 @@ def _compile_telemetry_object(tmp_path: Path, emitter: str = "llvm") -> Path:
         str(TELEMETRY_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     source = llvm_ir

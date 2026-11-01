@@ -9,7 +9,7 @@ def _compile_and_run(tmp_path, monkeypatch, source: str) -> str:
     src = tmp_path / "case.py"
     exe = tmp_path / "case.out"
     src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30.0)
     assert result.returncode == 0
     return result.stdout

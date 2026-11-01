@@ -32,7 +32,7 @@ def optimize_ir(text: str, passes: str) -> str:
             raise ValueError("unsupported owned IR pass: " + name)
         started = time.perf_counter()
         previous = text
-        text = run_owned_passes(text, selected, False)
+        text = run_owned_passes(text, selected)
         changed = text != previous
         name = ",".join(selected)
         elapsed = time.perf_counter() - started

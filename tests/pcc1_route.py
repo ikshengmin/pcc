@@ -6,7 +6,7 @@ instead of host CPython pcc, and ``pcc.driver.cli_launcher`` (``uv run pcc``,
 ``.venv/bin/pcc``) exec it.  The whole suite then checks the native compiler
 the same way it checks the host one.
 
-A call the native CLI cannot express (libpython on/auto, the LLVM backend,
+A call the native CLI cannot express (the LLVM backend,
 ``recursive_stdlib``, ``profile=`` or multi-module compiles) is rejected before
 host compilation in strict mode. Non-strict use retains the host fallback.
 Every compile -- routed or not -- is appended to
@@ -274,7 +274,6 @@ def install() -> None:
         *,
         verbose=False,
         emit_llvm_only=False,
-        libpython_mode=None,
         ir_scaffold_mode=None,
         backend=None,
         gpu_backend=None,
@@ -287,9 +286,7 @@ def install() -> None:
         profile=None,
     ):
         reason = ""
-        if libpython_mode not in (None, "off"):
-            reason = "libpython_mode=" + str(libpython_mode)
-        elif backend not in (None, "self"):
+        if backend not in (None, "self"):
             reason = "backend=" + str(backend)
         elif recursive_stdlib:
             reason = "recursive_stdlib"
@@ -328,7 +325,6 @@ def install() -> None:
                 out_path,
                 verbose=verbose,
                 emit_llvm_only=emit_llvm_only,
-                libpython_mode=libpython_mode,
                 ir_scaffold_mode=ir_scaffold_mode,
                 backend=backend,
                 gpu_backend=gpu_backend,
@@ -344,8 +340,6 @@ def install() -> None:
             compiler,
             "--backend",
             "self",
-            "--python-libpython",
-            "off",
             "--ir-scaffold",
             ir_scaffold_mode or "on",
         ]

@@ -134,14 +134,14 @@ def main():
     assert "alloca" not in out and "ret i64 %arg" in out
     out = "".join(_sroa_function(STRUCT.splitlines(keepends=True)))
     assert "alloca {" not in out and "getelementptr" not in out
-    out = run_compiled_default_tier(SCALAR, ["mem2reg", "sroa"], strict_no_libpython=False)
+    out = run_compiled_default_tier(SCALAR, ["mem2reg", "sroa"])
     assert "alloca" not in out and "ret i64 %arg" in out
     out = run_owned_passes(SCALAR, ["mem2reg", "sroa"], False)
     assert "alloca" not in out and "ret i64 %arg" in out
     assert _has_py_cpy_call(CALL)
     assert not _has_py_cpy_call("declare ptr @py_cpy_import(ptr)\n")
     assert run_owned_passes(CALL, ["mem2reg"], True) == CALL
-    assert run_compiled_default_tier(CALL, ["mem2reg", "sroa"], strict_no_libpython=True) == CALL
+    assert run_compiled_default_tier(CALL, ["mem2reg", "sroa"]) == CALL
     print("scalar-helpers-and-strict-bool")
 
     functions = [inline_module]

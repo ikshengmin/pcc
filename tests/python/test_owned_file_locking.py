@@ -19,7 +19,7 @@ def probe_lock(fd: i64, operation: i64) -> i64:
     return file_flock(fd, operation)
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", target_triple=target)
+                   target_triple=target)
     text = output.read_text()
     if "darwin" in target:
         assert "@flock(" in text and "@__error(" in text
@@ -43,7 +43,7 @@ def probe_lock(fd: i64) -> i64:
     return file_lock_region(fd, 1, 0, 1)
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", target_triple="x86_64-pc-windows-msvc")
+                   target_triple="x86_64-pc-windows-msvc")
     text = output.read_text()
     assert "@pcc_win_file_lock_region(" in text
     assert not re.search(r"\bcall\b[^\n]*@py_cpy_", text)
@@ -54,7 +54,7 @@ def test_file_lock_runtime_exports_actual_locking_operations(tmp_path):
     source = root / "pcc/runtime/py/py_file_lock.py"
     output = tmp_path / "file_lock.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", target_triple="arm64-apple-darwin")
+                   target_triple="arm64-apple-darwin")
     text = output.read_text()
     assert "@py_fcntl_flock(" in text
     assert "@py_msvcrt_locking(" in text

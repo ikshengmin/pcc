@@ -8,7 +8,7 @@ resolves a class attribute via ``type(inst).__mro__``, so the override must win.
 Fix: ``ClassLowering.class_attr_overridden_by_subclass`` gates the static
 fast path; when any subclass redeclares the attribute the access falls through
 to the runtime ``py_obj_getattr`` MRO lookup. The no-override case keeps the
-static path (unchanged IR). Frontend-only; verified under ``--python-libpython=off``.
+static path (unchanged IR). Frontend-only; verified under the native pipeline.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def test_class_attr_subclass_override_matches_cpython(tmp_path, monkeypatch):
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,

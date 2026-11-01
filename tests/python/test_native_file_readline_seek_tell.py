@@ -3,7 +3,7 @@
 S-P0-SELF-FILE-READLINE-SEEK-TELL: the no-libpython file object grows the
 CPython positioning/line surface. IR-shape tests prove the calls lower to
 the py_file_* runtime helpers (no cpy fallback); the round-trip tests
-compile with libpython_mode="off" and diff the native binary's stdout
+compile natively and diff the native binary's stdout
 against real python3 running the same source.
 """
 from __future__ import annotations
@@ -87,7 +87,6 @@ def _run_native_vs_python3(tmp_path, program: str, name: str) -> None:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     native = subprocess.run(
         [str(exe)],

@@ -686,7 +686,6 @@ def _loader_probe(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             "--profile-json",
             str(profile_path),

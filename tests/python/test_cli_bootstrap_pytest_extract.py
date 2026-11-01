@@ -78,7 +78,7 @@ def test_extracted_harness_launcher_uses_supplied_stage_and_bounded_runs(
     assert status == 0
     assert len(calls) == 3
     assert calls[1][0][0] == "/tmp/current-pcc1"
-    assert calls[1][0][-2:] == ["--python-libpython=off", "--ir-scaffold=on"]
+    assert calls[1][0][-2:] == ["--ir-scaffold=on"]
     assert calls[2][0][0].endswith(".out")
     assert all(check is True and timeout == 37 for _, check, timeout in calls)
 

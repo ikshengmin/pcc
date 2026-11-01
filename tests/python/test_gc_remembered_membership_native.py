@@ -23,7 +23,7 @@ def test_remembered_membership_real_self_emitted_index_object(tmp_path):
     source = ROOT / "pcc/runtime/py/freestanding_gc_index_table.py"
     ir = tmp_path / "gc_index.ll"
     pipeline.compile_python(
-        str(source), str(ir), emit_llvm_only=True, libpython_mode="off",
+        str(source), str(ir), emit_llvm_only=True,
         python_library=True, target_triple=host_target_triple(),
     )
     assembly = tmp_path / "gc_index.s"

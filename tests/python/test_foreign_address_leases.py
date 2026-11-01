@@ -670,7 +670,7 @@ def check():
     print(probe(null(), '''+str(int(threaded))+'''))
 check()
 ''')
-    compile_python(str(source),str(output),backend='self',libpython_mode='off',ir_scaffold_mode='on',runtime_archive=str(pcc_runtime_archive),object_inputs=(str(helper),))
+    compile_python(str(source),str(output),backend='self',ir_scaffold_mode='on',runtime_archive=str(pcc_runtime_archive),object_inputs=(str(helper),))
     for backend in (3,4):
         result=subprocess.run([str(output)],capture_output=True,text=True,timeout=60,
             env=dict(os.environ,PCC_GC_BACKEND=str(backend),PCC_GC_MINOR_ALLOC_MAX='4096',PATH='',PCC_HOST_PYTHON='/nonexistent/host-python'))

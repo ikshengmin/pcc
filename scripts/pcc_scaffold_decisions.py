@@ -56,8 +56,8 @@ def observe_worker(manifest: Path, output: Path) -> int:
     selected = read_worker_manifest(str(manifest))
     if selected["job_kind"] != "codegen":
         raise ValueError("scaffold observation requires a codegen worker")
-    if selected["ir_scaffold_mode"] != "on" or selected["libpython_mode"] != "off":
-        raise ValueError("scaffold baseline requires ir-scaffold=on and libpython=off")
+    if selected["ir_scaffold_mode"] != "on":
+        raise ValueError("scaffold baseline requires ir-scaffold=on")
     from pcc.ir import compat, ir
 
     if compat.ir is not ir:

@@ -405,7 +405,6 @@ def run_pcc1_dlpack_capsule_gate(tmp_path: Path) -> None:
             str(source),
             "-o",
             str(executable),
-            "--python-libpython=off",
             "--ir-scaffold=on",
         ],
         cwd=REPO,

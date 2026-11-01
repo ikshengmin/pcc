@@ -35,7 +35,7 @@ def test_list_replacement_finalizes_after_unlock_on_all_collectors(
     binary = tmp_path / "list_store_finalizer"
     compile_python(
         str(ROOT / "tests/fixtures/native/list_store_finalizer.py"), str(binary),
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         runtime_archive=str(threaded_pcc_runtime_archive),
     )
     for backend in range(5):

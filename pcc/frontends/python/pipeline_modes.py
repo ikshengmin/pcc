@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-import sys
 from typing import Optional
 
-PY_LIBPYTHON_MODE_ENV = "PCC_PYTHON_LIBPYTHON"
 IR_SCAFFOLD_MODE_ENV = "PCC_IR_SCAFFOLD"
 GPU_BACKEND_ENV = "PCC_GPU_BACKEND"
 DEFAULT_GPU_BACKEND = "none"
@@ -131,14 +129,13 @@ def select_direct_indexed_route(
     python_library: bool,
     target_triple: Optional[str],
     gpu_backend: Optional[str],
-    libpython_mode: Optional[str],
 ) -> list:
     """Default a host executable compile to the direct indexed route.
 
     The frontend then hands the self backend its indexed kernel instead of
     LLVM text that the emit workers parse back into the same kernel. Text
-    stays the route for LLVM/library output, cross targets, GPU host lowering
-    and libpython modes. An explicit ``PCC_DIRECT_INDEXED_KERNEL_*`` setting
+    stays the route for LLVM/library output, cross targets and GPU host
+    lowering. An explicit ``PCC_DIRECT_INDEXED_KERNEL_*`` setting
     always wins; ``0`` selects the text route for debugging. Returns the
     variables set here, for ``restore_direct_indexed_route``.
     """
@@ -153,12 +150,6 @@ def select_direct_indexed_route(
         gpu_backend if gpu_backend is not None else os.environ.get(GPU_BACKEND_ENV)
     )
     if gpu != "none":
-        return []
-    try:
-        if resolve_libpython_mode(libpython_mode) != "off":
-            return []
-    except PyPipelineError:
-        # The compile itself reports the invalid mode.
         return []
     # Python IR passes still run on LLVM text; with them on, a direct
     # worker would render and reparse its own text without the split emit
@@ -197,24 +188,6 @@ def native_backend_kind(backend) -> str:
     return kind
 
 
-def resolve_libpython_mode(mode: Optional[str]) -> str:
-    raw = mode
-    if raw is None:
-        raw = os.environ.get(PY_LIBPYTHON_MODE_ENV, "")
-    normalized = str(raw or "").strip().lower()
-    if not normalized:
-        return "off"
-    if normalized == "auto":
-        return "auto"
-    if normalized in ("on", "true", "yes", "1"):
-        return "on"
-    if normalized in ("off", "false", "no", "0"):
-        return "off"
-    raise PyPipelineError(
-        "invalid libpython mode " f"{raw!r}; expected auto, on, or off"
-    )
-
-
 def resolve_ir_scaffold_mode(mode: Optional[str]) -> str:
     """Resolve the ``--ir-scaffold`` mode to a canonical value."""
 
@@ -231,41 +204,3 @@ def resolve_ir_scaffold_mode(mode: Optional[str]) -> str:
     raise PyPipelineError(
         "invalid ir scaffold mode " f"{raw!r}; expected off, on, or auto"
     )
-
-
-def finalize_libpython_mode(
-    *,
-    detected: bool,
-    mode: str,
-    context: str,
-    reasons: list[str],
-) -> bool:
-    if mode == "on":
-        return True
-    if mode == "off" and detected:
-        suffix = ""
-        if reasons:
-            suffix = " (" + "; ".join(reasons) + ")"
-        if bool(os.environ.get("PCC_DEBUG_LIBPYTHON_GATE_BYPASS")):
-            sys.stderr.write("[libpython_gate_bypass] " + context + suffix + "\n")
-            return detected
-        raise PyPipelineError(
-            "Python pipeline requires libpython fallback for "
-            + context
-            + suffix
-            + "; rerun with --python-libpython=auto/on or "
-            + "PCC_PYTHON_LIBPYTHON=auto/on"
-        )
-    return detected
-
-
-def reject_mixed_extension_object_models(
-    *,
-    needs_libpython: bool,
-    needs_native_extension_exports: bool,
-) -> None:
-    if needs_libpython and needs_native_extension_exports:
-        raise PyPipelineError(
-            "pcc-native extension imports cannot be combined with libpython mode; "
-            "use --python-libpython=off or a CPython-ABI extension"
-        )

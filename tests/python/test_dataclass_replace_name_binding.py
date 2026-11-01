@@ -28,7 +28,7 @@ def test_replace_resolves_user_definitions(tmp_path, pcc_runtime_archive):
                                text=True, timeout=15)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, "11 23\n", "")
     output = tmp_path / "replace_names"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15,

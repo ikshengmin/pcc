@@ -46,7 +46,7 @@ main()
 '''.replace("RAW_IMPORT", "from pcc.unsafe import ptr_is_null" if raw_scaffold else "")
        .replace("CAST", spelling))
     binary = tmp_path / "cast_tuple_owner"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
@@ -101,7 +101,7 @@ def main():
 main()
 '''.replace("SETUP", setup).replace("CAST", spelling).replace("OPERAND", operand).replace("RELEASE", release))
     binary = tmp_path / "cast_owner"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
@@ -129,10 +129,10 @@ def cast_raw(value: c_ptr) -> c_ptr:
         # Preserve that boundary rather than treating an uncompiled body as
         # evidence that its pointers never reached the managed runtime.
         with pytest.raises(RuntimeError, match="freestanding modules only support imports.*typing"):
-            compile_python(str(source), str(output), backend="self", libpython_mode="off",
+            compile_python(str(source), str(output), backend="self",
                            emit_llvm_only=True, python_library=True)
         return
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     start = text.index("define", text.index("@cast_raw") - 32)
@@ -171,7 +171,7 @@ def main():
 main()
 '''.replace("CAST", spelling))
     binary = tmp_path / "cast_raw_run"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

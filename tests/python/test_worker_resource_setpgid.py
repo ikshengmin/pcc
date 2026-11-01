@@ -50,7 +50,7 @@ def test_original_resource_join_function_uses_named_signed_c_abi(tmp_path, targe
     input_path.write_text(source)
     pipeline.compile_python(
         str(input_path), str(output), emit_llvm_only=True, python_library=True,
-        libpython_mode="off", backend="self", target_triple=target,
+        backend="self", target_triple=target,
     )
     text = output.read_text()
     calls = [line for line in text.splitlines() if "call " in line and "@setpgid(" in line]
@@ -190,7 +190,7 @@ def test_darwin_resource_fixture_handles_execute(
     save()
     try:
         python_program_compiler(
-            str(DRIVER), str(binary), backend="self", libpython_mode="off",
+            str(DRIVER), str(binary), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     except Exception as error:

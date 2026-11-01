@@ -54,7 +54,6 @@ def test_default_pcc_python_thread_objects_remain_synchronous(
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(archive),
     )

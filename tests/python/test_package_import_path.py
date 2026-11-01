@@ -157,7 +157,6 @@ def _assert_compiled_import_prints_42(main: Path, exe: Path) -> None:
     compile_python(
         str(main),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     env = os.environ.copy()
@@ -184,7 +183,6 @@ def _assert_pcc_cli_import_prints(
             "uv",
             "run",
             "pcc",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -667,7 +665,6 @@ def test_installed_real_cpython_extension_wheel_rejected_by_no_libpython_import(
         compile_python(
             str(main),
             str(tmp_path / "main"),
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -709,7 +706,6 @@ def test_cli_import_real_cpython_extension_package_init_rejected_by_no_libpython
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -772,7 +768,6 @@ def test_package_site_rejects_cpython_extension_abi_for_no_libpython(
         compile_python(
             str(main),
             str(tmp_path / "main"),
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -863,7 +858,6 @@ def test_pcc1_pip_install_wheel_participates_in_import_site(tmp_path):
     compile_process = subprocess.run(
         [
             str(pcc1),
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -945,7 +939,6 @@ def test_pcc1_wheel_import_compile_failure_preserves_full_output(
     command, options = calls[0]
     assert command == [
         str(pcc1),
-        "--python-libpython=off",
         "--ir-scaffold=on",
         str(tmp_path / "main.py"),
         "-o",
@@ -1444,7 +1437,6 @@ def test_pcc1_mlx_namespace_extension_import_rejected_by_no_libpython_boundary(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -1516,7 +1508,6 @@ def test_pcc1_vllm_extension_import_rejected_by_no_libpython_boundary(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -1589,7 +1580,6 @@ def test_pcc1_tilelang_extension_import_rejected_by_no_libpython_boundary(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -1661,7 +1651,6 @@ def test_pcc1_vllm_metal_extension_import_rejected_by_no_libpython_boundary(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -1861,7 +1850,6 @@ def test_pcc1_real_numpy_first_import_boundary_opt_in(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -1942,7 +1930,6 @@ def test_pcc1_real_mlx_first_import_boundary_opt_in(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -2018,7 +2005,6 @@ def test_pcc1_real_vllm_metal_first_import_boundary_opt_in(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -2100,7 +2086,6 @@ def test_pcc1_pip_install_chain_no_host_ext_abi_smoke(tmp_path):
     subprocess.run(
         [
             str(pcc1),
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

@@ -138,7 +138,7 @@ def test_level_two_gate_is_one_hostless_owned_build_and_five_gc_chain():
     assert '"--no-index"' in source
     assert '"--build=owned"' in source
     assert '"PCC_HOST_PYTHON": str(deny / "python3")' in source
-    assert '"--python-libpython=off"' in source
+    assert '"--python-libpython' not in source
     assert '"--backend",\n            "self"' in source
     assert "for backend in range(5):" in source
     assert 'assert actual == expected' in source

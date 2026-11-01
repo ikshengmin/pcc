@@ -38,8 +38,7 @@ def test_str_releases_owned_argument_and_not_borrowed(tmp_path):
     out = tmp_path / "ir.ll"
     build = _run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", "--python-library", f"--emit-llvm={out}",
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", "--python-library", f"--emit-llvm={out}",
             str(src),
         ],
         timeout=600,

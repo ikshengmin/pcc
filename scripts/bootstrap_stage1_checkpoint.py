@@ -234,8 +234,8 @@ def _require_supported_host() -> None:
 def validate_route(options, command: list[str], environment: dict[str, str]) -> None:
     resolve_hash_seed(environment)
     _require_supported_host()
-    if options.backend != "self" or options.python_libpython != "off":
-        raise CheckpointError("Stage1 checkpoint requires self backend and --python-libpython off")
+    if options.backend != "self":
+        raise CheckpointError("Stage1 checkpoint requires the self backend")
     if options.runtime_cc != "pcc" or options.runtime_high != "py":
         raise CheckpointError("Stage1 checkpoint requires the pcc-Python runtime")
     if options.reuse_stage1 or options.start_stage != 1 or options.clean:
@@ -437,7 +437,7 @@ def build_identity(options, command: list[str], environment: dict[str, str]) -> 
         "owner": "cpython", "backend": "self", "target": probe["target"],
         "bytecode_policy": BYTECODE_POLICY,
         "source_root": str(root), "working_directory": str(root),
-        "command": [*command, "--backend", "self", "--python-libpython", "off",
+        "command": [*command, "--backend", "self",
                     str(root / "pcc/__main__.py"), "-o", str(options.stage_output(1))],
         "entry_path": str(root / "pcc/__main__.py"), "output_role": "pcc1",
         "compiler_sources": source_inventory(root),
@@ -604,7 +604,7 @@ class Attempt:
             "build_identity_sha256": identity, "started_at_utc": started_at or dt.datetime.now(dt.timezone.utc).isoformat(),
             "monotonic_anchor_s": self.started, "launcher_pid": os.getpid(),
             "command": [*command, "--profile-json", str(self.directory / "profile/stage1.json"),
-                        "--backend", options.backend, "--python-libpython", options.python_libpython,
+                        "--backend", options.backend,
                         str(Path(options.repo_root) / "pcc/__main__.py"), "-o", str(options.stage_output(1))],
             "guard_result": str(self.guard_dir / "result.json"),
             "stage_timeout_s": options.stage_timeout, "tree_rss_cap_bytes": options.max_tree_rss_bytes,

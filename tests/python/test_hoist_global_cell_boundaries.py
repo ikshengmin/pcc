@@ -124,7 +124,7 @@ def test_host_ir_global_reads_do_not_become_capture_values(tmp_path, monkeypatch
     compile_python_multi(
         _sources(tmp_path), str(output),
         module_names=["scope_provider", "scope_entry"], entry_module="scope_entry",
-        emit_llvm_only=True, backend="self", libpython_mode="off",
+        emit_llvm_only=True, backend="self",
         ir_scaffold_mode=scaffold,
     )
     text = output.read_text()
@@ -159,7 +159,7 @@ def test_host_emitted_global_barrier_and_nonlocal_cells(tmp_path, monkeypatch, s
     compile_python_multi(
         _sources(tmp_path), str(binary),
         module_names=["scope_provider", "scope_entry"], entry_module="scope_entry",
-        backend="self", libpython_mode="off", ir_scaffold_mode=scaffold,
+        backend="self", ir_scaffold_mode=scaffold,
         runtime_archive=str(runtime),
     )
     for backend in (1, 4):

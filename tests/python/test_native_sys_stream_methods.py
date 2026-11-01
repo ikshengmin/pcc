@@ -49,7 +49,7 @@ def test_sys_stream_methods_match_cpython(tmp_path: Path, backend: str) -> None:
     env.pop("LC_ALL", None)
     env["PCC_GC_BACKEND"] = backend
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=600, env=env,
     )
     assert build.returncode == 0, build.stderr

@@ -93,7 +93,6 @@ def test_pcc_threads_complete_all_workers(tmp_path, threaded_runtime):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     _, out = _run_binary(exe, timeout=60.0, runs=1)
 
@@ -119,11 +118,11 @@ def test_pcc_threads_give_real_parallel_speedup(tmp_path, threaded_runtime):
 
     compile_python(
         str(parallel_src), str(parallel_exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
     compile_python(
         str(serial_src), str(serial_exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
     serial_time, serial_out = _run_binary(serial_exe, timeout=60.0)

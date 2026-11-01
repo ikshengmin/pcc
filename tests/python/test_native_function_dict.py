@@ -35,7 +35,7 @@ main()
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "function_dict"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15,

@@ -64,7 +64,7 @@ def test_module_global_store_unboxes_into_raw_cell(tmp_path, monkeypatch):
     monkeypatch.setenv("PCC_PY_FRONTEND_IR_CACHE", "0")
     source = _write(tmp_path)
     out_ll = tmp_path / "raw_int_globals.ll"
-    compile_python(str(source), str(out_ll), backend="self", libpython_mode="off",
+    compile_python(str(source), str(out_ll), backend="self",
                    emit_llvm_only=True)
     text = out_ll.read_text()
     assert "@.modvar.raw_int_globals.count = global i64 0" in text
@@ -96,7 +96,7 @@ def test_raw_int_module_globals_execute_on_five_gcs(tmp_path, monkeypatch, pcc_r
     monkeypatch.setenv("PCC_SELF_BACKEND_OBJECT_CACHE", "0")
     source = _write(tmp_path)
     binary = tmp_path / "raw_int_globals"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent")

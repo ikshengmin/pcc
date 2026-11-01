@@ -76,7 +76,7 @@ def test_type_value_does_not_stub_the_function(tmp_path):
     source = tmp_path / "type_value.py"
     source.write_text(_PROGRAM, encoding="utf-8")
     output = tmp_path / "type_value.ll"
-    compile_python(str(source), str(output), emit_llvm_only=True, libpython_mode="off",
+    compile_python(str(source), str(output), emit_llvm_only=True,
                    backend="self", ir_scaffold_mode="on")
     text = output.read_text(encoding="utf-8")
     assert "strict.nolib.stub" not in text
@@ -90,7 +90,7 @@ def test_type_value_matches_cpython_under_five_collectors(tmp_path, pcc_runtime_
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "type_value"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

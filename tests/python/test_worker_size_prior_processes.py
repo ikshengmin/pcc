@@ -373,7 +373,7 @@ def test_size_prior_native_processes_five_collectors(
     save()
     try:
         python_program_compiler(
-            str(DRIVER), str(binary), backend="self", libpython_mode="off",
+            str(DRIVER), str(binary), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     except Exception as error:

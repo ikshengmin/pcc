@@ -128,7 +128,6 @@ def test_native_subprocess_run_captures_like_cpython(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     for backend in range(5):
         native = subprocess.run(

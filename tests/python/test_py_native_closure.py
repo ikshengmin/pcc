@@ -30,7 +30,6 @@ def test_returned_typed_nested_def_uses_native_closure(tmp_path):
         str(ll_path),
         emit_llvm_only=True,
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -78,7 +77,6 @@ def test_closure_heavy_runs_without_libpython(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -135,7 +133,6 @@ def test_native_closure_sees_outer_rebind_after_value_capture(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -180,7 +177,6 @@ def test_native_closure_shares_outer_captured_dict_subscript_mutation(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -219,7 +215,6 @@ def test_native_nonlocal_counter_stays_libpython_free(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -258,7 +253,6 @@ def test_native_closure_captures_starred_unpack_target(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -307,7 +301,7 @@ def test_native_starred_unpack_into_captured_and_attribute_targets(
     assert expected.returncode == 0, expected.stderr
     exe = tmp_path / "starred_targets.out"
     python_program_compiler(
-        str(src), str(exe), backend="self", libpython_mode="off",
+        str(src), str(exe), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

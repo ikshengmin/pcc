@@ -39,7 +39,7 @@ def test_native_owned_path_direct_and_first_class_constructors(
     source.write_text(PROGRAM)
     binary = tmp_path / "path_constructor"
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", ir_scaffold_mode="on",
+                            ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,

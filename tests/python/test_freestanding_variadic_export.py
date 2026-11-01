@@ -38,7 +38,6 @@ def test_freestanding_c_abi_variadic_export_reads_integer_arguments(tmp_path: Pa
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -107,7 +106,6 @@ def test_self_backend_c_abi_variadic_export_reads_integer_arguments(tmp_path: Pa
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     asm.write_text(
@@ -171,7 +169,6 @@ def test_fixed_va_list_cursor_reads_pointer_float_and_integer(tmp_path: Path):
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     build = subprocess.run(
@@ -238,7 +235,6 @@ def test_typed_c_abi_export_preserves_narrow_integer_and_pointer_abi(
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -298,7 +294,6 @@ def test_typed_and_variadic_exports_compose_for_narrow_fixed_arguments(
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")

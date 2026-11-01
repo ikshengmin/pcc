@@ -71,7 +71,6 @@ def test_native_compiled_sibling_machine(tmp_path, pcc_runtime_archive):
         entry_module="probe",
         module_names=["probe", "platform", "pcc.driver.python_target"],
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )

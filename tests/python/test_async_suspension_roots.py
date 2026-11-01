@@ -173,7 +173,6 @@ def _assert_native_async_program_matches_cpython(
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )

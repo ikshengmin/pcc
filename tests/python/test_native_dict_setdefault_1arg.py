@@ -2,7 +2,7 @@
 
 Previously only the 2-arg form ``d.setdefault(k, default)`` was lowered
 natively; the 1-arg form ``d.setdefault(k)`` fell through to a dynamic
-getattr and was rejected under ``--python-libpython=off``. CPython inserts
+getattr and was rejected under the native pipeline. CPython inserts
 ``{k: None}`` for a missing key and returns ``None``; for a present key it
 returns the existing value and does not overwrite it. See slice
 S-P0-SELF-DICT-SETDEFAULT-1ARG.
@@ -116,7 +116,6 @@ def test_dict_setdefault_1arg_runtime_matches_cpython(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     got = subprocess.run(
@@ -168,7 +167,6 @@ def test_dict_setdefault_1arg_scalar_valued_dict_is_none_gap(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     got = subprocess.run(

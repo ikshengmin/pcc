@@ -83,7 +83,7 @@ def test_join_results_reach_keyword_constructor_owned_objects(tmp_path, target):
     output = tmp_path / "join_publication.ll"
     source.write_text(PUBLISHED_JOIN_PROGRAM, encoding="utf-8")
     compile_python(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         ir_scaffold_mode="on", target_triple=target, emit_llvm_only=True,
     )
     assert emit_owned_object(output.read_text(encoding="utf-8"), target)
@@ -97,7 +97,7 @@ def _compile(tmp_path, monkeypatch, runtime_cc):
     src.write_text(PROGRAM, encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     return src, exe
 

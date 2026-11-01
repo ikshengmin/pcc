@@ -16,7 +16,6 @@ Usage:
 Runtime defaults for every stage:
   PCC_BOOTSTRAP_RUNTIME_CC=pcc
   PCC_BOOTSTRAP_RUNTIME_HIGH=py
-  PCC_BOOTSTRAP_PYTHON_LIBPYTHON=off
   PCC_BOOTSTRAP_PYTHON_IR_PASSES=${PCC_PYTHON_IR_PASSES:-off}
   PCC_BOOTSTRAP_PY_FRONTEND_JOBS=${PCC_PY_FRONTEND_JOBS:-auto} for stage2+
   PCC_BOOTSTRAP_STAGE1_PY_FRONTEND_JOBS=${PCC_PY_FRONTEND_JOBS:-auto}
@@ -106,7 +105,6 @@ class Options:
         )
         self.runtime_cc = env.get("PCC_BOOTSTRAP_RUNTIME_CC") or "pcc"
         self.runtime_high = env.get("PCC_BOOTSTRAP_RUNTIME_HIGH") or "py"
-        self.python_libpython = env.get("PCC_BOOTSTRAP_PYTHON_LIBPYTHON") or "off"
         self.python_ir_passes = (
             env.get("PCC_BOOTSTRAP_PYTHON_IR_PASSES")
             or env.get("PCC_PYTHON_IR_PASSES")
@@ -573,7 +571,6 @@ def stage_exec_barrier(out_exe: Path, stage: int, options: Options) -> int:
                     str(out_exe),
                     "--ir-scaffold=on",
                     "--backend", options.backend,
-                    "--python-libpython", options.python_libpython,
                     str(smoke_src),
                     "-o", str(smoke_out),
                 ],
@@ -973,7 +970,6 @@ def _run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> N
         command += ["--profile-json", str(Path(options.profile_dir) / f"stage{stage}.json")]
     command += backend_args
     command += [
-        "--python-libpython", options.python_libpython,
         str(MAIN_PY), "-o", str(out_exe),
     ]
 
@@ -1019,8 +1015,7 @@ def _run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> N
         f"PCC_PYTHON_IR_PASSES={options.python_ir_passes} "
         f"PCC_PY_FRONTEND_JOBS={frontend_jobs} "
         f"PCC_SELF_BACKEND_JOBS={options.self_backend_jobs} "
-        f"PCC_MACHO_LINK_JOBS={options.macho_link_jobs} "
-        f"--python-libpython {options.python_libpython}"
+        f"PCC_MACHO_LINK_JOBS={options.macho_link_jobs}"
     )
     if options.profile_dir:
         print(f"profile: {options.profile_dir}/stage{stage}.json")

@@ -122,7 +122,6 @@ def compile_run_assert_no_libpython(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

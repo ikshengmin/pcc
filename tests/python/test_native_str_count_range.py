@@ -39,7 +39,7 @@ def test_str_count_range_matches_cpython(tmp_path, monkeypatch):
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,
@@ -73,7 +73,7 @@ def test_dynamic_str_count_bound_method_no_libpython(tmp_path, monkeypatch):
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=30,

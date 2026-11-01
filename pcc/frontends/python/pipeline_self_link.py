@@ -77,7 +77,6 @@ def validate_pcc_self_link_surface(
     selected_mode: str,
     *,
     extra_link_args: tuple[str, ...] = (),
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     native_extension_exports_supported: bool = False,
 ) -> None:
@@ -88,10 +87,6 @@ def validate_pcc_self_link_surface(
         raise SelfLinkContractError(
             "pcc self-link mode does not support link arguments: "
             + _join_arguments(extra_link_args)
-        )
-    if needs_libpython:
-        raise SelfLinkContractError(
-            "pcc self-link mode does not support the libpython link surface"
         )
     if needs_native_extension_exports and not native_extension_exports_supported:
         raise SelfLinkContractError(

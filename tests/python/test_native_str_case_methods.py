@@ -1,11 +1,11 @@
 """Native str.title()/swapcase()/casefold() under strict no-libpython (run-based).
 
 These ASCII case-transform methods had no native lowering, so they fell back to
-libpython (rejected under --python-libpython=off). Now lowered like
+libpython (rejected in the native pipeline). Now lowered like
 upper/lower/capitalize: runtime py_str_title/swapcase/casefold (py_str_accessors.c)
 + dispatch in string_method_lowering.py.
 
-Compiles + runs under --backend self --python-libpython=off and asserts exact
+Compiles + runs under --backend self and asserts exact
 output. (ASCII-only, the same scope as the existing py_str_upper/lower/capitalize.)
 """
 from __future__ import annotations
@@ -27,8 +27,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # pcc-Python port py_str_accessors.py, so this works in the default mode.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

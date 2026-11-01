@@ -1253,7 +1253,7 @@ def test_exception_class_cell_and_index_execute_all_collectors(tmp_path, monkeyp
     assert (oracle.returncode, oracle.stdout, oracle.stderr) == (0, expected, "")
     binary = tmp_path / "exception_class_cell"
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20, env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))
         assert result.returncode == 0 and result.stdout == expected and result.stderr == "", (backend, result.returncode, result.stdout, result.stderr)
@@ -1299,7 +1299,7 @@ main()
     binary = tmp_path / 'error_use'
     compile_python_multi([str(errors), str(source)], str(binary),
                          module_names=['error_types', 'error_use'], entry_module='error_use',
-                         backend='self', libpython_mode='off', runtime_archive=str(pcc_runtime_archive))
+                         backend='self', runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))
@@ -1426,7 +1426,7 @@ def test_handled_exception_thread_isolation(tmp_path, monkeypatch, threaded_pcc_
     assert (oracle.returncode, oracle.stdout, oracle.stderr) == (0, "HANDLED_THREADS_OK\n", "")
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     binary = tmp_path / "handled_threads"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
+    python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=40,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))
@@ -1438,7 +1438,7 @@ def test_handled_exception_virtual_thread_isolation(tmp_path, pcc_runtime_archiv
     source = tmp_path / "handled_vthread.py"
     source.write_text(HANDLED_VTHREAD_SOURCE)
     binary = tmp_path / "handled_vthread"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))
@@ -1471,7 +1471,7 @@ main()
         ))]
     expected = chain_lines(oracle.stderr)
     binary = tmp_path / "suppression_trace"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))

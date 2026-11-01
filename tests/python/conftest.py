@@ -65,7 +65,7 @@ def python_program_compiler(request):
     from tests.python.process_timeout import run_process_group_timeout
     compiler = request.getfixturevalue("native_pcc1_compiler")
 
-    def compile_program(source, output, *, backend, libpython_mode, runtime_archive,
+    def compile_program(source, output, *, backend, runtime_archive,
                         ir_scaffold_mode="on"):
         env = dict(os.environ)
         env.pop("LC_ALL", None)
@@ -80,8 +80,7 @@ def python_program_compiler(request):
             # Linux x86 hashlib failure left only "Type: message".
             PCC_DEBUG_WORKER_RERAISE="1",
         )
-        command = [str(compiler), "--backend", backend,
-                   "--python-libpython", libpython_mode, "--ir-scaffold", ir_scaffold_mode,
+        command = [str(compiler), "--backend", backend, "--ir-scaffold", ir_scaffold_mode,
                    str(source), "-o", str(output)]
         # stderr streams into its file, so a gate killed mid-compile keeps
         # the coordinator and worker timing printed so far. The 400 s compile

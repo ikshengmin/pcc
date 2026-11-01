@@ -230,7 +230,7 @@ def test_iterator_handoff_executes_all_collectors(tmp_path, monkeypatch,
     binary = tmp_path / "iterator_root_handoff"
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     python_program_compiler(str(source), str(binary), backend="self",
-        libpython_mode="off", ir_scaffold_mode="on",
+        ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,

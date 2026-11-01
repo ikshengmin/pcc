@@ -1,7 +1,7 @@
 """CPython parity for ``import`` statements, ported from
 ``Lib/test/test_import.py``.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython):
   * ``import X`` binds ``X`` to a module object
@@ -30,7 +30,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 

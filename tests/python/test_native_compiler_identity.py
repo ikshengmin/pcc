@@ -20,7 +20,7 @@ main()
     compile_python_multi(
         [str(Path(compiler_identity.__file__)), str(source)], str(output),
         module_names=["pcc.tools.compiler_identity", "identity_probe"], entry_module="identity_probe",
-        recursive_stdlib=True, backend="self", libpython_mode="off",
+        recursive_stdlib=True, backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     expected = compiler_identity.native_executable_identity(str(output)) + "\n"

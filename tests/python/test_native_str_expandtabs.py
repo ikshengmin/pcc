@@ -7,7 +7,7 @@ column-aware '\\t' -> spaces up to the next tabsize boundary, with '\\n'/'\\r'
 resetting the column; frontend dispatch handles expandtabs() (default tabsize 8)
 and expandtabs(n) in both the StrType and DynType paths.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode) and asserts CPython-exact output.
 """
 from __future__ import annotations
@@ -25,8 +25,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

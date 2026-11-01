@@ -1537,7 +1537,6 @@ def _compile_and_run_pcc(
         str(src),
         str(out),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     return subprocess.run(

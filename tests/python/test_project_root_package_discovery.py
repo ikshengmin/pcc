@@ -58,7 +58,7 @@ def test_program_in_a_subdirectory_imports_its_project_package(tmp_path: Path) -
     saved = os.environ.pop("PCC_PACKAGE_SITE", None)
     try:
         compile_python(
-            str(app), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self"
+            str(app), str(exe), ir_scaffold_mode="on", backend="self"
         )
     finally:
         if saved is not None:

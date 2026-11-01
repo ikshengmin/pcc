@@ -127,7 +127,6 @@ def test_parallel_self_codegen_enables_ast_wire_sidecars(tmp_path, monkeypatch) 
         module_names=["entry", "lib"],
         entry_module="entry",
         backend="self",
-        libpython_mode="off",
         emit_llvm_only=True,
         profile=profile,
     )
@@ -207,7 +206,7 @@ def test_native_ast_wire_uses_shared_contract_all_gcs(
     binary = tmp_path / "wire_contract"
     source.write_text(NATIVE_WIRE_CONTRACT_PROGRAM)
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

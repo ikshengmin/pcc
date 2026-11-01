@@ -135,7 +135,7 @@ def test_native_worker_state_reader_matches_host_clock(
     save()
     try:
         python_program_compiler(
-            str(source), str(binary), backend="self", libpython_mode="off",
+            str(source), str(binary), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     except BaseException as error:

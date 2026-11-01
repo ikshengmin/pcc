@@ -5,7 +5,7 @@ Covers ``set.difference_update`` / ``set.intersection_update`` /
 rewrite the receiver's contents (preserving receiver identity) using the
 py_set_difference / py_set_intersection / py_set_symmetric_difference
 result, and return None. They must stay on the pcc-native runtime under
-``--python-libpython=off`` (i.e. never fall through to dynamic getattr /
+the native pipeline (i.e. never fall through to dynamic getattr /
 libpython).
 
 Slice: S-P0-SELF-SET-INPLACE-UPDATE.
@@ -87,12 +87,11 @@ def _run_native(tmp_path, source: str, name: str) -> list[str]:
     src = tmp_path / f"{name}.py"
     exe = tmp_path / name
     src.write_text(source, encoding="utf-8")
-    # libpython_mode="off": prove the in-place update methods lower fully to
+    # Native compile: prove the in-place update methods lower fully to
     # the pcc-native runtime with no libpython fallback.
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(

@@ -82,8 +82,7 @@ def test_migrating_virtual_threads_keep_their_writes_and_results(tmp_path: Path)
     source.write_text(_program(), encoding="utf-8")
     executable = tmp_path / "vthread_migration"
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         str(source), "-o", str(executable)],
+        ["uv", "run", "pcc", "--backend", "self", str(source), "-o", str(executable)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr

@@ -120,7 +120,7 @@ def test_atomic_intrinsics_single_thread_semantics(tmp_path, backend):
     src.write_text(PROGRAM, encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend=backend,
+        ir_scaffold_mode="on", backend=backend,
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=30,
@@ -140,7 +140,6 @@ def test_atomic_cas_loop_matches_removed_dec_if_positive_helper(tmp_path, backen
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend=backend,
     )
     result = subprocess.run(
@@ -199,7 +198,7 @@ def test_dynamic_address_parameters_reach_raw_memory(tmp_path):
     exe = tmp_path / "dynamic_address.out"
     src.write_text(DYNAMIC_ADDRESS_PROGRAM, encoding="utf-8")
     compile_python(
-        str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        str(src), str(exe), ir_scaffold_mode="on", backend="self",
     )
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
@@ -213,7 +212,7 @@ def _compile_to_ll(tmp_path, source: str) -> str:
     out = tmp_path / "atomics_ir.ll"
     src.write_text(source, encoding="utf-8")
     compile_python(
-        str(src), str(out), emit_llvm_only=True, libpython_mode="off",
+        str(src), str(out), emit_llvm_only=True,
     )
     return out.read_text(encoding="utf-8")
 
@@ -314,7 +313,7 @@ def test_atomic_intrinsics_fail_closed(tmp_path, call, message_part):
     )
     with pytest.raises(Exception) as excinfo:
         compile_python(
-            str(src), str(out), emit_llvm_only=True, libpython_mode="off",
+            str(src), str(out), emit_llvm_only=True,
         )
     assert message_part in str(excinfo.value)
 
@@ -340,6 +339,6 @@ def test_atomic_ordering_must_be_a_string_literal(tmp_path):
     )
     with pytest.raises(Exception) as excinfo:
         compile_python(
-            str(src), str(out), emit_llvm_only=True, libpython_mode="off",
+            str(src), str(out), emit_llvm_only=True,
         )
     assert "string literal" in str(excinfo.value)

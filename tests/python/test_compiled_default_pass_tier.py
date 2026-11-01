@@ -32,7 +32,6 @@ def test_compiled_default_tier_promotes_straight_line_scalar_slot():
     out = compiled_default_passes.run_compiled_default_tier(
         _SCALAR_IR,
         ["mem2reg", "sroa"],
-        strict_no_libpython=False,
     )
 
     assert "alloca i64" not in out
@@ -54,7 +53,6 @@ def test_compiled_default_tier_splits_bounded_literal_struct():
     out = compiled_default_passes.run_compiled_default_tier(
         _STRUCT_IR,
         ["mem2reg", "sroa"],
-        strict_no_libpython=False,
     )
 
     assert "alloca { i64, ptr }" not in out
@@ -85,7 +83,6 @@ read:
     out = compiled_default_passes.run_compiled_default_tier(
         source,
         ["mem2reg", "sroa"],
-        strict_no_libpython=False,
     )
     assert "alloca" not in out
     assert "load" not in out
@@ -112,7 +109,6 @@ read:
     assert compiled_default_passes.run_compiled_default_tier(
         source,
         ["mem2reg", "sroa"],
-        strict_no_libpython=False,
     ) == source
 
 
@@ -164,7 +160,6 @@ read:
     assert compiled_default_passes.run_compiled_default_tier(
         source,
         ["mem2reg", "sroa"],
-        strict_no_libpython=False,
     ) == source
 
 
@@ -182,7 +177,6 @@ entry:
     assert compiled_default_passes.run_compiled_default_tier(
         source,
         ["mem2reg", "sroa"],
-        strict_no_libpython=False,
     ) == source
 
 
@@ -202,7 +196,6 @@ def test_compiled_default_tier_strict_mode_skips_actual_cpython_call():
     assert compiled_default_passes.run_compiled_default_tier(
         source,
         ["mem2reg", "sroa"],
-        strict_no_libpython=True,
     ) == source
 
 
@@ -212,7 +205,6 @@ def test_compiled_default_tier_strict_mode_allows_cpython_declaration_only():
     out = compiled_default_passes.run_compiled_default_tier(
         source,
         ["mem2reg", "sroa"],
-        strict_no_libpython=True,
     )
 
     assert "declare ptr @py_cpy_import(ptr)" in out
@@ -230,7 +222,6 @@ def test_self_default_pass_tier_never_starts_host_subprocess(monkeypatch):
         _SCALAR_IR,
         module_name="probe",
         default_raw="default",
-        strict_no_libpython=True,
     )
 
     assert "alloca" not in out
@@ -247,7 +238,6 @@ def test_self_default_pass_batch_preserves_input_order_without_host(monkeypatch)
     out = pipeline._apply_python_ir_pass_pipeline_many(
         [("first", _SCALAR_IR), ("second", _STRUCT_IR)],
         default_raw="default",
-        strict_no_libpython=True,
     )
 
     assert [name for name, _text in out] == ["first", "second"]
@@ -717,11 +707,9 @@ def test_removed_definition_scan_preserves_complete_tier_bytes(monkeypatch):
             return current(lines, names)
 
         monkeypatch.setattr(module, "_references_removed_definitions", counted)
-        actual = module.run_compiled_default_tier(source, ["mem2reg", "sroa"],
-                                                  strict_no_libpython=True)
+        actual = module.run_compiled_default_tier(source, ["mem2reg", "sroa"])
         monkeypatch.setattr(module, "_references_removed_definitions", _removed_definition_scan_reference)
-        expected = module.run_compiled_default_tier(source, ["mem2reg", "sroa"],
-                                                    strict_no_libpython=True)
+        expected = module.run_compiled_default_tier(source, ["mem2reg", "sroa"])
         assert actual.encode("utf-8") == expected.encode("utf-8")
         assert bool(calls) is reaches_guard
 

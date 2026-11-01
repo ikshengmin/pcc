@@ -152,7 +152,7 @@ def test_owned_urljoin_provider_and_result_handoff_ir(tmp_path, monkeypatch):
     )
     compile_python(
         str(source), str(output), emit_llvm_only=True,
-        recursive_stdlib=True, libpython_mode="off", ir_scaffold_mode="on",
+        recursive_stdlib=True, ir_scaffold_mode="on",
         backend="self",
     )
     text = output.read_text(encoding="utf-8")
@@ -197,7 +197,6 @@ def test_native_sibling_import_alias_value_position_stays_native():
         emit_llvm_only=True,
         entry_module="main",
         module_names=["main", "pkg_alias_value", "pkg_alias_value.sub"],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -333,7 +332,7 @@ def main():
 main()
 """, encoding='utf-8')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   recursive_stdlib=True, libpython_mode='off',
+                   recursive_stdlib=True,
                    ir_scaffold_mode='on', backend='self')
     text = output.read_text(encoding='utf-8')
     assert not re.search(r'\bcall\b[^\n]*@py_cpy_', text)
@@ -372,7 +371,7 @@ def test_owned_html_parser_original_source_subclass_ir(tmp_path, monkeypatch):
                       '    parser.close()\n    print(parser.links)\nmain()\n',
                       encoding='utf-8')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   recursive_stdlib=True, libpython_mode='off',
+                   recursive_stdlib=True,
                    ir_scaffold_mode='on', backend='self')
     text = output.read_text(encoding='utf-8')
     assert not re.search(r'\bcall\b[^\n]*@py_cpy_', text)

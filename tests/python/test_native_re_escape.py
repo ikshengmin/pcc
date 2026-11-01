@@ -19,7 +19,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
 
 
@@ -56,6 +56,6 @@ def test_re_escape_matches_cpython(tmp_path, monkeypatch):
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,
     ).stdout
-    # The strict libpython_mode="off" compile already proves no fallback; this
+    # The native compile already proves no fallback; this
     # asserts the escaped output matches CPython exactly.
     assert _run(exe) == cpython

@@ -1033,8 +1033,8 @@ class NameLoweringMixin:
             # Built-in type names at value position (``isinstance(x,
             # int)`` already folds compile-time; this covers the
             # residual ``obj_type = int`` / ``self.ty = str`` uses).
-            # pcc-native callable values must stay native under
-            # --python-libpython=off; real type-object identity/equality
+            # pcc-native callable values must stay native; real type-object
+            # identity/equality
             # cases are handled before name lowering by type-tag compare
             # fast paths.
             if expr.ident in _CPY_BUILTIN_TYPE_NAMES:

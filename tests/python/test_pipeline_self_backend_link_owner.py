@@ -320,7 +320,6 @@ def test_semantic_layout_rejects_split_module_before_emission(
             str(tmp_path / "program"),
             None,
             False,
-            needs_libpython=False,
             tmp=str(tmp_path),
             profile=None,
             resolve_self_link_mode=lambda **_kwargs: "pcc",
@@ -334,9 +333,7 @@ def test_semantic_layout_rejects_split_module_before_emission(
             emit_objects=lambda *_args, **_kwargs: emitted.append("object"),
             runtime_archive_link_args=lambda *_args: [],
             native_extension_export_flags=lambda *_args: [],
-            libpython_isolation_flags=lambda *_args: [],
             platform_link_flags=lambda: [],
-            append_libpython_link_flags=lambda _cmd: None,
             log=lambda *_args: None,
             join_strings=lambda values, sep: sep.join(values),
             run_self_link_command=lambda *_args, **_kwargs: None,
@@ -461,6 +458,6 @@ def test_parallel_codegen_container_does_not_retain_prepass_ir(monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "_compile_python_multi_codegen_parallel", codegen)
     monkeypatch.setattr(pipeline, "_link_with_self_backend_ir_texts", link)
     pipeline.compile_python_multi([str(source)], str(tmp_path / "output"),
-        module_names=["entry"], backend="self", libpython_mode="off",
+        module_names=["entry"], backend="self",
         ir_scaffold_mode="on", runtime_archive=str(runtime))
     assert calls == ["runtime", "link"]

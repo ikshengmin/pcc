@@ -1463,8 +1463,7 @@ def test_build_tool_stdlib_modules_compile_and_match_cpython(tmp_path):
     env.pop("PCC_RUNTIME_CC", None)
 
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=900, env=env,
     )
     assert build.returncode == 0, build.stdout + build.stderr

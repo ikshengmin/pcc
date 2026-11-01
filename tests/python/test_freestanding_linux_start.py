@@ -38,7 +38,6 @@ def _compile_linux_ir(tmp_path: Path, monkeypatch) -> str:
         str(SOURCE),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return "\n".join(
@@ -100,7 +99,6 @@ def test_python_cli_propagates_explicit_cross_target_to_emitted_ir(
         target_triple=LINUX_TRIPLE,
         backend="self",
         python_library=True,
-        python_libpython="off",
     )
 
     assert result == 0
@@ -128,7 +126,6 @@ def test_python_cli_launcher_propagates_explicit_cross_target(
             "--target",
             LINUX_TRIPLE,
             "--python-library",
-            "--python-libpython=off",
             "--emit-llvm=" + str(output),
             str(SOURCE),
         ]
@@ -153,7 +150,6 @@ def test_multi_file_python_emit_applies_cross_target_to_every_module(tmp_path):
         emit_llvm_only=True,
         entry_module="pkg.first",
         module_names=["pkg.first", "pkg.second"],
-        libpython_mode="off",
         target_triple=LINUX_TRIPLE,
     )
 

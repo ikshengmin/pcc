@@ -45,7 +45,7 @@ def test_frontend_prefix_evidence_respects_runtime_mode(tmp_path, monkeypatch, m
     def compile_member(source, output, **options):
         observed.append(os.environ["PCC_PYTHON_IR_PASSES"])
         assert options == dict(emit_llvm_only=True, python_library=True,
-                               libpython_mode="off", backend="self", target_triple="arm64-apple-darwin")
+                               backend="self", target_triple="arm64-apple-darwin")
 
     monkeypatch.setattr(pipeline, "compile_python", compile_member)
     result = owned._compile_runtime_module("probe", str(tmp_path / "probe.py"),
@@ -348,7 +348,7 @@ def test_real_runtime_member_has_valid_phi_and_application_keeps_debug(tmp_path,
     assert os.environ["PCC_PY_DEBUG_INFO"] == "1"
     application_ir = tmp_path / "application.ll"
     pipeline.compile_python(str(source), str(application_ir), emit_llvm_only=True,
-                            libpython_mode="off", backend="self", target_triple="arm64-apple-darwin")
+                            backend="self", target_triple="arm64-apple-darwin")
     application = application_ir.read_text()
     assert "!dbg" in application and "!DICompileUnit" in application
     obj = parse_object(emit_owned_object(application, "arm64-apple-darwin"))

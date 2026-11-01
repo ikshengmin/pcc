@@ -67,7 +67,7 @@ def _compile(tmp_path: Path, name: str, source: str, *, emit_llvm: bool):
     src = tmp_path / f"{name}.py"
     src.write_text(source, encoding="utf-8")
     out = tmp_path / (f"{name}.ll" if emit_llvm else f"{name}.bin")
-    cmd = ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", "--ir-scaffold=on"]
+    cmd = ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on"]
     cmd += [f"--emit-llvm={out}", str(src)] if emit_llvm else [str(src), "-o", str(out)]
     proc = subprocess.run(cmd, text=True, capture_output=True, timeout=420, env=_env())
     assert proc.returncode == 0, proc.stderr
@@ -172,7 +172,7 @@ def test_promotion_matches_cpython_with_the_c_runtime_mirror(tmp_path, monkeypat
     src = tmp_path / "promote_cc.py"
     exe = tmp_path / "promote_cc.out"
     src.write_text(PROMOTE, encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on", backend="self")
     expected = subprocess.run([sys.executable, str(src)], text=True, capture_output=True, timeout=60).stdout
     env = _env()
     for backend in ("0", "3", "4"):

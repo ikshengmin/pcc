@@ -28,7 +28,6 @@ def _build_and_run(tmp_path: Path, source: str) -> list[str]:
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -36,54 +35,6 @@ def _build_and_run(tmp_path: Path, source: str) -> list[str]:
         [str(exe)], text=True, capture_output=True, check=True, timeout=30
     )
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-
-
-def test_unbound_call_cpy_base_compiles_via_dynamic_getattr(tmp_path):
-    """gnu.py shape: the method lives only on a CPython-backed base.
-
-    Must compile (library/auto mode, like the numpy per-module sweep)
-    and must lower to a dynamic getattr on the class object — NOT to a
-    direct call of the subclass's same-named method.
-    """
-    src = tmp_path / "mid_leaf.py"
-    out = tmp_path / "mid_leaf.ll"
-    src.write_text(
-        dedent(
-            """
-            from argparse import ArgumentParser
-
-            class Mid(ArgumentParser):
-                pass
-
-            class Leaf(Mid):
-                def format_usage(self):
-                    return Mid.format_usage(self)
-            """
-        ),
-        encoding="utf-8",
-    )
-    compile_python(
-        str(src),
-        str(out),
-        emit_llvm_only=True,
-        libpython_mode="auto",
-        ir_scaffold_mode="on",
-        python_library=True,
-    )
-    ir_text = out.read_text(encoding="utf-8")
-    assert "py_obj_getattr" in ir_text
-    # the buggy fallback dispatched the subclass method directly with the
-    # class object as receiver; pin that the unbound base reference
-    # `Mid.format_usage(self)` lowers to a dynamic getattr on the class
-    # object and is NOT emitted as a direct call of Leaf's own method in the
-    # body. Count actual calls independently of the emitter's explicit
-    # linkage spelling, then inspect the method body for recursive dispatch.
-    symbol = "@user_mid_leaf_Leaf_format_usage"
-    calls = re.findall(r"(?m)^\s*[^\n]*\bcall\b[^\n]*" + symbol + r"\(", ir_text)
-    body = re.search(r"(?m)^define[^\n]*" + symbol + r"\([^\n]*\{\n([\s\S]*?)^\}", ir_text)
-    assert body is not None
-    assert len(calls) == 1, calls
-    assert symbol + "(" not in body[1], body[1]
 
 
 def test_unbound_call_missing_method_raises_attribute_error(tmp_path):

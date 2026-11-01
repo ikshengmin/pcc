@@ -152,7 +152,7 @@ def test_capability_admission_does_not_relax_other_link_contracts():
         "pcc", needs_native_extension_exports=True,
         native_extension_exports_supported=True,
     )
-    for extra in ({"needs_libpython": True}, {"extra_link_args": ("-lpython",)}):
+    for extra in ({"extra_link_args": ("-lpython",)},):
         with pytest.raises(contract.SelfLinkContractError):
             contract.validate_pcc_self_link_surface(
                 "pcc", needs_native_extension_exports=True,

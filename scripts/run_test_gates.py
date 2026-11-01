@@ -216,7 +216,6 @@ def gate_gc_longrun(args) -> int:
                 *_python_prefix(),
                 "-m",
                 "pcc",
-                "--python-libpython=off",
                 "--ir-scaffold=on",
                 "--backend",
                 "self",

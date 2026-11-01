@@ -70,7 +70,6 @@ def _build_object(tmp_path: Path, emitter: str) -> Path:
         str(STATE_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     source = llvm_ir
@@ -357,7 +356,6 @@ def test_current_production_archive_gc_state_drives_all_five_collectors(
         str(executable),
         backend="self",
         ir_scaffold_mode="on",
-        libpython_mode="off",
         runtime_archive=str(pcc_runtime_archive),
     )
 

@@ -99,7 +99,7 @@ def test_classinfo_callbacks_failures_and_operand_lifetimes_native(tmp_path, pcc
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=20)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, "ISINSTANCE_BORROWED_ROOT_OK\n", "")
     binary = tmp_path / "borrowed_isinstance"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

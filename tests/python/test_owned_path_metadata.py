@@ -20,7 +20,7 @@ def test_path_metadata_calls_stay_native_and_check_errors(tmp_path):
         encoding="utf-8",
     )
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text(encoding="utf-8")
     body = re.search(r"define [^\n]*@user_[^\n]*inspect\([^\n]*\)\s*[^\n]*\{(.*?)\n\}", text, re.S)
     assert body is not None
@@ -53,7 +53,7 @@ def test_metadata_intrinsics_use_the_target_stat_abi(tmp_path, target):
         encoding="utf-8",
     )
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   libpython_mode="off", python_library=True, target_triple=target)
+                   python_library=True, target_triple=target)
     text = output.read_text(encoding="utf-8")
     assert count_py_cpy_fallback_calls(text) == 0
     assert "strict.nolib.stub" not in text

@@ -8,7 +8,7 @@ py_int_from_cstr returns NULL; the frontend routes int(str) to it (both StrType
 and DynType paths) and emits the post-call err check so the bad value never
 propagates and try/except can catch it. Valid parses are unaffected.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode).
 """
 from __future__ import annotations
@@ -26,8 +26,7 @@ def _build(tmp_path: Path, source: str):
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

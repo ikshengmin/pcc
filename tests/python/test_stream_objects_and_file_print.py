@@ -1,6 +1,6 @@
 """First-class ``sys.std*`` streams, dynamic file methods and ``print(file=)``.
 
-In a ``--python-libpython=off`` build:
+In a the native pipeline build:
 
 * ``sys.stderr`` as a value was the string ``"<sys.stderr>"``, so
   ``destination = sys.stderr; destination.write(...)`` raised, and with it
@@ -91,7 +91,7 @@ def test_stream_objects_file_methods_and_file_print_match_cpython(tmp_path):
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
     src.write_text(textwrap.dedent(SOURCE).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     native = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=60, cwd=str(tmp_path)
     )
@@ -116,7 +116,7 @@ def test_warnings_warn_writes_category_and_message_to_stderr(tmp_path):
         "print('done')\n",
         encoding="utf-8",
     )
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     native = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
     assert native.returncode == 0, native.stderr
     assert native.stdout == "done\n"

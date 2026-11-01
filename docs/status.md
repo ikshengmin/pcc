@@ -25,6 +25,72 @@ Reproduce ordinary checks with `uv run python -m pytest -x -vv --tb=short tests/
 select the executed pointer/public-driver checks with `-m integration
 tests/cpp/test_cpp_pointer_execution.py tests/cpp/test_cpp_public_driver_execution.py`.
 
+## libpython route removed, stage 1 (2026-11-01)
+
+The maintainer classified the remaining libpython route as an uncleaned
+migration defect and asked for its removal. Stage 1 removes every way to
+select, build or link it:
+
+- `--python-libpython` and `PCC_PYTHON_LIBPYTHON` are gone from `pcc`,
+  `python -m pcc` and `pcc1`; `libpython_mode` is gone from
+  `compile_python`, `compile_python_multi`, worker manifests, frontend cache
+  keys and the Stage 1 checkpoint graph key.
+- Link and runtime chains no longer carry `needs_libpython`: no
+  `python-config` flags, no C-API symbol isolation, no
+  `libpy_runtime_pcc_py_libpython.a` Make target, and
+  `pcc/runtime/src/py_libpython.c` is deleted. pcc1's CPython compat module
+  runner (which spawned host `python3`) is deleted.
+- The package ABI mode `libpython` is no longer accepted.
+- The strict pass rule is unconditional: owned passes leave IR that calls
+  `py_cpy_*` unchanged for every caller. The C evaluator used to opt out of
+  that rule; C IR only matches it if user code names a function `py_cpy_*`.
+- A program, module or direct indexed artifact whose IR still calls a
+  `py_cpy_*` helper fails with "cannot compile ... natively: generated IR
+  still calls py_cpy_* CPython bridge helpers".
+
+Deleted libpython-only tests (`tests/python/`): `test_pcc1_compat_runner.py`,
+`test_libpython_bridge_concurrency.py`, `test_libpython_auto_eager_init.py`,
+`test_mlx_cpython_proxy.py`, `test_cpython_compat_cext_import.py`,
+`test_native_cpy_object_render_hook.py`, `test_dynamic_import.py`,
+`test_native_membership_cpy_bridge.py`, `test_native_list_literal_cpy_bridge.py`,
+`test_native_tuple_dict_literal_cpy_bridge.py`,
+`test_native_cpy_str_method_bridge.py`, `test_cpy_call_argument_ownership.py`.
+About 1170 other test files dropped `libpython_mode="off"` and
+`--python-libpython off`. "No libpython linkage" assertions remain.
+
+Stage 2 (not started; needs a plan the maintainer confirms): the codegen
+still emits the CPython bridge (`py_cpy_*` helpers, `_cpy_values`,
+`CpyBridgeLoweringMixin`; 109 files, about 2655 sites), so the native gate
+above stays fail-closed. Also left for stage 2: `needs_libpython` fields in
+Stage 1 checkpoint receipts and the indexed handoff seal,
+`direct_indexed_module_needs_libpython`, the `_has_py_cpy_call` pass skip,
+the `python_libpython: off` label in
+`scripts/qualification/cpython_replacement/contract.py` data, and
+`build_libpython` ignore entries in packaging metadata (packaging untouched).
+
+Validation: compile and run of a native program; `--python-libpython` exits
+with an unknown-option error (2). The focused list (76 files touched by the
+removal, 2022 tests, six workers, `-x`) stopped after 236 tests: 234 passed,
+and the 2 failures below fail identically at `c34c1d137`, before this
+change. The other 1786 focused tests were not run on the final tree; earlier
+partial runs of the same list stopped on failures that are fixed. Also not
+run: the whole Python and C suites, pcc1 native self-host, the five-GC gates.
+
+- `test_fallback_baseline.py::test_per_module_fallbacks_under_ratchet` and
+  `::test_on_mode_per_module_fallbacks_under_ratchet`: 110 (OFF) and 109
+  (ON) modules exceed the 2026-10-22 baseline at `c34c1d137`, most of them
+  absent from it; after this change 109 and 108 (the `pipeline_libpython`
+  entry is gone, `pipeline_runtime_archive` 92 -> 78, nothing new). The
+  baseline needs a reviewed recapture; open.
+- `test_freestanding_linux_start.py::test_none_return_type_survives_self_host_module_class_boundary`
+  expected a missing return annotation to count as `None`; the code keeps
+  the dynamic ABI there (as its docstring says), so the test is corrected
+  in a follow-up commit.
+
+The focused list is the 76 test files whose assertions changed (not only a
+dropped keyword); the stage 1 commit message lists them. Rerun with
+`uv run pytest -x <those files>`.
+
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
 The maintainer requires Python compatibility and native performance together:
@@ -5977,6 +6043,12 @@ admitted workers on 3 cores; three workers would make it ~2300 s).
 
 ## Known failures
 
+- Set iteration order (found 2026-11-01, `c34c1d137`): for keys whose hashes
+  collide, a native set iterates in a different order than CPython 3.15.
+  Membership, deletion and reinsertion match. Repro: append
+  `print([k.number for k in members][:4])` to the colliding-hash program in
+  `tests/python/test_runtime_substrate_spike.py`; pcc prints
+  `[1188, 1076, 1072, 1127]`, CPython 3.15.0 `[43, 1254, 1253, 140]`.
 - Default suite at `f65ce326d` (2026-10-19, isolated snapshot rerun of the
   424 files that failed on 2026-10-18): 141 pass, 277 fail, 1 timeout;
   first failures and logs in

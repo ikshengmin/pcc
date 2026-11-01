@@ -98,7 +98,7 @@ def test_real_split_and_unsplit_match_complete_objects(tmp_path, monkeypatch):
         path.write_text(source, encoding="utf-8")
     source_hashes = [_sha256(path) for path in sources]
     options = dict(jobs=1, entry_module=names[1], sibling_inits=(names[0],),
-                   libpython_mode="off", ir_scaffold_mode="on", verbose=False)
+                   ir_scaffold_mode="on", verbose=False)
     environment = {
         "PCC_NO_AUTO_PCC1": "1", "PCC_PY_FRONTEND_JOBS": "1",
         "PCC_PYTHON_IR_PASSES": "off", "PCC_BACKEND": "self",

@@ -99,7 +99,6 @@ def test_indexed_sidecar_worker_rejects_a_non_singleton_manifest(
         "module_names": ["a", "b"],
         "entry_module": "a",
         "sibling_inits": (),
-        "libpython_mode": "off",
         "ir_scaffold_mode": "on",
         "verbose": False,
         "assigned_indices": [0, 1],

@@ -89,7 +89,7 @@ def test_discard_preserves_results_exceptions_and_resurrection_five_gc(tmp_path,
     assert reference.returncode == 0, reference.stderr
     assert "[('called', 'item'), 'result released', 'after'] 1" in reference.stdout
     output = tmp_path / "discard_append"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

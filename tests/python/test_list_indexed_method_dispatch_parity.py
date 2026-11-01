@@ -76,7 +76,6 @@ def test_list_indexed_method_dispatch_parity(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     outputs: list[list[str]] = []
     for _ in range(3):

@@ -272,7 +272,6 @@ def test_worker_manifest_v4_round_trips_and_rejects_truncation(tmp_path: Path):
         [1],
         entry_module="pkg.a",
         sibling_inits=("pkg.b",),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         verbose=True,
         job_kind="export",

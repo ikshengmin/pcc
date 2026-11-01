@@ -164,7 +164,7 @@ main()
     compile_python_multi(
         [str(path) for path, _name, _source in sources], str(binary),
         module_names=[name for _path, name, _source in sources], entry_module="entry",
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

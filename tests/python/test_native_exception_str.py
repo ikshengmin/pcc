@@ -1,6 +1,6 @@
 """str(exc) / print(exc) for builtin exceptions under strict no-libpython.
 
-Before this fix, ``print(exc)`` under ``--python-libpython=off`` rendered the
+Before this fix, ``print(exc)`` under the native pipeline rendered the
 opaque ``<object tag=12>`` (PY_TYPE_EXC) instead of the exception message: the
 print formatter ``_format`` (py_print_fmt.py port / py_print_fmt.c) had no
 PY_TYPE_EXC case and fell through to the unknown-tag fallback. This is a silent
@@ -21,7 +21,7 @@ message plainly. Both the ``str(exc)`` path (py_obj_str / py_obj_stubs) and the
 (The unhandled-exception traceback printer ``KeyError: m`` and ``repr(exc)``
 itself remain separate follow-ups.)
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode
+Runs under ``--backend self`` in DEFAULT runtime mode
 (pcc-Python ports — the goal mode; py_print_fmt is a PY_MODULES port).
 """
 from __future__ import annotations
@@ -39,8 +39,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

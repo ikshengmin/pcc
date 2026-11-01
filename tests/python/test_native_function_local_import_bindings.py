@@ -122,8 +122,7 @@ def test_function_local_from_imports_follow_control_flow_and_scope(tmp_path):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     built = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=600, env=env,
     )
     assert built.returncode == 0, built.stdout + built.stderr

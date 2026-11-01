@@ -7,7 +7,7 @@ None deletes it, an int gives that byte, a str inserts its bytes. Frontend
 string_method_lowering dispatch in both the StrType and DynType paths.
 
 Byte/ASCII-oriented like the other str helpers (non-ASCII codepoint keys are a
-follow-on). Compiles + runs under ``--backend self --python-libpython=off`` in
+follow-on). Compiles + runs under ``--backend self`` in
 DEFAULT runtime mode (pcc-Python ports — the goal mode).
 """
 from __future__ import annotations
@@ -25,8 +25,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

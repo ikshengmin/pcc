@@ -29,7 +29,6 @@ def test_class_instance_is_pinned_across_init(tmp_path):
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
 
@@ -94,7 +93,6 @@ def test_dataclass_constructor_attr_args_do_not_lower_to_null(tmp_path, monkeypa
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
 

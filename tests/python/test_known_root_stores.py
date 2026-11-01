@@ -48,7 +48,7 @@ def test_root_store_selection_preserves_raw_scopes(tmp_path, monkeypatch, enable
     source.write_text("def replace(value):\n" + raw_import +
                       "    local = [value]\n    local = [local, value]\n    return local\n")
     output = tmp_path / "root_owner.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     calls = [line for line in output.read_text().splitlines() if "call " in line]
     assert any("@pcc_gc_store_root_known(" in line for line in calls) == expected
@@ -60,7 +60,7 @@ def test_known_roots_keep_native_lifetimes_all_collectors(tmp_path, monkeypatch,
     source = tmp_path / "lifetime.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "lifetime"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

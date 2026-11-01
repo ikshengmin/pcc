@@ -12,7 +12,6 @@ def test_shared_cli_contract_is_complete_and_self_consistent():
     assert cli_contract.validate_cli_contract() == ()
     assert {row[1] for row in cli_contract.SHARED_CLI_OPTIONS} == {
         "--backend",
-        "--python-libpython",
         "--python-library",
         "--emit-llvm",
         "-o",
@@ -23,14 +22,6 @@ def test_shared_cli_contract_is_complete_and_self_consistent():
 def test_host_and_bootstrap_parsers_consume_shared_choice_owners():
     assert cli_core.BACKEND_CHOICES is cli_contract.BACKEND_CHOICES
     assert cli_bootstrap.BACKEND_CHOICES is cli_contract.BACKEND_CHOICES
-    assert (
-        cli_core.PYTHON_LIBPYTHON_CHOICES
-        is cli_contract.PYTHON_LIBPYTHON_CHOICES
-    )
-    assert (
-        cli_bootstrap.PYTHON_LIBPYTHON_CHOICES
-        is cli_contract.PYTHON_LIBPYTHON_CHOICES
-    )
     assert cli_core._DEFAULT_EMIT_LL == cli_contract.DEFAULT_EMIT_LL
     assert cli_bootstrap._DEFAULT_EMIT_LL == cli_contract.DEFAULT_EMIT_LL
 

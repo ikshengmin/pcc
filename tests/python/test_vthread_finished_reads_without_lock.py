@@ -142,7 +142,7 @@ def test_watchers_read_racing_completions_on_four_carriers(tmp_path, threaded_pc
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "finished_reads"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         for attempt in range(3):

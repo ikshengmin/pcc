@@ -20,7 +20,7 @@ def test_static_literal_kernel_compiles_with_exact_freestanding_boundaries(tmp_p
     compile_python(
         str(ROOT / "pcc/runtime/py/freestanding_gc_root_operations.py"),
         str(output), emit_llvm_only=True, python_library=True,
-        backend="self", libpython_mode="off", target_triple="arm64-apple-darwin",
+        backend="self", target_triple="arm64-apple-darwin",
     )
     ir_text = output.read_text()
     assert "define external i64 @pcc_gc_static_literal_contains" in ir_text

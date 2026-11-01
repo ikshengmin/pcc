@@ -2,12 +2,12 @@
 
 sorted() was only lowered for the no-kwargs form (call_expression_lowering
 ``len(args)==1 and not expr.kwargs``), so sorted(x, reverse=True) fell back to
-py_cpy_* and the compile hard-errored under --python-libpython=off. Now a
+py_cpy_* and the compile hard-errored in the native pipeline. Now a
 constant ``reverse=<bool>`` kwarg is handled natively: py_obj_sorted(x) then, if
 reverse=True, py_list_reverse on the result (both already exist). key= (a
 first-class function) and a non-constant reverse still fall through.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode) and asserts CPython-exact output.
 """
 from __future__ import annotations
@@ -25,8 +25,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

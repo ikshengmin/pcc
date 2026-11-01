@@ -123,7 +123,7 @@ def test_literal_unpack_callback_program_native_five_gc(
     source.write_text(PROGRAM)
     binary = tmp_path / 'literal_unpack_native'
     python_program_compiler(str(source), str(binary), backend='self',
-                            libpython_mode='off', runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,

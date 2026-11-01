@@ -14,7 +14,7 @@ integer-valued floats. The pcc-Python ports (py_print_fmt.py::_format_float and
 py_obj_stubs.py::_float_str) and the C print path
 (py_print_fmt.c::py_format_float) all delegate to it.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode) and asserts CPython-exact
 output.
 """
@@ -36,8 +36,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # delegate to it.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

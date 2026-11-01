@@ -25,12 +25,12 @@ def _run_test(tmp_path, monkeypatch, source, compiler):
     if compiler == "pcc1":
         if not PCC1.exists(): pytest.fail("no pcc1 even after auto-provisioning")
         subprocess.run(
-            [str(PCC1), str(src), "-o", str(exe), "--ir-scaffold=on", "--python-libpython=off"],
+            [str(PCC1), str(src), "-o", str(exe), "--ir-scaffold=on"],
             check=True,
         )
     else:
         from pcc.frontends.python.pipeline import compile_python
-        compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+        compile_python(str(src), str(exe), ir_scaffold_mode="on")
     return subprocess.run([str(exe)], capture_output=True, text=True).stdout.strip()
 
 @pytest.mark.parametrize("compiler", ["python", "pcc1"])

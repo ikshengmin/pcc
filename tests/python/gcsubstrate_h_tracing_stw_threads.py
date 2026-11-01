@@ -707,7 +707,6 @@ def test_no_libpython_all_backends_collect_through_thread_gate(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     for backend in range(5):
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20,
@@ -990,7 +989,6 @@ def test_thread_safepoint_composes_with_all_gc_backends(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     for backend in range(5):
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20,
@@ -1033,7 +1031,6 @@ def test_threading_substrate_runs_in_no_libpython_binary(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,

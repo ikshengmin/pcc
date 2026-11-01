@@ -54,7 +54,6 @@ def test_print_operand_cleanup_has_consistent_self_stackmap(tmp_path):
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -87,7 +86,6 @@ def test_print_operand_errors_leave_lifo_roots_and_reach_handler(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

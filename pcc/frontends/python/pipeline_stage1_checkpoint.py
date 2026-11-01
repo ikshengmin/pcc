@@ -32,7 +32,7 @@ _MODULE_FIELDS = (
 _GRAPH_FIELDS = (
     "stage", "producer_role", "owner", "backend", "target", "module_names",
     "original_chunks", "sources", "entry_module", "sibling_inits",
-    "libpython_mode", "ir_scaffold_mode", "worker_prefix", "jobs",
+    "ir_scaffold_mode", "worker_prefix", "jobs",
     "exports_sha256", "exports_size", "runtime_path", "runtime_sha256",
     "worker_schema", "ast_schema", "export_reader_by_chunk",
 )
@@ -249,11 +249,11 @@ def _graph_payload(payload) -> None:
     _fields(payload, _GRAPH_FIELDS, "graph payload")
     if (not _integer(payload["stage"]) or payload["stage"] != 1
             or payload["producer_role"] != "host-pcc0" or payload["owner"] != "cpython"
-            or payload["backend"] != "self" or payload["libpython_mode"] != "off"
+            or payload["backend"] != "self"
             or not isinstance(payload["target"], str)
             or not payload["target"].startswith("x86_64-")
             or "-linux-" not in payload["target"]):
-        raise CheckpointError("graph requires host Stage1 self no-libpython x86_64 Linux")
+        raise CheckpointError("graph requires host Stage1 self x86_64 Linux")
     names = payload.get("module_names")
     chunks = payload.get("original_chunks")
     if not isinstance(names, list) or not names or not isinstance(chunks, list) or not chunks:

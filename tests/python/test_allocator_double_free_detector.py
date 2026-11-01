@@ -157,7 +157,7 @@ def test_an_ordinary_program_reports_no_double_free(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     env = dict(os.environ)
     env["PCC_GC_BACKEND"] = "0"
     env["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = "2"
@@ -216,7 +216,7 @@ def _compile_and_run(tmp_path, probe_mode: str, metric: int = METRIC):
     src = tmp_path / "double_free.py"
     exe = tmp_path / "double_free.out"
     src.write_text(_double_free_program(metric), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     env = dict(os.environ)
     env["PCC_GC_BACKEND"] = "0"
     env["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = probe_mode

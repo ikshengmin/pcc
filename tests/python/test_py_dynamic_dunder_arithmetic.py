@@ -24,7 +24,6 @@ def test_call_result_arithmetic_compiles_dynamic_dunder_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     assert exe.exists()

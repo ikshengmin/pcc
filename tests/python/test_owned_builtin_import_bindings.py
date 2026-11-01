@@ -251,7 +251,7 @@ def test_cross_module_import_values_share_the_runtime_cache(tmp_path, monkeypatc
         paths.append(str(path))
     output = tmp_path / "cross-module.ll"
     compile_python_multi(paths, str(output), module_names=names, entry_module="app",
-                         emit_llvm_only=True, backend="self", libpython_mode="off",
+                         emit_llvm_only=True, backend="self",
                          ir_scaffold_mode="on")
     text = output.read_text()
     # Each module publishes its wrapper candidate; the runtime keeps the first.
@@ -276,7 +276,7 @@ def test_builtin_import_controls_execute_all_collectors(tmp_path, monkeypatch, p
     path.write_text(source)
     binary = tmp_path / name
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
-    python_program_compiler(str(path), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(path), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2", PATH="/nonexistent"))
@@ -289,7 +289,7 @@ def test_cold_builtin_import_identity_executes_with_real_threads(tmp_path, monke
     path.write_text(THREADS)
     binary = tmp_path / "builtin_threads"
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
-    python_program_compiler(str(path), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
+    python_program_compiler(str(path), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2", PATH="/nonexistent"))
@@ -308,7 +308,7 @@ def test_cross_module_builtin_identity_executes_all_collectors(tmp_path, monkeyp
         paths.append(str(path))
     binary = tmp_path / "cross_module"
     compile_python_multi(paths, str(binary), module_names=names, entry_module="app",
-                         backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                         backend="self", ir_scaffold_mode="on",
                          runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

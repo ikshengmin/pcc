@@ -70,7 +70,7 @@ def frontend_ir(tmp_path, target):
     source.write_text(FRONTEND)
     output = tmp_path / "address.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", backend="self", target_triple=target)
+                   backend="self", target_triple=target)
     return output.read_text()
 
 
@@ -109,7 +109,7 @@ def exchange(value: i64) -> i64:
 ''')
     output = tmp_path / "pointer_access.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", backend="self", target_triple=target)
+                   backend="self", target_triple=target)
     text = output.read_text()
     assert "@pointer_cell = thread_local global ptr null" in text
     assert emit_owned_object(text, target)

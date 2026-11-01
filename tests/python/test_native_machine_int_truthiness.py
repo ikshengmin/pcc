@@ -41,7 +41,6 @@ def _compile_freestanding(tmp_path: Path, source: str) -> str:
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return out.read_text(encoding="utf-8")
@@ -113,7 +112,6 @@ def _pcc(tmp_path, compiler, archive, backends):
         str(source),
         str(binary),
         backend="self",
-        libpython_mode="off",
         runtime_archive=str(archive),
     )
     outputs = []

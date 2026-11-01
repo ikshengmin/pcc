@@ -240,7 +240,7 @@ def test_fullmatch_emits_the_typed_raw_abi_without_managed_roots(tmp_path):
 
     output = tmp_path / "freestanding_re_engine.ll"
     compile_python(str(SOURCE), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", backend="self", target_triple="x86_64-unknown-linux-gnu")
+                   backend="self", target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     entry = re.search(r"^define (?:external )?i32 @pcc_re_engine_fullmatch_flags\(([^\n]*)\).*?^}", text, re.M | re.S)
     assert entry is not None

@@ -87,7 +87,6 @@ def test_property_fget_can_alias_an_instance_method(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     result = subprocess.run(

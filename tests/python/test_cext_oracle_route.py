@@ -43,7 +43,7 @@ def test_cext_oracle_environment_selects_text_without_changing_host(
         target.setattr(pipeline_modes.os, "environ", environment)
         chosen = pipeline_modes.select_direct_indexed_route(
             backend="self", emit_llvm_only=False, python_library=False,
-            target_triple=None, gpu_backend="none", libpython_mode="off",
+            target_triple=None, gpu_backend="none",
         )
         assert chosen == []
         pipeline_modes.restore_direct_indexed_route(chosen)

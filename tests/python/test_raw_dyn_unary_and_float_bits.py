@@ -98,7 +98,7 @@ def _pcc(tmp_path, name, text, compiler, archive, backends):
         package.symlink_to(os.path.join(_repo_root(), "pcc"), target_is_directory=True)
     binary = tmp_path / name
     compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(archive),
     )
     outputs = []

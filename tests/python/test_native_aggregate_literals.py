@@ -11,7 +11,7 @@ def test_native_aggregate_literals_match_host(tmp_path, pcc_diagnostic_runtime_a
 
     source = Path(__file__).resolve().parents[2] / "pcc/backend/owned_literal_driver.py"
     binary = tmp_path / "aggregate_literals"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_diagnostic_runtime_archive))
     cases = [("int", "8", "0", "255"), ("int", "32", "0", "4294967295"),
              ("int", "64", "0", "1"), ("int", "64", "0", "-1"),

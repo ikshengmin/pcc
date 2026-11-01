@@ -39,7 +39,7 @@ def test_condition_notify_and_notify_all_select_distinct_owned_runtime_calls(tmp
 
         main()
     ''').lstrip(), encoding="utf-8")
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     text = output.read_text(encoding="utf-8")
     for suffix, expected, rejected in (

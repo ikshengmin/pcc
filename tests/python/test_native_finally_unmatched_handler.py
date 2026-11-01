@@ -52,7 +52,7 @@ def test_finally_runs_on_unmatched_handler_matches_cpython(tmp_path, monkeypatch
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,
@@ -123,7 +123,7 @@ def test_finally_preserves_exception_across_cleanup(tmp_path, monkeypatch):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     for backend in range(5):
         monkeypatch.setenv("PCC_GC_BACKEND", str(backend))

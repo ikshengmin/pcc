@@ -34,7 +34,7 @@ def _enabled_environment():
 
 def _require(env, **changes):
     options = dict(checkpoint_root="", action_cache_plan=None,
-                   libpython_mode="off", artifact_dir="/private/artifacts")
+                   artifact_dir="/private/artifacts")
     options.update(changes)
     stage.require_host_indexed_split(env, **options)
 
@@ -67,7 +67,6 @@ def test_host_split_rejects_incompatible_routes(name, value):
 @pytest.mark.parametrize("changes", (
     {"checkpoint_root": "/private/checkpoint"},
     {"action_cache_plan": {}},
-    {"libpython_mode": "on"},
     {"artifact_dir": ""},
 ))
 def test_host_split_rejects_incompatible_frontend_contracts(changes):

@@ -34,7 +34,7 @@ check(1.5, TYPES)
 check(Child("empty"), EMPTY)
 ''', encoding="utf-8")
     compile_python(str(source), str(executable), backend="self",
-                   ir_scaffold_mode="on", libpython_mode="off")
+                   ir_scaffold_mode="on")
     ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert ran.stdout.splitlines() == ["True", "True", "True", "False", "False"]
@@ -206,7 +206,7 @@ def test_literal_dynamic_classinfo_executes_all_collectors(
     output = tmp_path / 'literal_classinfo'
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
     python_program_compiler(str(source), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True,
@@ -252,7 +252,7 @@ def test_dynamic_tuple_reads_each_module_alias_once(tmp_path, monkeypatch, rever
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
     monkeypatch.setenv('PCC_PY_FRONTEND_JOBS', '1')
     compile_python_multi(paths, str(output), module_names=names, entry_module='tuple_main',
-                         emit_llvm_only=True, backend='self', libpython_mode='off',
+                         emit_llvm_only=True, backend='self',
                          ir_scaffold_mode='on')
     text = output.read_text()
     names_by_symbol = {
@@ -287,7 +287,7 @@ def test_dynamic_tuple_keeps_qualified_module_class_identity(
     binary = tmp_path / 'tuple_owner'
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
     compile_python_multi(paths, str(binary), module_names=names, entry_module='tuple_main',
-                         backend='self', libpython_mode='off', ir_scaffold_mode='on',
+                         backend='self', ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

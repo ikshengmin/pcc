@@ -48,7 +48,7 @@ def test_module_scope_comprehension_targets_match_cpython(tmp_path, pcc_runtime_
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "module_scope_comprehensions"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

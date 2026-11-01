@@ -14,13 +14,12 @@ _TRUE = ("1", "true", "yes", "on")
 _FALSE = ("0", "false", "no", "off")
 
 
-def require_host_indexed_split(env, *, checkpoint_root, action_cache_plan,
-                               libpython_mode, artifact_dir):
+def require_host_indexed_split(env, *, checkpoint_root, action_cache_plan, artifact_dir):
     """Fail before building exports when an explicit split cannot be owned."""
     if checkpoint_root or action_cache_plan is not None:
         raise ValueError("host indexed process split cannot share a checkpoint or action cache")
-    if libpython_mode != "off" or not artifact_dir:
-        raise ValueError("host indexed process split requires no-libpython and an artifact root")
+    if not artifact_dir:
+        raise ValueError("host indexed process split requires an artifact root")
     for name in ("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "PCC_DIRECT_INDEXED_KERNEL_EMIT",
                  "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK"):
         if str(env.get(name, "") or "").strip().lower() not in _TRUE:

@@ -71,7 +71,6 @@ def test_value_array_uses_nested_aggregate_abi_on_self(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -155,7 +154,6 @@ def test_value_array_checked_index_and_element_escape_match_host_default_and_exp
         compile_python(
             str(src),
             str(exe),
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend=backend,
         )

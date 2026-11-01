@@ -99,7 +99,7 @@ def _build_and_run(tmp_path, name, source):
     src = tmp_path / (name + ".py")
     exe = tmp_path / (name + ".out")
     src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )

@@ -71,7 +71,6 @@ def test_class_method_registration_uses_stable_function_ref(tmp_path, monkeypatc
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
 
@@ -119,7 +118,6 @@ def test_pcc_cross_module_class_schema_matches_local_layout(tmp_path):
         emit_llvm_only=True,
         entry_module=mods[0],
         module_names=mods,
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         recursive_stdlib=True,

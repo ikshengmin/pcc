@@ -112,7 +112,7 @@ def coordinator_case(tmp_path, monkeypatch):
         def run():
             return parallel.compile_parallel_uncached(
                 sources, names, jobs=2, entry_module="m0", sibling_inits=(),
-                libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+                ir_scaffold_mode="on", verbose=False,
                 action_cache_plan=None, artifact_dir=str(state.artifacts),
                 can_spawn_worker=lambda: True, worker_command_prefix=lambda: ["python3"],
                 chunk_count_for_workers=chunk_count, codegen_chunks=chunks,

@@ -92,7 +92,7 @@ def test_modf_provider_has_real_no_libpython_body(tmp_path):
     compile_python(
         str(Path(owned_math.__file__)), str(output),
         emit_llvm_only=True, python_library=True,
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     text = output.read_text()
     body = re.search(r"^define .*@user_pcc_stdlib_math_modf\(.*?^}", text, re.M | re.S)

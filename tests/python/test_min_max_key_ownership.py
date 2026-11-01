@@ -111,7 +111,7 @@ def test_min_max_key_matches_cpython_under_every_collector(
     assert reference.stdout == EXPECTED
     binary = tmp_path / "min_max_key"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -224,7 +224,7 @@ def test_min_max_key_owners_are_released(
     ))
     binary = tmp_path / "min_max_owners"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

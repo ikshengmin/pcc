@@ -79,7 +79,7 @@ def test_compiled_program_sees_cpython_escapes(
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "escapes"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     ran = subprocess.run(

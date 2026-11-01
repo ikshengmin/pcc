@@ -72,7 +72,7 @@ def test_user_exception_repr_matches_cpython_under_five_collectors(tmp_path, pcc
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "exception_repr"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

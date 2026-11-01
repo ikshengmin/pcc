@@ -29,7 +29,7 @@ def main():
 main()
 ''', encoding="utf-8")
     binary = tmp_path / "rlock_scope"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

@@ -345,7 +345,7 @@ def test_annotation_assignment_native(source, expected, tmp_path, pcc_runtime_ar
     assert reference.returncode == 0, reference.stderr
     assert reference.stdout == expected
     python_program_compiler(str(path), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -380,7 +380,7 @@ main()
     compile_python_multi([str(consumer), str(provider)], str(output),
                          module_names=['annotation_consumer', 'annotation_provider'],
                          entry_module='annotation_consumer', backend='self',
-                         libpython_mode='off', ir_scaffold_mode='on',
+                         ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -398,7 +398,7 @@ def test_annotation_assignment_owned_object(source, tmp_path):
     path = tmp_path / 'annotation_object.py'
     output = tmp_path / 'annotation_object.ll'
     path.write_text(source)
-    compile_python(str(path), str(output), backend='self', libpython_mode='off',
+    compile_python(str(path), str(output), backend='self',
                    ir_scaffold_mode='on', emit_llvm_only=True,
                    target_triple='x86_64-unknown-linux-gnu')
     assert emit_owned_object(output.read_text(), 'x86_64-unknown-linux-gnu')[:4] == b'\x7fELF'
@@ -497,7 +497,7 @@ def test_imported_dataclass_defaults_reach_owned_objects(tmp_path):
     compile_python_multi([str(consumer), str(provider)], str(output),
                          module_names=['defaults_consumer', 'defaults_provider'],
                          entry_module='defaults_consumer', emit_llvm_only=True,
-                         backend='self', libpython_mode='off', ir_scaffold_mode='on',
+                         backend='self', ir_scaffold_mode='on',
                          target_triple='x86_64-unknown-linux-gnu')
     text = output.read_text()
     caller = re.search(r'define[^\n]*@user_defaults_consumer_main\([^\n]*\) \{(.*?)\n\}', text, re.S).group(1)
@@ -526,7 +526,7 @@ def test_imported_dataclass_defaults_native(tmp_path, pcc_runtime_archive, pytho
     assert reference.stdout == 'ANNOTATION_IMPORTED_DEFAULTS_OK\n'
     output = tmp_path / 'imported_defaults'
     python_program_compiler(str(consumer), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

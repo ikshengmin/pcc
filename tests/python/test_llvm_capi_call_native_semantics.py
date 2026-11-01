@@ -126,7 +126,6 @@ def test_compiled_call_signature_replacement_and_subclass_match_host(
         entry_module="ir_call_probe",
         backend="self",
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
 
     run_env = os.environ.copy()

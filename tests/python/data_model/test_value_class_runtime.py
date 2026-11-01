@@ -14,7 +14,6 @@ def _write_and_build_probe(tmp_path: Path, source: str, *, backend: str | None =
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend=backend,
     )

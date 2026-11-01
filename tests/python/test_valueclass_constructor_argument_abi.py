@@ -188,7 +188,7 @@ main()
         [str(consumer), str(tmp_path / "records.py")], str(executable),
         entry_module="pcc.backend.consumer",
         module_names=["pcc.backend.consumer", "pcc.backend.records"],
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         recursive_stdlib=False, target_triple=host_target_triple(),
         runtime_archive=str(pcc_runtime_archive),
     )

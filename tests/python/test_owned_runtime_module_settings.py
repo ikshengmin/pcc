@@ -62,7 +62,7 @@ def test_raw_runtime_disables_implicit_polls_and_restores_environment(
                                 "x86_64-pc-windows-msvc")
     assert len(calls) == 1
     assert calls[0][2]["target_triple"] == "x86_64-pc-windows-msvc"
-    assert calls[0][2]["libpython_mode"] == "off"
+    assert "libpython_mode" not in calls[0][2]
     assert os.environ.get("PCC_WITH_THREADS") == threads
     assert os.environ.get(POLL_ENV) == previous
 

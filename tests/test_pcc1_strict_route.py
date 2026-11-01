@@ -81,8 +81,7 @@ def test_single_native_argv_preserves_target_output_and_identity(bound_route, ta
              link_args=("-lm", "-Wl,--as-needed"))
     assert not s.host and not s.multi and len(s.native) == 1
     argv, options = s.native[0]
-    assert argv == [str(s.compiler), "--backend", "self", "--python-libpython", "off",
-                    "--ir-scaffold", "on", "--target", target, "--verbose",
+    assert argv == [str(s.compiler), "--backend", "self", "--ir-scaffold", "on", "--target", target, "--verbose",
                     "--link-arg", "-lm", "--link-arg", "-Wl,--as-needed"] + (
         ["--emit-llvm", "output with space", "source with space.py"] if emit_ir else
         ["source with space.py", "-o", "output with space"])
@@ -99,7 +98,7 @@ def test_single_native_argv_preserves_target_output_and_identity(bound_route, ta
 
 
 UNSUPPORTED = (
-    {"libpython_mode": "on"}, {"libpython_mode": "auto"}, {"backend": "llvm"},
+    {"backend": "llvm"},
     {"recursive_stdlib": True}, {"profile": {}}, {"gpu_backend": "metal"},
     {"link_args": ("raw.o",)}, {"link_args": ("raw.obj",)},
 )
@@ -122,7 +121,7 @@ def test_strict_multi_is_visible_gap_not_host_fallback(bound_route):
     assert _rows(s)[0]["route"] == "unsupported"
 
 
-@pytest.mark.parametrize("kind", ("libpython", "profile", "object-container", "multi"))
+@pytest.mark.parametrize("kind", ("profile", "object-container", "multi"))
 def test_non_strict_retains_real_host_call_contract(bound_route, monkeypatch, kind):
     s = bound_route
     monkeypatch.setenv(route.STRICT_ENV, "0")
@@ -131,8 +130,7 @@ def test_non_strict_retains_real_host_call_contract(bound_route, monkeypatch, ki
         assert s.multiple(["one.py", "two.py"], "out", **options) == "multi-recorder-only"
         assert s.multi == [((["one.py", "two.py"], "out"), options)]
     else:
-        options = {"libpython_mode": "on"} if kind == "libpython" else (
-            {"profile": {}} if kind == "profile" else {"object_inputs": "not-a-sequence.o"})
+        options = {"profile": {}} if kind == "profile" else {"object_inputs": "not-a-sequence.o"}
         assert s.single("in.py", "out", **options) == "host-recorder-only"
         assert len(s.host) == 1 and s.host[0][0] == ("in.py", "out")
         for key, value in options.items():
@@ -191,15 +189,6 @@ def test_object_negative_expressibility_does_not_fake_native_rejection(bound_rou
         assert len(s.native) == 1 and str(obj) in s.native[0][0]
         assert _rows(s)[-1]["outcome"] == "failed"
     assert not s.host
-
-
-@pytest.mark.parametrize("mode", ("on", "auto"))
-def test_launcher_strict_libpython_never_enters_host_cli(bound_route, mode):
-    from pcc.driver.cli_launcher import _route_to_test_compiler
-    with pytest.raises(RuntimeError, match="strict pcc1 route unsupported"):
-        _route_to_test_compiler(["--python-libpython=" + mode, "in.py"])
-    assert _rows(bound_route)[0]["route"] == "unsupported"
-    assert not bound_route.host and not bound_route.native
 
 
 def test_launcher_exec_preserves_exact_compiler_argv_and_guard(bound_route, monkeypatch):

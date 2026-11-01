@@ -67,7 +67,7 @@ def test_clear_dispatches_to_the_receiver_under_every_backend(
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "clear_dispatch"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

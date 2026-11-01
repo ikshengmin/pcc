@@ -343,7 +343,7 @@ def test_set_unpack_owned_ir(tmp_path, monkeypatch, name):
     output = source.with_suffix(".ll")
     source.write_text(PROGRAMS[name])
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on", target_triple="x86_64-unknown-linux-gnu")
+                   ir_scaffold_mode="on", target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     assert re.search(r"call i64[^\n]*@py_set_call_method_slots\(", text)
     assert "name '*' is not defined" not in text
@@ -357,7 +357,7 @@ def test_set_unpack_native(tmp_path, pcc_runtime_archive, name):
     source = tmp_path / ("set_" + name + ".py")
     output = source.with_suffix("")
     source.write_text(PROGRAMS[name])
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

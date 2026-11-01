@@ -192,7 +192,6 @@ def _run_python_probe(
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         runtime_archive=str(runtime_archive),

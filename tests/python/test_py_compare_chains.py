@@ -28,7 +28,6 @@ def test_chained_comparison_uses_python_and_semantics(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

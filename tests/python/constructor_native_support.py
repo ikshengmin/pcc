@@ -326,7 +326,7 @@ def main():
         "status": "ADMITTING", "compiler": "host-pcc0", "native_pcc1": "UNRUN",
         "source": str(source), "source_sha256": _sha(source),
         "runtime_archive": str(archive), "helper_sha256": _sha(Path(__file__)),
-        "backend": "self", "libpython_mode": "off", "ir_scaffold_mode": "on",
+        "backend": "self", "ir_scaffold_mode": "on",
         "link_inputs": [], "constructor_calls": [], "link_call_count": 0,
     }
     _save(receipt_path, receipt)
@@ -378,13 +378,12 @@ def main():
                     "Unexpected extra linker inputs or arguments")
             receipt["actual_link_call"] = {
                 key: values[key] for key in ("out_path", "runtime_archive", "verbose",
-                    "needs_libpython", "needs_native_extension_exports", "extra_link_inputs",
+                    "needs_native_extension_exports", "extra_link_inputs",
                     "extra_link_args", "tmp_dir", "consume_ir_texts")
             }
             _save(receipt_path, receipt)
             require(isinstance(ir_texts, list) and all(isinstance(text, str) for text in ir_texts),
                     "Expected the actual list of linker IR strings")
-            require(not kwargs.get("needs_libpython", False), "Link requested libpython")
             rows = []
             for text in ir_texts:
                 path = directory / ("link-input-" + str(len(receipt["link_inputs"])) + ".ll")
@@ -411,7 +410,7 @@ def main():
         stage = "COMPILE"
         try:
             pipeline.compile_python(
-                str(source), str(binary), backend="self", libpython_mode="off",
+                str(source), str(binary), backend="self",
                 ir_scaffold_mode="on", runtime_archive=str(admitted), target_triple=target,
             )
         finally:

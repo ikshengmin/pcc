@@ -118,8 +118,7 @@ def test_native_matches_cpython(tmp_path):
     build = subprocess.run(
         [
             sys.executable, "-m", "pcc",
-            "--backend", "self", "--python-libpython", "off",
-            str(source), "-o", str(binary),
+            "--backend", "self", str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=1800,
     )

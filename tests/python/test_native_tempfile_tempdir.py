@@ -137,7 +137,7 @@ def test_native_tempdir_default_probe_and_nonempty_cleanup(tmp_path, pcc_runtime
     )
     compile_python(
         str(src), str(exe), backend="self", ir_scaffold_mode="on",
-        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     run = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,

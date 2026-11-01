@@ -4377,8 +4377,6 @@ def pcc1_self_host_binary(tmp_path_factory, worker_id):
                         sys.executable,
                         "-m",
                         "pcc",
-                        "--python-libpython",
-                        "off",
                         "--backend",
                         "self",
                         "--ir-scaffold",
@@ -4429,8 +4427,6 @@ def _build_next_stage(
         result = subprocess.run(
             [
                 str(compiler),
-                "--python-libpython",
-                "off",
                 "--backend",
                 "self",
                 "pcc/__main__.py",
@@ -4556,8 +4552,6 @@ def _compile_and_run(
     compile_result = subprocess.run(
         compiler
         + [
-            "--python-libpython",
-            "off",
             "--backend",
             "self",
             str(src),
@@ -4632,8 +4626,6 @@ def _compile_and_run_parity_observation(
     out: Path,
 ) -> dict[str, object]:
     compile_command = compiler + [
-        "--python-libpython",
-        "off",
         "--backend",
         "self",
         "--ir-scaffold",
@@ -4717,7 +4709,6 @@ def _fail_host_pcc_pcc1_parity(
             "mode": {
                 "backend": "self",
                 "ir_scaffold": "on",
-                "python_libpython": "off",
             },
             "manifest": str(manifest_path),
             "candidate_names_sha256": candidate_names_digest,
@@ -4771,8 +4762,6 @@ def _compile_and_run_artifact_no_host(
     compile_result = subprocess.run(
         compiler
         + [
-            "--python-libpython",
-            "off",
             "--backend",
             "self",
             str(src),
@@ -4845,8 +4834,6 @@ def test_pcc1_duplicate_definition_ir_matches_host_shape(
     host_ir = tmp_path / "duplicate_definition.host.ll"
     pcc1_ir = tmp_path / "duplicate_definition.pcc1.ll"
     common = [
-        "--python-libpython",
-        "off",
         "--backend",
         "self",
         "--emit-llvm",
@@ -4937,8 +4924,6 @@ def test_pcc1_runtime_rebuild_uses_repo_python_and_surfaces_make_error(
     result = subprocess.run(
         [
             str(pcc1_self_host_binary),
-            "--python-libpython",
-            "off",
             "--backend",
             "self",
             str(source),

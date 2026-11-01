@@ -29,7 +29,7 @@ def _production_nodes(entry, monkeypatch, **options):
         patch.setattr(pipeline, "_prepare_multi_source_compile_closure", observe)
         with pytest.raises(DiscoveryFinished):
             effective = {
-                "backend": "self", "libpython_mode": "off", "ir_scaffold_mode": "on",
+                "backend": "self", "ir_scaffold_mode": "on",
                 **options,
             }
             pipeline.compile_python(
@@ -74,18 +74,16 @@ def test_probe_matches_production_discovery_node_set(package_entry, monkeypatch)
     assert not (package_entry.parent / "never-produced").exists()
 
 
-@pytest.mark.parametrize("libpython_mode", ("off", "auto", "on"))
 @pytest.mark.parametrize("ir_scaffold_mode", ("on", "off"))
 def test_probe_uses_the_selected_production_modes(
-    package_entry, monkeypatch, libpython_mode, ir_scaffold_mode,
+    package_entry, monkeypatch, ir_scaffold_mode,
 ):
-    options = {"libpython_mode": libpython_mode, "ir_scaffold_mode": ir_scaffold_mode}
+    options = {"ir_scaffold_mode": ir_scaffold_mode}
     production = _production_nodes(package_entry, monkeypatch, **options)
     sources, modules, effective, _admissions = tool._discover_stage1_closure(str(package_entry), **options)
     assert set(zip(modules, sources)) == production
-    assert effective["libpython_mode"] == libpython_mode
     assert effective["ir_scaffold_mode"] == ir_scaffold_mode
-    assert ("discovery_package.worker" in modules) is (libpython_mode == "off")
+    assert "discovery_package.worker" in modules
 
 
 def test_owned_provider_roots_and_recursive_admission_match_production(
@@ -229,7 +227,7 @@ def test_package_abi_failure_has_an_error_receipt(package_entry, monkeypatch, tm
     def reject(*args, **kwargs):
         raise pipeline.PyPipelineError("PCC-PACKAGE-CPYTHON-ABI: fixture dependency")
 
-    monkeypatch.setattr(pipeline, "_validate_package_site_no_libpython_abi", reject)
+    monkeypatch.setattr(pipeline, "_validate_package_site_native_abi", reject)
     receipt_path = tmp_path / "failure.json"
     assert tool.main(["--entry", str(package_entry), "--json", str(receipt_path)]) == 1
     receipt = json.loads(receipt_path.read_text())
@@ -269,7 +267,7 @@ def test_repository_entry_matches_production_discovery_nodes(monkeypatch, tmp_pa
     before = inventory()
     production = _production_nodes(entry, monkeypatch)
     sources, modules, options, admissions = tool._discover_stage1_closure(
-        str(entry), libpython_mode="off", ir_scaffold_mode="on",
+        str(entry), ir_scaffold_mode="on",
     )
     assert set(zip(modules, sources)) == production
     assert inventory() == before, "source changed during discovery"

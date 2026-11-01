@@ -22,7 +22,7 @@ def test_path_copy_and_file_read(tmp_path, pcc_runtime_archive):
         "main()\n", encoding="utf-8",
     )
     binary = tmp_path / "path_copy"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

@@ -45,7 +45,6 @@ def test_raw_scaffold_or_alias_store_keeps_owned_string(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ref = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=60,
@@ -112,7 +111,6 @@ def test_raw_scaffold_borrowed_alias_store_is_not_released_by_owned_rebind(tmp_p
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ref = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=60,

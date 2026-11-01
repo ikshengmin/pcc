@@ -37,7 +37,7 @@ print(events)
                       'backend = extern("pcc_gc_backend", (), c_int64)\n'
                       'print(backend())\n' + source.read_text())
     executable = tmp_path / "field_owner"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(executable)], capture_output=True, text=True,
@@ -90,7 +90,7 @@ print(events)
                       'backend = extern("pcc_gc_backend", (), c_int64)\n'
                       'print(backend())\n' + source.read_text())
     executable = tmp_path / "suspended_field"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(executable)], capture_output=True, text=True,

@@ -68,7 +68,7 @@ main()
     assert reference.returncode == 0, reference.stderr
     output = tmp_path / "warning_identity"
     compile_python(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

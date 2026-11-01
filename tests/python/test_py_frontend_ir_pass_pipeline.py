@@ -758,7 +758,6 @@ def test_compile_python_emit_llvm_applies_python_ir_pass_pipeline(
         module_name,
         verbose=False,
         default_raw=None,
-        strict_no_libpython=False,
     ):
         seen.append((module_name, verbose))
         return str(ir_text) + "\n; pass marker\n"
@@ -880,7 +879,6 @@ def test_string_literals_emit_immortal_globals_not_py_str_new(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
     )
 
     text = out.read_text(encoding="utf-8")
@@ -911,7 +909,6 @@ def test_compile_python_multi_batches_python_ir_pass_pipeline(
         *,
         verbose=False,
         default_raw=None,
-        strict_no_libpython=False,
     ):
         seen.append([name for name, _text in module_ir_texts])
         return [
@@ -1010,7 +1007,7 @@ def test_compile_python_multi_strict_no_libpython_fails_after_first_fallback_mod
     )
     monkeypatch.setattr(
         pipeline,
-        "_validate_package_site_no_libpython_abi",
+        "_validate_package_site_native_abi",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(pipeline, "_order_module_inits", lambda *_args: [])
@@ -1049,7 +1046,6 @@ def test_compile_python_multi_strict_no_libpython_fails_after_first_fallback_mod
             emit_llvm_only=True,
             entry_module="entry",
             module_names=["entry", "helper"],
-            libpython_mode="off",
         )
 
     message = str(excinfo.value)
@@ -1214,7 +1210,7 @@ def test_parallel_frontend_codegen_uses_shared_export_context(tmp_path, monkeypa
     monkeypatch.setattr(
         pipeline,
         "_ensure_runtime",
-        lambda verbose, *, needs_libpython=False, target_triple=None: "/tmp/fake_runtime.a",
+        lambda verbose, *, target_triple=None: "/tmp/fake_runtime.a",
     )
     monkeypatch.setattr(
         pipeline,
@@ -1256,7 +1252,6 @@ def test_self_backend_native_compile_defaults_to_bounded_python_ir_pass_manifest
         *,
         verbose=False,
         default_raw=None,
-        strict_no_libpython=False,
     ):
         defaults.append(default_raw)
         return [(name, str(text)) for name, text in module_ir_texts]
@@ -1271,12 +1266,12 @@ def test_self_backend_native_compile_defaults_to_bounded_python_ir_pass_manifest
     monkeypatch.setattr(
         pipeline,
         "_ensure_runtime",
-        lambda verbose, *, needs_libpython=False, target_triple=None: "/tmp/fake_runtime.a",
+        lambda verbose, *, target_triple=None: "/tmp/fake_runtime.a",
     )
     monkeypatch.setattr(
         pipeline,
         "_link_native",
-        lambda ll_paths, out_path, runtime_archive, verbose, *, backend, needs_libpython=False: out.write_text(
+        lambda ll_paths, out_path, runtime_archive, verbose, *, backend: out.write_text(
             "linked", encoding="utf-8"
         ),
     )
@@ -1315,7 +1310,6 @@ def test_self_backend_emit_llvm_defaults_to_bounded_python_ir_pass_manifest(
         *,
         verbose=False,
         default_raw=None,
-        strict_no_libpython=False,
     ):
         defaults.append(default_raw)
         return [(name, str(text)) for name, text in module_ir_texts]

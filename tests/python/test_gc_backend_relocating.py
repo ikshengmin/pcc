@@ -23,7 +23,7 @@ def _compile_probe(tmp_path, source: str):
     src = tmp_path / "probe.py"
     exe = tmp_path / "probe.out"
     src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     return exe
 
 

@@ -107,7 +107,7 @@ def compile_terminal_owner_probe(tmp_path, archive):
                        'probe = extern("terminal_owner_probe", (), c_int64)\n'
                        'def main():\n    print(probe())\nmain()\n')
     binary = tmp_path / "driver"
-    compile_python(str(wrapper), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on",
+    compile_python(str(wrapper), str(binary), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(archive), object_inputs=(str(obj),))
     return binary
 

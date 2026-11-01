@@ -137,7 +137,7 @@ def _compile(tmp_path: Path, name: str, source: str, *, enabled: bool) -> Path:
         else:
             os.environ.pop(FLAG, None)
         compile_python(
-            str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off"
+            str(src), str(exe), ir_scaffold_mode="on"
         )
     finally:
         if saved is None:
@@ -182,7 +182,6 @@ def test_a_class_that_intercepts_attributes_keeps_the_general_protocol(tmp_path)
             str(ir_path),
             emit_llvm_only=True,
             ir_scaffold_mode="on",
-            libpython_mode="off",
         )
     finally:
         if saved is None:

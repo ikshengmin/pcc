@@ -73,11 +73,11 @@ def simulation(tmp_path, monkeypatch):
         monotonic_ns=lambda: next(execution_ticks),
     ), raising=False)
 
-    def compile_program(source, output, *, backend, libpython_mode,
+    def compile_program(source, output, *, backend,
                         runtime_archive, ir_scaffold_mode="on", profile=None):
         state.compile_calls.append((source, output))
-        assert (backend, libpython_mode, ir_scaffold_mode, runtime_archive) == (
-            "self", "off", "on", str(archive),
+        assert (backend, ir_scaffold_mode, runtime_archive) == (
+            "self", "on", str(archive),
         )
         state.profile = profile
         if profile is not None:
@@ -96,7 +96,7 @@ def simulation(tmp_path, monkeypatch):
         assert command[0] == str(native_compiler)
         assert env["PCC_NO_AUTO_PCC1"] == "1"
         compile_program(
-            command[-3], command[-1], backend="self", libpython_mode="off",
+            command[-3], command[-1], backend="self",
             runtime_archive=str(archive),
         )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -145,10 +145,10 @@ def simulation(tmp_path, monkeypatch):
         compiler = python_fixtures.python_program_compiler.__wrapped__(request)
         if state.mode in ("pcc1-routed", "unrecognized-pcc0"):
             # Match the native fixture's strict signature: profile is forbidden.
-            def strict_compiler(source, output, *, backend, libpython_mode,
+            def strict_compiler(source, output, *, backend,
                                 runtime_archive, ir_scaffold_mode="on"):
                 return compile_program(
-                    source, output, backend=backend, libpython_mode=libpython_mode,
+                    source, output, backend=backend,
                     runtime_archive=runtime_archive, ir_scaffold_mode=ir_scaffold_mode,
                 )
 

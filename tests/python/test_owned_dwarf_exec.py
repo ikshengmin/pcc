@@ -134,7 +134,7 @@ def test_real_python_source_runs_on_five_collectors_and_hits_native_breakpoint(
     monkeypatch.setenv('PCC_PY_DEBUG_INFO', '1')
     monkeypatch.setenv('PCC_LINKER', 'pcc')
     output = tmp_path / 'debuggee'
-    compile_python(str(source), str(output), backend='self', libpython_mode='off',
+    compile_python(str(source), str(output), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     assert source.read_text() == text
     for collector in range(5):

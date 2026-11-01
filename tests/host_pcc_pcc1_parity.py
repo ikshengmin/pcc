@@ -23,7 +23,6 @@ REGISTRY_ID = "tests.python.test_self_host_oracle_diff.CASES"
 ALLOWED_EXCLUSION_REASONS = frozenset(
     {
         "external_tool_only",
-        "host_libpython_only",
         "not_source_program",
         "platform_or_hardware_unavailable",
         "pytest_infrastructure_only",
@@ -178,7 +177,6 @@ def pcc1_receipt_payload(
         "mode": {
             "backend": "self",
             "ir_scaffold": "on",
-            "python_libpython": "off",
         },
     }
 

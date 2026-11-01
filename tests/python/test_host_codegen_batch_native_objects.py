@@ -192,7 +192,7 @@ def test_real_batch_orders_match_singletons_and_keep_exports_unchanged(tmp_path,
         pipeline._write_python_frontend_worker_manifest(
             str(manifest), str(result_path), str(output_dir), str(exports_path),
             str(ast_dir), paths, names, assigned, entry_module="support",
-            sibling_inits=(), libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+            sibling_inits=(), ir_scaffold_mode="on", verbose=False,
         )
         # No shell, native runtime build, FFI, external compiler or linker.
         completed = subprocess.run(

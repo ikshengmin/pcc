@@ -98,7 +98,6 @@ def test_unsafe_load_i64x4_is_an_unboxed_callsite_aggregate(tmp_path: Path) -> N
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         target_triple="arm64-apple-darwin23.6.0",
@@ -154,7 +153,6 @@ def test_current_pcc1_emits_i64x4_aggregate_without_libpython(
         [
             str(pcc1),
             "--python-library",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             "--backend",
             "self",

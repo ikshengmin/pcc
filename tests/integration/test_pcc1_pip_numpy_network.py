@@ -109,7 +109,6 @@ def test_pcc1_pip_install_numpy_from_network_then_array_add(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import sys
 
-from pcc.driver.cli_contract import BACKEND_CHOICES, DEFAULT_PUBLIC_BACKEND, DEFAULT_EMIT_LL, DIAGNOSTIC_FORMAT_CHOICES, IR_SCAFFOLD_CHOICES, PYTHON_LIBPYTHON_CHOICES, cli_input_path
+from pcc.driver.cli_contract import BACKEND_CHOICES, DEFAULT_PUBLIC_BACKEND, DEFAULT_EMIT_LL, DIAGNOSTIC_FORMAT_CHOICES, IR_SCAFFOLD_CHOICES, cli_input_path
 
 from pcc.package.schema import PACKAGE_MANIFEST_SCHEMA, PACKAGE_MANIFEST_SCHEMA_VERSION, PCC_CAPI_HEADERS, campaign_profile, capability_profile, directory_project_name, distribution_filename_fields, literal_project_metadata_fields, source_build_policy, pcc_native_extension_suffix, pcc_native_wheel_tag, wheel_tag_fields
 from pcc.package.environment import DEFAULT_PYTHON_SEMANTIC_TARGET, apply_locked_environment_resource_defaults, default_package_cache as _pcc_default_package_cache, default_package_site as _pcc_default_package_site, environment_info_json, environment_info_text, package_site_roots
@@ -122,7 +122,6 @@ Options:
   -c COMMAND [ARGS...]      Compile and run a Python command through pcc1.
   - [ARGS...]               Compile and run Python source read from stdin.
   --backend BACKEND         Native emission backend: self (default).
-  --python-libpython MODE   off (default), auto, or on for Python fallback linkage.
   --python-library          Emit a Python library module without @main.
   -g, --debug               Emit DWARF line information.
   --ir-scaffold MODE        on (default), off, or auto. Enables Path A
@@ -359,7 +358,6 @@ def _iter_py_sources_under(root: str):
 def _python_run_cache_key(
     src_path: str,
     *,
-    python_libpython: str,
     python_library: bool,
     ir_scaffold: str,
     backend: str,
@@ -370,7 +368,6 @@ def _python_run_cache_key(
     parts = (
         _PY_RUN_CACHE_VERSION,
         os.path.abspath(src_path),
-        str(python_libpython or ""),
         str(bool(python_library)),
         str(ir_scaffold or ""),
         str(backend or ""),
@@ -433,7 +430,6 @@ def _python_run_cache_key(
 def _python_run_cache_path(
     src_path: str,
     *,
-    python_libpython: str,
     python_library: bool,
     ir_scaffold: str,
     backend: str,
@@ -450,7 +446,6 @@ def _python_run_cache_path(
         return None
     key = _python_run_cache_key(
         src_path,
-        python_libpython=python_libpython,
         python_library=python_library,
         ir_scaffold=ir_scaffold,
         backend=backend,
@@ -491,35 +486,6 @@ def _run_pytest_from_pcc1(argv) -> int:
 
 def _is_module_request(argv) -> bool:
     return len(argv) > 0 and argv[0] == "-m"
-
-
-def _is_libpython_mode(value) -> bool:
-    return value in PYTHON_LIBPYTHON_CHOICES
-
-
-def _module_request_libpython_mode(argv):
-    """Detect a module run, optionally preceded by --python-libpython=<mode>.
-
-    Returns (is_module_request, mode, module_argv) where module_argv is the
-    argv slice starting at "-m". The plain `-m ...` form (no flag) keeps the
-    strict research default mode "off", so existing behavior is unchanged.
-    Only `off`, `auto`, and `on` are accepted as leading modes.
-    """
-    if len(argv) == 0:
-        return (False, "off", [])
-    first = argv[0]
-    if first == "-m":
-        return (True, "off", _copy_seq(argv))
-    if first.startswith("--python-libpython="):
-        mode = _option_value(first)
-        if _is_libpython_mode(mode) and len(argv) > 1 and argv[1] == "-m":
-            return (True, mode, _copy_seq(argv[1:]))
-        return (False, "off", [])
-    if first == "--python-libpython":
-        if len(argv) > 2 and _is_libpython_mode(argv[1]) and argv[2] == "-m":
-            return (True, argv[1], _copy_seq(argv[2:]))
-        return (False, "off", [])
-    return (False, "off", [])
 
 
 def _json_escape(text: str) -> str:
@@ -693,65 +659,6 @@ def _json_int_list(items) -> str:
         i += 1
     out += "]"
     return out
-
-
-def compat_runner_manifest(mode) -> dict:
-    """Describe the compatibility-runner contract for a --python-libpython mode.
-
-    `auto`/`on` run the requested module in the explicit CPython compatibility
-    subprocess. The pcc1 binary itself remains no-libpython, so links_libpython
-    stays false. `native_package_claim` is always False: this route is never a
-    pcc-native package support proof.
-    """
-    if mode == "auto" or mode == "on":
-        return {
-            "requested_execution_mode": "cpython-compat",
-            "execution_mode": "cpython-compat",
-            "python_libpython_mode": mode,
-            "allows_libpython_fallback": True,
-            "links_libpython": False,
-            "native_package_claim": False,
-        }
-    return {
-        "requested_execution_mode": "pcc-native",
-        "execution_mode": "pcc-native",
-        "python_libpython_mode": "off",
-        "allows_libpython_fallback": False,
-        "links_libpython": False,
-        "native_package_claim": False,
-    }
-
-
-def compat_runner_manifest_json(mode) -> str:
-    """Serialize compat_runner_manifest(mode) via the hand-rolled JSON helpers.
-
-    cli_bootstrap.py is compiled no-libpython into pcc1, so this must not use
-    the json module; it uses _json_str plus literal boolean tokens.
-    """
-    if mode == "auto" or mode == "on":
-        requested_execution_mode = "cpython-compat"
-        python_libpython_mode = mode
-    else:
-        requested_execution_mode = "pcc-native"
-        python_libpython_mode = "off"
-    if mode == "auto" or mode == "on":
-        execution_mode = "cpython-compat"
-        allows_libpython_fallback = "true"
-    else:
-        execution_mode = "pcc-native"
-        allows_libpython_fallback = "false"
-    return (
-        '{"requested_execution_mode": '
-        + _json_str(requested_execution_mode)
-        + ', "execution_mode": '
-        + _json_str(execution_mode)
-        + ', "python_libpython_mode": '
-        + _json_str(python_libpython_mode)
-        + ', "allows_libpython_fallback": '
-        + allows_libpython_fallback
-        + ', "links_libpython": false'
-        + ', "native_package_claim": false}'
-    )
 
 
 def _sanitize_tag(text: str) -> str:
@@ -5491,13 +5398,13 @@ def _native_linkage_json(artifacts, roots, commands, abi_mode: str) -> str:
         # PKG-P0-ABI-MODE-LABELS: mirror linkage_report's per-scan labels so a
         # pcc1 no-libpython linkage result carries the same explicit
         # execution-mode labels as the in-process report. Generic mapping from
-        # abi_mode only (no package-name special cases): libpython /
-        # cpython-compat -> cpython-compat, otherwise pcc-native. A single scan
+        # abi_mode only (no package-name special cases): cpython-compat ->
+        # cpython-compat, otherwise pcc-native. A single scan
         # earns native_package_claim only under pcc-native with no libpython
         # edge and no CPython-ABI usage.
         scan_execution_mode = (
             "cpython-compat"
-            if (abi_mode == "libpython" or abi_mode == "cpython-compat")
+            if abi_mode == "cpython-compat"
             else "pcc-native"
         )
         scan_native_package_claim = (
@@ -5577,7 +5484,7 @@ def _native_linkage_json(artifacts, roots, commands, abi_mode: str) -> str:
     # finding keeps it False). No existing key is renamed or removed.
     execution_mode = (
         "cpython-compat"
-        if (abi_mode == "libpython" or abi_mode == "cpython-compat")
+        if abi_mode == "cpython-compat"
         else "pcc-native"
     )
     native_package_claim = (
@@ -5586,10 +5493,8 @@ def _native_linkage_json(artifacts, roots, commands, abi_mode: str) -> str:
         and not links
         and not uses_cpython_abi
     )
-    ok = ((not links) or abi_mode == "libpython") and (
-        (not uses_cpython_abi)
-        or abi_mode == "libpython"
-        or abi_mode == "cpython-compat"
+    ok = (not links) and (
+        (not uses_cpython_abi) or abi_mode == "cpython-compat"
     )
     out = "{"
     out += '"abi_mode": ' + _json_str(abi_mode)
@@ -8661,7 +8566,6 @@ def _native_owned_meson_build_json(name: str, source: str) -> str:
         compile_command = [
             compiler,
             "--backend=self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             meson_source,
             "-o",
@@ -8732,7 +8636,6 @@ def _native_owned_meson_build_json(name: str, source: str) -> str:
         build_exec_compile_command = [
             compiler,
             "--backend=self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             build_exec_source,
             "-o",
@@ -9200,10 +9103,8 @@ def _native_install_manifest_json(
             and not uses_cpython_abi
         )
         install_ok = (
-            ((not links_libpython) or abi == "libpython")
-            and (
-                (not uses_cpython_abi) or abi == "libpython" or abi == "cpython-compat"
-            )
+            (not links_libpython)
+            and ((not uses_cpython_abi) or abi == "cpython-compat")
             and build_ok
         )
         if install_ok:
@@ -9638,42 +9539,6 @@ def _run_python_module_from_pcc1(argv) -> int:
     return _run_compiled_python_module_from_pcc1(module_name, module_args)
 
 
-def _run_python_module_from_pcc1_with_mode(argv, mode) -> int:
-    """Run a module request through its explicitly selected execution owner.
-
-    `auto`/`on` delegate to a generic CPython module subprocess. The pcc1
-    process remains no-libpython and the manifest does not claim otherwise.
-    `off` (including plain `-m`) keeps the native module runner unchanged.
-    """
-    if mode == "auto" or mode == "on":
-        _write_text(
-            "PCC1_COMPAT_RUNNER_MANIFEST: " + compat_runner_manifest_json(mode),
-            err=True,
-        )
-        compat_python = os.environ.get("PCC_COMPAT_PYTHON")
-        if not compat_python:
-            compat_python = os.environ.get("PCC_HOST_PYTHON") or "python3"
-        if compat_python == sys.executable:
-            _write_text(
-                "Error: compatibility Python points at this pcc1 binary; "
-                "refusing recursive module delegation",
-                err=True,
-            )
-            return 2
-        command = [compat_python]
-        i = 0
-        while i < len(argv):
-            command.append(argv[i])
-            i += 1
-        try:
-            _bootstrap_subprocess_run(command, check=True)
-        except Exception:
-            _write_text("Error: pcc1 CPython compatibility runner failed", err=True)
-            return 1
-        return 0
-    return _run_python_module_from_pcc1(argv)
-
-
 def _is_host_cli_c_indicator(arg) -> bool:
     if arg is None:
         return False
@@ -9993,21 +9858,13 @@ def _format_compile_error(exc, *, options, metadata):
         str(original_exception_type) if original_exception_type else "Exception"
     )
     mode_backend = metadata.get("backend", "") if metadata else ""
-    mode_libpython = metadata.get("python_libpython", "") if metadata else ""
     mode_scaffold = metadata.get("ir_scaffold", "") if metadata else ""
-    if mode_backend or mode_libpython or mode_scaffold:
+    if mode_backend or mode_scaffold:
         note += (
             "; backend="
             + str(mode_backend)
-            + "; python_libpython="
-            + str(mode_libpython)
             + "; ir_scaffold="
             + str(mode_scaffold)
-        )
-    if options.explain_fallback:
-        note += (
-            "; fallback_explain=libpython fallback is controlled by "
-            "--python-libpython/PCC_PYTHON_LIBPYTHON"
         )
     span_json = ""
     location = ""
@@ -10030,12 +9887,10 @@ def _format_compile_error(exc, *, options, metadata):
         )
     if options.diagnostic_format == "json" or options.diagnostic_format == "sarif":
         metadata_json = "{}"
-        if mode_backend or mode_libpython or mode_scaffold:
+        if mode_backend or mode_scaffold:
             metadata_json = (
                 '{"backend": '
                 + _observability_json_str(mode_backend)
-                + ', "python_libpython": '
-                + _observability_json_str(mode_libpython)
                 + ', "ir_scaffold": '
                 + _observability_json_str(mode_scaffold)
                 + "}"
@@ -10073,7 +9928,6 @@ def _write_profile_json(path: str, options, metadata) -> None:
     emit_llvm = metadata.get("emit_llvm", False) if metadata else False
     output_path = metadata.get("output_path", None) if metadata else None
     backend = metadata.get("backend", None) if metadata else None
-    python_libpython = metadata.get("python_libpython", None) if metadata else None
     ir_scaffold = metadata.get("ir_scaffold", None) if metadata else None
     counters = metadata.get("counters", {}) if metadata else {}
     phase_totals = metadata.get("phase_totals_ms", {}) if metadata else {}
@@ -10098,11 +9952,6 @@ def _write_profile_json(path: str, options, metadata) -> None:
         if backend is not None:
             f.write(",\n")
             f.write('    "backend": ' + _observability_json_str(backend))
-        if python_libpython is not None:
-            f.write(",\n")
-            f.write(
-                '    "python_libpython": ' + _observability_json_str(python_libpython)
-            )
         if ir_scaffold is not None:
             f.write(",\n")
             f.write('    "ir_scaffold": ' + _observability_json_str(ir_scaffold))
@@ -10232,7 +10081,6 @@ def _observed_compile_python(
     metadata,
     verbose,
     emit_llvm_only,
-    libpython_mode,
     ir_scaffold_mode,
     backend,
     python_library,
@@ -10257,7 +10105,6 @@ def _observed_compile_python(
             compile_output,
             verbose=verbose,
             emit_llvm_only=emit_llvm_only,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             backend=backend,
             python_library=python_library,
@@ -10270,7 +10117,6 @@ def _observed_compile_python(
             compile_output,
             verbose=verbose,
             emit_llvm_only=emit_llvm_only,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             backend=backend,
             python_library=python_library,
@@ -10358,15 +10204,6 @@ def _observed_compile_python(
             _write_profile_json(options.profile_json, options, metadata or {})
 
 
-def _parse_python_libpython(value):
-    lowered = (value or "").strip().lower()
-    if lowered not in PYTHON_LIBPYTHON_CHOICES:
-        raise ValueError(
-            "invalid --python-libpython " f"{value!r}; expected auto, on, or off"
-        )
-    return lowered
-
-
 def _parse_ir_scaffold(value):
     lowered = (value or "").strip().lower()
     if lowered not in IR_SCAFFOLD_CHOICES:
@@ -10376,14 +10213,7 @@ def _parse_ir_scaffold(value):
     return lowered
 
 
-def _resolve_pcc1_python_modes(python_libpython, ir_scaffold, backend):
-    libpython_value = python_libpython
-    if libpython_value is None:
-        libpython_value = os.environ.get("PCC_PYTHON_LIBPYTHON", "")
-    if not str(libpython_value or "").strip():
-        libpython_value = "off"
-    resolved_libpython = _parse_python_libpython(libpython_value)
-
+def _resolve_pcc1_python_modes(ir_scaffold, backend):
     scaffold_value = ir_scaffold
     if scaffold_value is None:
         scaffold_value = os.environ.get("PCC_IR_SCAFFOLD", "")
@@ -10405,17 +10235,14 @@ def _resolve_pcc1_python_modes(python_libpython, ir_scaffold, backend):
             + repr(backend_value)
             + "; expected self"
         )
-    return resolved_libpython, resolved_scaffold, resolved_backend
+    return resolved_scaffold, resolved_backend
 
 
-def _bootstrap_compile_metadata(
-    *, emit_llvm, output_path, backend, python_libpython, ir_scaffold
-):
+def _bootstrap_compile_metadata(*, emit_llvm, output_path, backend, ir_scaffold):
     return {
         "emit_llvm": bool(emit_llvm),
         "output_path": output_path,
         "backend": backend,
-        "python_libpython": python_libpython,
         "ir_scaffold": ir_scaffold,
     }
 
@@ -10458,7 +10285,6 @@ def parse_bootstrap_cli_args(argv=None):
     output_path = None
     emit_llvm = None
     verbose = False
-    python_libpython = None
     python_library = False
     ir_scaffold = None
     backend = None
@@ -10543,22 +10369,6 @@ def parse_bootstrap_cli_args(argv=None):
             backend = argv[i + 1]
             i += 2
             continue
-        if arg.startswith("--python-libpython="):
-            try:
-                python_libpython = _parse_python_libpython(_option_value(arg))
-            except ValueError as exc:
-                return None, 2, str(exc)
-            i += 1
-            continue
-        if arg == "--python-libpython":
-            if i + 1 >= len(argv):
-                return None, 2, "--python-libpython requires a value"
-            try:
-                python_libpython = _parse_python_libpython(argv[i + 1])
-            except ValueError as exc:
-                return None, 2, str(exc)
-            i += 2
-            continue
         if arg.startswith("--ir-scaffold="):
             try:
                 ir_scaffold = _parse_ir_scaffold(_option_value(arg))
@@ -10636,7 +10446,6 @@ def parse_bootstrap_cli_args(argv=None):
             output_path,
             emit_llvm,
             verbose,
-            python_libpython,
             python_library,
             ir_scaffold,
             backend,
@@ -10809,10 +10618,7 @@ def _bootstrap_cli_main_impl(
         )
     if _is_pytest_request(raw_argv):
         return _run_pytest_from_pcc1(raw_argv)
-    module_is_request, module_mode, module_argv = _module_request_libpython_mode(
-        raw_argv
-    )
-    if module_is_request:
+    if _is_module_request(raw_argv):
         applied_defaults = apply_locked_environment_resource_defaults()
         restarted = _restart_with_locked_environment_defaults(
             raw_argv,
@@ -10820,7 +10626,7 @@ def _bootstrap_cli_main_impl(
         )
         if restarted is not None:
             return restarted
-        return _run_python_module_from_pcc1_with_mode(module_argv, module_mode)
+        return _run_python_module_from_pcc1(_copy_seq(raw_argv))
     if _should_delegate_to_host_cli(raw_argv) or _requires_full_compile_cli(raw_argv):
         return _run_c_cli(raw_argv)
 
@@ -10838,7 +10644,6 @@ def _bootstrap_cli_main_impl(
         output_path,
         emit_llvm,
         verbose,
-        python_libpython,
         python_library,
         ir_scaffold,
         backend,
@@ -10851,17 +10656,13 @@ def _bootstrap_cli_main_impl(
     output_path = None if output_path is None else (output_path or "") + ""
     emit_llvm = None if emit_llvm is None else (emit_llvm or "") + ""
     verbose = True if verbose else False
-    python_libpython = (
-        None if python_libpython is None else (python_libpython or "") + ""
-    )
     python_library = True if python_library else False
     ir_scaffold = None if ir_scaffold is None else (ir_scaffold or "") + ""
     backend = None if backend is None else (backend or "") + ""
     logical_argv0 = path if _logical_argv0 is None else str(_logical_argv0)
 
     try:
-        python_libpython, ir_scaffold, backend = _resolve_pcc1_python_modes(
-            python_libpython,
+        ir_scaffold, backend = _resolve_pcc1_python_modes(
             ir_scaffold,
             backend,
         )
@@ -10905,7 +10706,6 @@ def _bootstrap_cli_main_impl(
     if output_path is None and emit_llvm is None:
         cache_path = _python_run_cache_path(
             path,
-            python_libpython=python_libpython,
             python_library=python_library,
             ir_scaffold=ir_scaffold,
             backend=backend,
@@ -10939,12 +10739,10 @@ def _bootstrap_cli_main_impl(
                     emit_llvm=False,
                     output_path=exe_path,
                     backend=backend,
-                    python_libpython=python_libpython,
                     ir_scaffold=ir_scaffold,
                 ),
                 verbose=verbose,
                 emit_llvm_only=False,
-                libpython_mode=python_libpython,
                 ir_scaffold_mode=ir_scaffold,
                 backend=backend,
                 python_library=python_library,
@@ -10980,12 +10778,10 @@ def _bootstrap_cli_main_impl(
                     emit_llvm=False,
                     output_path=exe_path,
                     backend=backend,
-                    python_libpython=python_libpython,
                     ir_scaffold=ir_scaffold,
                 ),
                 verbose=verbose,
                 emit_llvm_only=False,
-                libpython_mode=python_libpython,
                 ir_scaffold_mode=ir_scaffold,
                 backend=backend,
                 python_library=python_library,
@@ -11021,12 +10817,10 @@ def _bootstrap_cli_main_impl(
                 emit_llvm=True,
                 output_path=ll_out,
                 backend=backend,
-                python_libpython=python_libpython,
                 ir_scaffold=ir_scaffold,
             ),
             verbose=verbose,
             emit_llvm_only=True,
-            libpython_mode=python_libpython,
             ir_scaffold_mode=ir_scaffold,
             backend=backend,
             python_library=python_library,
@@ -11042,12 +10836,10 @@ def _bootstrap_cli_main_impl(
                 emit_llvm=False,
                 output_path=output_path,
                 backend=backend,
-                python_libpython=python_libpython,
                 ir_scaffold=ir_scaffold,
             ),
             verbose=verbose,
             emit_llvm_only=False,
-            libpython_mode=python_libpython,
             ir_scaffold_mode=ir_scaffold,
             backend=backend,
             python_library=python_library,

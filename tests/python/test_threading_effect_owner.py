@@ -31,7 +31,7 @@ def test_imported_event_wait_does_not_turn_main_into_a_generator(
     compile_python_multi(
         [str(provider), str(source)], str(binary),
         module_names=["external_events", "program"], entry_module="program",
-        recursive_stdlib=True, backend="self", libpython_mode="off",
+        recursive_stdlib=True, backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -58,7 +58,7 @@ vt.run(1, 64)
 print(vt.result(thread))
 ''', encoding="utf-8")
     binary = tmp_path / "native_event"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

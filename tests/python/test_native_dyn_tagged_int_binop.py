@@ -62,7 +62,6 @@ def test_dyn_tagged_int_binop_preserves_object_semantics(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -90,7 +89,6 @@ def test_dyn_tagged_int_binop_emits_fast_path(tmp_path):
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )

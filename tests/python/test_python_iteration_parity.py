@@ -1,7 +1,7 @@
 """CPython parity for iteration protocols, ported from
 ``Lib/test/test_iter.py`` and ``Lib/test/test_listcomps.py``.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython):
   * ``for x in container:`` calls ``iter(container)`` then ``next``
@@ -24,7 +24,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 

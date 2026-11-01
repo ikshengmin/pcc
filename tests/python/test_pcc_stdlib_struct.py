@@ -105,7 +105,7 @@ main()
 ''', encoding="utf-8")
     output = tmp_path / "struct_cache_probe"
     compile_python(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -246,7 +246,7 @@ def main():
 main()
 ''', encoding="utf-8")
     output = tmp_path / "mutable_struct"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
@@ -543,7 +543,6 @@ def test_host_pcc_and_current_pcc1_unpack_from_matches_cpython_without_libpython
             compiler
             + [
                 "--backend=self",
-                "--python-libpython=off",
                 "--ir-scaffold=on",
                 str(source),
                 "-o",
@@ -623,7 +622,6 @@ def test_host_pcc_and_current_pcc1_pack_subnormals_without_libpython(
             compiler
             + [
                 "--backend=self",
-                "--python-libpython=off",
                 "--ir-scaffold=on",
                 str(source),
                 "-o",

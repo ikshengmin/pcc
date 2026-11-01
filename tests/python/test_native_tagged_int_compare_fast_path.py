@@ -78,7 +78,7 @@ def test_dynamic_compare_tests_tags_before_the_runtime_call(tmp_path: Path) -> N
     src = tmp_path / "cmp_shape.py"
     src.write_text("def below(n):\n    return n < 2\n", encoding="utf-8")
     out = tmp_path / "cmp_shape.ll"
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     text = out.read_text(encoding="utf-8")
     start = text.index("@user_cmp_shape_below(")
     body = text[start:text.index("\n}\n", start)]
@@ -96,7 +96,7 @@ def test_tagged_int_compare_matches_cpython(tmp_path: Path, backend: str) -> Non
     env.pop("LC_ALL", None)
     env["PCC_GC_BACKEND"] = backend
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=600, env=env,
     )
     assert build.returncode == 0, build.stderr

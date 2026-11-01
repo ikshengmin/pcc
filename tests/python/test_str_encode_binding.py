@@ -184,7 +184,7 @@ def excess(value: str):
     return value.encode("utf8", "strict", "extra")
 ''')
     output = tmp_path / "encode_binding.ll"
-    compile_python(str(path), str(output), backend="self", libpython_mode="off",
+    compile_python(str(path), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -205,7 +205,7 @@ def mutable(value: str):
     return bytearray(value, "latin-1")
 ''')
     output = tmp_path / "encode_constructors.ll"
-    compile_python(str(path), str(output), backend="self", libpython_mode="off",
+    compile_python(str(path), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -230,7 +230,7 @@ def test_encoder_scoped_runtime_ir(tmp_path):
     source.parent.mkdir(parents=True)
     source.write_text(ast.unparse(tree))
     output = tmp_path / "encoding_runtime.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -247,7 +247,7 @@ def test_encoder_scoped_runtime_ir(tmp_path):
 def test_encoder_runtime_abi_has_no_stubs(tmp_path):
     output = tmp_path / "py_str_accessors.ll"
     compile_python(str(ROOT / "pcc/runtime/py/py_str_accessors.py"), str(output),
-                   backend="self", libpython_mode="off", emit_llvm_only=True, python_library=True)
+                   backend="self", emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
     assert re.search(r"^define[^\n]*@py_str_encode_with_encoding\(ptr[^,]*, ptr[^,]*, ptr[^)]*\)", text, re.M)
@@ -369,7 +369,7 @@ def test_encode_executes_all_collectors(tmp_path, pcc_diagnostic_runtime_archive
     oracle = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, timeout=15)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / "encode_execution"
-    python_program_compiler(str(path), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(path), str(binary), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         actual = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

@@ -91,8 +91,8 @@ def test_exclusion_requires_a_current_case_reason_and_owner(tmp_path):
     document["exclusions"] = [
         {
             "case": excluded,
-            "reason": "host_libpython_only",
-            "owner": "python/libpython-boundary",
+            "reason": "external_tool_only",
+            "owner": "python/external-tool-boundary",
             "note": "Synthetic contract probe; the checked-in manifest has no exclusions.",
         }
     ]
@@ -101,7 +101,7 @@ def test_exclusion_requires_a_current_case_reason_and_owner(tmp_path):
     applicability = load_applicability_manifest(path, CASES)
 
     assert excluded not in {name for name, _source in applicability.applicable}
-    assert applicability.exclusions[0]["reason"] == "host_libpython_only"
+    assert applicability.exclusions[0]["reason"] == "external_tool_only"
 
     document["exclusions"][0]["reason"] = "temporary_skip"
     invalid = _write_manifest(tmp_path / "invalid.json", document)

@@ -91,7 +91,6 @@ def test_dict_pop_without_default_raises_keyerror(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -141,7 +140,6 @@ def test_dynamic_pop_attr_on_list_and_dict_no_libpython(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -233,7 +231,7 @@ def test_dict_popitem_lifo_and_keyerror(tmp_path):
     """), encoding="utf-8")
     exe = tmp_path / "popitem.out"
     compile_python(str(src), str(exe), ir_scaffold_mode="on",
-                   libpython_mode="off", backend="self")
+                   backend="self")
     r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     assert r.stdout == (

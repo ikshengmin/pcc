@@ -234,7 +234,7 @@ def test_owned_pass_dispatch_preserves_order_and_needs_no_host(monkeypatch):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "mem2reg,sroa,instsimplify,dce")
     ir = 'define i64 @value() {\nentry:\n  %p = alloca i64\n  store i64 42, ptr %p\n  %v = load i64, ptr %p\n  %dead = add i64 %v, 1\n  ret i64 %v\n}\n'
     results = pipeline._apply_python_ir_pass_pipeline_many(
-        [("first", ir), ("second", ir)], default_raw="default", strict_no_libpython=True,
+        [("first", ir), ("second", ir)], default_raw="default",
     )
     assert [name for name, _ in results] == ["first", "second"]
     for _, text in results:
@@ -338,7 +338,7 @@ entry:
     input_path.write_text(ir)
     driver = ROOT / "pcc" / "native_ir" / "driver.py"
     binary = tmp_path / "simplify_driver"
-    compile_python(str(driver), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(driver), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     run = subprocess.run([str(binary), "inline,instsimplify", str(input_path), str(output_path)],
                          capture_output=True, text=True, timeout=15)

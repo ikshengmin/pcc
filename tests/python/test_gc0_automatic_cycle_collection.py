@@ -84,7 +84,7 @@ def test_gc0_collects_cycles_automatically_unless_disabled(tmp_path: Path) -> No
     src.write_text(PROGRAM, encoding="utf-8")
     exe = tmp_path / "auto_cycles"
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr

@@ -29,7 +29,6 @@ def test_deferred_cpython_fallback_becomes_native_error_stub(tmp_path, monkeypat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -77,7 +76,6 @@ def test_deferred_method_and_generator_fallbacks_become_native_stubs(
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run(
@@ -128,7 +126,7 @@ def test_cpython_value_at_a_slot_call_defers_its_function(
     )
     exe = tmp_path / "deferred_operand.out"
     python_program_compiler(
-        str(src), str(exe), backend="self", libpython_mode="off",
+        str(src), str(exe), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -181,7 +179,7 @@ def test_class_module_init_does_not_demand_libpython(
 
     exe = tmp_path / "main.out"
     python_program_compiler(
-        str(main), str(exe), backend="self", libpython_mode="off",
+        str(main), str(exe), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

@@ -23,7 +23,7 @@ def _run(tmp_path: Path, source: str, *, runtime_cc: bool, monkeypatch) -> str:
     src = tmp_path / "cx.py"
     exe = tmp_path / "cx.out"
     src.write_text(textwrap.dedent(source), encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off",
+    compile_python(str(src), str(exe),
                    ir_scaffold_mode="on", backend="self")
     r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr

@@ -25,7 +25,7 @@ main()
         [str(repo / 'pcc/frontends/c/parse/c_parse_driver.py'), str(source)], str(binary),
         module_names=['pcc.frontends.c.parse.c_parse_driver', 'parser_probe'],
         entry_module='parser_probe', recursive_stdlib=True, backend='self',
-        libpython_mode='off', runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,

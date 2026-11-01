@@ -41,7 +41,7 @@ def test_runtime_compiler_patterns_execute_self_backend(tmp_path):
     source.write_text(PROGRAM)
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10, check=True)
     executable = tmp_path / "runtime_patterns"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(source), str(executable), backend="self", ir_scaffold_mode="on")
     actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
     assert (actual.returncode, actual.stdout, actual.stderr) == (0, expected.stdout, expected.stderr)
 
@@ -73,6 +73,6 @@ def test_public_recursion_setter_executes_self_backend(tmp_path):
     source.write_text(SETTER_PROGRAM)
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10, check=True)
     executable = tmp_path / "recursion_setter"
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(source), str(executable), backend="self", ir_scaffold_mode="on")
     actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
     assert (actual.returncode, actual.stdout, actual.stderr) == (0, expected.stdout, expected.stderr)

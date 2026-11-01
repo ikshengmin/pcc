@@ -19,7 +19,6 @@ def _build(tmp_path: Path, source: str) -> tuple[Path, dict[str, str]]:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

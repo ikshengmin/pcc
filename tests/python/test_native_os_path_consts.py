@@ -4,7 +4,7 @@
 ``pardir`` / ``altsep`` are plain POSIX constants; emitting them as native
 literals keeps ``os.path.<const>`` off the libpython fallback (a generic
 B-P0-PKG fallback shrink). This runtime test verifies the VALUES match CPython
-on ``--backend self --python-libpython=off`` (``os.path.defpath`` is
+on ``--backend self`` (``os.path.defpath`` is
 intentionally NOT lowered — its value is platform/build-variable — so it is not
 asserted here).
 """
@@ -34,8 +34,7 @@ def test_os_path_constants_match_cpython(tmp_path):
     # Strict no-libpython: a CPython fallback for any constant would error
     # PCC-PY-COMPILE-001 at build time.
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

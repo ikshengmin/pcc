@@ -77,7 +77,7 @@ def _compile_to_ir(tmp_path, source_text, name):
     src = tmp_path / (name + ".py")
     out = tmp_path / (name + ".ll")
     src.write_text(source_text, encoding="utf-8")
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     return out.read_text(encoding="utf-8")
 
 
@@ -109,7 +109,7 @@ def test_character_projection_matches_cpython_under_all_collectors(
     assert reference.returncode == 0, reference.stderr
     binary = tmp_path / "char_projection"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

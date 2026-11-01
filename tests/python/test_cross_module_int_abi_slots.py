@@ -59,7 +59,7 @@ def _build_and_run(tmp_path: Path) -> str:
     app = tmp_path / "app.py"
     app.write_text(textwrap.dedent(_APP).lstrip(), encoding="utf-8")
     exe = tmp_path / "app"
-    compile_python(str(app), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self")
+    compile_python(str(app), str(exe), ir_scaffold_mode="on", backend="self")
     done = subprocess.run([str(exe)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
     assert done.returncode == 0, done.stderr
     return done.stdout

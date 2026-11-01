@@ -12,7 +12,6 @@ SURFACE_LEGACY_CLICK = "pcc.py"
 ALL_CLI_SURFACES = (SURFACE_HOST, SURFACE_BOOTSTRAP, SURFACE_LEGACY_CLICK)
 
 BACKEND_CHOICES = ("self",)
-PYTHON_LIBPYTHON_CHOICES = ("auto", "on", "off")
 IR_SCAFFOLD_CHOICES = ("auto", "on", "off")
 DIAGNOSTIC_FORMAT_CHOICES = ("text", "json", "sarif")
 DEFAULT_EMIT_LL = "__PCC_DEFAULT_LL__"
@@ -21,7 +20,7 @@ DEFAULT_PUBLIC_BACKEND = "self"
 # Options consuming a following value before the source path. Used only for
 # dispatch; the owning parser still validates each option and its value.
 _INPUT_VALUE_OPTIONS = (
-    "-o", "--backend", "--python-libpython", "--ir-scaffold",
+    "-o", "--backend", "--ir-scaffold",
     "--diagnostic-format", "--profile-json", "--pass", "--disable-pass",
     "--gpu-backend", "--target", "--emit-obj", "--emit-asm", "--jobs",
     "--cache-dir", "--sources-from-make", "--depends-on", "--cpp-arg",
@@ -59,7 +58,6 @@ def cli_input_path(argv: list[str]) -> str:
 # (logical name, public flag, consuming surfaces)
 SHARED_CLI_OPTIONS = (
     ("backend", "--backend", ALL_CLI_SURFACES),
-    ("python_libpython", "--python-libpython", ALL_CLI_SURFACES),
     ("python_library", "--python-library", ALL_CLI_SURFACES),
     ("emit_llvm", "--emit-llvm", ALL_CLI_SURFACES),
     ("output", "-o", ALL_CLI_SURFACES),
@@ -148,7 +146,6 @@ __all__ = [
     "DIAGNOSTIC_FORMAT_CHOICES",
     "INTENDED_CLI_DIVERGENCES",
     "IR_SCAFFOLD_CHOICES",
-    "PYTHON_LIBPYTHON_CHOICES",
     "SHARED_CLI_OPTIONS",
     "SURFACE_BOOTSTRAP",
     "SURFACE_HOST",

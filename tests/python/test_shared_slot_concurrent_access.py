@@ -142,7 +142,7 @@ def shared_slot_program(tmp_path_factory, threaded_pcc_runtime_archive):
     source.write_text(PROGRAM, encoding="utf-8")
     executable = directory / "shared_slots"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     return executable
 

@@ -203,7 +203,7 @@ def _install_pipeline_profile() -> None:
         recorder.set_metadata("entry", "pcc.frontends.python.pipeline.compile_python")
         if args:
             recorder.set_metadata("input", str(args[0]))
-        for key in ("emit_llvm_only", "libpython_mode", "ir_scaffold_mode", "backend", "python_library"):
+        for key in ("emit_llvm_only", "ir_scaffold_mode", "backend", "python_library"):
             if key in kwargs:
                 recorder.set_metadata(key, kwargs[key])
         with ExitStack() as stack:

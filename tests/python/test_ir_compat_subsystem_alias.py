@@ -47,7 +47,7 @@ def test_compat_subsystem_alias_exposes_every_provider_export(
     )
     binary = tmp_path / "ir_alias"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)

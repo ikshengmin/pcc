@@ -2,12 +2,12 @@
 
 The numeric-method dispatch (method_call_expression_lowering) routed all
 int/float methods through the libpython fallback, so float.is_integer() was
-rejected under --python-libpython=off. Added a native branch (before that
+rejected in the native pipeline. Added a native branch (before that
 fallback) calling runtime py_float_is_integer (py_obj_stubs.c + port .py):
 finite-and-no-fractional-part, avoiding math.h (|v|>=2^53 is always integral,
 otherwise the int64 round-trip is exact). Returns a bool.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode) and asserts CPython-exact output.
 """
 from __future__ import annotations
@@ -25,8 +25,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

@@ -29,7 +29,7 @@ def test_canonical_mixed_markers_preserve_valueclass_and_raw_fields(tmp_path, mo
     output = tmp_path / "adapter_scope.ll"
     source.write_text(PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     ir_text = output.read_text()
     assert "@user_pcc___getattr__" not in ir_text
     assert "cpy.fromimport.pcc" not in ir_text
@@ -47,7 +47,7 @@ def probe():
 probe()
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     assert "cpy.fromimport.pcc" not in text
     assert "@user_pcc___getattr__" not in text
@@ -152,7 +152,7 @@ def test_unknown_member_is_not_admitted_as_a_marker(tmp_path):
     output = tmp_path / "unknown_member.ll"
     source.write_text("from pcc import valueclass, i64, no_such_member\n")
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     # Strict missing-provider IR must remain a real failure path. Admitting the
     # known members cannot convert the rest of this statement into a no-op.
@@ -174,7 +174,7 @@ def test_module_marker_values_are_seeded_before_function_lowering(tmp_path, head
                       + "def local():\n    from pcc import i64 as Make\n    return Make(9)\n"
                       + "print(run(), indirect(), local())\n")
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     run = re.search(r"^define[^\n]*@user_marker_calls_run\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)[1]
     # A successfully encoded NameError path is not a callable implementation.

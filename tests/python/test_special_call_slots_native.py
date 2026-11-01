@@ -110,7 +110,7 @@ def test_special_call_slots_native_all_collectors(tmp_path, pcc_runtime_archive)
     source = tmp_path / "special_call_slots.py"
     output = source.with_suffix("")
     source.write_text(PROGRAM)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

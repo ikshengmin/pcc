@@ -56,6 +56,6 @@ def test_over_lane_int_literals_match_cpython(tmp_path):
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True,
                               timeout=30, check=True).stdout
     exe = tmp_path / "over_lane_literals"
-    compile_python(str(source), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self")
+    compile_python(str(source), str(exe), ir_scaffold_mode="on", backend="self")
     actual = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30, check=True).stdout
     assert actual == expected

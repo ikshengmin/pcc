@@ -6,7 +6,7 @@ def emit(tmp_path,expression,method='fullmatch'):
     source=tmp_path/'method_slots.py'
     source.write_text('import re\ndef receiver(s: str): return re.compile(s)\ndef text(s: str): return s + "ab"\ndef start(s: str): return 0\ndef end(s: str): return 99\ndef boom(s: str): raise ValueError("arg")\ndef run(s: str):\n    '+expression+'\n')
     out=tmp_path/'method.ll'
-    compile_python(str(source),str(out),emit_llvm_only=True,python_library=True,libpython_mode='off',ir_scaffold_mode='on',backend='self')
+    compile_python(str(source),str(out),emit_llvm_only=True,python_library=True,ir_scaffold_mode='on',backend='self')
     content=out.read_text();body=re.search(r'^define[^\n]*@user_method_slots_run\(.*?^}',content,re.M|re.S).group()
     assert 'strict.nolib.stub' not in body
     return body

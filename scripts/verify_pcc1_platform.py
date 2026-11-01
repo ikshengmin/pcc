@@ -328,7 +328,7 @@ def verify_platform_compiler(receipt_path, *, compiler, runtime_archive,
         command = stage.get("command")
         _require(isinstance(command, list) and len(command) == 11
                  and isinstance(command[0], str) and Path(command[0]).is_absolute()
-                 and command[1:8] == ["-m", "pcc", "--backend", "self", "--python-libpython", "off", "--ir-scaffold=on"]
+                 and command[1:8] == ["-m", "pcc", "--backend", "self", "--ir-scaffold=on"]
                  and command[-2:] == ["-o", original_compiler]
                  and isinstance(command[8], str) and Path(command[8]).is_absolute()
                  and command[8].endswith("/pcc/__main__.py"), "invalid Stage1 build command")
@@ -357,7 +357,7 @@ def verify_platform_compiler(receipt_path, *, compiler, runtime_archive,
         }, "missing complete native canary evidence")
         original_canary = original_dir / "canary1"
         _execution(canary["compile"], [original_compiler, str(original_dir / "canary.py"), "-o",
-                                      str(original_canary), "--backend", "self", "--python-libpython", "off"],
+                                      str(original_canary), "--backend", "self"],
                    original_dir / "canary1-compile.log", rss_limit)
         _execution(canary["run"], [str(original_canary)], original_dir / "canary1-run.log", rss_limit)
         canary_binary = receipt_path.parent / "canary1"

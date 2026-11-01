@@ -139,7 +139,7 @@ def test_native_persistent_carriers_poll_timer_under_ready_churn(tmp_path, pcc_r
     source = tmp_path / "ready_batch.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "ready_batch"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

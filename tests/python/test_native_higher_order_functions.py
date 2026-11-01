@@ -18,7 +18,6 @@ def _run_strict_self_backend(tmp_path, source: str) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

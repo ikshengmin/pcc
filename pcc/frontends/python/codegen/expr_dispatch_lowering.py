@@ -785,7 +785,7 @@ class ExprDispatchLoweringMixin:
         # keys).
         #
         # The native function object is tried FIRST when native callables are
-        # preferred (``libpython_mode="off"``).  Otherwise the operator
+        # preferred (always, in the native pipeline).  Otherwise the operator
         # shortcut claims the shape and imports CPython's ``operator`` module:
         # ``pcc/frontends/c/passes/base.py`` builds a module-scope dict of ten
         # ``lambda pm: pm.add_<x>_pass()`` values, which became ten

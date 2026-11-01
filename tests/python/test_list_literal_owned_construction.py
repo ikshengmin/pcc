@@ -143,7 +143,7 @@ def test_native_list_literal_uses_owned_root_constructor(tmp_path, monkeypatch):
     source.write_text('def pair(a: int) -> list:\n    return [a, a]\n')
     output = source.with_suffix('.ll')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend='self', libpython_mode='off', ir_scaffold_mode='on')
+                   backend='self', ir_scaffold_mode='on')
     text = output.read_text()
     verify_ir_text(text)
     body = re.search(r'(?ms)^define [^\n]*@user_owned_list_pair\([^\n]*\n.*?^}', text).group(0)
@@ -164,7 +164,7 @@ def test_list_literal_owned_construction_native_all_gc(
     source.write_text(PROGRAM)
     binary = source.with_suffix('')
     python_program_compiler(str(source), str(binary), backend='self',
-                            libpython_mode='off', runtime_archive=str(pcc_runtime_archive))
+                            runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
@@ -242,7 +242,7 @@ def test_list_construction_concurrent_native_all_gc(
     source = tmp_path / "threaded_construction.py"
     source.write_text(THREADED_PROGRAM)
     binary = source.with_suffix("")
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(

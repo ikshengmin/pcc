@@ -124,7 +124,7 @@ def verify_program_receipts(directory, runtime):
         _program, output = expected.pop(label)
         assert record["status"] == "PASS"
         assert record["compiler_fixture_parameter"] == record["compiler_mode"] == "pcc0"
-        assert record["backend"] == "self" and record["libpython"] == "off"
+        assert record["backend"] == "self"
         assert record["source_sha256"] == sha(source)
         assert record["runtime_archive"] == runtime["path"]
         assert record["runtime_sha256"] == runtime["hashes"][""]
@@ -164,7 +164,7 @@ def verify_win64_callback_receipt(directory, runtime, run_id):
     assert record["status"] == "PASS"
     assert run_id and record["run_id"] == run_id, "stale Win64 callback receipt"
     assert record["compiler_mode"] == "host-pcc0"
-    assert record["backend"] == "self" and record["libpython"] == "off"
+    assert record["backend"] == "self"
     assert record["target"] == runtime["target"] == TARGET
     source = path.parent / "win64_home_callback.py"
     helper = path.parent / "win64_home_callback.obj"

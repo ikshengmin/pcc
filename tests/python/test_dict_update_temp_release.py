@@ -57,7 +57,6 @@ def dict_update_binary(tmp_path_factory):
     compile_python(
         str(source),
         str(output),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

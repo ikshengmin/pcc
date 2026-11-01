@@ -63,7 +63,7 @@ def test_min_max_arguments_match_cpython(tmp_path):
     src = tmp_path / "min_max_arguments.py"
     exe = tmp_path / "min_max_arguments.out"
     src.write_text(PROGRAM)
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     python3 = shutil.which("python3")
     assert python3 is not None, "python3 oracle not found on PATH"
     ref = subprocess.run([python3, str(src)], capture_output=True, text=True, timeout=30)

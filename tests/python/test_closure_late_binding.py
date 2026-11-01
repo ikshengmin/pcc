@@ -371,7 +371,7 @@ def test_lambda_captures_bind_late_under_every_collector(
     assert reference.stdout == EXPECTED
     output = tmp_path / "closure_late_binding"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

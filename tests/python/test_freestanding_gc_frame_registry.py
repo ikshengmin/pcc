@@ -104,7 +104,6 @@ def _compile_object(tmp_path: Path, emitter: str, target_triple: str) -> Path:
         str(FRAME_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple=target_triple,
     )

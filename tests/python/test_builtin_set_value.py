@@ -55,7 +55,7 @@ def test_set_value_and_factory_reach_owned_object_without_cpython(tmp_path, monk
     source = tmp_path / "set_value.py"
     output = tmp_path / "set_value.ll"
     source.write_text(PROGRAM)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     text = output.read_text()
     cpython_call = re.search(r"\bcall[^\n]*@py_cpy_", text)
@@ -70,7 +70,7 @@ def test_native_set_value_and_factory_all_gcs(tmp_path, pcc_runtime_archive,
     source = tmp_path / "set_value.py"
     binary = tmp_path / "set_value"
     source.write_text(PROGRAM)
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))

@@ -53,7 +53,6 @@ def test_explicit_cc_oracle_requires_host_cpython():
     ("kwargs", "message"),
     [
         ({"extra_link_args": ("-Wl,-map,out.map",)}, "link arguments"),
-        ({"needs_libpython": True}, "libpython link surface"),
         (
             {"needs_native_extension_exports": True},
             "native-extension export anchors",

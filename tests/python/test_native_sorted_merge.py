@@ -60,7 +60,6 @@ def _build(tmp_path: Path) -> Path:
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -142,7 +141,6 @@ def test_sorted_merge_releases_all_elements(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

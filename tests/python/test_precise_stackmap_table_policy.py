@@ -110,7 +110,7 @@ def test_main_publishes_the_table_only_for_the_owned_linker(
     source.write_text("def value():\n    return 42\nprint(value())\n", encoding="utf-8")
     output = tmp_path / "publication.ll"
     pipeline.compile_python(
-        str(source), str(output), emit_llvm_only=True, libpython_mode="off",
+        str(source), str(output), emit_llvm_only=True,
         target_triple="arm64-apple-darwin",
     )
     text = output.read_text(encoding="utf-8")
@@ -161,7 +161,7 @@ def test_emitted_assembly_carries_the_table_according_to_target_policy(
     source.write_text(_PROGRAM, encoding="utf-8")
     ir = tmp_path / "boxes.ll"
     pipeline.compile_python(
-        str(source), str(ir), emit_llvm_only=True, libpython_mode="off",
+        str(source), str(ir), emit_llvm_only=True,
         target_triple=triple,
     )
     text = ir.read_text(encoding="utf-8")
@@ -211,7 +211,7 @@ def test_default_executable_has_no_table_and_matches_cpython_on_five_collectors(
             monkeypatch.delenv(PRECISE_STACKMAP_TABLES_ENV, raising=False)
         output = tmp_path / ("boxes" + setting)
         python_program_compiler(
-            str(source), str(output), backend="self", libpython_mode="off",
+            str(source), str(output), backend="self",
             runtime_archive=str(pcc_runtime_archive),
         )
         outputs[setting] = output
@@ -245,7 +245,7 @@ def test_macho_executable_names_its_table_for_the_runtime(
             monkeypatch.delenv(PRECISE_STACKMAP_TABLES_ENV, raising=False)
         output = tmp_path / ("boxes" + setting)
         python_program_compiler(
-            str(source), str(output), backend="self", libpython_mode="off",
+            str(source), str(output), backend="self",
             runtime_archive=str(pcc_runtime_archive),
         )
         image = macho_spec.parse_object(output.read_bytes())
@@ -295,7 +295,7 @@ def test_table_enabled_main_publishes_the_table_to_the_runtime(
             monkeypatch.delenv(PRECISE_STACKMAP_TABLES_ENV, raising=False)
         output = tmp_path / ("probe" + setting)
         python_program_compiler(
-            str(source), str(output), backend="self", libpython_mode="off",
+            str(source), str(output), backend="self",
             runtime_archive=str(pcc_runtime_archive),
         )
         for gc in range(5):
@@ -343,7 +343,7 @@ def test_call_safepoints_are_recorded_at_the_return_address(tmp_path, monkeypatc
     source.write_text(_PROGRAM, encoding="utf-8")
     ir = tmp_path / "boxes.ll"
     pipeline.compile_python(
-        str(source), str(ir), emit_llvm_only=True, libpython_mode="off",
+        str(source), str(ir), emit_llvm_only=True,
         target_triple=triple,
     )
     monkeypatch.setenv(PRECISE_STACKMAP_TABLES_ENV, "1")
@@ -400,7 +400,7 @@ def test_stack_walk_mapped_and_registered_roots_cover_each_other(
     monkeypatch.setenv(_FORMAT_ENV, table_format)
     output = tmp_path / "deep"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_stackmap_runtime_archive),
     )
     _assert_linked_table_format(output, table_format)
@@ -553,7 +553,7 @@ def test_stack_walk_agrees_with_registered_roots_across_root_shapes(
     monkeypatch.setenv(_FORMAT_ENV, table_format)
     output = tmp_path / "shapes"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_stackmap_runtime_archive),
     )
     _assert_linked_table_format(output, table_format)
@@ -630,7 +630,7 @@ def test_stack_walk_agrees_with_registered_roots_at_automatic_collections(
     monkeypatch.setenv(PRECISE_STACKMAP_TABLES_ENV, "1")
     output = tmp_path / "churn"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_stackmap_runtime_archive),
     )
     ran = subprocess.run(
@@ -675,7 +675,7 @@ def test_stack_maps_alone_root_the_stack_frames_on_gc3_and_gc4(
     monkeypatch.setenv(_FORMAT_ENV, table_format)
     output = tmp_path / program
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_stackmap_runtime_archive),
     )
     _assert_linked_table_format(output, table_format)
@@ -749,7 +749,7 @@ def test_x86_64_tables_omit_rootless_safepoints(tmp_path, monkeypatch):
     source.write_text(_PROGRAM, encoding="utf-8")
     ir = tmp_path / "boxes.ll"
     pipeline.compile_python(
-        str(source), str(ir), emit_llvm_only=True, libpython_mode="off",
+        str(source), str(ir), emit_llvm_only=True,
         target_triple="x86_64-unknown-linux-gnu",
     )
     monkeypatch.setenv(PRECISE_STACKMAP_TABLES_ENV, "1")

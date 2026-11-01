@@ -263,7 +263,7 @@ def test_managed_provider_calls_do_not_use_lexical_exception_intrinsic(tmp_path,
     output = tmp_path / 'route.ll'
     compile_python_multi([str(source)], str(output), emit_llvm_only=True,
                          entry_module='route', module_names=['route'], recursive_stdlib=True,
-                         backend='self', libpython_mode='off', ir_scaffold_mode='on')
+                         backend='self', ir_scaffold_mode='on')
     text = output.read_text()
     for function, runtime in [('format_exc', 'py_exc_traceback_format_current'),
                               ('print_exc', 'py_exc_traceback_print_current')]:
@@ -290,7 +290,7 @@ def test_dynamic_provider_and_before_after_rebinding_native(tmp_path, pcc_runtim
     source = tmp_path / 'provider.py'
     source.write_text(PROVIDER_PROGRAM)
     executable = tmp_path / 'provider.out'
-    compile_python(str(source), str(executable), backend='self', libpython_mode='off',
+    compile_python(str(source), str(executable), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=30)
@@ -342,7 +342,7 @@ def main():
 main()
 ''')
     executable = tmp_path / 'options.out'
-    compile_python(str(source), str(executable), backend='self', libpython_mode='off',
+    compile_python(str(source), str(executable), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
     assert actual.returncode == 0, actual.stderr
@@ -362,7 +362,7 @@ def test_local_traceback_provider_keeps_ordinary_module_semantics(tmp_path, pcc_
     source = tmp_path / 'entry.py'
     source.write_text('import traceback\ndef main():\n    print(traceback.format_exc())\nmain()\n')
     executable = tmp_path / 'entry.out'
-    compile_python(str(source), str(executable), backend='self', libpython_mode='off',
+    compile_python(str(source), str(executable), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=30)

@@ -33,7 +33,6 @@ def _run(tmp_path, backend, body: str) -> list[str]:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(

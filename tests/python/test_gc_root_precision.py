@@ -26,7 +26,6 @@ def test_owned_object_locals_are_registered_as_gc_frame_roots(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -60,7 +59,6 @@ def test_borrowed_class_method_parameters_are_rooted_before_calls(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -99,7 +97,6 @@ def test_owned_module_global_is_rooted_before_attribute_publication(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -134,7 +131,6 @@ def test_borrowed_module_global_default_is_not_released_after_signature_store(
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -174,7 +170,6 @@ def test_native_with_open_file_is_an_owned_gc_frame_root(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -215,7 +210,6 @@ def test_dynamic_for_iterator_is_an_owned_gc_frame_root(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -257,7 +251,6 @@ def test_dynamic_for_target_replaces_an_owned_gc_frame_root(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -304,7 +297,6 @@ def test_temporary_gc_roots_use_lifo_frame_api(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -344,7 +336,6 @@ def test_owned_local_cleanup_release_reads_through_gc_barrier(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -390,7 +381,6 @@ def test_string_subscript_assignment_is_owned_local_in_raw_scaffold(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -438,7 +428,6 @@ def test_owned_object_roots_are_left_on_function_error_exit(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -469,7 +458,6 @@ def test_owned_nested_string_binop_operand_is_pinned_across_outer_concat(tmp_pat
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -512,7 +500,6 @@ def test_owned_nested_string_binop_argument_is_pinned_across_list_append(tmp_pat
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")
@@ -567,7 +554,6 @@ def test_incremental_collect_preserves_live_owned_object_local(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(

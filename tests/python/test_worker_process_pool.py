@@ -124,7 +124,7 @@ def main():
             stream.write("must not run")
 main()
 ''')
-    compile_python(str(child_source), str(child), backend="self", libpython_mode="off",
+    compile_python(str(child_source), str(child), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     parent_source = tmp_path / "parent.py"
     parent = tmp_path / "parent"
@@ -149,7 +149,7 @@ main()
         [str(Path(worker_process_pool.__file__)), str(parent_source)], str(parent),
         module_names=["pcc.frontends.python.worker_process_pool", "pool_parent"],
         entry_module="pool_parent", recursive_stdlib=True,
-        backend="self", libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        backend="self", runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         pid_file = tmp_path / f"child-{gc}.pid"

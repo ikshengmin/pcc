@@ -25,7 +25,7 @@ def resource_driver_ir(tmp_path_factory):
 
     module = pipeline._module_name_from_src(str(DRIVER))
     sources, modules, recursive = pipeline._prepare_single_source_compile_closure(
-        str(DRIVER), module, emit_llvm_only=False, libpython_mode="off",
+        str(DRIVER), module, emit_llvm_only=False,
         ir_scaffold_mode="on", recursive_stdlib=False, python_library=False,
     )
     sources, modules = pipeline._prepare_multi_source_compile_closure(
@@ -33,8 +33,7 @@ def resource_driver_ir(tmp_path_factory):
     )
     output = tmp_path_factory.mktemp("resource-worker-abi")
     counts = compile_contextual_per_module_fallback_counts(
-        sources, modules, [module], ir_scaffold_mode="on",
-        strict_no_libpython=True, emit_ir_dir=str(output), entry_module=module,
+        sources, modules, [module], ir_scaffold_mode="on", emit_ir_dir=str(output), entry_module=module,
     )
     assert counts == {module: 0}
     return (output / (module.replace(".", "_") + ".ll")).read_text()

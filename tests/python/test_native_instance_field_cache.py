@@ -15,7 +15,6 @@ def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     return subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
 

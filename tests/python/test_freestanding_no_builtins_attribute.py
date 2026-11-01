@@ -56,7 +56,6 @@ def _emit_path(tmp_path: Path, src: Path, name: str) -> str:
     compile_python(
         str(src),
         str(out),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         emit_llvm_only=True,
@@ -72,7 +71,6 @@ def _emit(tmp_path: Path, source: str, name: str) -> str:
     compile_python(
         str(src),
         str(out),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
         emit_llvm_only=True,

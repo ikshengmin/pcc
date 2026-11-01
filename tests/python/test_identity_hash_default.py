@@ -96,7 +96,7 @@ def test_identity_hashed_instances_in_sets_and_dicts(tmp_path, backend):
     src.write_text(textwrap.dedent(PROGRAM).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     done = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=240,

@@ -40,7 +40,7 @@ main()
     if entry == 'pcc1':
         env.update(PCC_HOST_PYTHON='/nonexistent/python', PCC_HOST_PCC='/nonexistent/pcc')
     compiled = subprocess.run(
-        command + ['--backend', 'self', '--python-libpython=off',
+        command + ['--backend', 'self',
                    '--link-arg', artifact.output_path, str(script), '-o', str(output)],
         capture_output=True, text=True, timeout=300, env=env,
     )
@@ -53,7 +53,7 @@ main()
     assert ran.stdout == '42\n'
     if entry == 'module':
         env['PCC_PY_RUN_CACHE_DIR'] = str(tmp_path / 'run-cache')
-        run_command = command + ['--backend', 'self', '--python-libpython=off',
+        run_command = command + ['--backend', 'self',
                                  '--link-arg', artifact.output_path, str(script)]
         first = subprocess.run(run_command, capture_output=True, text=True, timeout=300, env=env)
         assert first.returncode == 0, first.stderr
@@ -78,7 +78,7 @@ def test_python_run_cache_binds_native_object_content(tmp_path, monkeypatch):
     obj.write_bytes(b'first object')
     before = obj.stat()
     monkeypatch.setenv('PCC_PACKAGE_SITE', str(tmp_path))
-    options = dict(python_libpython='off', python_library=False, ir_scaffold='on',
+    options = dict(python_library=False, ir_scaffold='on',
                    backend='self', gpu_backend=None, link_args=[str(obj)])
     first = _python_run_cache_key(str(script), **options)
     obj.write_bytes(b'other object')

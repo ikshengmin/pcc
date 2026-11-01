@@ -75,7 +75,6 @@ def _compile_to_ll(source: str, name: str) -> str:
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     return out.read_text(encoding="utf-8")
 
@@ -117,7 +116,6 @@ def test_set_and_frozenset_of_dict_have_dict_length(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(
@@ -158,7 +156,6 @@ def test_dict_keys_survive_a_non_string_key(tmp_path, call):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(
@@ -205,7 +202,6 @@ def test_mapping_builtin_family_matches_cpython(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(
@@ -363,7 +359,6 @@ def test_strict_zip_over_a_mapping_still_lowers(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(

@@ -28,7 +28,7 @@ class ClassType:
     binary = tmp_path / "ast_defaults"
     compile_python_multi([str(source), str(definitions)], str(binary),
         module_names=["pcc.frontends.python.entry", "pcc.frontends.python.py_ast"],
-        entry_module="pcc.frontends.python.entry", backend="self", libpython_mode="off",
+        entry_module="pcc.frontends.python.entry", backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
     assert ran.returncode == 0, ran.stdout + ran.stderr

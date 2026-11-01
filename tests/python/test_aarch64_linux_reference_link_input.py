@@ -91,7 +91,7 @@ def _link(texts, directory, observe, *, mode="cc", emitter=_native, consume=Fals
 
     return link.link_ir_texts_run(
         texts, str(directory / "output"), "runtime.a", False,
-        needs_libpython=False, needs_native_extension_exports=exports,
+        needs_native_extension_exports=exports,
         extra_link_inputs=("external.o",), extra_link_args=("-explicit-flag",),
         tmp=str(directory), profile=None, consume_ir_texts=consume,
         resolve_self_link_mode=lambda **_: mode,
@@ -101,9 +101,7 @@ def _link(texts, directory, observe, *, mode="cc", emitter=_native, consume=Fals
         emit_asm=lambda text, *_: emitter(text), emit_objects=objects,
         runtime_archive_link_args=lambda archive, exported: [archive, "-capi-export" if exported else "-no-capi"],
         native_extension_export_flags=lambda exported: ["-native-export"] if exported else [],
-        libpython_isolation_flags=lambda *_: ["-isolate"],
-        platform_link_flags=lambda: ["-platform"], append_libpython_link_flags=_unexpected,
-        log=_noop, join_strings=lambda xs, sep: sep.join(xs),
+        platform_link_flags=lambda: ["-platform"], log=_noop, join_strings=lambda xs, sep: sep.join(xs),
         run_self_link_command=observe, finish_self_backend_executable=_noop,
         semantic_layout_enabled=lambda: False, write_semantic_layout_policy=_unexpected,
     )
@@ -166,10 +164,10 @@ def test_reference_link_receives_real_elf_and_unchanged_exports(tmp_path, monkey
         assert len(inputs) == count
         for i, path in enumerate(inputs): _elf(path, "unit" + str(i))
         assert cmd[0] == "reference-cc" and cmd.count("runtime.a") == 1
-        for flag in ("external.o", "-capi-export", "-explicit-flag", "-native-export", "-isolate", "-platform"):
+        for flag in ("external.o", "-capi-export", "-explicit-flag", "-native-export", "-platform"):
             assert cmd.count(flag) == 1
         assert runtime == "runtime.a" and extras == ("external.o",)
-        assert kw['needs_libpython'] is False and kw['needs_native_extension_exports'] is True
+        assert 'needs_libpython' not in kw and kw['needs_native_extension_exports'] is True
         assert not kw.get('pcc_asm_inputs') and not kw.get('pcc_native_object_inputs')
     _link(texts, tmp_path, observe, emitter=native, consume=True)
     assert len(calls) == 1 and emitted == original and texts == []

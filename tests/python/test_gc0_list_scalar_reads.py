@@ -48,7 +48,7 @@ print(sum_ints([1, 2, 3, 4]))
 ''')
     ir = tmp_path / "scalar_consumer.ll"
     compile_python(str(source), str(ir), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = ir.read_text()
     body = re.search(r"(?ms)^define[^\n]*@user_[^\n]*sum_ints\(.*?^}", text).group(0)
     assert "@py_list_get_i64_nonnegative" in body
@@ -58,7 +58,7 @@ print(sum_ints([1, 2, 3, 4]))
         assert not any(attr in declaration for attr in
                        ("readonly", "readnone", "willreturn", "nounwind"))
     binary = tmp_path / "scalar_consumer"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         run = run_process_group_timeout(

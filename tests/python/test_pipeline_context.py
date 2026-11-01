@@ -385,7 +385,7 @@ def test_declared_arena_field_keeps_direct_aggregate_getter_ir(tmp_path, initial
     path.write_text(_constructor_field_projection_source(initializer), encoding="utf-8")
     counts = compile_contextual_per_module_fallback_counts(
         [str(path)], ["pcc.owner"], ["pcc.owner"],
-        ir_scaffold_mode="on", strict_no_libpython=True, emit_ir_dir=str(tmp_path),
+        ir_scaffold_mode="on", emit_ir_dir=str(tmp_path),
     )
     assert counts == {"pcc.owner": 0}
     ir_text = (tmp_path / "pcc_owner.ll").read_text(encoding="utf-8")

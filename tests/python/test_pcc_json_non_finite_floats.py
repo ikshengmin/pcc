@@ -102,7 +102,7 @@ def test_native_json_reads_non_finite_tokens(tmp_path, pcc_runtime_archive, pyth
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "json_non_finite_probe"
     python_program_compiler(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

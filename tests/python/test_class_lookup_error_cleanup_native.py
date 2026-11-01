@@ -187,7 +187,6 @@ def class_cleanup_native_program(
         str(source),
         str(binary),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(explicit_class_cleanup_archive),
         link_args=(str(helper),),

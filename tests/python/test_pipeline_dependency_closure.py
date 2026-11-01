@@ -7,7 +7,7 @@ def test_pipeline_dependency_closure_facade_has_single_function_owners():
     from pcc.frontends.python import pipeline_dependency_closure as closure
 
     for name in (
-        "_validate_package_site_no_libpython_abi",
+        "_validate_package_site_native_abi",
         "_top_level_import_targets",
         "_package_import_targets",
         "_collect_relative_module_closure",

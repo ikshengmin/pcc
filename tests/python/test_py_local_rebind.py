@@ -30,7 +30,6 @@ def test_object_local_rebind_updates_codegen_type_for_augassign_self_backend(tmp
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

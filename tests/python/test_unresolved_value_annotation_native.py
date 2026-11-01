@@ -57,7 +57,7 @@ def test_unresolved_local_value_annotation_executes_natively(tmp_path, pcc_runti
     executable = tmp_path / "unresolved_value_annotation"
     compile_python_multi(
         package_sources(tmp_path), str(executable), module_names=MODULES,
-        entry_module="consumer", backend="self", libpython_mode="off",
+        entry_module="consumer", backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

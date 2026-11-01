@@ -50,8 +50,7 @@ def _compile_run(tmp_path, init_src, *, core_src=None):
     env["PCC_PACKAGE_SITE"] = str(site)
     # Strict no-libpython: a CPython fallback would error PCC-PY-COMPILE-001.
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

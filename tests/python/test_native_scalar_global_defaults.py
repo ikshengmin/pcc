@@ -34,7 +34,7 @@ main()
     compile_python_multi([str(provider), str(source)], str(output),
                          module_names=[provider_name, "defaults_consumer"],
                          entry_module="defaults_consumer", recursive_stdlib=True,
-                         backend="self", libpython_mode="off",
+                         backend="self",
                          runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

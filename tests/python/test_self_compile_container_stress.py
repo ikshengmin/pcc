@@ -1,6 +1,6 @@
 """Reproduce the pcc1 self-host crash with smaller pcc-Python programs.
 
-The pcc1 binary (built via ``--backend self --python-libpython=off``) crashes
+The pcc1 binary (built via ``--backend self``) crashes
 with nano-allocator heap corruption while compiling pcc/__main__.py. The
 crash bt was inside Lifter._s_Return -> py_instance_new + 60 -> nanov2 guard.
 
@@ -30,7 +30,6 @@ def _run_self_compile(src_text: str, tmp_path: Path, name: str = "stress") -> su
     compile_python(
         str(src), str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     env = {k: v for k, v in os.environ.items()

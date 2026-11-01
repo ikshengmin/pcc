@@ -350,7 +350,7 @@ def test_os_error_changed_modules_lower_to_owned_ir(tmp_path, module):
     from tests.owned_ir_validation import verify_ir_text
     output = tmp_path / (module + '.ll')
     compile_python(str(ROOT / 'pcc/runtime/py' / (module + '.py')), str(output),
-                   backend='self', libpython_mode='off', emit_llvm_only=True, python_library=True)
+                   backend='self', emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
     assert 'strict.nolib.stub' not in text

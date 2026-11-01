@@ -61,7 +61,7 @@ def test_native_rss_selects_budget_and_refuses_an_unfit_worker(
         [str(Path(pipeline_frontend_workers.__file__)), str(source)], str(executable),
         module_names=["pcc.frontends.python.pipeline_frontend_workers", "memory_admission"],
         entry_module="memory_admission", recursive_stdlib=True,
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in (0, 1, 2, 3, 4):
@@ -122,7 +122,7 @@ def test_native_summary_child_uses_the_planned_collector_snapshot(
 ):
     child_source, child = tmp_path / "collector_child.py", tmp_path / "collector_child"
     child_source.write_text(CHILD_PROBE, encoding="utf-8")
-    compile_python(str(child_source), str(child), backend="self", libpython_mode="off",
+    compile_python(str(child_source), str(child), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     parent_source, parent = tmp_path / "collector_parent.py", tmp_path / "collector_parent"
     parent_source.write_text(PARENT_PROBE, encoding="utf-8")
@@ -131,7 +131,7 @@ def test_native_summary_child_uses_the_planned_collector_snapshot(
         str(parent), module_names=["pcc.frontends.python.pipeline_frontend_workers",
                                   "pcc.frontends.python.worker_process_pool", "collector_parent"],
         entry_module="collector_parent", recursive_stdlib=True, backend="self",
-        libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
+        ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     for actual, conflicting in ((0, 4), (1, 0)):
         output = tmp_path / ("child-" + str(actual))

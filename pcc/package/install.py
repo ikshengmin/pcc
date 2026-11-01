@@ -1282,8 +1282,8 @@ def _install_prepared_package(
     # import_success stays None precisely because import was not attempted; it
     # is a tri-state (True/False only after a real import gate runs).
     import_success = None
-    # Install success (even of a CPython-ABI wheel accepted in cpython-compat/
-    # libpython mode) is NEVER a pcc-native package claim. A native package
+    # Install success (even of a CPython-ABI wheel accepted in cpython-compat
+    # mode) is NEVER a pcc-native package claim. A native package
     # claim would require a separate, proven import/ABI gate under pcc-native
     # mode, which this flow does not perform.
     native_package_claim = False

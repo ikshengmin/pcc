@@ -84,7 +84,7 @@ def test_partial_and_forwarders_park_through_vthread_call_on_five_collectors(
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "transparent_forwarding"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True,
@@ -110,7 +110,7 @@ def test_forward_call_outside_the_returned_value_fails_closed(tmp_path):
     )
     with pytest.raises(Exception, match="must be the returned value of a transparent_call function"):
         compile_python(str(source), str(tmp_path / "invalid.ll"), emit_llvm_only=True,
-                       backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                       backend="self", ir_scaffold_mode="on")
 
 
 def test_parking_transparent_wrapper_fails_closed(tmp_path):
@@ -127,7 +127,7 @@ def test_parking_transparent_wrapper_fails_closed(tmp_path):
     )
     with pytest.raises(Exception, match="transparent_call wrapper must not park"):
         compile_python(str(source), str(tmp_path / "parking.ll"), emit_llvm_only=True,
-                       backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                       backend="self", ir_scaffold_mode="on")
 
 
 def test_forward_call_requires_a_transparent_function(tmp_path):
@@ -141,4 +141,4 @@ def test_forward_call_requires_a_transparent_function(tmp_path):
     )
     with pytest.raises(Exception, match="must be the returned value of a transparent_call function"):
         compile_python(str(source), str(tmp_path / "plain.ll"), emit_llvm_only=True,
-                       backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                       backend="self", ir_scaffold_mode="on")

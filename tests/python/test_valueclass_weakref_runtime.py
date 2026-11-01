@@ -56,7 +56,6 @@ def test_dyn_valuebox_weakref_raises_typeerror(tmp_path, monkeypatch, runtime_cc
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -112,7 +111,6 @@ def test_weak_dicts_reject_valueclass_payloads(tmp_path, monkeypatch, runtime_cc
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

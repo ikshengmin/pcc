@@ -48,10 +48,7 @@ def compiler_sources_newer_than(
     archive_base: str,
     archive_mtime: float,
 ) -> bool:
-    if archive_base not in (
-        "libpy_runtime_pcc_py.a",
-        "libpy_runtime_pcc_py_libpython.a",
-    ):
+    if archive_base != "libpy_runtime_pcc_py.a":
         return False
     roots = (
         os.path.join(pcc_dir, "backend"),
@@ -128,51 +125,6 @@ def capi_inventory(archive: str) -> str:
 
 def requires_provenance(archive: str) -> bool:
     return os.path.basename(archive) == "libpy_runtime_pcc_py.a"
-
-
-def requires_c_bundle_validation(archive: str) -> bool:
-    # The libpython archive carries a C-API inventory instead of a provenance
-    # manifest (it adds the cc-built CPython bridge to the pcc-Python archive).
-    return os.path.basename(archive) == "libpy_runtime_pcc_py_libpython.a"
-
-
-def c_bundle_valid(archive: str, *, host_python_command) -> bool:
-    if not requires_c_bundle_validation(archive):
-        return True
-    try:
-        with open(archive, "rb") as stream:
-            archive_data = stream.read()
-        inventory_path = capi_inventory(archive)
-        with open(inventory_path, "r", encoding="utf-8") as stream:
-            inventory_text = stream.read()
-    except OSError:
-        return False
-    lines = inventory_text.splitlines()
-    if not lines or inventory_text != join_strings(lines, "\n") + "\n":
-        return False
-    if lines != sorted(set(lines)):
-        return False
-    for symbol in lines:
-        bare = symbol[1:] if symbol.startswith("_") else symbol
-        if not (bare.startswith("Py") or bare.startswith("_Py")):
-            return False
-    try:
-        from pcc.backend.ar import read_members
-        from pcc.backend.ar_writer import _defined_symbols
-
-        members = read_members(archive_data)
-        if not members:
-            return False
-        actual = set()
-        for _name, payload in members:
-            _format, symbols = _defined_symbols(payload)
-            for symbol in symbols:
-                bare = symbol[1:] if symbol.startswith("_") else symbol
-                if bare.startswith("Py") or bare.startswith("_Py"):
-                    actual.add(symbol)
-        return sorted(actual) == lines
-    except Exception:
-        return False
 
 
 def provenance_root(archive: str, runtime_dir: str) -> str:
@@ -494,8 +446,6 @@ def archive_stale(
     archive: str,
     *,
     runtime_dir: str,
-    base_pcc_py_archive: str,
-    c_bundle_valid,
     target_matches,
     archive_requires_provenance,
     archive_provenance_valid,
@@ -505,7 +455,7 @@ def archive_stale(
 ) -> bool:
     if not os.path.isfile(archive):
         return True
-    if not c_bundle_valid(archive) or not target_matches(archive):
+    if not target_matches(archive):
         return True
     archive_base = str(os.path.basename(archive))
     if archive_requires_provenance(archive):
@@ -518,19 +468,7 @@ def archive_stale(
     archive_mtime = os.path.getmtime(archive)
     if compiler_sources_newer(archive_base, archive_mtime):
         return True
-    if archive_base == "libpy_runtime_pcc_py_libpython.a":
-        # The CPython bridge is the only C object in any runtime archive.
-        for path in (
-            os.path.join(runtime_dir, "src", "py_libpython.c"),
-            os.path.join(runtime_dir, "src", "py_internal.h"),
-            os.path.join(runtime_dir, "include", "py_runtime.h"),
-        ):
-            if os.path.isfile(path) and os.path.getmtime(path) > archive_mtime:
-                return True
-    if archive_base in (
-        "libpy_runtime_pcc_py.a",
-        "libpy_runtime_pcc_py_libpython.a",
-    ):
+    if archive_base == "libpy_runtime_pcc_py.a":
         py_dir = os.path.join(runtime_dir, "py")
         if os.path.isdir(py_dir):
             for name in os.listdir(py_dir):
@@ -539,12 +477,6 @@ def archive_stale(
                 path = os.path.join(py_dir, name)
                 if os.path.isfile(path) and os.path.getmtime(path) > archive_mtime:
                     return True
-        if archive_base == "libpy_runtime_pcc_py_libpython.a":
-            if (
-                os.path.isfile(base_pcc_py_archive)
-                and os.path.getmtime(base_pcc_py_archive) > archive_mtime
-            ):
-                return True
     makefile = os.path.join(runtime_dir, "Makefile")
     return os.path.isfile(makefile) and os.path.getmtime(makefile) > archive_mtime
 
@@ -552,12 +484,9 @@ def archive_stale(
 def ensure_runtime(
     verbose: bool,
     *,
-    needs_libpython: bool,
     runtime_dir_default: str,
     archive_pcc_py: str,
-    archive_pcc_py_libpython: str,
     archive_stale_check,
-    c_bundle_valid,
     archive_requires_provenance,
     archive_provenance_valid,
     archive_codegen_stale,
@@ -577,8 +506,6 @@ def ensure_runtime(
     host_target = host_target_triple()
     target = target_triple or host_target
     if runtime_build_mode() == "owned":
-        if needs_libpython:
-            raise RuntimeArchiveError("owned platform runtime does not include libpython")
         from pcc.frontends.python.owned_runtime_build import ensure_target_runtime
 
         try:
@@ -593,10 +520,9 @@ def ensure_runtime(
     if target != host_target:
         raise RuntimeArchiveError("runtime Make reference oracle cannot build a cross target")
     return _ensure_runtime_make_reference(
-        verbose, needs_libpython=needs_libpython,
+        verbose,
         runtime_dir_default=runtime_dir_default, archive_pcc_py=archive_pcc_py,
-        archive_pcc_py_libpython=archive_pcc_py_libpython,
-        archive_stale_check=archive_stale_check, c_bundle_valid=c_bundle_valid,
+        archive_stale_check=archive_stale_check,
         archive_requires_provenance=archive_requires_provenance,
         archive_provenance_valid=archive_provenance_valid,
         archive_codegen_stale=archive_codegen_stale, wheel_matches=wheel_matches,
@@ -610,12 +536,9 @@ def ensure_runtime(
 def _ensure_runtime_make_reference(
     verbose: bool,
     *,
-    needs_libpython: bool,
     runtime_dir_default: str,
     archive_pcc_py: str,
-    archive_pcc_py_libpython: str,
     archive_stale_check,
-    c_bundle_valid,
     archive_requires_provenance,
     archive_provenance_valid,
     archive_codegen_stale,
@@ -635,11 +558,6 @@ def _ensure_runtime_make_reference(
         if not os.path.isfile(explicit_archive):
             raise RuntimeArchiveError(
                 "explicit runtime archive not found: " + explicit_archive
-            )
-        if not c_bundle_valid(explicit_archive):
-            raise RuntimeArchiveError(
-                "explicit runtime archive has an invalid archive/inventory bundle: "
-                + explicit_archive
             )
         if (
             archive_requires_provenance(explicit_archive)
@@ -661,9 +579,9 @@ def _ensure_runtime_make_reference(
         raise RuntimeArchiveError(
             "explicit runtime directory not found: " + runtime_dir
         )
-    # The runtime is the pcc-Python archive; libpython mode adds the CPython
-    # bridge object to it.  The host-cc and pcc-C runtime archives are retired.
-    archive = archive_pcc_py_libpython if needs_libpython else archive_pcc_py
+    # The runtime is the pcc-Python archive; the host-cc, pcc-C and libpython
+    # runtime archives are retired.
+    archive = archive_pcc_py
     if runtime_dir != runtime_dir_default:
         archive = os.path.join(runtime_dir, os.path.basename(archive))
 
@@ -672,7 +590,6 @@ def _ensure_runtime_make_reference(
         logger(True, "[runtime] runtime_dir=" + runtime_dir)
         logger(True, "[runtime] archive=" + str(archive))
         logger(True, "[runtime] makefile=" + os.path.join(runtime_dir, "Makefile"))
-        logger(True, "[runtime] needs_libpython=" + str(needs_libpython))
         logger(True, "[runtime] archive_exists=" + str(os.path.isfile(archive)))
         if os.path.isfile(archive):
             logger(
@@ -788,11 +705,6 @@ def _ensure_runtime_make_reference(
                         "pcc-Python runtime archive has stale codegen provenance: "
                         + manifest
                     )
-            if not c_bundle_valid(archive):
-                raise RuntimeArchiveError(
-                    "runtime build published an invalid archive/inventory bundle: "
-                    + archive
-                )
             write_archive_target_stamp(archive)
             logger(verbose, "runtime archive: " + archive)
             return archive

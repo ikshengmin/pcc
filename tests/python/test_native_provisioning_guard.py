@@ -238,7 +238,7 @@ def test_container_native_helper_forwards_admitted_request(
     monkeypatch.setattr(pipeline, "compile_python", record_compile)
     monkeypatch.setattr(subprocess, "run", record_run)
     assert container._run_native(tmp_path, "  print(1)\n") is result
-    options = {"ir_scaffold_mode": "on", "libpython_mode": "off", "backend": "self"}
+    options = {"ir_scaffold_mode": "on", "backend": "self"}
     if explicit:
         options["runtime_archive"] = str(archive.resolve())
     assert calls == [
@@ -267,7 +267,7 @@ def test_container_host_ir_uses_private_temporary_directory(tmp_path, monkeypatc
     assert source.parent == output.parent
     assert source.name == "probe.py" and output.name == "probe.ll"
     assert options == {
-        "emit_llvm_only": True, "ir_scaffold_mode": "on", "libpython_mode": "off",
+        "emit_llvm_only": True, "ir_scaffold_mode": "on",
     }
     assert not source.parent.exists()
     assert not (tmp_path / "build").exists()

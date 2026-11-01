@@ -49,7 +49,7 @@ def test_freestanding_raw_extern_integer_comparison_has_no_boxing(tmp_path, oper
         "    return 0\n"
     )
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", target_triple=host_target_triple())
+                   backend="self", target_triple=host_target_triple())
     text = output.read_text()
     assert "icmp" in text
     assert not re.search(r"\bcall\b[^@\n]*@(py_int_from_i64|py_obj_)", text)
@@ -80,7 +80,7 @@ def test_raw_pointer_ternary_and_extern_comparison_execute(tmp_path):
         "    return status(null()) if flag else 11\n"
     )
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", target_triple=host_target_triple())
+                   backend="self", target_triple=host_target_triple())
     text = output.read_text()
     assert not re.search(r"\bcall\b[^@\n]*@(pcc_gc_retain|py_int_from_i64)", text)
     evaluator = CEvaluator()

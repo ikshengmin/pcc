@@ -38,7 +38,7 @@ def test_pow_negative_exponent_matches_cpython(tmp_path, monkeypatch):
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,
@@ -71,7 +71,6 @@ def test_int_literal_pow_folds_without_runtime_pow(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
@@ -83,7 +82,6 @@ def test_int_literal_pow_folds_without_runtime_pow(tmp_path, monkeypatch):
         str(src),
         str(ll),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
         emit_llvm_only=True,
     )

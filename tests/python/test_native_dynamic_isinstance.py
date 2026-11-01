@@ -68,7 +68,6 @@ def test_dynamic_isinstance_second_arg_dispatches_to_runtime(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -111,7 +110,6 @@ def test_isinstance_builtin_exception_matches(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
@@ -147,7 +145,6 @@ def test_builtin_exception_class_can_be_captured_as_default(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
@@ -174,7 +171,6 @@ def test_dyn_builtin_isinstance_uses_runtime_type_tag(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -211,7 +207,6 @@ def test_dyn_bytes_bytearray_and_set_isinstance_use_runtime_type_tags(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -249,7 +244,6 @@ def test_isinstance_tuple_accepts_type_none(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -282,7 +276,6 @@ def test_isinstance_accepts_dynamic_type_call(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -316,7 +309,6 @@ def test_isinstance_tuple_accepts_dynamic_type_call(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -361,7 +353,7 @@ def test_isinstance_slice_and_getitem_slice(tmp_path):
     )
     exe = tmp_path / "slice_gi.out"
     compile_python(
-        str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off", backend="self"
+        str(src), str(exe), ir_scaffold_mode="on", backend="self"
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert run.returncode == 0, run.stderr

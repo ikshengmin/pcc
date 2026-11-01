@@ -34,7 +34,7 @@ from pcc.extern import extern, c_int
 _USAGE = (
     "Usage:\n"
     "  pcc_multi --entry MODULE --out PATH "
-    "[--backend self] [--python-libpython off|auto|on] "
+    "[--backend self] "
     "[--ir-scaffold on|off|auto] [--emit-llvm] [-v|--verbose] "
     "SRC [SRC ...]\n"
     "\n"
@@ -141,16 +141,6 @@ def _infer_module_name(path: str) -> str:
     return base
 
 
-def _parse_python_libpython(value: str) -> str:
-    lowered = (value or "").strip().lower()
-    if lowered not in ("auto", "on", "off"):
-        raise ValueError(
-            "invalid --python-libpython "
-            f"{value!r}; expected auto, on, or off"
-        )
-    return lowered
-
-
 def _parse_ir_scaffold(value: str) -> str:
     lowered = (value or "").strip().lower()
     if lowered not in ("auto", "on", "off"):
@@ -168,7 +158,6 @@ def _parse_cli(argv=None):
     emit_llvm = False
     verbose = False
     backend = None
-    python_libpython = None
     ir_scaffold = None
     sources: list[str] = []
     i = 0
@@ -210,26 +199,14 @@ def _parse_cli(argv=None):
             backend = arg[len("--backend="):]
             i += 1
             continue
-        if arg == "--python-libpython" or arg == "--ir-scaffold":
+        if arg == "--ir-scaffold":
             if i + 1 >= len(argv):
                 return None, 2, f"{arg} requires a value"
             try:
-                if arg == "--python-libpython":
-                    python_libpython = _parse_python_libpython(argv[i + 1])
-                else:
-                    ir_scaffold = _parse_ir_scaffold(argv[i + 1])
+                ir_scaffold = _parse_ir_scaffold(argv[i + 1])
             except ValueError as exc:
                 return None, 2, str(exc)
             i += 2
-            continue
-        if arg.startswith("--python-libpython="):
-            try:
-                python_libpython = _parse_python_libpython(
-                    arg[len("--python-libpython="):]
-                )
-            except ValueError as exc:
-                return None, 2, str(exc)
-            i += 1
             continue
         if arg.startswith("--ir-scaffold="):
             try:
@@ -257,7 +234,6 @@ def _parse_cli(argv=None):
         emit_llvm,
         verbose,
         backend,
-        python_libpython,
         ir_scaffold,
         sources,
     ), 0, None
@@ -285,7 +261,6 @@ def main(argv=None) -> int:
     emit_llvm = False
     verbose = False
     backend = None
-    python_libpython = None
     ir_scaffold = None
     source_specs: list[str] = []
     i = 0
@@ -338,7 +313,7 @@ def main(argv=None) -> int:
             backend = arg[len("--backend="):]
             i += 1
             continue
-        if arg == "--python-libpython" or arg == "--ir-scaffold":
+        if arg == "--ir-scaffold":
             if i + 1 >= len(argv):
                 _write_text(
                     "pcc_multi: " + arg + " requires a value\n",
@@ -347,26 +322,12 @@ def main(argv=None) -> int:
                 _write_text(_USAGE, to_stderr=True)
                 return 2
             try:
-                if arg == "--python-libpython":
-                    python_libpython = _parse_python_libpython(argv[i + 1])
-                else:
-                    ir_scaffold = _parse_ir_scaffold(argv[i + 1])
+                ir_scaffold = _parse_ir_scaffold(argv[i + 1])
             except ValueError as exc:
                 _write_text("pcc_multi: " + str(exc) + "\n", to_stderr=True)
                 _write_text(_USAGE, to_stderr=True)
                 return 2
             i += 2
-            continue
-        if arg.startswith("--python-libpython="):
-            try:
-                python_libpython = _parse_python_libpython(
-                    arg[len("--python-libpython="):]
-                )
-            except ValueError as exc:
-                _write_text("pcc_multi: " + str(exc) + "\n", to_stderr=True)
-                _write_text(_USAGE, to_stderr=True)
-                return 2
-            i += 1
             continue
         if arg.startswith("--ir-scaffold="):
             try:
@@ -426,7 +387,6 @@ def main(argv=None) -> int:
                 emit_llvm_only=emit_llvm,
                 entry_module=entry_module,
                 module_names=module_names,
-                libpython_mode=python_libpython,
                 ir_scaffold_mode=ir_scaffold,
             )
         else:
@@ -438,7 +398,6 @@ def main(argv=None) -> int:
                 entry_module=entry_module,
                 module_names=module_names,
                 backend=backend,
-                libpython_mode=python_libpython,
                 ir_scaffold_mode=ir_scaffold,
             )
     except PyPipelineError as e:

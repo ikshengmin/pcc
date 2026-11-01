@@ -84,7 +84,7 @@ def test_gc0_collect_over_deep_live_structures_matches_cpython(tmp_path: Path) -
     src.write_text(PROGRAM, encoding="utf-8")
     exe = tmp_path / "deep"
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr

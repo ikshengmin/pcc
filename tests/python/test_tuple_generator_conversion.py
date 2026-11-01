@@ -38,7 +38,7 @@ def test_tuple_generator_contents_and_error(tmp_path: Path, pcc_runtime_archive)
     source = tmp_path / "tuple_iterator.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "tuple_iterator"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

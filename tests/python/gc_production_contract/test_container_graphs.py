@@ -92,8 +92,7 @@ def _exes(tmp_path_factory):
         p.write_text(src, encoding="utf-8")
         exe = tmp / f"{name}_bin"
         b = subprocess.run(
-            ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-             "--ir-scaffold=on", str(p), "-o", str(exe)],
+            ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(p), "-o", str(exe)],
             text=True, capture_output=True, timeout=420, env=env,
         )
         assert b.returncode == 0, f"{name}: {b.stdout + b.stderr}"

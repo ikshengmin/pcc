@@ -40,7 +40,7 @@ def test_unpacked_container_integers_keep_arbitrary_precision(
                                text=True, check=True, timeout=30)
     binary = tmp_path / 'unpack_integers'
     python_program_compiler(
-        str(source), str(binary), backend='self', libpython_mode='off',
+        str(source), str(binary), backend='self',
         runtime_archive=str(pcc_runtime_archive),
     )
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)

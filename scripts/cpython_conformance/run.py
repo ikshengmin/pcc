@@ -338,7 +338,7 @@ def run_module(module: str, args, paths: dict, key: str) -> dict:
         if args.runtime_archive:
             env["PCC_RUNTIME_ARCHIVE"] = str(args.runtime_archive)
         compile_result = run_process(
-            [*shlex.split(args.pcc), "--backend", "self", "--python-libpython=off",
+            [*shlex.split(args.pcc), "--backend", "self",
              str(driver), "-o", str(binary)],
             cwd=REPO, stdout=work / "compile.out", stderr=work / "compile.err",
             timeout=args.compile_timeout, env=env,

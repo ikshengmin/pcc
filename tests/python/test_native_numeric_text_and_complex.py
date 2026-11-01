@@ -70,8 +70,7 @@ def test_numeric_text_and_complex_match_cpython(tmp_path):
     exe = tmp_path / "numbers_bin"
     env = os.environ.copy()
     built = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(source), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(source), "-o", str(exe)],
         text=True, capture_output=True, timeout=600, env=env,
     )
     assert built.returncode == 0, built.stderr

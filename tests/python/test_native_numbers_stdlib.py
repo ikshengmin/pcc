@@ -22,7 +22,6 @@ def test_numbers_stdlib_import_and_register_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

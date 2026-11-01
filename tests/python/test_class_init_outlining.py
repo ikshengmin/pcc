@@ -215,7 +215,7 @@ def test_one_construction_body_and_two_calls_survive_owned_passes(library, extra
     passes = list(PYTHON_IR_PASS_DEFAULT_TIER)
     if extra_pass is not None:
         passes.append(extra_pass)
-    optimized = run_owned_passes(text, passes, strict_no_libpython=True)
+    optimized = run_owned_passes(text, passes)
     verify_ir_text(optimized)
     assert set(_helpers(optimized)) == set(helpers)
     for checked in (text, optimized):

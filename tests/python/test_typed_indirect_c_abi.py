@@ -29,7 +29,7 @@ def _compile(tmp_path, body, target=LINUX):
     output = tmp_path / "typed_call.ll"
     source.write_text(HEADER + body)
     pipeline.compile_python(str(source), str(output), emit_llvm_only=True,
-        python_library=True, libpython_mode="off", backend="self", target_triple=target)
+        python_library=True, backend="self", target_triple=target)
     return output.read_text()
 
 
@@ -217,7 +217,7 @@ def probe(fn: i64, destination: i64, obj, make) -> None:
     call_c_abi(fn, "i64", ("ptr", "{ptr,i64}"), (obj, (make(), 7)), destination)
 ''')
     pipeline.compile_python(str(source), str(output), emit_llvm_only=True,
-        python_library=True, libpython_mode="off", backend="self", target_triple=LINUX)
+        python_library=True, backend="self", target_triple=LINUX)
     text = output.read_text()
     body = next(part for part in text.split("define ") if "@user_managed_call_probe(" in part).split("\n}", 1)[0]
     lines = body.splitlines()
@@ -298,7 +298,7 @@ def probe(fn: {alias}, value: {alias}, result: {alias}) -> None:
     call_c_abi(address(fn), "ptr", ("ptr", "{{ptr,i64}}"), (address(value), (value, 1)), address(result))
 ''')
     pipeline.compile_python(str(source), str(output), emit_llvm_only=True,
-        python_library=True, libpython_mode="off", backend="self", target_triple=LINUX)
+        python_library=True, backend="self", target_triple=LINUX)
     calls = [line for line in output.read_text().splitlines() if " call " in line]
     assert any("call ptr (ptr, { ptr, i64 }) %" in line for line in calls)
     assert not any("@pcc_gc_pin(" in line for line in calls)

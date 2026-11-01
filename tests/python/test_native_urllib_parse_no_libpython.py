@@ -61,7 +61,7 @@ def test_urljoin_owned_native_result_handoff(tmp_path, monkeypatch, pcc_runtime_
     # The archive fixture verifies source/target/configuration provenance.
     # Runtime selection is supported, so all collectors run the same binary.
     compile_python(
-        str(source), str(executable), backend="self", libpython_mode="off",
+        str(source), str(executable), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     binary_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
@@ -276,7 +276,6 @@ def test_urlparse_parse_result_attrs_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",
@@ -337,7 +336,6 @@ def test_urlquote_keyword_codec_args_no_libpython(tmp_path):
         [
             "uv", "run", "pcc",
             "--backend", "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src), "-o", str(exe),
         ],

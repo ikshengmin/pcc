@@ -97,7 +97,7 @@ def test_native_preload_encoding_preserves_alias_ids_and_nested_types(tmp_path):
         [str(consumer), *(str(p) for p in paths)], str(output),
         entry_module="pcc.frontends.python.preload_encoding",
         module_names=["pcc.frontends.python.preload_encoding", *modules],
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
         recursive_stdlib=False, target_triple="arm64-apple-darwin23.6.0",
         runtime_archive=str(archive),
     )

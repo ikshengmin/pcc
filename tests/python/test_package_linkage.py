@@ -156,7 +156,7 @@ def test_bootstrap_native_artifact_scan_uses_small_tool_output(monkeypatch, tmp_
     assert any("strings -a" in command for command in commands)
 
 
-def test_linkage_report_blocks_pcc_native_but_allows_explicit_libpython_mode(tmp_path):
+def test_linkage_report_blocks_libpython_under_every_abi_mode(tmp_path):
     artifact = tmp_path / "demo.so"
     artifact.write_text(
         "linked against Python.framework/Versions/3.13/Python", encoding="utf-8"
@@ -167,10 +167,13 @@ def test_linkage_report_blocks_pcc_native_but_allows_explicit_libpython_mode(tmp
     assert report["no_libpython_runtime"] is False
     assert report["diagnostics"][0]["code"] == "PCC-PKG-003"
 
-    compat = linkage_report(artifacts=[str(artifact)], abi_mode="libpython")
-    assert compat["ok"] is True
-    assert compat["links_libpython"] is True
-    assert compat["no_libpython_runtime"] is False
+    # No ABI mode admits a libpython link; the retired "libpython" label is
+    # an ordinary unknown mode.
+    for abi_mode in ("cpython-compat", "libpython"):
+        other = linkage_report(artifacts=[str(artifact)], abi_mode=abi_mode)
+        assert other["ok"] is False
+        assert other["links_libpython"] is True
+        assert other["no_libpython_runtime"] is False
 
 
 def test_linkage_report_blocks_cpython_extension_abi_in_pcc_native_mode(tmp_path):

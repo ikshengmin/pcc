@@ -105,7 +105,7 @@ def test_callback_exception_disposal_native_all_gc(tmp_path, pcc_runtime_archive
     source = tmp_path / "callback_exception_disposal.py"
     executable = tmp_path / "callback_exception_disposal"
     source.write_text(PROGRAM, encoding="utf-8")
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         log = tmp_path / ("gc" + str(backend) + ".jsonl")

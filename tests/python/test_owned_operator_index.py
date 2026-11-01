@@ -46,7 +46,7 @@ def test_index_provider_has_owned_object_returning_native_body(tmp_path):
     output = tmp_path / "operator.ll"
     compile_python(str(Path(owned_operator.__file__)), str(output),
                    emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                   ir_scaffold_mode="on", backend="self")
     text = output.read_text()
     body = re.search(r"^define[^\n]*@user_pcc_stdlib_operator_index\(.*?^}", text, re.M | re.S)
     assert body is not None
@@ -61,7 +61,7 @@ def test_runtime_index_body_keeps_objects_out_of_machine_integer_lanes(tmp_path)
     source = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_protocol_runtime.py"
     output = tmp_path / "protocol.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                   ir_scaffold_mode="on", backend="self")
     text = output.read_text()
     body = re.search(r"^define[^\n]*@py_obj_index\(.*?^}", text, re.M | re.S)
     assert body is not None
@@ -87,7 +87,7 @@ def test_public_index_calls_reach_the_owned_provider(tmp_path):
     )
     output = tmp_path / "public_index.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, recursive_stdlib=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                   ir_scaffold_mode="on", backend="self")
     text = output.read_text()
     for name in ("plain", "protocol"):
         body = re.search(r"^define[^\n]*@user_public_index_" + name + r"\(.*?^}", text, re.M | re.S)

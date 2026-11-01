@@ -93,7 +93,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
         str(STRICT_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     source = llvm_ir

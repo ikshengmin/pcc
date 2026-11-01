@@ -49,7 +49,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
         str(STRICT_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     source = llvm_ir
@@ -260,7 +259,6 @@ def test_backend0_finalizer_may_track_temporaries_without_table_lock_deadlock(
     pipeline.compile_python(
         str(source),
         str(executable),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )

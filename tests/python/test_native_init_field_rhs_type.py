@@ -58,7 +58,6 @@ def test_init_copy_rhs_preserves_field_type_in_ir(tmp_path):
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )
@@ -77,7 +76,6 @@ def test_init_copy_rhs_field_type_runs_no_libpython(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -130,7 +128,6 @@ def test_class_self_call_argument_types_reach_literal_dispatch_target(tmp_path):
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )
@@ -149,7 +146,6 @@ def test_class_self_call_argument_types_run_no_libpython(tmp_path):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -193,7 +189,6 @@ def test_full_context_method_ints_follow_emitted_abi(
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )
@@ -243,7 +238,6 @@ def test_full_context_class_method_never_exposes_boxed_int_tag(
         str(src),
         str(exe),
         backend=backend,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -262,7 +256,6 @@ def test_method_argument_provenance_pins_managed_but_not_raw_pointer(tmp_path):
         str(src),
         str(ll),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         emit_llvm_only=True,
     )
@@ -325,7 +318,6 @@ def test_method_argument_provenance_runs_no_libpython(backend, tmp_path):
         str(src),
         str(exe),
         backend=backend,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

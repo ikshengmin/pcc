@@ -27,7 +27,6 @@ def test_os_makedirs_emits_native_no_libpython_call(tmp_path):
         str(ll),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     ir_text = ll.read_text(encoding="utf-8")
     assert "call ptr @py_os_makedirs" in ir_text
@@ -68,7 +67,6 @@ def test_os_makedirs_runtime_and_exist_ok(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
     assert run.returncode == 0, run.stderr

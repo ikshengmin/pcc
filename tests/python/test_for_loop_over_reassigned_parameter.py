@@ -81,7 +81,6 @@ def test_generator_argument_survives_a_tuple_typed_reassignment(tmp_path):
         [
             sys.executable, "-m", "pcc",
             "--ir-scaffold=on", "--backend", "self",
-            "--python-libpython", "off",
             str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT),

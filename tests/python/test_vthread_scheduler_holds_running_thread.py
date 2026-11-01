@@ -244,7 +244,7 @@ def test_scheduler_step_keeps_the_running_thread_on_five_collectors(
     binary = tmp_path / "program"
     compile_python_multi([str(scope), str(program)], str(binary),
                          module_names=["scope_lib", "program"], entry_module="program",
-                         ir_scaffold_mode="on", libpython_mode="off",
+                         ir_scaffold_mode="on",
                          runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary), "100", "0", "3", "--summary"],

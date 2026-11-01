@@ -320,8 +320,8 @@ class NativeOsLoweringMixin:
         """``dict(os.environ)``.
 
         `run_runtime_make` opens with exactly this, and without a lowering
-        the call fell through to CPython, which under
-        ``--python-libpython=off`` stubbed the whole function -- leaving
+        the call fell through to CPython, which the native pipeline answers
+        by stubbing the whole function -- leaving
         pcc1 unable to rebuild its own runtime archive.
         """
         if expr.kwargs or len(expr.args) != 1:

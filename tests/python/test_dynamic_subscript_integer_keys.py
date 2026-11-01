@@ -37,7 +37,7 @@ main()
                               text=True, timeout=10)
     assert expected.returncode == 0, expected.stderr
     output = tmp_path / "dynamic_keys"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15,
@@ -61,7 +61,7 @@ def main():
 main()
 ''', encoding="utf-8")
     output = tmp_path / "extern_dict_keys"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15,
@@ -109,7 +109,7 @@ def main():
 main()
 ''', encoding="utf-8")
     output = tmp_path / "wide_key_lifetime"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

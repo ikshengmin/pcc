@@ -297,7 +297,7 @@ def test_native_deferred_link_plan_executes_under_all_collectors(
     helper = tmp_path / "native-deferred"
     python_program_compiler(
         str(Path(driver.__file__)), str(helper), backend="self",
-        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     sections, undefined = assemble_file(
         ".section __TEXT,__text,regular,pure_instructions\n"
@@ -362,8 +362,7 @@ def test_pcc1_native_deferred_cli_compiles_and_executes_two_modules(
     )
     result = run_process_group_timeout(
         [sys.executable, str(script), str(native_pcc1_compiler), str(codegen), str(link), "--",
-         str(native_pcc1_compiler), "--backend", "self", "--python-libpython", "off",
-         str(source), "-o", str(output)],
+         str(native_pcc1_compiler), "--backend", "self", str(source), "-o", str(output)],
         env=env, timeout=120,
     )
     assert result.returncode == 0, result.stderr

@@ -59,7 +59,6 @@ def _compile_threaded(monkeypatch, tmp_path: Path, src: Path, exe: Path) -> None
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         runtime_archive=str(work_runtime / "libpy_runtime_pcc_py.a"),
     )
 

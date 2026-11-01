@@ -183,7 +183,6 @@ def test_current_pcc1_imports_generic_built_extension_without_host_helpers(tmp_p
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

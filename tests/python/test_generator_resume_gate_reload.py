@@ -111,7 +111,7 @@ def test_generator_resume_reloads_its_generator_and_frame_after_gates(tmp_path: 
     src = tmp_path / "gates.py"
     src.write_text(SOURCE, encoding="utf-8")
     out = tmp_path / "gates.ll"
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     text = out.read_text(encoding="utf-8")
     for name in ("walk", "counter"):
         across = _managed_values_live_across_gates(text, r"[^ (]*_" + name + r"__gen_resume")

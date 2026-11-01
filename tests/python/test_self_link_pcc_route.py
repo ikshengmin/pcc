@@ -154,8 +154,7 @@ def _build(tmp_path: Path, tag: str, env_extra: dict, program: str = PROGRAM):
     env["PCC_DISABLE_PY_RUN_CACHE"] = "1"
     env.update(env_extra)
     run = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(out)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(out)],
         capture_output=True, text=True, timeout=560, env=env, cwd=str(REPO),
     )
     return run, out

@@ -87,7 +87,7 @@ def test_native_integer_pack_boundaries_match_cpython_under_every_collector(tmp_
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True,
                               timeout=30, check=True).stdout
     binary = tmp_path / "struct_edges"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,

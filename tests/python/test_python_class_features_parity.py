@@ -1,7 +1,7 @@
 """CPython parity for class features, ported from
 ``Lib/test/test_class.py`` and ``Lib/test/test_descr.py``.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython):
   * single inheritance + ``super()`` + MRO follow standard rules
@@ -29,7 +29,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 

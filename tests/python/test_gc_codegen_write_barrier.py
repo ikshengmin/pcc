@@ -837,7 +837,6 @@ def test_generated_heap_stores_increment_barrier_counter_only_for_tracing_backen
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     for backend in ("0", "1"):
         result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,

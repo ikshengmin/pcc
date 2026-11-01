@@ -28,7 +28,6 @@ def test_compiled_enum_provider_publishes_member_name_and_value(tmp_path, monkey
         str(executable),
         module_names=["main", "enum"],
         entry_module="main",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -62,7 +61,6 @@ def test_native_enum_module_alias_supports_dotted_base(tmp_path, monkeypatch):
         str(executable),
         module_names=["main"],
         entry_module="main",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

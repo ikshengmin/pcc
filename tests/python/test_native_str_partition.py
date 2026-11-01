@@ -21,7 +21,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
 
 
@@ -60,7 +60,7 @@ def test_str_partition_matches_cpython(tmp_path, monkeypatch):
         [sys.executable, str(src)], capture_output=True, text=True,
         encoding="utf-8", timeout=30,
     ).stdout
-    # The strict ``libpython_mode="off"`` compile above already proves no
+    # The native compile above already proves no
     # libpython fallback (strict mode hard-errors on any py_cpy_* emission);
     # this asserts the runtime result matches CPython.
     assert _run(exe) == cpython

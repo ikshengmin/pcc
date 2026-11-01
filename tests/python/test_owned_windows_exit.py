@@ -428,7 +428,7 @@ main()
     executable = tmp_path / "managed_exit.exe"
     try:
         compile_python(
-            str(source), str(executable), backend="self", libpython_mode="off",
+            str(source), str(executable), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     finally:

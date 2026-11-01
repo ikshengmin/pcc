@@ -155,7 +155,7 @@ def test_nested_unpack_preserves_lifetimes_across_parking(
                       "active_backend = extern('pcc_gc_backend', (), c_int64)\n"
                       "print('backend', active_backend())\n", encoding='utf-8')
     binary = tmp_path / 'nested_unpack'
-    python_program_compiler(str(source), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(binary), backend='self',
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(

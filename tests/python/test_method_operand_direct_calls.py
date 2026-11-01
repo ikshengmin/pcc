@@ -117,7 +117,7 @@ def _compile(tmp_path: Path, archive) -> tuple[Path, str]:
     )
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "method_operands"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(archive))
     return binary, expected.stdout
 
@@ -139,7 +139,7 @@ def _ir_text(tmp_path: Path) -> str:
         source = tmp_path / "method_operands.py"
         source.write_text(PROGRAM, encoding="utf-8")
         compile_python(str(source), str(ir_path), emit_llvm_only=True, backend="self",
-                       libpython_mode="off", ir_scaffold_mode="on")
+                       ir_scaffold_mode="on")
     return ir_path.read_text(encoding="utf-8")
 
 

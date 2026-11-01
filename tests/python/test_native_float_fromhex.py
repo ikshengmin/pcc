@@ -1,7 +1,7 @@
 """float.fromhex(s) under strict no-libpython (run-based).
 
 float.fromhex is a builtin-type classmethod that previously routed through the
-libpython fallback (PCC-PY-COMPILE-001 under --python-libpython=off; the
+libpython fallback (PCC-PY-COMPILE-001 in the native pipeline; the
 generated IR still called py_cpy_*). Added a native branch
 (unary_call_lowering._maybe_emit_builtin_type_method, next to the bytes.fromhex
 arm) plus a runtime helper py_float_fromhex (the production pcc-Python owner is
@@ -14,7 +14,7 @@ decimal 1.5). inf/infinity/nan (case-insensitive, optional sign) are accepted;
 a malformed string raises ValueError and an out-of-range magnitude raises
 OverflowError.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode). Values below are diffed
 against CPython float.fromhex.
 """
@@ -33,8 +33,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

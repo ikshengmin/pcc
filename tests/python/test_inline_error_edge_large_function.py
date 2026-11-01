@@ -68,8 +68,7 @@ def test_large_function_errors_match_cpython(tmp_path):
         "PCC_PYTHON_IR_PASSES": "off",
     })
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(source), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(source), "-o", str(exe)],
         text=True, capture_output=True, timeout=900, env=env,
     )
     assert build.returncode == 0, build.stderr[-4000:]

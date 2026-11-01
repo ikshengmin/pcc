@@ -45,7 +45,6 @@ def longrun_binaries(tmp_path_factory):
         compile_python(
             str(src),
             str(exe),
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )

@@ -28,7 +28,6 @@ def test_local_cache_method_decorator_is_noop_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

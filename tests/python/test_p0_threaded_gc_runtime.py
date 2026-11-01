@@ -183,7 +183,7 @@ def _compile(tmp_path: Path, name: str, source: str) -> Path:
     src.write_text(source, encoding="utf-8")
     exe = tmp_path / name
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr
@@ -227,7 +227,7 @@ def test_stack_frames_use_the_mapped_frame_entries_where_tables_publish(tmp_path
         encoding="utf-8",
     )
     out = tmp_path / "frames.ll"
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     text = out.read_text(encoding="utf-8")
     start = text.index("@user_frames_pair(")
     body = text[start:text.index("\n}\n", start)]
@@ -248,7 +248,7 @@ def test_main_publishes_the_table_before_any_frame_enters(tmp_path, monkeypatch)
     src = tmp_path / "prog.py"
     src.write_text("value = [1, 2]\nprint(len(value))\n", encoding="utf-8")
     out = tmp_path / "prog.ll"
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     text = out.read_text(encoding="utf-8")
     start = text.index("define i32 @main(")
     body = text[start:text.index("\n}\n", start)]

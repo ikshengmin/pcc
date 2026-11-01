@@ -172,7 +172,7 @@ def test_shared_instance_attributes_under_four_carriers(tmp_path, threaded_pcc_r
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "instance_races"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         for run in range(2):

@@ -61,7 +61,7 @@ def test_dynamic_singletons_keep_identity_through_calls_and_collection(
     binary = tmp_path / "singleton_values"
     source.write_text(PROGRAM)
     compile_python(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

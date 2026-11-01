@@ -84,7 +84,7 @@ def test_owned_link_driver_large_relocations_execute_natively(
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     python_program_compiler(
         str(Path(owned_link_driver.__file__)), str(linker), backend="self",
-        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
         output = tmp_path / ("linked-gc" + str(backend))

@@ -230,7 +230,7 @@ def test_hinted_dunders_follow_subclass_overrides(tmp_path):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     for backend in ("0", "4"):
         run = subprocess.run(
@@ -255,7 +255,7 @@ def test_dynamic_binary_dunders_follow_the_python_protocol(tmp_path, mode):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        libpython_mode="off", ir_scaffold_mode=mode, backend="self",
+        ir_scaffold_mode=mode, backend="self",
     )
     for backend in ("0", "1", "2", "3", "4"):
         run = subprocess.run(

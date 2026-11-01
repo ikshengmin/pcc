@@ -263,7 +263,6 @@ with zipfile.ZipFile(%(generated_archive)r) as archive:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

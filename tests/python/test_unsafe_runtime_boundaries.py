@@ -78,7 +78,6 @@ def _compile_probe(tmp_path: Path) -> str:
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return llvm_ir.read_text(encoding="utf-8")
@@ -112,7 +111,6 @@ def _compile_platform_guarded_loader_probe(tmp_path: Path) -> str:
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     return llvm_ir.read_text(encoding="utf-8")
@@ -373,7 +371,6 @@ def test_runtime_boundary_intrinsic_does_not_whitelist_unregistered_gc_extern(
             str(source),
             str(llvm_ir),
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
         )
 
@@ -397,7 +394,6 @@ def test_open_readonly_and_open_file_share_the_vararg_open_declaration(tmp_path:
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple="arm64-apple-macosx11.0",
     )
@@ -420,7 +416,7 @@ __pcc_freestanding__ = True
 def probe(path: c_ptr, flags: i64, permissions: i64, directory: i64) -> i64:
     return open_file_flags(path, flags, permissions, directory)
 ''')
-    compile_python(str(source),str(out),emit_llvm_only=True,python_library=True,libpython_mode='off',target_triple=target)
+    compile_python(str(source),str(out),emit_llvm_only=True,python_library=True,target_triple=target)
     text=out.read_text();verify_ir_text(text)
     assert not re.search(r'\bcall[^\n]*@py_cpy_', text)
     if 'linux' in target:

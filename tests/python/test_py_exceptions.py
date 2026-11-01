@@ -73,7 +73,6 @@ class PyExceptionTests(unittest.TestCase):
         compile_python(
             src,
             exe,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -109,7 +108,6 @@ class PyExceptionTests(unittest.TestCase):
         compile_python(
             src,
             exe,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -153,7 +151,6 @@ class PyExceptionTests(unittest.TestCase):
         compile_python(
             src,
             exe,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -223,7 +220,6 @@ class PyExceptionTests(unittest.TestCase):
         compile_python(
             src,
             exe,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -283,7 +279,6 @@ class PyExceptionTests(unittest.TestCase):
         compile_python(
             src,
             exe,
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )

@@ -598,7 +598,7 @@ def test_condition_token_protocol_reaches_owned_emitter(tmp_path, monkeypatch, t
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", runtime_ir_passes(str(PORT.parent.parent)))
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple=triple)
     text = output.read_text()
     # This is the changed runtime unit's actual IR, not a native call stub.
@@ -680,7 +680,7 @@ main()
 """)
     output = tmp_path / "condition_calls.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     calls = set(re.findall(r"\bcall i64[^\n]*@([^(\s]+)\(", text))
     for name in ("py_threading_condition_wait_vthread_timeout",
@@ -804,7 +804,7 @@ def test_dynamic_condition_dispatch_reaches_owned_emitter(tmp_path, monkeypatch)
     output = tmp_path / "py_obj_ops_dispatch.ll"
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", runtime_ir_passes(str(PORT.parent.parent)))
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple="arm64-apple-darwin")
     text = output.read_text()
     assert re.search(r"\bcall i64[^\n]*@py_threading_condition_wait_timeout\(", text)
@@ -949,7 +949,7 @@ def test_condition_semantic_program_reaches_owned_emitter(tmp_path):
     source.write_text(PROGRAM)
     output = tmp_path / "condition_semantics.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on")
+                   backend="self", ir_scaffold_mode="on")
     assert len(emit_owned_object(output.read_text(), "arm64-apple-darwin")) > 64
 
 
@@ -962,7 +962,7 @@ def test_native_condition_collect_notify_all_and_timeouts_all_gcs(
     source = tmp_path / "condition_semantics.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "condition_semantics"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

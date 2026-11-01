@@ -480,7 +480,7 @@ def test_fast_binding_diagnostic_reaches_owned_emitter(tmp_path, monkeypatch, tr
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", runtime_ir_passes(str(RUNTIME)))
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                   backend="self", ir_scaffold_mode="on",
                    target_triple=triple)
     ir_text = output.read_text()
     assert "@user_py_func__signature_runtime_error_if_unset(" in ir_text

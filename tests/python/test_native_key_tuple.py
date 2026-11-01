@@ -8,7 +8,7 @@ now recognises a TupleExpr whose components are each a simple attr/index subspec
 lexicographically (verified: pcc already sorts plain tuples correctly). Both the
 sorted insertion sort and the min/max object fold pick this up for free.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
@@ -17,7 +17,7 @@ import os, subprocess
 def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30, env=env)
     assert r.returncode == 0, r.stderr

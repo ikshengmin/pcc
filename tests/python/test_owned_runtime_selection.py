@@ -116,15 +116,14 @@ def test_diagnostic_boolean_lowering_separates_runtime_receipts(runtime_root, mo
 def _selection_options(root):
     callbacks = {
         name: _forbidden for name in (
-            "archive_stale_check", "c_bundle_valid", "archive_requires_provenance",
+            "archive_stale_check", "archive_requires_provenance",
             "archive_provenance_valid", "archive_codegen_stale", "archive_manifest",
             "archive_target_matches", "compiler_sources_newer", "resolve_pcc_binary",
             "runtime_host_python", "run_make", "write_archive_target_stamp",
         )
     }
-    return dict(callbacks, needs_libpython=False, runtime_dir_default=str(root),
+    return dict(callbacks, runtime_dir_default=str(root),
                 archive_pcc_py=str(root / "libpy_runtime_pcc_py.a"),
-                archive_pcc_py_libpython=str(root / "libpy_runtime_pcc_py_libpython.a"),
                 wheel_matches=lambda _path: False, logger=lambda *_args: None)
 
 
@@ -284,16 +283,6 @@ def test_fresh_owned_build_must_pass_current_codegen_admission(
     assert len(builds) == 1
 
 
-def test_native_libpython_request_rejected_before_explicit_fast_path(runtime_root, monkeypatch):
-    monkeypatch.setattr(selection, "sys", SimpleNamespace(platform="linux"))
-    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(runtime_root / "arbitrary.a"))
-    monkeypatch.setattr(owned, "ensure_target_runtime", _forbidden)
-    options = _selection_options(runtime_root)
-    options["needs_libpython"] = True
-    with pytest.raises(selection.RuntimeArchiveError, match="does not include libpython"):
-        selection.ensure_runtime(False, **options)
-
-
 @pytest.mark.parametrize("target", TARGETS)
 def test_facade_default_native_entry_selects_in_process_owned_builder(runtime_root, monkeypatch, target):
     from pcc.frontends.python import pipeline
@@ -369,7 +358,7 @@ def test_owned_runtime_frontend_uses_runtime_pass_policy_and_restores_applicatio
     owned._compile_runtime_module(owned._THREAD_KERNEL_MODULE, "source.py", str(tmp_path / "module.ll"), TARGETS[3])
     import os
     assert observed[0][0:3] == ("mem2reg,sroa", "0", None)
-    assert observed[0][3] == dict(emit_llvm_only=True, python_library=True, libpython_mode="off", backend="self", target_triple=TARGETS[3])
+    assert observed[0][3] == dict(emit_llvm_only=True, python_library=True, backend="self", target_triple=TARGETS[3])
     assert os.environ["PCC_PYTHON_IR_PASSES"] == "application-only"
     assert os.environ["PCC_WITH_THREADS"] == "1"
     assert os.environ["PCC_DIRECT_INDEXED_KERNEL_CAPTURE"] == "1"

@@ -159,10 +159,6 @@ def python_ir_pass_timeout_seconds() -> Optional[float]:
     return None if value <= 0 else value
 
 
-def python_ir_pass_strict_arg(*, strict_no_libpython: bool) -> str:
-    return "1" if strict_no_libpython else "0"
-
-
 def python_ir_pass_batch_size_summary(
     module_ir_texts: list[tuple[str, str]],
     *,

@@ -687,7 +687,7 @@ def test_host_pcc_self_emitted_elf_phase_counters_keep_high_bits(tmp_path, monke
             ir_path = tmp_path / (name + ".ll")
             compile_python(
                 str(input_path), str(ir_path), emit_llvm_only=True,
-                libpython_mode="off", python_library=True,
+                python_library=True,
                 backend="self", target_triple=target,
             )
             blob = emit_object(ir_path.read_text(encoding="utf-8"), target_triple=target)

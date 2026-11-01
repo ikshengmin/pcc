@@ -24,10 +24,10 @@ def _compile(tmp_path: Path, name: str, source: str, run: bool) -> str:
     src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
     if not run:
         compile_python(str(src), str(tmp_path / f"{name}.ll"), emit_llvm_only=True,
-                       libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                       ir_scaffold_mode="on", backend="self")
         return ""
     exe = tmp_path / name
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on", backend="self")
     done = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
     return done.stdout
@@ -82,7 +82,7 @@ def test_rebound_module_constant_fails_closed(tmp_path: Path, rebinding: str) ->
     )
     ll = tmp_path / "rebound_const.ll"
     try:
-        compile_python(str(src), str(ll), emit_llvm_only=True, libpython_mode="off",
+        compile_python(str(src), str(ll), emit_llvm_only=True,
                        ir_scaffold_mode="on", backend="self")
     except (PyPipelineError, NotImplementedError) as exc:
         assert "statically imported integer constants" in str(exc)

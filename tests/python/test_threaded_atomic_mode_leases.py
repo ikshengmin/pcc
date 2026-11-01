@@ -187,7 +187,7 @@ def main():
 main()
 ''' % expect)
     binary = tmp_path / "atomic_mode_leases"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(threaded_pcc_runtime_archive), object_inputs=(str(helper),))
     for repetition in range(3):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=45,

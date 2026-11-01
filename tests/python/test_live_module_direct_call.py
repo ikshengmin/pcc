@@ -175,7 +175,7 @@ def test_live_module_call_cpython_reference(tmp_path):
 def test_live_module_calls_native(tmp_path, pcc_runtime_archive):
     main = _write(tmp_path)
     output = tmp_path / "guardcall_main"
-    compile_python(str(main), str(output), backend="self", libpython_mode="off",
+    compile_python(str(main), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run(

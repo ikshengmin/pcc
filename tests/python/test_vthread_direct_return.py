@@ -118,7 +118,7 @@ def test_task_returns_and_nested_generators_on_five_collectors(tmp_path, pcc_run
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "direct_return"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True,

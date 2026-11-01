@@ -122,7 +122,7 @@ def test_keyword_provider_emits_real_no_libpython_functions(tmp_path):
     compile_python(
         str(Path(owned_keyword.__file__)), str(output),
         emit_llvm_only=True, python_library=True,
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     text = output.read_text(encoding="utf-8")
     for name in ("iskeyword", "issoftkeyword"):
@@ -150,7 +150,7 @@ def test_imported_keyword_calls_use_the_owned_provider(tmp_path):
     counts = compile_contextual_per_module_fallback_counts(
         [str(Path(owned_keyword.__file__)), str(source)],
         ["keyword", "keyword_user"], ["keyword_user"],
-        ir_scaffold_mode="on", strict_no_libpython=True,
+        ir_scaffold_mode="on",
         emit_ir_dir=str(tmp_path), entry_module="keyword_user",
     )
     assert counts == {"keyword_user": 0}

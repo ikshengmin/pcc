@@ -42,7 +42,7 @@ def test_owned_time_structseq_on_observed_collectors(tmp_path, request, explicit
         receipt_path.write_text(json.dumps(receipt, indent=2)+'\n')
     save()
     try:
-        python_program_compiler(str(SOURCE), str(binary), backend='self', libpython_mode='off',
+        python_program_compiler(str(SOURCE), str(binary), backend='self',
                                 ir_scaffold_mode='on', runtime_archive=str(explicit_owned_runtime))
     except Exception as error:
         receipt.update(status='COMPILE_FAILED', error=type(error).__name__+': '+str(error))

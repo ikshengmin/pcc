@@ -361,7 +361,7 @@ def test_native_owned_time_provider_callbacks(
     source = ROOT / 'tests/fixtures/owned_time_provider_callbacks.py'
     output = tmp_path / 'owned_time_provider_callbacks'
     python_program_compiler(str(source), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,

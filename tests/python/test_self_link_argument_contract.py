@@ -189,7 +189,7 @@ def test_unsupported_default_host_fails_instead_of_selecting_cc(monkeypatch, hos
         pipeline._resolve_self_link_mode()
 
 
-@pytest.mark.parametrize("options", [{"needs_libpython": True}, {"needs_native_extension_exports": True}, {"extra_link_args": ("-lz",)}])
+@pytest.mark.parametrize("options", [{"needs_native_extension_exports": True}, {"extra_link_args": ("-lz",)}])
 def test_default_compatibility_requests_keep_owned_mode_and_fail_before_commands(tmp_path, monkeypatch, options):
     monkeypatch.setattr(pipeline, "_default_self_link_mode", lambda: "pcc")
     monkeypatch.delenv("PCC_SELF_LINK", raising=False)
@@ -524,14 +524,6 @@ def test_pcc_self_link_rejects_unimplemented_link_arguments(
             "link arguments",
         ),
         (
-            [
-                'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @first() { ret i64 1 }",
-                'target triple = "arm64-apple-darwin23.6.0"\n' "define i64 @second() { ret i64 2 }",
-            ],
-            {"needs_libpython": True},
-            "libpython link surface",
-        ),
-        (
             ['target triple = "x86_64-unknown-linux-gnu"\n' "define i64 @single() { ret i64 1 }"],
             {"needs_native_extension_exports": True},
             "native-extension imports require",
@@ -571,7 +563,6 @@ def test_pcc_self_link_rejects_unsupported_surface_before_emission(
             str(output),
             None,
             False,
-            needs_libpython=bool(options.get("needs_libpython", False)),
             needs_native_extension_exports=bool(
                 options.get("needs_native_extension_exports", False)
             ),
@@ -862,7 +853,6 @@ def test_large_multi_module_branch_uses_shared_self_link_contract(
         str(tmp_path / "output"),
         None,
         False,
-        needs_libpython=False,
         extra_link_args=("-Wl,-map,map.txt",),
         tmp=str(tmp_path),
         profile=None,
@@ -874,7 +864,6 @@ def test_large_multi_module_branch_uses_shared_self_link_contract(
     assert args[4] == ()
     assert args[-1] == {
         "extra_link_args": ("-Wl,-map,map.txt",),
-        "needs_libpython": False,
             "needs_native_extension_exports": False,
             "pcc_asm_inputs": (),
             "pcc_native_object_inputs": (),
@@ -926,7 +915,6 @@ def test_pcc_mode_marks_multi_object_output_as_already_signed(
         str(tmp_path / "output"),
         None,
         False,
-        needs_libpython=False,
         tmp=str(tmp_path),
         profile=None,
     )
@@ -981,7 +969,6 @@ def test_linux_pcc_link_routes_internal_assembly_without_system_assembler(
         str(tmp_path / "output"),
         None,
         False,
-        needs_libpython=False,
         tmp=str(tmp_path),
         profile=None,
     )
@@ -1024,7 +1011,6 @@ def test_pcc_owned_signature_is_published_without_external_codesign(
 @pytest.mark.parametrize(
     ("options", "message"),
     [
-        ({"needs_libpython": True}, "libpython link surface"),
         (
             {"needs_native_extension_exports": True},
             "require a verified runtime archive",

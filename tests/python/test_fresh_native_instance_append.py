@@ -75,7 +75,7 @@ main(sys.argv[1])
 ''')
     binary = tmp_path / "append_root_join"
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+    python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary), str(payload)], env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"), capture_output=True, text=True, timeout=20)
         assert result.returncode == 0 and result.stdout == "APPEND_WITH_ROOT_JOIN_OK\n" and result.stderr == "", (backend, result.returncode, result.stdout, result.stderr)
@@ -345,7 +345,6 @@ def test_fresh_instance_append_preserves_identity_finalizer_and_weakref_all_gcs(
             str(source),
             str(executable),
             backend="self",
-            libpython_mode="off",
             ir_scaffold_mode="on",
         )
         for backend in range(5):

@@ -133,7 +133,7 @@ def _compile(paths, output, **options):
     compile_python_multi(
         paths, str(output), entry_module='consumer',
         module_names=['consumer', 'provider'], backend='self',
-        libpython_mode='off', ir_scaffold_mode='on', recursive_stdlib=False,
+        ir_scaffold_mode='on', recursive_stdlib=False,
         target_triple=host_target_triple(), **options,
     )
     return ('pcc1-routed' if compile_python_multi.__module__ == 'tests.pcc1_route'

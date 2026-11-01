@@ -300,7 +300,7 @@ def test_production_packed_builder_executes_with_native_arenas_under_all_collect
     receipt_path = tmp_path / "native_packed_stackmaps.receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()

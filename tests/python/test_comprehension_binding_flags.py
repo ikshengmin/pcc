@@ -139,7 +139,7 @@ def test_comprehension_binding_flags_native(
     assert reference.returncode == 0, reference.stderr
     assert reference.stdout == expected
     python_program_compiler(str(path), str(output), backend='self',
-                            libpython_mode='off', ir_scaffold_mode='on',
+                            ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True,

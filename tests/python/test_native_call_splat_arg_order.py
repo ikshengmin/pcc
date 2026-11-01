@@ -12,7 +12,7 @@ Fix (frontend): _expand_direct_call_unpacks now records how many plain
 positionals precede the splat (``star_prefix_count``) and splices the splat
 expansion back in at that index instead of appending it.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 Also unit-tests the resolver directly so the ordering is pinned even when no
 current pcc1/self-backend toolchain is available.
 """
@@ -127,7 +127,6 @@ def _run(tmp_path, source):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

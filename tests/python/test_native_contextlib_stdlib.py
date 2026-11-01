@@ -27,7 +27,6 @@ def test_nullcontext_import_and_enter_result_no_libpython(tmp_path):
         str(executable),
         entry_module="main",
         module_names=["main", "contextlib"],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -71,7 +70,6 @@ def test_dynamic_cross_module_context_manager_no_libpython(tmp_path):
         str(executable),
         entry_module="main",
         module_names=["main", "provider"],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

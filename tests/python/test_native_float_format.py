@@ -4,10 +4,10 @@
 only `,`, `.precision`, and a bare `f`/`e` type — it raised
 ``ValueError: unsupported format specifier`` on ANY width/align/sign/zero-pad,
 so the extremely common ``f"{x:8.3f}"`` / ``f"{x:>10.2f}"`` / ``f"{x:08.2f}"``
-specs failed at runtime under ``--python-libpython=off``. The formatter now
+specs failed at runtime under the native pipeline. The formatter now
 mirrors ``format_int_builtin``'s align/sign/zero-pad/width handling.
 
-These tests COMPILE + RUN under ``--backend self --python-libpython=off`` (which
+These tests COMPILE + RUN under ``--backend self`` (which
 hard-errors on any residual ``py_cpy_*`` fallback) and assert the exact output,
 so a green run proves the float formatter is native and matches CPython.
 """
@@ -28,8 +28,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

@@ -50,7 +50,7 @@ def test_owned_cache_provider_matches_cpython(tmp_path, pcc_runtime_archive):
     binary = tmp_path / "cache_values"
     compile_python(
         str(source), str(binary), backend="self",
-        libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,

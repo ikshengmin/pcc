@@ -23,7 +23,6 @@ def _write_manifest(tmp_path, assigned=(0, 1, 2), skipped=(0, 2), **overrides):
     options = {
         "entry_module": "pkg.a",
         "sibling_inits": ("pkg.b", "pkg.c"),
-        "libpython_mode": "off",
         "ir_scaffold_mode": "on",
         "verbose": False,
         "checkpoint_root": str(tmp_path / "checkpoint"),
@@ -296,7 +295,7 @@ def test_scheduler_preserves_full_chunk_when_only_one_module_remains(tmp_path, m
     result = parallel.compile_parallel_uncached(
         sources, ["pkg.a", "pkg.b", "pkg.c"], jobs=1,
         entry_module="pkg.a", sibling_inits=("pkg.b", "pkg.c"),
-        libpython_mode="off", ir_scaffold_mode="on", verbose=False,
+        ir_scaffold_mode="on", verbose=False,
         artifact_dir=str(artifact_dir), can_spawn_worker=lambda: True,
         worker_command_prefix=lambda: ["python", "-m", "pcc"],
         chunk_count_for_workers=lambda *_args: 1,

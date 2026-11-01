@@ -249,7 +249,7 @@ def probe(seed: i64) -> i64:
     return seed + value
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   python_library=True, libpython_mode="off", backend="self")
+                   python_library=True, backend="self")
     text = output.read_text()
     body = _function(text, "carrier_c_control")
     assert re.search(r"@carrier_c_control\(i64 %seed, \.\.\.\)", body)

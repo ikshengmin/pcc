@@ -25,7 +25,6 @@ def _compile_to_ll(
     name: str,
     *,
     mode: str,
-    libpython_mode: str = "off",
 ) -> str:
     from pcc.frontends.python.pipeline import compile_python
 
@@ -36,7 +35,6 @@ def _compile_to_ll(
         str(src), str(out),
         emit_llvm_only=True,
         ir_scaffold_mode=mode,
-        libpython_mode=libpython_mode,
     )
     return out.read_text(encoding="utf-8")
 
@@ -104,10 +102,9 @@ def test_print_with_literal_flush_kwarg_dispatches_natively(mode):
     assert "cpy.builtin.print" not in body, body
 
 
-@pytest.mark.parametrize("libpython_mode", ["auto", "off"])
-def test_print_with_dynamic_flush_kwarg_writes_through_the_stream(libpython_mode):
+def test_print_with_dynamic_flush_kwarg_writes_through_the_stream():
     # A non-literal flush= used to need CPython's print (and was stubbed out
-    # under --python-libpython=off).  It now lowers natively: the stream is a
+    # in the native pipeline).  It now lowers natively: the stream is a
     # file object and py_print_to_file writes through it, calling flush()
     # when the flag is true.
     program = textwrap.dedent(
@@ -120,9 +117,8 @@ def test_print_with_dynamic_flush_kwarg_writes_through_the_stream(libpython_mode
     )
     ir = _compile_to_ll(
         program,
-        f"pflush_dynamic_{libpython_mode}",
+        "pflush_dynamic",
         mode="off",
-        libpython_mode=libpython_mode,
     )
     body = _function_body(ir, "f")
     assert body is not None

@@ -147,7 +147,7 @@ def test_fixed_call_arguments_native_all_gc(tmp_path, threaded_pcc_runtime_archi
     source = tmp_path / "fixed_call.py"
     source.write_text(program)
     binary = source.with_suffix("")
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
+    compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_MINOR_ALLOC_MAX="4096", PATH="/nonexistent"))
@@ -191,7 +191,7 @@ main()
     target = host_target_triple()
     original = tmp_path / "original.ll"
     compile_python(str(source), str(original), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on", target_triple=target)
+                   ir_scaffold_mode="on", target_triple=target)
     text = original.read_text()
     function = re.search(r"^define [^\n]*@user_forced_tuple_oom_probe\([^\n]*\).*?^}", text, re.M | re.S)
     assert function is not None
@@ -220,7 +220,7 @@ main()
     failure_object.write_bytes(emit_owned_object(helper, target))
     binary = tmp_path / "forced_tuple_oom"
     _run_self_link_command(["/usr/bin/false"], None, binary, threaded_pcc_runtime_archive,
-                           (str(program_object), str(failure_object)), False, needs_libpython=False)
+                           (str(program_object), str(failure_object)), False)
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent"))

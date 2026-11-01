@@ -62,7 +62,7 @@ def _compile(tmp_path, name, text, compiler, archive):
     source.write_text(text, encoding="utf-8")
     binary = tmp_path / name
     compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(archive),
     )
     return binary

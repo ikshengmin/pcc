@@ -109,8 +109,7 @@ def test_cleanup_cache_fields_have_matching_host_export_and_ir_slots(tmp_path):
         assert layout.index(field) == exported.index(field) == inferred.index(field)
 
     counts = compile_contextual_per_module_fallback_counts(
-        paths, names, [mixin_name], ir_scaffold_mode="on",
-        strict_no_libpython=True, emit_ir_dir=str(tmp_path),
+        paths, names, [mixin_name], ir_scaffold_mode="on", emit_ir_dir=str(tmp_path),
     )
     assert counts == {mixin_name: 0}
     text = (tmp_path / (mixin_name.replace(".", "_") + ".ll")).read_text()

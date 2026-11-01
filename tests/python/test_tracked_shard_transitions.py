@@ -154,7 +154,7 @@ def test_python_snapshots_and_resurrection(tmp_path, threaded_pcc_runtime_archiv
     source = tmp_path / "tracked_snapshots.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "tracked_snapshots"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     _execute_matrix(binary, tmp_path, "python", lambda backend, workers:
                     f"TRACKED_SHARDS_PY_OK {backend} {workers}\n")

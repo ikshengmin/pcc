@@ -44,7 +44,6 @@ def _compile_with_pcc1(pcc1: Path, site: Path, source: Path, exe: Path) -> None:
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

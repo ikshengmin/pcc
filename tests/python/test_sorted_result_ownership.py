@@ -42,7 +42,7 @@ main()
 '''.replace("FAIL", str(fail_iteration)))
     binary = tmp_path / "sorted_plain_input"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -107,7 +107,7 @@ main()
 '''.replace("SETUP", setup).replace("VALUE", value))
     binary = tmp_path / "sorted_input_owner"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -161,7 +161,7 @@ main()
 '''.replace("FAIL_KEY", str(fail_key)))
     binary = tmp_path / "sorted_input_lifetime"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -210,7 +210,7 @@ def main():
 main()
 '''.replace("EXPRESSION", expression))
     binary = tmp_path / "sorted_owner"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
@@ -254,7 +254,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "sorted_custom_owner"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

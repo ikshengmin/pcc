@@ -125,7 +125,7 @@ def test_live_imported_dictionary_methods_execute_natively(tmp_path, pcc_runtime
                                text=True, timeout=20)
     assert reference.returncode == 0, reference.stderr
     output = tmp_path / "program"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=40,
                          env=dict(os.environ, PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))

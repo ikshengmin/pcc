@@ -137,7 +137,6 @@ def test_container_retain_paths_match_cpython(tmp_path, backend, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(
@@ -176,7 +175,6 @@ def test_container_retain_paths_c_mirror(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     native = subprocess.run(

@@ -32,7 +32,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     object_source = llvm_ir
@@ -110,7 +109,6 @@ def test_thread_local_global_intrinsics_emit_tls_and_isolate_threads(
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -192,7 +190,6 @@ def test_unsigned_greater_i64_compares_raw_u64_bit_patterns(tmp_path: Path) -> N
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     build = subprocess.run(

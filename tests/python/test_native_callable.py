@@ -2,13 +2,13 @@
 
 ``callable`` was listed in the frontend's builtin name-allowlist but had no
 direct-call lowering, so ``callable(x)`` hit the CPython fallback and was
-rejected under ``--python-libpython=off``. It is now lowered to the runtime
+rejected under the native pipeline. It is now lowered to the runtime
 helper ``py_builtin_callable`` (py_dunder.c + py_dunder.py port), which mirrors
 ``py_obj_call``'s dispatch classification: functions, classes and weakrefs are
 callable, an instance is callable iff its class defines ``__call__``, and every
 other object (tagged int, str, list, tuple, None, float) is not.
 
-Compiles + runs under ``--backend self --python-libpython=off`` and asserts the
+Compiles + runs under ``--backend self`` and asserts the
 exact CPython-matching output.
 """
 from __future__ import annotations
@@ -28,8 +28,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # in both py_dunder.c and py_dunder.py.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=300, env=env,
     )

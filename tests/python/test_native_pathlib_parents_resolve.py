@@ -48,7 +48,7 @@ def test_parents_and_resolve_match_cpython(tmp_path):
     src = tmp_path / "pathlib_parents.py"
     exe = tmp_path / "pathlib_parents.out"
     src.write_text(_SOURCE, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )
@@ -90,7 +90,7 @@ main()
 ''',
         encoding="utf-8",
     )
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     workdir = tmp_path / "work"
     workdir.mkdir()
     run = subprocess.run(
@@ -171,7 +171,7 @@ def test_resolve_does_not_follow_symlinks(tmp_path):
         "main()\n",
         encoding="utf-8",
     )
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe), str(link)],
         text=True,

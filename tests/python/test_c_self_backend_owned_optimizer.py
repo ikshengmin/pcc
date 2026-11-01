@@ -58,14 +58,14 @@ def test_prepare_self_backend_units_runs_the_owned_default_tier(monkeypatch):
 
     original = owned.run_owned_passes
 
-    def _traced(text, names, strict_no_libpython):
-        calls.append((tuple(names), strict_no_libpython))
-        return original(text, names, strict_no_libpython)
+    def _traced(text, names):
+        calls.append(tuple(names))
+        return original(text, names)
 
     monkeypatch.setattr(owned, "run_owned_passes", _traced)
     evaluator._prepare_self_backend_units(_units(), optimize=2)
 
-    assert calls == [(tuple(PYTHON_IR_PASS_DEFAULT_TIER), False)]
+    assert calls == [tuple(PYTHON_IR_PASS_DEFAULT_TIER)]
 
 
 def test_mem2reg_actually_ran_on_the_c_unit():

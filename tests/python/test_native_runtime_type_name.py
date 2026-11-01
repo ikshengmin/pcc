@@ -44,7 +44,7 @@ main()
     binary = tmp_path / 'type_name_entry'
     compile_python_multi([str(owner), str(source)], str(binary),
                          module_names=['type_names', 'type_name_entry'], entry_module='type_name_entry',
-                         backend='self', libpython_mode='off', runtime_archive=str(pcc_runtime_archive))
+                         backend='self', runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))

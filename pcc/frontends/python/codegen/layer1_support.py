@@ -1125,7 +1125,6 @@ def _populate_static_native_exports_3(out):
                 ("str",),
                 ("dyn",),
                 ("str",),
-                ("str",),
             ),
             (
                 _export_arg("src_paths", ("dyn",)),
@@ -1135,7 +1134,6 @@ def _populate_static_native_exports_3(out):
                 _export_arg("host_python", ("str",)),
                 _export_arg("entry_module", ("str",)),
                 _export_arg("sibling_inits", ("dyn",)),
-                _export_arg("libpython_mode", ("str",)),
                 _export_arg("ir_scaffold_mode", ("str",)),
             ),
         ),
@@ -1186,7 +1184,6 @@ def _populate_static_native_exports_4(out):
                 ("dyn",),
                 ("dyn",),
                 ("dyn",),
-                ("dyn",),
             ),
             (
                 _export_arg("src_path", ("str",)),
@@ -1194,7 +1191,6 @@ def _populate_static_native_exports_4(out):
                 _export_arg("", kind="kw_only"),
                 _export_arg("verbose", ("dyn",), has_default=True),
                 _export_arg("emit_llvm_only", ("dyn",), has_default=True),
-                _export_arg("libpython_mode", ("dyn",), has_default=True),
                 _export_arg("ir_scaffold_mode", ("dyn",), has_default=True),
                 _export_arg("backend", ("dyn",), has_default=True),
                 _export_arg("recursive_stdlib", ("dyn",), has_default=True),
@@ -2050,12 +2046,10 @@ def _populate_owned_optimizer_exports(out):
             (_export_arg("lines", text_list),),
         ),
         "run_compiled_default_tier": _native_function_object_export(
-            owner, "run_compiled_default_tier", text, (text, text_list, flag),
+            owner, "run_compiled_default_tier", text, (text, text_list),
             (
                 _export_arg("ir_text", text),
                 _export_arg("pass_names", text_list),
-                _export_arg("", kind="kw_only"),
-                _export_arg("strict_no_libpython", flag, kind="kw_only"),
             ),
             docstring='Run the exact self-hosted tier, leaving unsupported IR unchanged.',
         ),

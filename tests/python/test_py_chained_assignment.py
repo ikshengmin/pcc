@@ -20,7 +20,7 @@ def test_class_chained_assignment_initializes_all_aliases(tmp_path):
         )
     , encoding="utf-8")
     exe = tmp_path / "class_chained_assignment.out"
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     out = subprocess.check_output([str(exe)], text=True).splitlines()
     assert out == ["7", "7", "7"]
 
@@ -104,7 +104,7 @@ def test_chain_evaluates_rhs_once_and_stores_targets_in_order(
     output = tmp_path / 'chained_targets'
     source.write_text(CHAIN_PROGRAM, encoding='utf-8')
     python_program_compiler(
-        str(source), str(output), backend='self', libpython_mode='off',
+        str(source), str(output), backend='self',
         runtime_archive=str(pcc_runtime_archive),
     )
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)

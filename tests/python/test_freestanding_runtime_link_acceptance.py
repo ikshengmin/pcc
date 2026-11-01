@@ -229,7 +229,6 @@ def test_darwin_python_runtime_final_link_has_only_documented_libsystem_boundary
             "run",
             "pcc",
             "--backend=self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             "--link-arg=-Wl,-map," + str(link_map),
             str(source),

@@ -70,7 +70,7 @@ def _emit(tmp_path, monkeypatch, shape, first_entry, target):
     source.write_text(PROGRAMS[shape])
     compile_python(
         str(source), str(output), emit_llvm_only=True, python_library=True,
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
         target_triple=target,
     )
     return output.read_text()

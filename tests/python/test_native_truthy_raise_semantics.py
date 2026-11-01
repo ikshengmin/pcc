@@ -12,7 +12,7 @@ because their result feeds a checked consumer.  Condition contexts feed a
 ``cbranch`` directly, so ``if`` and ``while`` silently swallowed the exception
 and took the false branch.
 
-Runs under --backend self --python-libpython=off on both runtime tiers: the
+Runs under --backend self on both runtime tiers: the
 default tier links the pcc-Python port archive, the cc tier links the C
 sources.
 """
@@ -110,8 +110,7 @@ def test_raising_bool_and_len_propagate_from_every_truthy_context(
     env.pop("PCC_RUNTIME_CC", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=600, env=env,
     )

@@ -198,7 +198,7 @@ def test_singleton_storage_and_capi_alias_emit_the_same_object(module, tmp_path)
     source = Path(__file__).resolve().parents[2] / "pcc/runtime/py" / (module + ".py")
     output = tmp_path / (module + ".ll")
     pipeline.compile_python(str(source), str(output), emit_llvm_only=True,
-                            libpython_mode="off", python_library=True)
+                            python_library=True)
     text = output.read_text()
     assert "strict.nolib.stub:" not in text
     if module == "py_substrate":

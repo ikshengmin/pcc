@@ -42,7 +42,7 @@ def test_gc4_store_buffer_holds_one_entry_per_slot(tmp_path: Path, pcc_runtime_a
     source = tmp_path / "slot_dedupe.py"
     source.write_text(PROGRAM, encoding="utf-8")
     binary = tmp_path / "slot_dedupe"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND="4"),
                          capture_output=True, text=True, timeout=120)

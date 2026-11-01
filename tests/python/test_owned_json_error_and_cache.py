@@ -46,7 +46,7 @@ main()
     compile_python_multi(
         [str(provider), str(source)], str(binary),
         module_names=["owned_json", "json_errors"], entry_module="json_errors",
-        backend="self", libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        backend="self", runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         result = subprocess.run(

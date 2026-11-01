@@ -418,7 +418,7 @@ def test_host_frontend_native_callback_context(tmp_path, monkeypatch, backend, c
                     "_backend = extern('pcc_gc_backend', (), c_int64)\n"
                     "assert _threads() == 1\n"
                     "assert _backend() == " + str(backend) + "\n" + source)
-    compile_python(str(path), str(binary), backend='self', libpython_mode='off',
+    compile_python(str(path), str(binary), backend='self',
                    runtime_archive=str(archive))
     _run(binary, archive, backend, expected)
 
@@ -440,7 +440,7 @@ def test_native_compiler_callback_context(tmp_path, backend, case):
                     "_backend = extern('pcc_gc_backend', (), c_int64)\n"
                     "assert _threads() == 1\n"
                     "assert _backend() == " + str(backend) + "\n" + source)
-    built = subprocess.run([str(compiler), '--backend', 'self', '--python-libpython', 'off',
+    built = subprocess.run([str(compiler), '--backend', 'self',
                             str(path), '-o', str(binary)], env=_environment(archive, 0),
                            capture_output=True, text=True, timeout=90)
     assert built.returncode == 0, built.stdout + built.stderr
@@ -521,7 +521,7 @@ def test_callable_roles_in_actual_threaded_ir(tmp_path, monkeypatch, case):
     path.write_text(program)
     output = tmp_path / (case + '.ll')
     compile_python(str(path), str(output), emit_llvm_only=True, python_library=True,
-                   backend='self', libpython_mode='off', target_triple='arm64-apple-darwin')
+                   backend='self', target_triple='arm64-apple-darwin')
     text = output.read_text()
     suffix = '_Gate_choose_method_native_adapter' if case == 'factory' else '_target_'
     records = _callable_role_records(text, suffix)
@@ -571,7 +571,7 @@ def test_all_direct_method_adapter_roles(tmp_path, monkeypatch):
     path.write_text(METHOD_ROLE_SOURCE)
     output = tmp_path / 'method_roles.ll'
     compile_python(str(path), str(output), emit_llvm_only=True, python_library=True,
-                   backend='self', libpython_mode='off', target_triple='arm64-apple-darwin')
+                   backend='self', target_triple='arm64-apple-darwin')
     text = output.read_text()
     for suffix in ('Worker_expose', 'expose_class', 'expose_unbound'):
         body = re.search(r'^define[^\n]*@[^\n ]*' + suffix + r'\([^\n]*\)[^\n]*\{\n(.*?)^\}', text, re.M | re.S)
@@ -594,4 +594,4 @@ def test_direct_parking_constructor_keeps_explicit_rejection(tmp_path, monkeypat
     path.write_text(UNSUPPORTED_PARKING_DUNDER_SOURCE)
     with pytest.raises(Exception, match='implicit descriptor/dunder may_park dispatch is unsupported'):
         compile_python(str(path), str(tmp_path / 'rejected.ll'), emit_llvm_only=True,
-                       backend='self', libpython_mode='off', target_triple='arm64-apple-darwin')
+                       backend='self', target_triple='arm64-apple-darwin')

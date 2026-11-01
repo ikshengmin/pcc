@@ -63,7 +63,7 @@ def test_raw_field_native_five_gc(python_program_compiler, explicit_owned_runtim
     source = tmp_path / "program.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "program.out"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime))
     assert binary.read_bytes()[:4] == b"\x7fELF" or binary.read_bytes()[:4] in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe") or binary.read_bytes()[:2] == b"MZ"
     rows = []

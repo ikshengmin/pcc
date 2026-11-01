@@ -63,7 +63,6 @@ def test_next_exception_propagates_through_list_sum_comprehension(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

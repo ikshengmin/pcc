@@ -34,7 +34,7 @@ def items_loop_programs(tmp_path_factory):
         path.write_text(source, encoding="utf-8")
         executable = work / (name + ".out")
         compile_python(str(path), str(executable), backend="self",
-                       ir_scaffold_mode="on", libpython_mode="off")
+                       ir_scaffold_mode="on")
         built[name] = (executable, expected)
     return built
 

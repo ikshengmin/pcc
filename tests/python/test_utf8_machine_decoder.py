@@ -170,7 +170,7 @@ def test_managed_encoding_bytes_and_exception_payload_all_gc(tmp_path, threaded_
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=20)
     assert reference.returncode == 0 and reference.stderr == "" and reference.stdout == "UTF8_ENCODING_CONTRACT_OK\n"
     binary = source.with_suffix("")
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

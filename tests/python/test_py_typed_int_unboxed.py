@@ -20,7 +20,6 @@ def _compile_to_ll(tmp_path: Path, source: str, name: str) -> str:
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
     )
     return out.read_text(encoding="utf-8")
 
@@ -687,7 +686,6 @@ def test_exact_int_branch_and_zero_iteration_runtime_behavior(
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -937,7 +935,6 @@ def test_unsafe_i64_typed_list_int_loop_runs_without_libpython(tmp_path, monkeyp
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -974,7 +971,6 @@ def test_unsafe_i64_typed_list_int_loop_falls_back_for_heap_int_elements(
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -1052,7 +1048,6 @@ def test_unsafe_i64_typed_float_loop_runs_without_libpython(tmp_path, monkeypatc
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -1119,7 +1114,6 @@ def test_unsafe_i64_typed_int_unboxed_loop_runs_without_libpython(
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     expected = str(sum((i % 7) + (i // 13) for i in range(10000))) + "\n"
@@ -1205,7 +1199,6 @@ def test_typed_int_direct_call_defaults_to_boxed_tagged_shape_and_runs(tmp_path)
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -1262,7 +1255,6 @@ def test_for_range_raw_lane_reboxes_before_dyn_and_typed_calls(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -1295,7 +1287,6 @@ def test_tagged_int_mul_fast_path_runs_without_libpython(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -1332,7 +1323,6 @@ def test_unsafe_i64_typed_int_direct_call_uses_low_ir_and_runs_without_libpython
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

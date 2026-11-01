@@ -517,7 +517,7 @@ def test_generator_method_owned_result_ir(tmp_path, monkeypatch, target):
     source.write_text(PROGRAM)
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self", target_triple=target)
+                   ir_scaffold_mode="on", backend="self", target_triple=target)
     text = output.read_text()
     module = verify_ir_text(text)
     for name, symbol, mode in (

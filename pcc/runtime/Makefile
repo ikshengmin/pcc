@@ -9,9 +9,6 @@
 #
 # Usage:
 #   make                                   - build libpy_runtime_pcc_py.a
-#   make libpy_runtime_pcc_py_libpython.a  - add the CPython bridge object
-#                                            (src/py_libpython.c) for
-#                                            --python-libpython builds
 #   make clean                             - remove objects + archives
 
 .DEFAULT_GOAL := all
@@ -63,7 +60,6 @@ CFLAGS   += -pthread
 SRCDIR       = src
 PYDIR        = py
 OBJDIR_PY    = build_py
-OBJDIR_LIBPY = build_libpython
 
 # Runtime modules under py/ that use the managed object model.
 PY_MODULES = py_cleanup_runtime py_file_lock py_tuple py_tuple_slice py_obj_stubs py_exc_tls py_exc_objects py_exc_match py_exc_table py_exc_traceback py_obj_gc py_gc_telemetry py_gc_backend py_set py_os_env py_os_system py_os_path py_os_substrate py_process py_process_substrate py_process_timeout py_print_sys py_print_fmt py_format_runtime py_obj py_obj_dealloc py_dict py_list py_list_set_slice py_iter py_gen py_coroutine py_context_runtime py_call_splat_runtime py_module_attrs_runtime py_compiled_module_runtime py_dlpack_runtime py_runtime_log py_json_runtime py_pickle_copy_runtime py_protocol_runtime py_extension_loader_runtime py_hash_runtime py_http_runtime py_asyncio_io_runtime py_re_engine_runtime py_re_bridge_entry py_re_match_runtime py_re_match_class freestanding_io_waitset py_func py_re py_dunder py_weakref py_file py_threading py_class py_obj_ops_dispatch py_obj_ops_slice py_obj_ops_set_slice py_obj_ops_mod py_obj_ops_compare py_str py_str_accessors py_str_slice py_int_core py_int_decimal py_int_shift py_int_bitwise py_int_addsub py_int_mul py_int_bigint_pow py_int_ops py_int py_int_parse py_int_convert py_int_bigint_convert py_substrate
@@ -101,7 +97,6 @@ PCC_PY_OBJECTS = $(patsubst %,$(OBJDIR_PY)/%.o,$(PCC_RUNTIME_MODULES))
 PCC_PY_RECEIPTS = $(addsuffix .provenance.json,$(PCC_PY_OBJECTS))
 
 LIB_PCC_PY = libpy_runtime_pcc_py.a
-LIB_PCC_PY_LIBPYTHON = libpy_runtime_pcc_py_libpython.a
 PCC_RUNTIME_ARCHIVE_LOCK_HELD ?= 0
 PCC_RUNTIME_ARCHIVE_LOCK_MAX_WAITS ?= 3000
 PCC_RUNTIME_ARCHIVE_LOCK_OWNER_GRACE_WAITS ?= 50
@@ -211,35 +206,6 @@ $(LIB_PCC_PY): $(PCC_PY_OBJECTS) $(PCC_PY_RECEIPTS)
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.tools.runtime_archive_provenance stamp-target --archive "$@"
 endif
 
-# Compatibility fallback archive for bootstrap builds that still emit
-# py_cpy_* calls. It keeps the pcc-Python runtime replacement archive
-# as the base and adds only the CPython bridge object.
-# Preserve pcc-native C-API objects for internal object-model semantics.  The
-# final link makes their public Py*/_Py* symbols non-exported so a dlopen'd
-# CPython extension resolves those names from libpython instead.  The
-# pcc-native extension loader is a distinct ABI and is replaced by the
-# bridge's fail-closed entrypoints in this mixed-object-model archive.
-$(LIB_PCC_PY_LIBPYTHON): $(LIB_PCC_PY) $(OBJDIR_LIBPY)/py_libpython.o
-	@set -eu; \
-	rm -f "$@.tmp" "$@.capi_syms.nm.tmp" "$@.capi_syms.tmp" "$@.capi_syms"; \
-	cp $(LIB_PCC_PY) "$@.tmp"; \
-	$(AR) d "$@.tmp" py_extension_loader_runtime.o; \
-	$(AR) r "$@.tmp" $(OBJDIR_LIBPY)/py_libpython.o; \
-	$(RANLIB) "$@.tmp"; \
-	$(NM) -g "$@.tmp" > "$@.capi_syms.nm.tmp" 2>/dev/null; \
-	awk '$$2!="U" && $$2 ~ /^[A-Z]$$/ && ($$3 ~ /^_?Py/ || $$3 ~ /^_?_Py/) {print $$3}' "$@.capi_syms.nm.tmp" | LC_ALL=C sort -u > "$@.capi_syms.tmp"; \
-	test -s "$@.capi_syms.nm.tmp"; \
-	test -s "$@.capi_syms.tmp"; \
-	rm -f "$@.capi_syms.nm.tmp"; \
-	mv -f "$@.tmp" "$@"; \
-	mv -f "$@.capi_syms.tmp" "$@.capi_syms"
-
-$(OBJDIR_LIBPY)/py_libpython.o: $(SRCDIR)/py_libpython.c $(RUNTIME_HEADERS) | $(OBJDIR_LIBPY)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DPCC_WITH_LIBPYTHON=1 $(shell python3-config --includes) $(INCLUDES) -c $< -o $@
-
-$(OBJDIR_LIBPY):
-	mkdir -p $(OBJDIR_LIBPY)
-
 # Recompile a pcc-Python runtime module when that module changes. The archive
 # target already tracks additions/removals through OBJS_PY/FREESTANDING_OBJS_PY;
 # making every object depend on the entire Makefile turned any helper-list edit
@@ -332,10 +298,8 @@ $(OBJDIR_PY):
 	mkdir -p $(OBJDIR_PY)
 
 clean:
-	rm -rf $(OBJDIR_PY) $(OBJDIR_LIBPY) \
+	rm -rf $(OBJDIR_PY) \
 		$(LIB_PCC_PY) $(LIB_PCC_PY).capi_syms $(LIB_PCC_PY).provenance.json \
-		$(LIB_PCC_PY).target \
-		$(LIB_PCC_PY_LIBPYTHON) $(LIB_PCC_PY_LIBPYTHON).capi_syms \
-		$(LIB_PCC_PY_LIBPYTHON).target
+		$(LIB_PCC_PY).target
 
 distclean: clean

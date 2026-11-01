@@ -7,12 +7,12 @@ from pcc.frontends.python import pipeline_modes as modes
 
 NAMES = modes.DIRECT_INDEXED_ROUTE_ENV
 BASE = dict(backend=None, emit_llvm_only=False, python_library=False,
-            target_triple=None, gpu_backend=None, libpython_mode=None)
+            target_triple=None, gpu_backend=None)
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for name in NAMES + ("PCC_PYTHON_IR_PASSES", "PCC_BACKEND", "PCC_GPU_BACKEND", "PCC_PYTHON_LIBPYTHON"):
+    for name in NAMES + ("PCC_PYTHON_IR_PASSES", "PCC_BACKEND", "PCC_GPU_BACKEND"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
 
@@ -28,7 +28,6 @@ def test_host_executable_selects_and_restores_the_direct_route():
 @pytest.mark.parametrize("change", [
     {"emit_llvm_only": True}, {"python_library": True},
     {"target_triple": "x86_64-unknown-linux-gnu"}, {"gpu_backend": "metal"},
-    {"libpython_mode": "on"}, {"libpython_mode": "auto"},
 ])
 def test_text_outputs_and_other_modes_keep_the_text_route(change):
     assert modes.select_direct_indexed_route(**dict(BASE, **change)) == []

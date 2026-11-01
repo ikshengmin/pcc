@@ -108,12 +108,7 @@ _resolve_native_backend = _pipeline_modes.resolve_native_backend
 _select_direct_indexed_route = _pipeline_modes.select_direct_indexed_route
 _restore_direct_indexed_route = _pipeline_modes.restore_direct_indexed_route
 _native_backend_kind = _pipeline_modes.native_backend_kind
-_resolve_libpython_mode = _pipeline_modes.resolve_libpython_mode
 _resolve_ir_scaffold_mode = _pipeline_modes.resolve_ir_scaffold_mode
-_finalize_libpython_mode = _pipeline_modes.finalize_libpython_mode
-_reject_mixed_extension_object_models = (
-    _pipeline_modes.reject_mixed_extension_object_models
-)
 _normalize_gpu_backend_name = _pipeline_modes.normalize_gpu_backend_name
 _resolve_gpu_backend_kind = _pipeline_modes.resolve_gpu_backend_kind
 _self_backend_publish_sync_enabled = (
@@ -179,7 +174,6 @@ _seconds_debug_text = _pipeline_pass_config.seconds_debug_text
 _python_ir_pass_timeout_seconds = (
     _pipeline_pass_config.python_ir_pass_timeout_seconds
 )
-_python_ir_pass_strict_arg = _pipeline_pass_config.python_ir_pass_strict_arg
 _python_ir_pass_batch_size_summary = (
     _pipeline_pass_config.python_ir_pass_batch_size_summary
 )
@@ -307,13 +301,6 @@ _PY_RUNTIME_ARCHIVE_PCC_PY = str(
         "libpy_runtime_pcc_py.a",
     )
 )
-_PY_RUNTIME_ARCHIVE_PCC_PY_LIBPYTHON = str(
-    os.path.join(
-        _PY_RUNTIME_DIR,
-        "libpy_runtime_pcc_py_libpython.a",
-    )
-)
-_PY_LIBPYTHON_MODE_ENV = _pipeline_modes.PY_LIBPYTHON_MODE_ENV
 _IR_SCAFFOLD_MODE_ENV = _pipeline_modes.IR_SCAFFOLD_MODE_ENV
 _PYTHON_IR_PASSES_ENV = _pipeline_pass_config.PYTHON_IR_PASSES_ENV
 _PYTHON_IR_PASS_TRANSPORT_ENV = (
@@ -321,7 +308,6 @@ _PYTHON_IR_PASS_TRANSPORT_ENV = (
 )
 _PYTHON_IR_PASS_JOBS_ENV = _pipeline_pass_config.PYTHON_IR_PASS_JOBS_ENV
 _PYTHON_IR_PASS_TIMEOUT_ENV = _pipeline_pass_config.PYTHON_IR_PASS_TIMEOUT_ENV
-_PYTHON_IR_PASS_STRICT_NO_LIBPYTHON_ENV = "PCC_PYTHON_IR_PASS_STRICT_NO_LIBPYTHON"
 _PYTHON_IR_PASS_SPLIT_LARGE_MODULES_ENV = (
     _pipeline_pass_config.PYTHON_IR_PASS_SPLIT_LARGE_MODULES_ENV
 )
@@ -429,7 +415,7 @@ def _log(verbose: bool, msg: str) -> None:
 
 
 _NATIVE_EXTENSION_SUFFIXES = _pipeline_packages.NATIVE_EXTENSION_SUFFIXES
-_validate_package_site_no_libpython_abi = _pipeline_dependency_closure._validate_package_site_no_libpython_abi
+_validate_package_site_native_abi = _pipeline_dependency_closure._validate_package_site_native_abi
 _top_level_import_targets = _pipeline_dependency_closure._top_level_import_targets
 
 _source_module_scope_lines = _pipeline_import_scan._source_module_scope_lines
@@ -662,8 +648,6 @@ def _runtime_archive_stale(archive: str) -> bool:
     return _pipeline_runtime_archive.archive_stale(
         archive,
         runtime_dir=_PY_RUNTIME_DIR,
-        base_pcc_py_archive=_PY_RUNTIME_ARCHIVE_PCC_PY,
-        c_bundle_valid=_runtime_archive_c_bundle_valid,
         target_matches=_runtime_archive_target_matches,
         archive_requires_provenance=_runtime_archive_requires_provenance,
         archive_provenance_valid=_runtime_archive_provenance_valid,
@@ -707,17 +691,6 @@ def _runtime_archive_capi_inventory(archive: str) -> str:
 
 def _runtime_archive_requires_provenance(archive: str) -> bool:
     return _pipeline_runtime_archive.requires_provenance(archive)
-
-
-def _runtime_archive_requires_c_bundle_validation(archive: str) -> bool:
-    return _pipeline_runtime_archive.requires_c_bundle_validation(archive)
-
-
-def _runtime_archive_c_bundle_valid(archive: str) -> bool:
-    return _pipeline_runtime_archive.c_bundle_valid(
-        archive,
-        host_python_command=_host_python_command,
-    )
 
 
 def _runtime_archive_provenance_root(archive: str) -> str:
@@ -788,18 +761,14 @@ def _runtime_host_python_for_make() -> str:
 def _ensure_runtime(
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     target_triple: Optional[str] = None,
 ) -> str:
     try:
         return _pipeline_runtime_archive.ensure_runtime(
             verbose,
-            needs_libpython=needs_libpython,
             runtime_dir_default=_PY_RUNTIME_DIR,
             archive_pcc_py=_PY_RUNTIME_ARCHIVE_PCC_PY,
-            archive_pcc_py_libpython=_PY_RUNTIME_ARCHIVE_PCC_PY_LIBPYTHON,
             archive_stale_check=_runtime_archive_stale,
-            c_bundle_valid=_runtime_archive_c_bundle_valid,
             archive_requires_provenance=_runtime_archive_requires_provenance,
             archive_provenance_valid=_runtime_archive_provenance_valid,
             archive_codegen_stale=_runtime_archive_codegen_stale,
@@ -819,8 +788,7 @@ def _ensure_runtime(
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
 
-def _explicit_runtime_archive(runtime_archive: str, *, needs_libpython: bool = False,
-                              target_triple: Optional[str] = None) -> str:
+def _explicit_runtime_archive(runtime_archive: str, *, target_triple: Optional[str] = None) -> str:
     """Apply the same owned target/configuration checks to the public argument."""
     host_target = _pipeline_targets.host_target_triple()
     target = target_triple or host_target
@@ -829,8 +797,6 @@ def _explicit_runtime_archive(runtime_archive: str, *, needs_libpython: bool = F
     except _pipeline_runtime_archive.RuntimeArchiveError as exc:
         raise PyPipelineError(str(exc)) from exc
     if mode == "owned":
-        if needs_libpython:
-            raise PyPipelineError("owned platform runtime does not include libpython")
         from pcc.frontends.python.owned_runtime_build import ensure_target_runtime
         try:
             return ensure_target_runtime(
@@ -844,8 +810,6 @@ def _explicit_runtime_archive(runtime_archive: str, *, needs_libpython: bool = F
         raise PyPipelineError("explicit runtime archive not found: " + archive)
     if target != host_target:
         raise PyPipelineError("runtime Make reference oracle cannot select a cross-target archive")
-    if not _runtime_archive_c_bundle_valid(archive):
-        raise PyPipelineError("explicit runtime archive has an invalid archive/inventory bundle: " + archive)
     if (_runtime_archive_requires_provenance(archive)
             and not _runtime_archive_wheel_stamp_matches(archive)
             and not _runtime_archive_provenance_valid(archive)):
@@ -869,7 +833,7 @@ def _ensure_runtime_without_direct_indexed_env(verbose: bool, *, target_triple: 
         if name in os.environ:
             saved[name] = os.environ.pop(name)
     try:
-        return _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
+        return _ensure_runtime(verbose, target_triple=target_triple)
     finally:
         for name, value in saved.items():
             os.environ[name] = value
@@ -925,7 +889,6 @@ def _apply_python_ir_pass_pipeline(
     module_name: str,
     verbose: bool = False,
     default_raw: Optional[str] = None,
-    strict_no_libpython: bool = False,
 ) -> str:
     if debug_info_requested():
         # A debug build is an unoptimized build.  Every transport in this
@@ -944,7 +907,6 @@ def _apply_python_ir_pass_pipeline(
             logger=lambda message: _log(verbose, message),
             verbose=verbose,
             default_raw=default_raw,
-            strict_no_libpython=strict_no_libpython,
         )
     except _pipeline_pass_driver.PassDriverError as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
@@ -955,7 +917,6 @@ def _apply_python_ir_pass_pipeline_many(
     *,
     verbose: bool = False,
     default_raw: Optional[str] = None,
-    strict_no_libpython: bool = False,
 ) -> list[tuple[str, str]]:
     try:
         return _pipeline_pass_driver.apply_passes_many(
@@ -966,7 +927,6 @@ def _apply_python_ir_pass_pipeline_many(
             logger=lambda message: _log(verbose, message),
             verbose=verbose,
             default_raw=default_raw,
-            strict_no_libpython=strict_no_libpython,
         )
     except _pipeline_pass_driver.PassDriverError as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
@@ -1029,20 +989,6 @@ def _verified_capi_export_anchor_symbols(
         except _pipeline_runtime_archive.RuntimeArchiveError as exc:
             raise PyPipelineError(str(exc) or type(exc).__name__) from exc
     return _capi_export_anchor_symbols(runtime_archive, require_verified_inventory=True)
-
-
-def _libpython_capi_isolation_link_flags(
-    runtime_archive: Optional[str],
-    needs_libpython: bool,
-) -> list[str]:
-    try:
-        return _pipeline_native_link.libpython_capi_isolation_link_flags(
-            runtime_archive,
-            needs_libpython,
-            anchor_symbols=_capi_export_anchor_symbols,
-        )
-    except _pipeline_native_link.NativeLinkError as exc:
-        raise PyPipelineError(str(exc) or type(exc).__name__) from exc
 
 
 def _runtime_archive_link_args_for_native_extensions(
@@ -1472,24 +1418,12 @@ _split_self_backend_large_ir_modules = (
 _platform_link_flags = _pipeline_targets.platform_link_flags
 
 
-def _libpython_link_flags() -> list[str]:
-    try:
-        return _pipeline_libpython.link_flags()
-    except _pipeline_libpython.LibpythonLinkConfigError as exc:
-        raise PyPipelineError(str(exc) or type(exc).__name__) from exc
-
-
-def _append_libpython_link_flags(cmd: list[str]) -> None:
-    cmd.extend(_libpython_link_flags())
-
-
 def _link_with_self_backend(
     ll_paths,
     out_path: str,
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -1500,7 +1434,6 @@ def _link_with_self_backend(
         out_path,
         runtime_archive,
         verbose,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_inputs=extra_link_inputs,
         extra_link_args=extra_link_args,
@@ -1536,7 +1469,6 @@ def _link_self_backend_ir_texts_run(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -1550,7 +1482,6 @@ def _link_self_backend_ir_texts_run(
             out_path,
             runtime_archive,
             verbose,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=needs_native_extension_exports,
             extra_link_inputs=extra_link_inputs,
             extra_link_args=extra_link_args,
@@ -1570,9 +1501,7 @@ def _link_self_backend_ir_texts_run(
                 _runtime_archive_link_args_for_native_extensions
             ),
             native_extension_export_flags=_native_extension_export_link_flags,
-            libpython_isolation_flags=_libpython_capi_isolation_link_flags,
             platform_link_flags=_platform_link_flags,
-            append_libpython_link_flags=_append_libpython_link_flags,
             log=_log,
             join_strings=_join_strings,
             run_self_link_command=_run_self_link_command,
@@ -1631,14 +1560,13 @@ def _default_self_link_mode() -> str:
 
 def _resolve_self_link_mode(
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_args: tuple[str, ...] = (),
 ) -> str:
     """Return the owned default or an explicit CPython reference oracle.
 
     Compatibility requirements never change the execution owner. The owned
-    surface validator reports unsupported link flags, libpython and unqualified
+    surface validator reports unsupported link flags and unqualified
     extension exports before emission. Only explicit PCC_SELF_LINK=cc selects the host
     toolchain, and native pcc1 rejects that reference route.
     """
@@ -1662,7 +1590,6 @@ def _resolve_self_link_mode(
 def _validate_pcc_self_link_surface(
     *,
     extra_link_args: tuple[str, ...] = (),
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     target_triple: Optional[str] = None,
     export_table_only: bool = False,
@@ -1673,8 +1600,7 @@ def _validate_pcc_self_link_surface(
     object inputs, and one runtime archive. Only the lower explicit link owner
     selects export_table_only: Linux x86-64 can emit a C-API table but its public
     native-extension loader is not admitted. The execution owner validates the
-    inventory and finite input surface again. Arbitrary flags and libpython remain
-    rejected
+    inventory and finite input surface again. Arbitrary flags remain rejected
     before producing temporary assembly/objects; the subprocess seam remains the
     second fail-closed boundary for direct/internal callers.
     """
@@ -1691,24 +1617,20 @@ def _validate_pcc_self_link_surface(
                 )
             _pipeline_self_link.validate_pcc_self_link_surface(
                 _resolve_self_link_mode(
-                    needs_libpython=needs_libpython,
                     needs_native_extension_exports=needs_native_extension_exports,
                     extra_link_args=extra_link_args,
                 ),
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 native_extension_exports_supported=supported,
             )
             return
         _pipeline_self_link.validate_pcc_self_link_surface(
             _resolve_self_link_mode(
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 extra_link_args=extra_link_args,
             ),
             extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=needs_native_extension_exports,
         )
     except _pipeline_self_link.SelfLinkContractError as exc:
@@ -1755,7 +1677,6 @@ def _run_self_link_command(
     verbose,
     *,
     extra_link_args: tuple[str, ...] = (),
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     pcc_asm_inputs: tuple[str, ...] = (),
     pcc_native_object_inputs: tuple[str, ...] = (),
@@ -1775,7 +1696,6 @@ def _run_self_link_command(
                 extra_link_inputs,
                 verbose,
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 pcc_asm_inputs=pcc_asm_inputs,
                 pcc_native_object_inputs=pcc_native_object_inputs,
@@ -1802,7 +1722,6 @@ def _run_self_link_command(
                 extra_link_inputs,
                 verbose,
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 pcc_asm_inputs=pcc_asm_inputs,
                 pcc_native_object_inputs=pcc_native_object_inputs,
@@ -1827,7 +1746,6 @@ def _run_self_link_command(
                 extra_link_inputs,
                 verbose,
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 pcc_asm_inputs=pcc_asm_inputs,
                 pcc_native_object_inputs=pcc_native_object_inputs,
@@ -1854,7 +1772,6 @@ def _link_with_self_backend_ir_texts(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -1867,7 +1784,6 @@ def _link_with_self_backend_ir_texts(
         out_path,
         runtime_archive,
         verbose,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_inputs=extra_link_inputs,
         extra_link_args=extra_link_args,
@@ -1923,7 +1839,7 @@ def _remove_direct_native_object_dir(path: str) -> None:
 
 
 def _validate_stage1_checkpoint_link(
-    artifacts, runtime_archive, needs_libpython, needs_native_exports, ir_bytes,
+    artifacts, runtime_archive, needs_native_exports, ir_bytes,
 ) -> None:
     """Revalidate every durable object and actual link input before linking."""
     root = str(os.environ.get("PCC_STAGE1_CHECKPOINT_DIR", "") or "")
@@ -1952,7 +1868,6 @@ def _validate_stage1_checkpoint_link(
         or [item[0] for item in artifacts] != graph["module_names"]
     ):
         raise PyPipelineError("Stage1 checkpoint runtime or module order changed")
-    expected_libpython = False
     expected_native_exports = False
     expected_ir_bytes = 0
     for index, artifact in enumerate(artifacts):
@@ -1967,14 +1882,12 @@ def _validate_stage1_checkpoint_link(
             or checkpoint.file_sha256(source["source_path"]) != source["source_sha256"]
         ):
             raise PyPipelineError("Stage1 checkpoint link input changed: " + name)
-        expected_libpython = expected_libpython or receipt["needs_libpython"]
         expected_native_exports = (
             expected_native_exports or receipt["needs_native_extension_exports"]
         )
         expected_ir_bytes += receipt["ir_bytes_before_passes"]
     if (
-        needs_libpython != expected_libpython
-        or needs_native_exports != expected_native_exports
+        needs_native_exports != expected_native_exports
         or ir_bytes != expected_ir_bytes
     ):
         raise PyPipelineError("Stage1 checkpoint link metadata differs")
@@ -1986,7 +1899,6 @@ def _link_with_self_backend_assembly_texts(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -2000,16 +1912,14 @@ def _link_with_self_backend_assembly_texts(
         )
     _validate_pcc_self_link_surface(
         extra_link_args=extra_link_args,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         target_triple=target_triple,
     )
     signature_owned_by_pcc = _resolve_self_link_mode(
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_args=extra_link_args,
     ) == "pcc"
-    export_pcc_capi = needs_native_extension_exports and not needs_libpython
+    export_pcc_capi = needs_native_extension_exports
     with tempfile.TemporaryDirectory(prefix="pcc_py_direct_asm_") as tmp:
         asm_paths = []
         needs_subsections_via_symbols = False
@@ -2048,17 +1958,9 @@ def _link_with_self_backend_assembly_texts(
         cmd.extend(["-o", tmp_out_path, "-lm"])
         cmd.extend(extra_link_args)
         cmd.extend(_native_extension_export_link_flags(export_pcc_capi))
-        cmd.extend(
-            _libpython_capi_isolation_link_flags(
-                runtime_archive,
-                needs_libpython,
-            )
-        )
         if sys.platform == "darwin" and needs_subsections_via_symbols:
             cmd.append("-Wl,-dead_strip")
         cmd.extend(_platform_link_flags())
-        if needs_libpython:
-            _append_libpython_link_flags(cmd)
         _log(verbose, "direct self link: " + _join_strings(cmd, " "))
         started = _profile_begin(profile)
         _run_self_link_command(
@@ -2069,7 +1971,6 @@ def _link_with_self_backend_assembly_texts(
             extra_link_inputs,
             verbose,
             extra_link_args=extra_link_args,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=export_pcc_capi,
             pcc_asm_inputs=(
                 tuple(asm_paths) if signature_owned_by_pcc else ()
@@ -2135,7 +2036,6 @@ def _link_with_self_backend_direct_artifacts(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -2154,7 +2054,6 @@ def _link_with_self_backend_direct_artifacts(
         )
     _validate_pcc_self_link_surface(
         extra_link_args=extra_link_args,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         target_triple=target_triple,
     )
@@ -2222,7 +2121,6 @@ def _link_with_self_backend_direct_artifacts(
                 extra_link_inputs,
                 verbose,
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 pcc_internal_input_manifest=input_manifest,
                 link_profile_path=link_profile_path,
@@ -2237,7 +2135,6 @@ def _link_with_self_backend_direct_artifacts(
                 extra_link_inputs,
                 verbose,
                 extra_link_args=extra_link_args,
-                needs_libpython=needs_libpython,
                 needs_native_extension_exports=needs_native_extension_exports,
                 pcc_internal_input_manifest=input_manifest,
                 link_profile_path=link_profile_path,
@@ -2275,7 +2172,6 @@ def _link_with_self_backend_native_objects(
     runtime_archive: Optional[str],
     verbose: bool,
     *,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -2287,7 +2183,6 @@ def _link_with_self_backend_native_objects(
         out_path,
         runtime_archive,
         verbose,
-        needs_libpython=needs_libpython,
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_inputs=extra_link_inputs,
         extra_link_args=extra_link_args,
@@ -2303,7 +2198,6 @@ def _link_native(
     verbose: bool,
     *,
     backend,
-    needs_libpython: bool = False,
     needs_native_extension_exports: bool = False,
     extra_link_inputs: tuple[str, ...] = (),
     extra_link_args: tuple[str, ...] = (),
@@ -2316,7 +2210,6 @@ def _link_native(
             out_path,
             runtime_archive,
             verbose,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=needs_native_extension_exports,
             extra_link_inputs=extra_link_inputs,
             extra_link_args=extra_link_args,
@@ -2342,20 +2235,6 @@ _module_import_is_scaffold = _pipeline_libpython.module_import_is_scaffold
 _resolve_relative_import = _pipeline_libpython.resolve_relative_import
 
 
-def _module_needs_libpython(
-    ast_module,
-    native_modules=None,
-    ir_scaffold_mode: str = "off",
-    strict_no_libpython: bool = False,
-) -> bool:
-    return _pipeline_libpython.module_needs_libpython(
-        ast_module,
-        native_modules=native_modules,
-        ir_scaffold_mode=ir_scaffold_mode,
-        strict_no_libpython=strict_no_libpython,
-    )
-
-
 def _module_imports_pcc_native_extension(
     ast_module,
     native_modules=None,
@@ -2368,11 +2247,35 @@ def _module_imports_pcc_native_extension(
     )
 
 
-_resolve_python_config_command = _pipeline_libpython.resolve_python_config_command
 
 
 _ir_needs_libpython = _pipeline_libpython.ir_needs_libpython
-_ensure_libpython_main_thread_init = _pipeline_libpython.ensure_main_thread_init
+
+
+def _reject_cpython_bridge_calls(ir_text: str, context: str) -> None:
+    """Fail closed when codegen lowered an operation to a ``py_cpy_*`` call.
+
+    No CPython runtime exists to resolve those helpers: the operation is a
+    capability gap of the native pipeline.
+    """
+    if _ir_needs_libpython(ir_text):
+        raise PyPipelineError(
+            "Python pipeline cannot compile " + context
+            + " natively: generated IR still calls py_cpy_* CPython bridge helpers"
+        )
+
+
+def _reject_cpython_bridge_modules(any_calls: bool, modules, context: str) -> None:
+    """The ``_reject_cpython_bridge_calls`` verdict for worker-reported modules."""
+    if any_calls:
+        names = ""
+        if modules:
+            names = " (modules: " + ", ".join(modules) + ")"
+        raise PyPipelineError(
+            "Python pipeline cannot compile " + context
+            + " natively: generated IR still calls py_cpy_* CPython bridge helpers"
+            + names
+        )
 
 
 def _prepare_single_source_compile_closure(
@@ -2380,7 +2283,6 @@ def _prepare_single_source_compile_closure(
     module_name: str,
     *,
     emit_llvm_only: bool,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     recursive_stdlib: bool,
     python_library: bool,
@@ -2398,7 +2300,7 @@ def _prepare_single_source_compile_closure(
         _collect_relative_module_closure(
             src_path,
             include_same_package_absolute=(module_name.endswith(".__main__")),
-            recurse_same_package_absolute=(libpython_mode == "off"),
+            recurse_same_package_absolute=True,
         )
         if should_auto_close
         else ([str(os.path.abspath(src_path))], [module_name])
@@ -2419,27 +2321,22 @@ def _prepare_single_source_compile_closure(
         auto_seen,
     )
     _profile_end(profile, "expand_native_extension_module_object_ports", t)
-    if should_auto_close and libpython_mode != "on":
+    if should_auto_close:
         # Runtime providers must be admitted before choosing the single-file
-        # path. In auto mode, missing providers otherwise become CPython
-        # imports even though an owned implementation is available.
+        # path, or a module would compile without its owned implementation.
         _expand_required_native_builtin_providers(auto_srcs, auto_mods, auto_seen)
     t = _profile_begin(profile)
-    _validate_package_site_no_libpython_abi(
-        auto_srcs,
-        libpython_mode=libpython_mode,
-    )
+    _validate_package_site_native_abi(auto_srcs)
     _profile_end(profile, "validate_package_site_abi", t)
     _profile_counter(profile, "auto_files", len(auto_srcs))
     effective_recursive_stdlib = recursive_stdlib
     if (
         not effective_recursive_stdlib
-        and libpython_mode == "off"
         and not python_library
         # A plain emit-only request is a per-module IR diagnostic. Expanding
         # its stdlib imports changes that request into a multi-module compile,
         # multiplying parse/type/codegen work and changing when the
-        # no-libpython gate runs. Executable builds and package entrypoints
+        # native capability gate runs. Executable builds and package entrypoints
         # still close their runtime graph automatically; callers that want a
         # standalone closure dump can request recursive_stdlib explicitly.
         and should_auto_close
@@ -2472,7 +2369,6 @@ def compile_python(
     *,
     verbose: bool = False,
     emit_llvm_only: bool = False,
-    libpython_mode: Optional[str] = None,
     ir_scaffold_mode: Optional[str] = None,
     backend: Optional[str] = None,
     gpu_backend: Optional[str] = None,
@@ -2530,7 +2426,6 @@ def compile_python(
         python_library=python_library,
         target_triple=target_triple,
         gpu_backend=gpu_backend,
-        libpython_mode=libpython_mode,
     )
     try:
         _compile_python_routed(
@@ -2538,7 +2433,6 @@ def compile_python(
             out_path,
             verbose=verbose,
             emit_llvm_only=emit_llvm_only,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             backend=backend,
             gpu_backend=gpu_backend,
@@ -2560,7 +2454,6 @@ def _compile_python_routed(
     *,
     verbose: bool = False,
     emit_llvm_only: bool = False,
-    libpython_mode: Optional[str] = None,
     ir_scaffold_mode: Optional[str] = None,
     backend: Optional[str] = None,
     gpu_backend: Optional[str] = None,
@@ -2581,7 +2474,6 @@ def _compile_python_routed(
     # Imports are deferred so that modules still under construction by
     # sibling agents don't break ``pcc --help`` or ``.c`` compilation.
     total_start = _profile_begin(profile)
-    libpython_mode = _resolve_libpython_mode(libpython_mode)
     ir_scaffold_mode = _resolve_ir_scaffold_mode(ir_scaffold_mode)
     gpu_backend_kind = _resolve_gpu_backend_kind(gpu_backend)
 
@@ -2620,7 +2512,6 @@ def _compile_python_routed(
         src_path,
         module_name,
         emit_llvm_only=emit_llvm_only,
-        libpython_mode=libpython_mode,
         ir_scaffold_mode=ir_scaffold_mode,
         recursive_stdlib=recursive_stdlib,
         python_library=python_library,
@@ -2651,8 +2542,7 @@ def _compile_python_routed(
             emit_llvm_only=False,
             entry_module=entry,
             module_names=auto_mods,
-            libpython_mode=libpython_mode,
-            ir_scaffold_mode=ir_scaffold_mode,
+                ir_scaffold_mode=ir_scaffold_mode,
             backend=backend,
             target_triple=target_triple,
             recursive_stdlib=effective_recursive_stdlib,
@@ -2677,8 +2567,7 @@ def _compile_python_routed(
             emit_llvm_only=emit_llvm_only,
             entry_module=entry,
             module_names=auto_mods,
-            libpython_mode=libpython_mode,
-            ir_scaffold_mode=ir_scaffold_mode,
+                ir_scaffold_mode=ir_scaffold_mode,
             backend=backend,
             target_triple=target_triple,
             recursive_stdlib=True,
@@ -2712,8 +2601,7 @@ def _compile_python_routed(
             emit_llvm_only=emit_llvm_only,
             entry_module=entry,
             module_names=auto_mods,
-            libpython_mode=libpython_mode,
-            ir_scaffold_mode=ir_scaffold_mode,
+                ir_scaffold_mode=ir_scaffold_mode,
             backend=backend,
             target_triple=target_triple,
             recursive_stdlib=effective_recursive_stdlib,
@@ -2744,10 +2632,6 @@ def _compile_python_routed(
     if freestanding_module and not python_library:
         raise PyPipelineError(
             "freestanding modules require python_library mode"
-        )
-    if freestanding_module and libpython_mode != "off":
-        raise PyPipelineError(
-            "freestanding modules require --python-libpython=off"
         )
     if gpu_source_has_kernels:
         t = _profile_begin(profile)
@@ -2792,13 +2676,6 @@ def _compile_python_routed(
     _profile_end(profile, "parse_and_lift", t)
 
     t = _profile_begin(profile)
-    ast_needs_libpython = _module_needs_libpython(
-        ast_mod,
-        ir_scaffold_mode=ir_scaffold_mode,
-        strict_no_libpython=(libpython_mode == "off"),
-    )
-    _profile_end(profile, "detect_libpython_need", t)
-    t = _profile_begin(profile)
     ast_needs_native_extension_exports = _module_imports_pcc_native_extension(
         ast_mod,
         ir_scaffold_mode=ir_scaffold_mode,
@@ -2821,13 +2698,9 @@ def _compile_python_routed(
 
     _log(verbose, "codegen (layer1)")
     t = _profile_begin(profile)
-    codegen = _L1CodeGen(
-        typed_mod,
-        (libpython_mode == "on" or (libpython_mode == "auto" and ast_needs_libpython)),
-        ir_scaffold_mode,
-    )
-    codegen._strict_no_libpython = libpython_mode == "off"
-    codegen._prefer_native_callable_values = libpython_mode == "off"
+    codegen = _L1CodeGen(typed_mod, False, ir_scaffold_mode)
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
     codegen._module_source_path = os.path.abspath(src_path)
     codegen._target_triple = target_triple or ""
     if target_triple:
@@ -2871,19 +2744,10 @@ def _compile_python_routed(
             emit_llvm_only=emit_llvm_only,
             backend=backend,
         ),
-        strict_no_libpython=(libpython_mode == "off"),
     )
     if freestanding_module:
         _validate_freestanding_ir(ir_text, freestanding_external_symbols)
     _profile_end(profile, "python_ir_pass_pipeline", t)
-
-    ir_needs_libpython = _ir_needs_libpython(ir_text)
-    if (
-        libpython_mode != "off"
-        and not python_library
-        and (ast_needs_libpython or ir_needs_libpython)
-    ):
-        ir_text = _ensure_libpython_main_thread_init(ir_text)
 
     if emit_llvm_only:
         # out_path is a .ll path; just write it and return.
@@ -2894,31 +2758,8 @@ def _compile_python_routed(
         return
 
     t = _profile_begin(profile)
-    needs_libpython = ast_needs_libpython
-    reasons = []
-    if needs_libpython:
-        reasons.append("imports still lower through CPython fallback")
-    # Fallback: scan the generated IR for direct call sites into the
-    # libpython shim (``py_cpy_*``). Codegen emits these for DynType
-    # method dispatch, ``hasattr`` fallback, ``x.__copy__()`` and
-    # similar even when the source has no explicit ``import``. Using
-    # ``\bcall`` rather than a plain text search avoids triggering on
-    # the ``declare external`` stubs emitted unconditionally for all
-    # runtime helpers.
-    if ir_needs_libpython:
-        needs_libpython = True
-        reasons.append("generated IR still calls py_cpy_* helpers")
-    needs_libpython = _finalize_libpython_mode(
-        detected=needs_libpython,
-        mode=libpython_mode,
-        context=str(src_path),
-        reasons=reasons,
-    )
-    _reject_mixed_extension_object_models(
-        needs_libpython=needs_libpython,
-        needs_native_extension_exports=ast_needs_native_extension_exports,
-    )
-    _profile_end(profile, "finalize_libpython_mode", t)
+    _reject_cpython_bridge_calls(ir_text, str(src_path))
+    _profile_end(profile, "native_capability_gate", t)
     if native_backend is None:
         native_backend = _resolve_native_backend(backend)
     if verbose:
@@ -2926,12 +2767,10 @@ def _compile_python_routed(
 
     t = _profile_begin(profile)
     if runtime_archive is not None:
-        runtime = _explicit_runtime_archive(runtime_archive, needs_libpython=needs_libpython,
-                                            target_triple=target_triple)
+        runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
     else:
         runtime = _ensure_runtime(
             verbose,
-            needs_libpython=needs_libpython,
             target_triple=target_triple,
         )
     _profile_end(profile, "ensure_runtime", t)
@@ -2984,7 +2823,6 @@ def _compile_python_routed(
             out_path,
             runtime,
             verbose,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=ast_needs_native_extension_exports,
             extra_link_inputs=extra_link_inputs,
             extra_link_args=extra_link_args,
@@ -3011,7 +2849,6 @@ def _compile_python_routed(
             runtime,
             verbose,
             backend=native_backend,
-            needs_libpython=needs_libpython,
             needs_native_extension_exports=ast_needs_native_extension_exports,
             extra_link_inputs=extra_link_inputs,
             extra_link_args=extra_link_args,
@@ -3153,7 +2990,6 @@ def _write_python_frontend_worker_manifest(
     *,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     job_kind: str = "codegen",
@@ -3173,7 +3009,6 @@ def _write_python_frontend_worker_manifest(
         assigned_indices,
         entry_module=entry_module,
         sibling_inits=sibling_inits,
-        libpython_mode=libpython_mode,
         ir_scaffold_mode=ir_scaffold_mode,
         verbose=verbose,
         job_kind=job_kind,
@@ -3419,7 +3254,6 @@ def _build_python_frontend_shared_exports_parallel(
     *,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     max_parallel: int,
@@ -3437,7 +3271,6 @@ def _build_python_frontend_shared_exports_parallel(
         worker_prefix,
         entry_module=entry_module,
         sibling_inits=sibling_inits,
-        libpython_mode=libpython_mode,
         ir_scaffold_mode=ir_scaffold_mode,
         verbose=verbose,
         max_parallel=max_parallel,
@@ -3493,7 +3326,6 @@ def _compile_python_multi_codegen_parallel(
     jobs: int,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     profile: Optional[dict] = None,
@@ -3516,7 +3348,6 @@ def _compile_python_multi_codegen_parallel(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -3543,7 +3374,6 @@ def _compile_python_multi_codegen_parallel(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -3679,7 +3509,6 @@ def _compile_python_multi_codegen_parallel_uncached(
     jobs: int,
     entry_module: str,
     sibling_inits,
-    libpython_mode: str,
     ir_scaffold_mode: str,
     verbose: bool,
     profile: Optional[dict] = None,
@@ -3713,7 +3542,6 @@ def _compile_python_multi_codegen_parallel_uncached(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -3751,7 +3579,6 @@ def _compile_python_multi_codegen_parallel_uncached(
             jobs=jobs,
             entry_module=entry_module,
             sibling_inits=sibling_inits,
-            libpython_mode=libpython_mode,
             ir_scaffold_mode=ir_scaffold_mode,
             verbose=verbose,
             profile=profile,
@@ -3861,7 +3688,6 @@ def compile_python_multi(
     emit_llvm_only: bool = False,
     entry_module: Optional[str] = None,
     module_names=None,
-    libpython_mode: Optional[str] = None,
     ir_scaffold_mode: Optional[str] = None,
     backend: Optional[str] = None,
     target_triple: Optional[str] = None,
@@ -3910,13 +3736,6 @@ def compile_python_multi(
         Raw arguments appended only to the final native linker invocation.
     target_triple:
         Optional explicit target applied consistently to every emitted module.
-
-    The multi-compile API **does not** yet rewrite cross-module
-    imports to extern references — step 2 of the spike plan
-    (``docs/plans/multi-file-compile-spike.md``). Until that
-    lands, imports between passed source files still route through
-    ``py_cpy_import`` and the link pulls libpython. Single-file
-    callers should keep using :func:`compile_python`.
     """
     object_inputs = _admit_python_object_inputs(
         object_inputs, out_path, target_triple, backend, emit_llvm_only,
@@ -3925,7 +3744,6 @@ def compile_python_multi(
         raise PyPipelineError("compile_python_multi requires at least one source file")
     total_start = _profile_begin(profile)
     _profile_counter(profile, "multi_input_files", len(src_paths))
-    libpython_mode = _resolve_libpython_mode(libpython_mode)
     ir_scaffold_mode = _resolve_ir_scaffold_mode(ir_scaffold_mode)
     src_paths = list(src_paths)
     if module_names is None:
@@ -3943,10 +3761,7 @@ def compile_python_multi(
         profile=profile,
     )
     t = _profile_begin(profile)
-    _validate_package_site_no_libpython_abi(
-        src_paths,
-        libpython_mode=libpython_mode,
-    )
+    _validate_package_site_native_abi(src_paths)
     _profile_end(profile, "validate_package_site_abi", t)
     _profile_counter(profile, "multi_files", len(src_paths))
 
@@ -4046,7 +3861,6 @@ def compile_python_multi(
                     jobs=frontend_jobs,
                     entry_module=entry_module,
                     sibling_inits=sibling_inits,
-                    libpython_mode=libpython_mode,
                     ir_scaffold_mode=ir_scaffold_mode,
                     verbose=verbose,
                     profile=profile,
@@ -4059,7 +3873,6 @@ def compile_python_multi(
                     jobs=frontend_jobs,
                     entry_module=entry_module,
                     sibling_inits=sibling_inits,
-                    libpython_mode=libpython_mode,
                     ir_scaffold_mode=ir_scaffold_mode,
                     verbose=verbose,
                     profile=profile,
@@ -4175,13 +3988,9 @@ def compile_python_multi(
             if verbose:
                 _log(verbose, "codegen " + mod_name)
             try:
-                codegen = _L1CodeGen(
-                    typed_mod,
-                    (libpython_mode == "on"),
-                    ir_scaffold_mode,
-                )
-                codegen._strict_no_libpython = libpython_mode == "off"
-                codegen._prefer_native_callable_values = libpython_mode == "off"
+                codegen = _L1CodeGen(typed_mod, False, ir_scaffold_mode)
+                codegen._strict_no_libpython = True
+                codegen._prefer_native_callable_values = True
                 codegen._module_source_path = os.path.abspath(src)
                 codegen._target_triple = target_triple or ""
                 if target_triple:
@@ -4246,19 +4055,7 @@ def compile_python_multi(
                     "codegen[" + mod_name + "]: " + type(exc).__name__ + ": " + str(exc)
                 ) from exc
             _profile_end(profile, "multi_codegen_layer1", t, mod_name)
-            if libpython_mode == "off" and _ir_needs_libpython(ir_text):
-                any_needs_libpython = _finalize_libpython_mode(
-                    detected=True,
-                    mode=libpython_mode,
-                    context="multi-file compile",
-                    reasons=[
-                        "module "
-                        + mod_name
-                        + " generated IR still calls py_cpy_* helpers"
-                    ],
-                )
-                if mod_name not in libpython_modules:
-                    libpython_modules.append(mod_name)
+            _reject_cpython_bridge_calls(ir_text, "module " + mod_name)
             _check_compiled_module_imports_are_in_closure(
                 mod_name, ir_text, module_names
             )
@@ -4280,13 +4077,8 @@ def compile_python_multi(
                 raise PyPipelineError(
                     "direct indexed artifact mode requires the self backend"
                 )
-            if libpython_mode != "off" or any_needs_libpython:
-                raise PyPipelineError(
-                    "direct indexed artifact mode requires no-libpython"
-                )
-            _reject_mixed_extension_object_models(
-                needs_libpython=False,
-                needs_native_extension_exports=any_needs_native_extension_exports,
+            _reject_cpython_bridge_modules(
+                any_needs_libpython, libpython_modules, "the program (direct indexed artifact mode)",
             )
             runtime_started = 0
             if coordinator_timing is not None:
@@ -4294,13 +4086,13 @@ def compile_python_multi(
             if runtime_archive is not None:
                 runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
             elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
-                runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
+                runtime = _ensure_runtime(verbose, target_triple=target_triple)
             else:
                 runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
             if coordinator_timing is not None:
                 coordinator_timing.complete("runtime_verify", runtime_started)
             _validate_stage1_checkpoint_link(
-                module_direct_artifacts, runtime, any_needs_libpython,
+                module_direct_artifacts, runtime,
                 any_needs_native_extension_exports, total_ir_bytes_before_passes,
             )
             assembly_count = 0
@@ -4336,7 +4128,6 @@ def compile_python_multi(
                     out_path,
                     runtime,
                     verbose,
-                    needs_libpython=False,
                     needs_native_extension_exports=(
                         any_needs_native_extension_exports
                     ),
@@ -4351,7 +4142,6 @@ def compile_python_multi(
                     out_path,
                     runtime,
                     verbose,
-                    needs_libpython=False,
                     needs_native_extension_exports=(
                         any_needs_native_extension_exports
                     ),
@@ -4388,18 +4178,13 @@ def compile_python_multi(
                 raise PyPipelineError(
                     "direct indexed native-object mode requires the self backend"
                 )
-            if libpython_mode != "off" or any_needs_libpython:
-                raise PyPipelineError(
-                    "direct indexed native-object mode requires no-libpython"
-                )
-            _reject_mixed_extension_object_models(
-                needs_libpython=False,
-                needs_native_extension_exports=any_needs_native_extension_exports,
+            _reject_cpython_bridge_modules(
+                any_needs_libpython, libpython_modules, "the program (direct indexed native-object mode)",
             )
             if runtime_archive is not None:
                 runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
             elif str(os.environ.get(_PY_RUNTIME_ARCHIVE_ENV, "") or "").strip():
-                runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
+                runtime = _ensure_runtime(verbose, target_triple=target_triple)
             else:
                 runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
             _profile_counter(
@@ -4425,7 +4210,6 @@ def compile_python_multi(
                 out_path,
                 runtime,
                 verbose,
-                needs_libpython=False,
                 needs_native_extension_exports=(
                     any_needs_native_extension_exports
                 ),
@@ -4451,19 +4235,8 @@ def compile_python_multi(
             raise PyPipelineError(
                 "direct indexed assembly mode requires the self backend"
             )
-        if libpython_mode != "off":
-            raise PyPipelineError(
-                "direct indexed assembly mode currently requires no-libpython"
-            )
-        if any_needs_libpython:
-            raise PyPipelineError(
-                "direct indexed assembly worker reported a libpython dependency"
-            )
-        _reject_mixed_extension_object_models(
-            needs_libpython=False,
-            needs_native_extension_exports=(
-                any_needs_native_extension_exports
-            ),
+        _reject_cpython_bridge_modules(
+            any_needs_libpython, libpython_modules, "the program (direct indexed assembly mode)",
         )
         if runtime_archive is not None:
             runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
@@ -4474,7 +4247,7 @@ def compile_python_multi(
             # PCC_RUNTIME_ARCHIVE.  Preserve the ordinary bundle/provenance
             # checks without entering the auto-build path whose nested compiler
             # must have direct-worker flags stripped.
-            runtime = _ensure_runtime(verbose, needs_libpython=False, target_triple=target_triple)
+            runtime = _ensure_runtime(verbose, target_triple=target_triple)
         else:
             runtime = _ensure_runtime_without_direct_indexed_env(verbose, target_triple=target_triple)
         _profile_counter(
@@ -4495,7 +4268,6 @@ def compile_python_multi(
             out_path,
             runtime,
             verbose,
-            needs_libpython=False,
             needs_native_extension_exports=(
                 any_needs_native_extension_exports
             ),
@@ -4526,7 +4298,6 @@ def compile_python_multi(
             emit_llvm_only=emit_llvm_only,
             backend=backend,
         ),
-        strict_no_libpython=(libpython_mode == "off"),
     )
     _profile_end(profile, "python_ir_pass_pipeline_many", t)
     total_ir_bytes = 0
@@ -4540,12 +4311,7 @@ def compile_python_multi(
             any_needs_libpython = True
             if mod_name not in libpython_modules:
                 libpython_modules.append(mod_name)
-    _profile_end(profile, "libpython_scan", t)
-    if libpython_mode != "off" and any_needs_libpython:
-        module_ir_texts = [
-            (name, _ensure_libpython_main_thread_init(text))
-            for name, text in module_ir_texts
-        ]
+    _profile_end(profile, "cpython_bridge_scan", t)
 
     if emit_llvm_only:
         # Concatenate all IR texts with a separator comment so the
@@ -4570,30 +4336,17 @@ def compile_python_multi(
         return
 
     t = _profile_begin(profile)
-    any_needs_libpython = _finalize_libpython_mode(
-        detected=any_needs_libpython,
-        mode=libpython_mode,
-        context="multi-file compile",
-        reasons=(
-            ["modules: " + ", ".join(libpython_modules)] if libpython_modules else []
-        ),
-    )
-    _reject_mixed_extension_object_models(
-        needs_libpython=any_needs_libpython,
-        needs_native_extension_exports=any_needs_native_extension_exports,
-    )
-    _profile_end(profile, "finalize_libpython_mode", t)
+    _reject_cpython_bridge_modules(any_needs_libpython, libpython_modules, "the program")
+    _profile_end(profile, "native_capability_gate", t)
     if verbose:
         _log(verbose, "native backend: " + str(native_backend))
 
     t = _profile_begin(profile)
     if runtime_archive is not None:
-        runtime = _explicit_runtime_archive(runtime_archive, needs_libpython=any_needs_libpython,
-                                            target_triple=target_triple)
+        runtime = _explicit_runtime_archive(runtime_archive, target_triple=target_triple)
     else:
         runtime = _ensure_runtime(
             verbose,
-            needs_libpython=any_needs_libpython,
             target_triple=target_triple,
         )
     _profile_end(profile, "ensure_runtime", t)
@@ -4633,7 +4386,6 @@ def compile_python_multi(
             out_path,
             runtime,
             verbose,
-            needs_libpython=any_needs_libpython,
             needs_native_extension_exports=any_needs_native_extension_exports,
             extra_link_inputs=object_inputs,
             extra_link_args=tuple(link_args),
@@ -4670,7 +4422,6 @@ def compile_python_multi(
             runtime,
             verbose,
             backend=native_backend,
-            needs_libpython=any_needs_libpython,
             needs_native_extension_exports=any_needs_native_extension_exports,
             extra_link_inputs=object_inputs,
             extra_link_args=tuple(link_args),

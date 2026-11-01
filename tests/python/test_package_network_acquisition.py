@@ -571,7 +571,6 @@ def test_self_backend_transport_and_sha256_kernel_primitives(tmp_path):
                 "pcc.driver.cli_launcher",
                 "--backend",
                 "self",
-                "--python-libpython=off",
                 "--ir-scaffold=on",
                 str(source),
                 "-o",

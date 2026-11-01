@@ -34,7 +34,7 @@ def _receipts(directory, runtime):
                   "returncode": 0, "stdout": output, "stderr": ""}
         record = {
             "status": "PASS", "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0",
-            "backend": "self", "libpython": "off", "source_sha256": gate.sha(source),
+            "backend": "self", "source_sha256": gate.sha(source),
             "runtime_archive": runtime["path"], "runtime_sha256": runtime["hashes"][""],
             "binary_sha256": gate.sha(binary), "reference": oracle,
             "executions": [{**oracle, "command": [str(binary)], "gc_backend": gc}
@@ -200,7 +200,7 @@ def test_run_failure_or_identity_drift_is_never_a_pass(tmp_path, monkeypatch, ad
 
 
 @pytest.mark.parametrize("change", (
-    "missing-receipt", "failed-receipt", "pcc1", "routed-pcc1", "llvm", "libpython",
+    "missing-receipt", "failed-receipt", "pcc1", "routed-pcc1", "llvm",
     "source-digest", "runtime-path", "runtime-digest", "binary-digest", "oracle",
     "missing-gc", "duplicate-gc", "failed-gc", "wrong-output", "stderr", "wrong-command",
     "foreign-program", "duplicate-program",
@@ -218,7 +218,7 @@ def test_native_evidence_requires_exact_source_and_all_five_successes(
     record = json.loads(path.read_text())
     fields = {"failed-receipt": ("status", "FAIL"), "pcc1": ("compiler_fixture_parameter", "pcc1"),
               "routed-pcc1": ("compiler_mode", "pcc1-routed"), "llvm": ("backend", "llvm"),
-              "libpython": ("libpython", "on"), "source-digest": ("source_sha256", "wrong"),
+              "source-digest": ("source_sha256", "wrong"),
               "runtime-path": ("runtime_archive", "another-runtime"),
               "runtime-digest": ("runtime_sha256", "wrong"), "binary-digest": ("binary_sha256", "wrong")}
     if change in fields:
@@ -353,7 +353,7 @@ def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path
         return subprocess.CompletedProcess(command, rc, stdout="ok\n", stderr="")
 
     def compile_program(source, binary, **options):
-        assert options == {"backend": "self", "libpython_mode": "off",
+        assert options == {"backend": "self",
                            "ir_scaffold_mode": "on", "runtime_archive": str(archive)}
         Path(binary).write_bytes(b"host-only executable placeholder")
 
@@ -575,7 +575,7 @@ def _win64_receipt(directory, runtime, run_id):
     binary.write_bytes(payload)
     record = {
         "schema": "pcc.win64-home-callback.v1", "status": "PASS", "run_id": run_id,
-        "compiler_mode": "host-pcc0", "backend": "self", "libpython": "off", "target": TARGET,
+        "compiler_mode": "host-pcc0", "backend": "self", "target": TARGET,
         "source_sha256": gate.sha(source),
         "helper_assembly_sha256": hashlib.sha256(HOME_CALLBACK_ASM.encode()).hexdigest(),
         "helper_sha256": gate.sha(helper), "runtime_archive": runtime["path"],
@@ -647,7 +647,7 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
 
 
 @pytest.mark.parametrize("change", (
-    "missing", "duplicate", "stale", "running", "schema", "pcc1", "llvm", "libpython",
+    "missing", "duplicate", "stale", "running", "schema", "pcc1", "llvm",
     "target", "runtime-target", "runtime-path", "runtime-digest", "source", "source-digest",
     "assembly-digest", "helper", "helper-digest", "binary-path", "binary-digest", "machine",
     "image-format", "missing-gc", "duplicate-gc", "boolean-gc", "failed-gc", "wrong-output",
@@ -667,7 +667,7 @@ def test_win64_receipt_rejects_missing_stale_or_mismatched_evidence(
     fields = {
         "stale": ("run_id", "old-run"), "running": ("status", "RUNNING"),
         "schema": ("schema", "other"), "pcc1": ("compiler_mode", "pcc1"),
-        "llvm": ("backend", "llvm"), "libpython": ("libpython", "on"),
+        "llvm": ("backend", "llvm"),
         "target": ("target", "aarch64-pc-windows-msvc"),
         "runtime-path": ("runtime_archive", "other.a"), "runtime-digest": ("runtime_sha256", "stale"),
         "source-digest": ("source_sha256", "stale"),
@@ -760,7 +760,7 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
             probe.test_native_win64_home_space_and_rooted_callback_five_collectors(work, Path(runtime["path"]), capfd)
     assert len(calls) == 1
     source, binary, options = calls[0]
-    assert options == {"backend": "self", "libpython_mode": "off", "ir_scaffold_mode": "on",
+    assert options == {"backend": "self", "ir_scaffold_mode": "on",
                        "runtime_archive": runtime["path"], "object_inputs": (str(work / "win64_home_callback.obj"),),
                        "target_triple": probe.TARGET}
     record = json.loads((work / "win64-home-callback.json").read_text())

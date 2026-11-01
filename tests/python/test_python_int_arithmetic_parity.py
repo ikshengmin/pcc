@@ -2,7 +2,7 @@
 ``Lib/test/test_int.py`` and ``Lib/test/test_long.py``.
 
 Each test compiles a tiny program with pcc's no-libpython pipeline
-(``libpython_mode="off"``, ``ir_scaffold_mode="on"``) and asserts the
+(``ir_scaffold_mode="on"``) and asserts the
 exact stdout that CPython would produce. Without ``libpython=off``
 this whole file is meaningless — the goal is to verify pcc's native
 ``int`` runtime, not delegate back to CPython.
@@ -27,7 +27,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off",
+        ir_scaffold_mode="on",
     )
 
 

@@ -444,7 +444,7 @@ def test_unicode_capi_sentinel_mapping_and_normalization():
 def test_unicode_capi_owned_ir(tmp_path):
     output = tmp_path / 'py_capi_exc_runtime.ll'
     compile_python(str(ROOT / 'pcc/runtime/py/py_capi_exc_runtime.py'), str(output),
-                   backend='self', libpython_mode='off', emit_llvm_only=True, python_library=True)
+                   backend='self', emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
     assert 'strict.nolib.stub' not in text
@@ -471,7 +471,7 @@ def test_unicode_libpython_callback_display_boundary_source():
 def test_unicode_runtime_owned_ir(tmp_path, module):
     output = tmp_path / (module + '.ll')
     compile_python(str(ROOT / 'pcc/runtime/py' / (module + '.py')), str(output),
-                   backend='self', libpython_mode='off', emit_llvm_only=True, python_library=True)
+                   backend='self', emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
     assert not re.search(r'\bcall\b[^\n]*@py_cpy_', text)
@@ -484,7 +484,7 @@ def test_unicode_static_constructor_uses_full_runtime_call(tmp_path):
     source = tmp_path / 'unicode_constructor.py'
     source.write_text('def make():\n    return UnicodeEncodeError("ascii", "é", 0, 1, "reason")\n')
     output = tmp_path / 'unicode_constructor.ll'
-    compile_python(str(source), str(output), backend='self', libpython_mode='off',
+    compile_python(str(source), str(output), backend='self',
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -561,7 +561,7 @@ def test_unicode_constructor_failure_cleanup_ir(tmp_path):
     source = tmp_path / "unicode_constructor_control.py"
     source.write_text(CONSTRUCTOR_CONTROL_PROGRAM)
     output = tmp_path / "unicode_constructor_control.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -668,7 +668,7 @@ def test_unicode_payload_program_owned_ir(tmp_path):
     source = tmp_path / "unicode_payload.py"
     source.write_text(PROGRAM)
     output = tmp_path / "unicode_payload.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -709,7 +709,7 @@ def test_unicode_exception_control_native_all_collectors(tmp_path, pcc_diagnosti
     oracle = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, timeout=15)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / 'unicode_control'
-    python_program_compiler(str(path), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(path), str(binary), backend='self',
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         actual = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -727,7 +727,7 @@ def test_unicode_payload_native_all_collectors(tmp_path, pcc_diagnostic_runtime_
     oracle = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, timeout=15)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / 'unicode_payload'
-    python_program_compiler(str(path), str(binary), backend='self', libpython_mode='off',
+    python_program_compiler(str(path), str(binary), backend='self',
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         actual = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

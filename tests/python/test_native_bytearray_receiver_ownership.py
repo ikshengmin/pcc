@@ -55,7 +55,7 @@ def main():
 main()
 ''', encoding="utf-8")
     output = tmp_path / "receiver"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(

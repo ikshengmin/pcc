@@ -1153,7 +1153,7 @@ def test_aggregate_ownership_native_five_gc(
         start_ns = time.monotonic_ns()
         try:
             compiler(
-                str(source), str(binary), backend="self", libpython_mode="off",
+                str(source), str(binary), backend="self",
                 ir_scaffold_mode="on", runtime_archive=str(archive), **compile_options,
             )
         finally:

@@ -189,7 +189,6 @@ def test_may_park_completion_native_preserves_prior_argument_and_finalizer(
         str(source),
         str(executable),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )

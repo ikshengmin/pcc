@@ -93,8 +93,8 @@ def py_os_environ_snapshot():
 
     ``os.environ`` is a compiler-recognised special form with no object
     behind it, so iteration, ``keys``/``items`` and ``dict(...)`` had no
-    lowering at all and fell through to CPython.  Under
-    ``--python-libpython=off`` that stubbed out every enclosing function,
+    lowering at all and fell through to CPython.  The native pipeline
+    therefore stubbed out every enclosing function,
     including ``run_runtime_make`` -- which is why pcc1 could not rebuild
     its own runtime archive.
 

@@ -675,8 +675,7 @@ def _elf_ordinary_environment():
 
 
 def _elf_argv(root):
-    return [sys.executable, "-m", "pcc", "--backend", "self", "--python-libpython", "off",
-            "--ir-scaffold=on", str(root / "pcc/__main__.py"), "-o", str(root / "stage1")]
+    return [sys.executable, "-m", "pcc", "--backend", "self", "--ir-scaffold=on", str(root / "pcc/__main__.py"), "-o", str(root / "stage1")]
 
 
 def _elf_owned_function(function, module, qualname):

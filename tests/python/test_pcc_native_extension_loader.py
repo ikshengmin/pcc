@@ -264,7 +264,7 @@ def _compile_typedemo_extension(tmp_path: Path) -> Path:
     # static PyTypeObject is registered via PyType_Ready, exposed on the module,
     # and instantiated through tp_new=PyType_GenericNew. This is the reduced
     # numpy type-registration pattern; it must import + instantiate under strict
-    # no-libpython (--python-libpython=off --backend self).
+    # no-libpython (--backend self).
     return _compile_extension(
         tmp_path,
         "typedemo",
@@ -13384,7 +13384,6 @@ def _compile_main(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -13434,7 +13433,6 @@ def test_pcc_native_extension_import_runs_under_self_backend_no_libpython(tmp_pa
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -13636,7 +13634,6 @@ def test_pcc_native_custom_type_pytype_ready_under_self_backend_no_libpython(tmp
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -13770,7 +13767,6 @@ def test_pcc_native_builtin_py_type_mapping_under_self_backend_no_libpython(tmp_
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -13810,7 +13806,6 @@ def test_pcc_native_subtype_check_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -13881,7 +13876,7 @@ def test_pcc_native_link_symbols_behave_under_self_backend_no_libpython(tmp_path
     py_capi_shim.c for numpy's no-libpython link surface (PyTuple_GetSlice,
     PyObject_AsFileDescriptor, Py_GenericAlias, PyUnicode_AsLatin1String,
     PyErr_NormalizeException). They were link-validated only; this exercises
-    them at runtime under strict --python-libpython=off --backend self.
+    them at runtime under strict --backend self.
     check() returns 31 when all five behave correctly."""
     site = _compile_linksym_extension(tmp_path)
     main = tmp_path / "main.py"
@@ -13898,7 +13893,6 @@ def test_pcc_native_link_symbols_behave_under_self_backend_no_libpython(tmp_path
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -13924,7 +13918,7 @@ def test_pcc_native_contextvar_get_under_self_backend_no_libpython(tmp_path):
     ContextVar at import and numpy alloc.c calls PyContextVar_Set. check() returns
     7: Get returns the var's own default (5) for a NULL default arg, the explicit
     default arg (9) when unset, and the set value (7) after Set — correct CPython
-    single-context semantics under strict --python-libpython=off."""
+    single-context semantics under the native pipeline."""
     site = _compile_contextvar_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text(
@@ -13949,7 +13943,6 @@ def test_pcc_native_contextvar_get_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14005,7 +13998,7 @@ def test_pcc_native_vaparse_tuple_and_keywords_under_self_backend_no_libpython(
     PyArg_VaParseTupleAndKeywords va_list-core delegation (canonical CPython
     refactor; PyArg_VaParseTupleAndKeywords is the symbol numpy's C core
     references). check(10, 20) parses "ll" through the core and returns 1020
-    under strict --python-libpython=off --backend self."""
+    under strict --backend self."""
     site = _compile_vaparse_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text(
@@ -14023,7 +14016,6 @@ def test_pcc_native_vaparse_tuple_and_keywords_under_self_backend_no_libpython(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14048,7 +14040,7 @@ def test_pcc_native_eval_getbuiltins_under_self_backend_no_libpython(tmp_path):
     and returns NULL gracefully if absent, so an empty real dict is import-safe.
     check() returns 7: GetBuiltins is a non-NULL real dict, an absent key yields
     NULL without crashing, and it is a mutable persistent singleton (borrowed-ref
-    semantics) under strict --python-libpython=off --backend self."""
+    semantics) under strict --backend self."""
     site = _compile_getbuiltins_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import ebdemo\nprint('eb', ebdemo.check())\n", encoding="utf-8")
@@ -14065,7 +14057,6 @@ def test_pcc_native_eval_getbuiltins_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14088,7 +14079,7 @@ def test_pcc_native_uniquely_referenced_under_self_backend_no_libpython(tmp_path
     """Behavioral regression for PyUnstable_Object_IsUniquelyReferenced (full
     numpy _core references it for safe in-place mutation). check() returns 3 when
     a freshly-created object (refcount 1) is uniquely referenced and, after
-    Py_INCREF (refcount 2), it is not — under strict --python-libpython=off."""
+    Py_INCREF (refcount 2), it is not — under the native pipeline."""
     site = _compile_uniqueref_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import urdemo\nprint('ur', urdemo.check())\n", encoding="utf-8")
@@ -14104,7 +14095,6 @@ def test_pcc_native_uniquely_referenced_under_self_backend_no_libpython(tmp_path
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14129,7 +14119,7 @@ def test_pcc_native_import_and_vectorcall_under_self_backend_no_libpython(tmp_pa
     numpy _core. The caller extension imports the sibling `demo` extension by name
     and invokes demo.add(2, 3) through the vectorcall entry. check() returns 7
     (import non-NULL, attr reachable, call == 5) under strict
-    --python-libpython=off --backend self."""
+    --backend self."""
     site = _compile_demo_extension(tmp_path)
     _compile_import_vectorcall_extension(tmp_path)  # same site as demo
     main = tmp_path / "main.py"
@@ -14147,7 +14137,6 @@ def test_pcc_native_import_and_vectorcall_under_self_backend_no_libpython(tmp_pa
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14227,7 +14216,7 @@ def test_pcc_native_sys_getobject_flags_under_self_backend_no_libpython(tmp_path
     check() returns 7: PySys_GetObject("flags") is a non-NULL real namespace,
     flags.optimize == 0 (accurate for pcc's no-O compile, matching numpy's exact
     PyObject_GetAttrString pattern), and an unprovided sys attr returns NULL —
-    under strict --python-libpython=off --backend self."""
+    under strict --backend self."""
     site = _compile_sysflags_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import sfdemo\nprint('sf', sfdemo.check())\n", encoding="utf-8")
@@ -14243,7 +14232,6 @@ def test_pcc_native_sys_getobject_flags_under_self_backend_no_libpython(tmp_path
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14267,7 +14255,7 @@ def test_pcc_native_generic_getdict_under_self_backend_no_libpython(tmp_path):
     installs as a `__dict__` getset. A module-level function gets the module as
     self; check() returns 3 when PyObject_GenericGetDict(self, NULL) is a non-NULL
     dict that contains the module's own "check" entry — under strict
-    --python-libpython=off --backend self."""
+    --backend self."""
     site = _compile_genericgetdict_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import gddemo\nprint('gd', gddemo.check())\n", encoding="utf-8")
@@ -14283,7 +14271,6 @@ def test_pcc_native_generic_getdict_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14306,7 +14293,7 @@ def test_pcc_native_seqiter_under_self_backend_no_libpython(tmp_path):
     """Behavioral regression for PySeqIter_New (batch 17) — a real sequence
     iterator driven through the C-API PyIter_Next path. check() returns 1 when
     iterating the tuple (10,20,30) yields exactly those 3 values (sum 60) then
-    NULL, under strict --python-libpython=off --backend self."""
+    NULL, under strict --backend self."""
     site = _compile_seqiter_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import sidemo\nprint('si', sidemo.check())\n", encoding="utf-8")
@@ -14323,7 +14310,6 @@ def test_pcc_native_seqiter_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14346,7 +14332,7 @@ def test_pcc_native_pymethod_new_under_self_backend_no_libpython(tmp_path):
     """Behavioral regression for PyMethod_New (batch 17) — binds a function to a
     self via the runtime's instance-method machinery. check() returns 7 when the
     func is reachable, PyMethod_New(func, self) is non-NULL, and the result is a
-    real callable, under strict --python-libpython=off --backend self."""
+    real callable, under strict --backend self."""
     site = _compile_pymethod_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import mndemo\nprint('mn', mndemo.check())\n", encoding="utf-8")
@@ -14362,7 +14348,6 @@ def test_pcc_native_pymethod_new_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14386,7 +14371,7 @@ def test_pcc_native_batch18_host_symbols_under_self_backend_no_libpython(tmp_pat
     PyDict_Merge, PyUnicode_Format, PyObject_GenericGetAttr/SetAttr), all routed
     to existing pcc primitives. check() returns 15 when copy/merge/format and the
     generic getattr/setattr round-trip all behave, under strict
-    --python-libpython=off --backend self."""
+    --backend self."""
     site = _compile_batch18_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import b18demo\nprint('b18', b18demo.check())\n", encoding="utf-8")
@@ -14402,7 +14387,6 @@ def test_pcc_native_batch18_host_symbols_under_self_backend_no_libpython(tmp_pat
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14426,7 +14410,7 @@ def test_pcc_native_batch19_host_symbols_under_self_backend_no_libpython(tmp_pat
     PySlice_GetIndicesEx, PyArg_UnpackTuple, PyDictProxy_New, PyObject_Init).
     check() returns 31 when slice index computation (both an explicit and an
     all-None slice), tuple unpacking, the dict proxy read, and PyObject_Init
-    passthrough all behave, under strict --python-libpython=off --backend self."""
+    passthrough all behave, under strict --backend self."""
     site = _compile_batch19_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import b19demo\nprint('b19', b19demo.check())\n", encoding="utf-8")
@@ -14442,7 +14426,6 @@ def test_pcc_native_batch19_host_symbols_under_self_backend_no_libpython(tmp_pat
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14467,7 +14450,7 @@ def test_pcc_native_batch2021_host_symbols_under_self_backend_no_libpython(tmp_p
     the symbols that let all 98 numpy _core files compile and link. check()
     returns 15 when KIND/READ_CHAR/1BYTE_DATA read the UTF-8 buffer correctly,
     PyNumber_Divmod(17,5)==(3,2), and _Py_HashDouble(NULL,2.0)==2, under strict
-    --python-libpython=off --backend self."""
+    --backend self."""
     site = _compile_batch2021_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import b21demo\nprint('b21', b21demo.check())\n", encoding="utf-8")
@@ -14483,7 +14466,6 @@ def test_pcc_native_batch2021_host_symbols_under_self_backend_no_libpython(tmp_p
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14520,7 +14502,6 @@ def test_pcc_native_unicode_writer_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14558,7 +14539,6 @@ def test_pcc_native_decode_heaptype_batch_under_self_backend_no_libpython(tmp_pa
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14602,7 +14582,6 @@ def test_pcc_native_simplejson_final_api_batch_under_self_backend_no_libpython(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14644,7 +14623,6 @@ def test_capi_import_sees_compiled_python_module_under_self_backend_no_libpython
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14686,7 +14664,6 @@ def test_capi_import_sees_native_math_module_under_self_backend_no_libpython(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14733,8 +14710,6 @@ def test_capi_import_sees_explicit_pcc_python_math_port_under_self_backend(
             str(exe),
             "--backend",
             "self",
-            "--python-libpython",
-            "off",
             "--ir-scaffold",
             "on",
             f"{main}=main",
@@ -14780,7 +14755,6 @@ def test_capi_import_sees_pcc_python_builtin_module_graph_under_self_backend(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14804,7 +14778,7 @@ def test_pcc_native_batch22_host_symbols_under_self_backend_no_libpython(tmp_pat
     PyFloat_FromString, PyLong_AsLongLongAndOverflow, PySlice_AdjustIndices) from
     numpy's C++ umath layer. check() returns 15 when str->int, str->float,
     long-long-with-overflow, and slice-index adjustment all behave, under strict
-    --python-libpython=off --backend self."""
+    --backend self."""
     site = _compile_batch22_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import b22demo\nprint('b22', b22demo.check())\n", encoding="utf-8")
@@ -14820,7 +14794,6 @@ def test_pcc_native_batch22_host_symbols_under_self_backend_no_libpython(tmp_pat
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14843,7 +14816,7 @@ def test_pcc_native_set_type_under_self_backend_no_libpython(tmp_path):
     """Behavioral regression for Py_SET_TYPE -> pcc_capi_set_type (batch 23), the
     sole symbol undefined when link-testing numpy's full _core. check() returns 3
     when a fresh Foo instance reports type Foo and, after Py_SET_TYPE(o, &BarType),
-    reports type Bar, under strict --python-libpython=off --backend self."""
+    reports type Bar, under strict --backend self."""
     site = _compile_settype_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import stdemo2\nprint('st2', stdemo2.check())\n", encoding="utf-8")
@@ -14859,7 +14832,6 @@ def test_pcc_native_set_type_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14883,7 +14855,7 @@ def test_pcc_native_multiphase_init_under_self_backend_no_libpython(tmp_path):
     _multiarray_umath uses it): PyInit returns PyModuleDef_Init(&def) with a
     Py_mod_exec slot, and the no-libpython loader must build the module + run the
     exec slot. The slot registers answer=42; this asserts mpdemo.answer == 42,
-    proving the loader executes Py_mod_exec under --python-libpython=off."""
+    proving the loader executes Py_mod_exec in the native pipeline."""
     site = _compile_multiphase_extension(tmp_path)
     main = tmp_path / "main.py"
     main.write_text("import mpdemo\nprint('mp', mpdemo.answer)\n", encoding="utf-8")
@@ -14899,7 +14871,6 @@ def test_pcc_native_multiphase_init_under_self_backend_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14943,7 +14914,6 @@ def test_pcc_native_extension_capsule_roundtrip_under_self_backend_no_libpython(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -14989,7 +14959,6 @@ def test_pcc_native_extension_capsule_import_loads_provider_under_self_backend_n
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",
@@ -16440,7 +16409,6 @@ def test_pcc_native_multiphase_capi_surface_default_runtime(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

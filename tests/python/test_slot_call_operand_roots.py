@@ -785,7 +785,7 @@ def test_original_integer_constructors_pipeline_ir_only(tmp_path, monkeypatch):
     output = source.with_suffix(".ll")
     source.write_text(CONSTRUCTORS)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     verify_ir_text(text)

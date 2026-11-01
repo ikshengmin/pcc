@@ -264,7 +264,6 @@ def test_pcc1_starred_unknown_positional_uses_required_args(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "--emit-llvm=" + str(out),

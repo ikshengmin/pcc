@@ -45,7 +45,7 @@ def test_inline_factory_preserves_python_lifetimes(tmp_path, monkeypatch, pcc_ru
     source = tmp_path / "lifetimes.py"
     source.write_text(PROGRAM)
     binary = tmp_path / "lifetimes"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
@@ -64,7 +64,7 @@ def test_inline_factory_is_default_and_legacy_bulk_control_wins(tmp_path, monkey
             monkeypatch.setenv("PCC_INLINE_GENERATOR_FRAMES", enabled)
         monkeypatch.setenv("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", legacy)
         output = tmp_path / (str(enabled) + legacy + ".ll")
-        compile_python(str(source), str(output), backend="self", libpython_mode="off",
+        compile_python(str(source), str(output), backend="self",
                        ir_scaffold_mode="on", emit_llvm_only=True)
         calls = [line for line in output.read_text().splitlines() if "call " in line]
         assert any("@py_gen_inline_frame_new(" in line for line in calls) == expected

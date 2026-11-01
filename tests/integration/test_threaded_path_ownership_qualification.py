@@ -198,7 +198,7 @@ def _program(toolchain, directory, fixture_name, gc_backend, *, normalized=False
     if source.suffix == ".c":
         command.extend(["--freestanding-libc", "--cpp-arg=-I" + str(source_root / "pcc/runtime/include")])
     else:
-        command.extend(["--python-libpython", "off", "--ir-scaffold", "on"])
+        command.extend(["--ir-scaffold", "on"])
     command.extend([str(source), "-o", str(executable)])
     _run(command, cwd=directory, environment=environment, label="compile", timeout=180,
          identities=inputs)

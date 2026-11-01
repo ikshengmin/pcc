@@ -28,7 +28,7 @@ main()
     oracle = subprocess.run([sys.executable, str(source)], capture_output=True,
                             text=True, timeout=10, check=True)
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

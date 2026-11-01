@@ -108,7 +108,7 @@ def test_dynamic_property_store_and_delete_match_cpython(tmp_path, mode):
     assert expected.returncode == 0, expected.stderr
     compile_python(
         str(src), str(exe),
-        libpython_mode="off", ir_scaffold_mode=mode, backend="self",
+        ir_scaffold_mode=mode, backend="self",
     )
     for backend in ("0", "1", "2", "3", "4"):
         run = subprocess.run(

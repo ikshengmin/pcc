@@ -65,7 +65,6 @@ def build_runtime_report() -> RuntimeReport:
     env = {
         "PCC_WITH_THREADS": os.environ.get("PCC_WITH_THREADS", "1"),
         "PCC_REFCOUNT_KIND": os.environ.get("PCC_REFCOUNT_KIND", "default"),
-        "PCC_PYTHON_LIBPYTHON": os.environ.get("PCC_PYTHON_LIBPYTHON", "off"),
     }
     capabilities = (
         Capability(

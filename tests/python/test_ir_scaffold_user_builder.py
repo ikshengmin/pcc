@@ -256,7 +256,6 @@ def test_user_builder_names_execute_natively(tmp_path, pcc_runtime_archive):
         str(source),
         str(binary),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )

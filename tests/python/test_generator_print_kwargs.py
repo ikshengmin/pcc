@@ -37,7 +37,7 @@ def test_generator_single_and_empty_print_kwargs_reach_owned_emitter(tmp_path, m
     source = tmp_path / "generator_print.py"
     source.write_text(PROGRAM)
     output = tmp_path / "generator_print.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     text = output.read_text()
     assert "@py_print_many(" in text
@@ -52,7 +52,7 @@ def test_native_generator_print_keywords_all_gcs(
     source.write_text(PROGRAM)
     binary = tmp_path / "generator_print"
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", ir_scaffold_mode="on",
+                            ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True,

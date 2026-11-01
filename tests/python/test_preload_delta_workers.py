@@ -222,7 +222,7 @@ def test_known_mixed_worker_tasks_and_unknown_commands_are_distinct(tmp_path):
     workers.write_worker_manifest(
         str(manifest), str(tmp_path / "result.json"), str(tmp_path),
         str(exports_path), "", [str(source)], ["module"], [0],
-        entry_module="module", sibling_inits=[], libpython_mode="off",
+        entry_module="module", sibling_inits=[],
         ir_scaffold_mode="on", verbose=False, job_kind="export",
     )
     codegen = shlex.join([

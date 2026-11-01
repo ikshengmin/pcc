@@ -6,7 +6,7 @@ calls the pcc-Python component-diff helper in ``py_os_path.py``, which
 normalises '.'/'..' while splitting (so it is correct even though the native
 abspath only cwd-prefixes and does not itself run normpath). This runtime test
 verifies the VALUES match CPython on ``--backend self
---python-libpython=off`` (a generic B-P0-PKG fallback shrink).
+`` (a generic B-P0-PKG fallback shrink).
 """
 from __future__ import annotations
 import os, subprocess
@@ -20,8 +20,7 @@ def _run(tmp_path, body):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     b = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(main), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(main), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert b.returncode == 0, b.stdout + b.stderr

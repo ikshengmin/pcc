@@ -178,7 +178,7 @@ def test_shared_containers_survive_four_carriers_on_five_collectors(tmp_path, th
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "shared_containers"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         for attempt in range(3):

@@ -54,7 +54,7 @@ def test_str_decode_constructor_as_operand_on_five_collectors(
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "str_decode"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

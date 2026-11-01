@@ -363,7 +363,7 @@ def test_closure_cell_shapes_execute_all_collectors(
     path.write_text(source)
     output = tmp_path / name
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
-    python_program_compiler(str(path), str(output), backend='self', libpython_mode='off',
+    python_program_compiler(str(path), str(output), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,
@@ -407,7 +407,7 @@ def test_cell_lowering_uses_registered_host_calls(tmp_path):
                 modules.append(name)
     assert module in modules
     counts = compile_contextual_per_module_fallback_counts(
-        sources, modules, {module}, ir_scaffold_mode='on', strict_no_libpython=True,
+        sources, modules, {module}, ir_scaffold_mode='on',
         emit_ir_dir=str(tmp_path),
     )
     assert counts == {module: 0}

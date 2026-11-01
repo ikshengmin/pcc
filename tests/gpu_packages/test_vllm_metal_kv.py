@@ -12,7 +12,7 @@ WHAT THIS GATE PROVES
 WHAT THIS GATE EXPLICITLY DOES NOT PROVE
   - No pcc-native vLLM / MLX / Metal execution.
   - No attention math, no KV tensor movement, no throughput/scaling/serving.
-  - The ``--python-libpython=off`` CPython-extension rejection is exercised
+  - The the native pipeline CPython-extension rejection is exercised
     through the real generic linkage scanner; this gate does not build or run
     pcc1.
 
@@ -200,7 +200,7 @@ def test_kv_block_free_queue_tail_lru_order():
 
 
 # ==========================================================================
-# 3. --python-libpython=off package boundary (real linkage scan; no pcc1 build)
+# 3. no-libpython package boundary (real linkage scan; no pcc1 build)
 # ==========================================================================
 
 

@@ -273,7 +273,7 @@ def test_int_float_comparison_is_exact(
     assert reference.stdout == EXPECTED
     binary = tmp_path / "int_float_exact_compare"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

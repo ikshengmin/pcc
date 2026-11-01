@@ -24,7 +24,7 @@ def test_owned_native_posix_provider_target_contract(tmp_path, provider):
     src.write_text(source)
     exe = tmp_path / (provider + (".exe" if os.name == "nt" else ""))
     built = run_cli(
-        ["--backend", "self", "--python-libpython=off", "--ir-scaffold=on",
+        ["--backend", "self", "--ir-scaffold=on",
          str(src), "-o", str(exe)],
         timeout=120,
     )

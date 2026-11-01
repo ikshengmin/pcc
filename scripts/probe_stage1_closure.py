@@ -26,10 +26,6 @@ import tempfile
 import traceback
 
 
-def _set_env_defaults() -> None:
-    os.environ.setdefault("PCC_PYTHON_LIBPYTHON", "off")
-
-
 def _try_per_module_lower(srcs: list[str], mods: list[str]):
     """Compile each module independently to surface codegen failures
     without aborting on the first error."""
@@ -47,8 +43,6 @@ def _try_per_module_lower(srcs: list[str], mods: list[str]):
             with open(src, "r", encoding="utf-8") as f:
                 source = f.read()
             ast_mod = parse_and_lift(source, src, mod)
-            stage = "needs_libpython"
-            needs = _pipeline._module_needs_libpython(ast_mod, native_modules=mods)
             stage = "type_infer"
             typed = _type_infer.infer_module(ast_mod)
             stage = "codegen"
@@ -61,14 +55,12 @@ def _try_per_module_lower(srcs: list[str], mods: list[str]):
             ok = False
             err = f"{type(e).__name__}: {e}"
             cpy_calls = 0
-            needs = None
         results.append({
             "module": mod,
             "src": src,
             "ok": ok,
             "fail_stage": None if ok else stage,
             "error": err,
-            "needs_libpython_ast": needs,
             "py_cpy_calls": cpy_calls,
         })
     return results
@@ -99,7 +91,6 @@ def _try_full_multi_compile(srcs: list[str], mods: list[str]) -> tuple[bool, str
                 emit_llvm_only=True,
                 entry_module=mods[0],
                 module_names=mods,
-                libpython_mode="off",
                 backend="self",
             )
             if os.path.exists(out_path):
@@ -180,7 +171,6 @@ def _record_provider_admission(records, *, lexical_only):
 def _discover_stage1_closure(
     entry_src: str,
     *,
-    libpython_mode: str = "off",
     ir_scaffold_mode: str | None = None,
     recursive_stdlib: bool = False,
     lexical_only: bool = False,
@@ -192,7 +182,6 @@ def _discover_stage1_closure(
     if not os.path.isfile(entry_src):
         raise pipeline.PyPipelineError("input file not found: " + entry_src)
     module_name = pipeline._module_name_from_src(entry_src)
-    libpython_mode = pipeline._resolve_libpython_mode(libpython_mode)
     ir_scaffold_mode = pipeline._resolve_ir_scaffold_mode(ir_scaffold_mode)
     direct_indexed_assembly = str(
         os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
@@ -204,7 +193,6 @@ def _discover_stage1_closure(
                 entry_src,
                 module_name,
                 emit_llvm_only=False,
-                libpython_mode=libpython_mode,
                 ir_scaffold_mode=ir_scaffold_mode,
                 recursive_stdlib=recursive_stdlib,
                 python_library=False,
@@ -217,9 +205,7 @@ def _discover_stage1_closure(
                 recursive_stdlib=effective_recursive_stdlib,
                 ir_scaffold_mode=ir_scaffold_mode,
             )
-            pipeline._validate_package_site_no_libpython_abi(
-                sources, libpython_mode=libpython_mode,
-            )
+            pipeline._validate_package_site_native_abi(sources)
     if (not modules or len(sources) != len(modules)
             or len(set(modules)) != len(modules) or module_name not in modules):
         raise pipeline.PyPipelineError("invalid production source closure")
@@ -228,7 +214,6 @@ def _discover_stage1_closure(
         "entry_source": entry_src,
         "backend": "self",
         "target": pipeline._host_target_triple_for_self_backend(),
-        "libpython_mode": libpython_mode,
         "ir_scaffold_mode": ir_scaffold_mode,
         "recursive_stdlib_requested": recursive_stdlib,
         "recursive_stdlib_effective": effective_recursive_stdlib,
@@ -308,10 +293,6 @@ def main(argv=None) -> int:
     sys.path.insert(0, str(root))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--entry", type=Path, default=root / "pcc" / "__main__.py")
-    parser.add_argument(
-        "--python-libpython", choices=("off", "auto", "on"),
-        default=os.environ.get("PCC_BOOTSTRAP_PYTHON_LIBPYTHON") or "off",
-    )
     parser.add_argument("--ir-scaffold", choices=("off", "auto", "on"))
     parser.add_argument("--recursive-stdlib", action="store_true")
     parser.add_argument(
@@ -328,7 +309,6 @@ def main(argv=None) -> int:
     try:
         sources, modules, options, admissions = _discover_stage1_closure(
             str(args.entry),
-            libpython_mode=args.python_libpython,
             ir_scaffold_mode=args.ir_scaffold,
             recursive_stdlib=args.recursive_stdlib,
             lexical_only=args.lexical_only,

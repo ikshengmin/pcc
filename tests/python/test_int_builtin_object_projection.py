@@ -46,7 +46,7 @@ def _assert_native_matches_python(tmp_path, program):
     )
     assert reference.returncode == 0, reference.stderr
     compile_python(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(
@@ -125,7 +125,7 @@ def test_int_object_consumers_emit_object_runtime_calls(tmp_path):
     output = tmp_path / "projection_ir.ll"
     source.write_text(CONSUMERS)
     compile_python(
-        str(source), str(output), backend="self", libpython_mode="off",
+        str(source), str(output), backend="self",
         ir_scaffold_mode="on", emit_llvm_only=True,
     )
     emitted = output.read_text()

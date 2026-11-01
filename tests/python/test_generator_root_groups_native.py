@@ -133,7 +133,7 @@ def test_generator_root_groups_repository_native(tmp_path):
     receipt = {
         "schema": "pcc.generator-root-groups-native.v1",
         "compiler": "host-pcc0", "native_pcc1": "UNRUN",
-        "backend": "self", "libpython_mode": "off", "ir_scaffold_mode": "on",
+        "backend": "self", "ir_scaffold_mode": "on",
         "source": str(_SOURCE), "source_relocated": False,
         "compile": {"status": "UNRUN"}, "actual_group_contract": {"status": "UNRUN"},
         "cases": {case: {"reference": {"status": "UNRUN"}, "executions": [

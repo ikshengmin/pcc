@@ -261,7 +261,7 @@ def test_actual_helper_emits_one_strong_full_word_cas(tmp_path):
     output = tmp_path / "actual_mark_color.ll"
     path.write_text(source, encoding="utf-8")
     pipeline.compile_python(str(path), str(output), emit_llvm_only=True,
-                            libpython_mode="off", python_library=True)
+                            python_library=True)
     text = output.read_text(encoding="utf-8")
     verify_ir_text(text)
     assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES["pcc_gc_set_mark_color"] == (("c_ptr", "c_int64"), "c_void")

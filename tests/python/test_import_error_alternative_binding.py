@@ -55,7 +55,7 @@ def _build_and_run(tmp_path: Path, primary: str) -> str:
     source = tmp_path / "alt_main.py"
     source.write_text(dedent(_ENTRY.format(primary=primary)), encoding="utf-8")
     exe = tmp_path / "alt_main"
-    compile_python(str(source), str(exe), libpython_mode="off", ir_scaffold_mode="on", backend="self")
+    compile_python(str(source), str(exe), ir_scaffold_mode="on", backend="self")
     proc = subprocess.run([str(exe)], text=True, capture_output=True, check=True, timeout=30)
     return proc.stdout.strip()
 

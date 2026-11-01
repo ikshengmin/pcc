@@ -16,7 +16,7 @@ py_obj_stubs, registered in runtime_abi).
 Frontend: `_maybe_emit_bytearray_insert_stmt` (statement form, re-binds the
 target) + a ByteArrayType `pop` branch in method_call_expression_lowering
 (expression form, returns the popped tagged int). Runs under
-``--backend self --python-libpython=off`` in DEFAULT runtime mode (which links
+``--backend self`` in DEFAULT runtime mode (which links
 the pcc-Python port), so the port must implement the helpers too.
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30, env=env)
     assert r.returncode == 0, r.stderr

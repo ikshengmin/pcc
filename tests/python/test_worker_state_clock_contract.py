@@ -52,7 +52,7 @@ def _build_clock_probe(directory, *, mock_darwin):
                           lambda self: "darwin")
         pipeline.compile_python(
             str(PLATFORM_SOURCE), str(llvm_ir), emit_llvm_only=True,
-            libpython_mode="off", python_library=True,
+            python_library=True,
         )
     obj = directory / "platform_time.o"
     obj.write_bytes(emit_owned_object(llvm_ir.read_text(), host_target_triple()))
@@ -170,7 +170,7 @@ def test_windows_clock_lowering_preserves_logical_kinds(tmp_path, monkeypatch):
     output = tmp_path / "windows_platform_time.ll"
     pipeline.compile_python(
         str(PLATFORM_SOURCE), str(output), emit_llvm_only=True,
-        libpython_mode="off", python_library=True,
+        python_library=True,
     )
     ir_text = output.read_text()
     calls = [line for line in ir_text.splitlines()

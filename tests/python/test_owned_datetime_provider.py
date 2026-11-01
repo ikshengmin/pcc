@@ -249,7 +249,7 @@ def test_iso_time_formatter_has_real_no_libpython_body(tmp_path):
     output = tmp_path / "datetime.ll"
     compile_python(str(Path(owned_datetime.__file__)), str(output),
                    emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self")
+                   ir_scaffold_mode="on", backend="self")
     text = output.read_text()
     body = re.search(r"^define[^\n]*@user_pcc_stdlib_datetime__format_time\(.*?^}", text, re.M | re.S)
     assert body is not None
@@ -264,7 +264,7 @@ def test_timedelta_constructor_emits_type_correct_owned_object(tmp_path):
     output = tmp_path / "datetime.ll"
     compile_python(str(Path(owned_datetime.__file__)), str(output),
                    emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self",
+                   ir_scaffold_mode="on", backend="self",
                    recursive_stdlib=True, target_triple="arm64-apple-darwin")
     # Parsing alone missed a boxed float passed as a double to fabs after
     # timedelta's modf branch join. Actual owned emission verifies operands.

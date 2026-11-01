@@ -22,7 +22,7 @@ WHAT THIS GATE PROVES
 WHAT THIS GATE EXPLICITLY DOES NOT PROVE
   - No pcc-native MiniMind / PyTorch / MLX / Metal execution.
   - No real training, no serving, no throughput/accuracy/scaling claim.
-  - The ``--python-libpython=off`` rejection of a CPython/PyTorch-shaped
+  - The the native pipeline rejection of a CPython/PyTorch-shaped
     extension artifact is exercised through the real generic linkage scanner;
     no pcc1 execution claim is made.
 
@@ -271,7 +271,7 @@ def test_inference_load_failure_classification():
 
 
 # ==========================================================================
-# 5. --python-libpython=off package boundary (real linkage scan; no pcc1 build)
+# 5. no-libpython package boundary (real linkage scan; no pcc1 build)
 # ==========================================================================
 
 

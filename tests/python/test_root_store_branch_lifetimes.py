@@ -58,7 +58,7 @@ def test_root_replacement_finalizers_and_resurrection_all_gc(tmp_path, pcc_runti
     reference = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=15)
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, "ROOT_REPLACEMENT_OK\n", "")
     output = tmp_path / "root_replacement"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         for probe in ("0", "2"):

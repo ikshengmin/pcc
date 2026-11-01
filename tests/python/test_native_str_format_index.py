@@ -47,7 +47,6 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
 
@@ -217,7 +216,7 @@ def test_str_format_nested_field_spec_matches_cpython(tmp_path, monkeypatch):
     ``None`` whenever the spec contained ``{`` or ``}`` (and the field scanner
     stopped at the first ``}``, mis-parsing the outer field), so any
     ``str.format`` with a runtime width/precision forced the libpython
-    fallback — a hard error under ``--python-libpython=off``. CPython assigns
+    fallback — a hard error under the native pipeline. CPython assigns
     auto field numbers in textual order: the outer field first, then the
     nested spec fields.
     """

@@ -88,7 +88,7 @@ def main():
 main()
 '''.replace("BODY", bodies[shape]).replace("SHAPE", shape))
     binary = tmp_path / "comp_owners"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run(

@@ -55,7 +55,7 @@ def test_join_matches_cpython_on_five_collectors(tmp_path, threaded_pcc_runtime_
     assert expected.returncode == 0, expected.stderr
     executable = tmp_path / "join_semantics"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,
@@ -110,7 +110,7 @@ def test_join_of_a_list_mutated_on_other_carriers(tmp_path, threaded_pcc_runtime
     source.write_text(CONCURRENT, encoding="utf-8")
     executable = tmp_path / "join_concurrent"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         for attempt in range(3):

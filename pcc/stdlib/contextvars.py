@@ -1,7 +1,7 @@
 """pcc.stdlib.contextvars - context variables without libpython.
 
-CPython's `contextvars` is a C extension module, so importing it under
-`--python-libpython=off` emits `py_cpy_ensure_init()` and the enclosing
+CPython's `contextvars` is a C extension module, so importing it in the
+native pipeline emits `py_cpy_ensure_init()` and the enclosing
 function is replaced by a fail-closed stub. `asyncio.Task.__init__` calls
 `copy_context()`, so that single import made every task construction
 unavailable natively.

@@ -80,7 +80,7 @@ def shapes_ir(tmp_path, monkeypatch):
     output = tmp_path / "moving_owners.ll"
     source.write_text(SHAPES)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   python_library=True, backend="self", libpython_mode="off",
+                   python_library=True, backend="self",
                    ir_scaffold_mode="on")
     return output.read_text()
 
@@ -133,7 +133,7 @@ def test_runtime_saved_exception_stays_pinned_across_callback(tmp_path, monkeypa
     source = Path(__file__).resolve().parents[2] / "pcc/runtime/py" / (module + ".py")
     output = tmp_path / (module + ".ll")
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   python_library=True, backend="self", libpython_mode="off",
+                   python_library=True, backend="self",
                    ir_scaffold_mode="on")
     body = _body(output.read_text(), symbol)
     pin = body.index("@pcc_gc_pin")
@@ -302,7 +302,7 @@ def test_moving_loop_exits_reach_owned_object_emitter(tmp_path, monkeypatch, thr
     output = tmp_path / "moving.ll"
     source.write_text(NATIVE_PROGRAM)
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   python_library=True, backend="self", libpython_mode="off",
+                   python_library=True, backend="self",
                    ir_scaffold_mode="on")
     ir_text = output.read_text()
     body = _body(ir_text, "user_moving_exercise_loop_exits")
@@ -322,7 +322,7 @@ def test_native_moving_generator_iterator_and_finalizer_owners(tmp_path, pcc_run
     binary = tmp_path / "moving_owner_execution"
     source.write_text(NATIVE_PROGRAM)
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", ir_scaffold_mode="on",
+                            ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))

@@ -31,7 +31,7 @@ def native_matches_python(tmp_path, monkeypatch, numeric_c_runtime, source, refe
     assert reference.returncode == 0, reference.stderr
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(numeric_c_runtime))
     compile_python(
-        str(path), str(output), backend="self", libpython_mode="off",
+        str(path), str(output), backend="self",
         ir_scaffold_mode="on",
     )
     environment = dict(os.environ, PCC_HOST_PYTHON="/usr/bin/false")

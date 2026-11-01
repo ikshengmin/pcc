@@ -31,7 +31,7 @@ main()
     binary = tmp_path / 'ir_helpers'
     compile_python_multi([str(repo / 'pcc/ir/ir.py'), str(source)], str(binary),
                          module_names=['pcc.ir.ir', 'ir_helpers'], entry_module='ir_helpers',
-                         recursive_stdlib=True, backend='self', libpython_mode='off',
+                         recursive_stdlib=True, backend='self',
                          runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,

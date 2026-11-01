@@ -78,7 +78,7 @@ def test_private_fields_follow_the_lexical_class(
     expected = _reference(source)
     binary = tmp_path / "private_fields"
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -107,7 +107,7 @@ def test_private_fields_follow_the_lexical_class_through_direct_emission(
     )
     compiled = subprocess.run(
         [sys.executable, "-m", "pcc", "--backend", "self",
-         "--python-libpython", "off", "--ir-scaffold", "on",
+         "--ir-scaffold", "on",
          str(source), "-o", str(binary)],
         capture_output=True, text=True, timeout=300, env=env,
     )

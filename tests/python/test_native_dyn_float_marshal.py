@@ -29,7 +29,6 @@ def test_dyn_float_value_can_enter_object_container(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

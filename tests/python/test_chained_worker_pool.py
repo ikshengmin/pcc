@@ -121,7 +121,7 @@ main()
         [str(Path(worker_process_pool.__file__)), str(parent_source)], str(parent),
         module_names=["pcc.frontends.python.worker_process_pool", "chained_parent"],
         entry_module="chained_parent", recursive_stdlib=True,
-        backend="self", libpython_mode="off", runtime_archive=str(pcc_runtime_archive),
+        backend="self", runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):
         case = tmp_path / f"gc{gc}"

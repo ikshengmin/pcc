@@ -85,8 +85,7 @@ def test_temporary_call_arguments_are_released(tmp_path):
     env["PCC_GC_BACKEND"] = "0"
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=600, env=env,
     )

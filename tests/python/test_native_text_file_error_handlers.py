@@ -143,7 +143,6 @@ def test_native_text_files_accept_codec_error_handlers(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     native = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120)
     assert native.returncode == 0, native.stderr

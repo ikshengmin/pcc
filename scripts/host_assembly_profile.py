@@ -88,7 +88,7 @@ def _elf_command(command, root):
     return (type(command) in (list, tuple) and len(command) == 11
             and all(type(item) is str for item in command)
             and list(command[:8]) == [sys.executable, "-m", "pcc", "--backend", "self",
-                                      "--python-libpython", "off", "--ir-scaffold=on"]
+                                      "--ir-scaffold=on"]
             and command[8] == str(Path(root) / "pcc/__main__.py") and command[9] == "-o"
             and bool(command[10]))
 

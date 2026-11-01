@@ -2,7 +2,7 @@
 strict no-libpython.
 
 These six str predicate methods had no native lowering, so under
-``--backend self --python-libpython=off`` they fell back to py_cpy_* helpers
+``--backend self`` they fell back to py_cpy_* helpers
 and the compile hard-errored (PCC-PY-COMPILE-001). Added:
   - runtime py_str_isascii / py_str_isidentifier / py_str_isprintable /
     py_str_isnumeric / py_str_isdecimal / py_str_istitle
@@ -12,7 +12,7 @@ and the compile hard-errored (PCC-PY-COMPILE-001). Added:
   - frontend string_method_lowering dispatch for the six methods, in both the
     StrType fast path and the DynType path (return i64 0/1 -> i1 bool).
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode (pcc-Python ports — the goal mode) and asserts CPython-exact
 output.
 """
@@ -33,8 +33,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # predicates are mirrored in py_str_accessors.c and the port .py.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

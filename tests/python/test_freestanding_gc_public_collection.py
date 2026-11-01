@@ -114,7 +114,6 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
         str(STRICT_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     source = llvm_ir
@@ -143,7 +142,6 @@ def _compile_llvm_object(tmp_path: Path, source_path: Path, stem: str) -> Path:
         str(source_path),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     obj = tmp_path / (stem + ".o")

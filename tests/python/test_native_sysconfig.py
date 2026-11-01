@@ -24,7 +24,6 @@ def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode=mode,
-        libpython_mode="off",
         recursive_stdlib=True,
     )
     return out.read_text(encoding="utf-8")
@@ -85,7 +84,6 @@ def test_native_sysconfig_runtime_returns_version_without_host_python(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         recursive_stdlib=True,
     )
     run_env = os.environ.copy()

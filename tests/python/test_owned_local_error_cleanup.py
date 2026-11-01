@@ -177,7 +177,7 @@ def test_owned_error_real_ir_releases_before_all_root_leaves(tmp_path, monkeypat
     _configure(monkeypatch)
     output=tmp_path/"owned-errors.ll"
     compile_python_multi([str(_source(tmp_path))],str(output),module_names=["owned_errors"],
-                         entry_module="owned_errors",backend="self",libpython_mode="off",
+                         entry_module="owned_errors",backend="self",
                          ir_scaffold_mode=scaffold,emit_llvm_only=True)
     text=output.read_text()
     for name in ("fail_two","fail_branch","fail_alias","fail_borrowed","fail_for"):
@@ -211,7 +211,7 @@ def test_host_emitted_owned_error_lifetimes(tmp_path,monkeypatch,explicit_runtim
     _configure(monkeypatch)
     output=tmp_path/"owned-errors"
     compile_python_multi([str(_source(tmp_path))],str(output),module_names=["owned_errors"],
-                         entry_module="owned_errors",backend="self",libpython_mode="off",
+                         entry_module="owned_errors",backend="self",
                          ir_scaffold_mode=scaffold,runtime_archive=str(explicit_runtime))
     for backend in (1,4):
         result=subprocess.run([str(output),str(backend)],cwd=tmp_path,text=True,capture_output=True,
@@ -273,7 +273,7 @@ def test_source_generator_error_releases_frame_while_generator_lives(tmp_path, m
     source.write_text(GENERATOR_SOURCE)
     binary = tmp_path / "source-generator-error"
     compile_python_multi([str(source)], str(binary), module_names=["source_generator_error"],
-                         entry_module="source_generator_error", backend="self", libpython_mode="off",
+                         entry_module="source_generator_error", backend="self",
                          ir_scaffold_mode=scaffold, runtime_archive=str(explicit_runtime))
     for backend in (1, 4):
         result = subprocess.run([str(binary), str(backend)], cwd=tmp_path, text=True, capture_output=True,
@@ -403,7 +403,7 @@ def test_source_generator_terminal_value_owners(tmp_path, monkeypatch, explicit_
     source.write_text(GENERATOR_PREFIX + GENERATOR_TERMINAL_CASES[case])
     binary = tmp_path / "source-generator-terminal"
     compile_python_multi([str(source)], str(binary), module_names=["source_generator_terminal"],
-                         entry_module="source_generator_terminal", backend="self", libpython_mode="off",
+                         entry_module="source_generator_terminal", backend="self",
                          ir_scaffold_mode=scaffold, runtime_archive=str(explicit_runtime))
     for backend in (1, 4):
         result = subprocess.run([str(binary), str(backend)], cwd=tmp_path, text=True, capture_output=True,
@@ -420,7 +420,7 @@ def test_source_generator_terminal_real_ir_keeps_frame_rooted(tmp_path, monkeypa
     source.write_text(GENERATOR_PREFIX + GENERATOR_TERMINAL_CASES["return_alias"])
     output = tmp_path / "source-generator-terminal.ll"
     compile_python_multi([str(source)], str(output), module_names=["source_generator_terminal"],
-                         entry_module="source_generator_terminal", backend="self", libpython_mode="off",
+                         entry_module="source_generator_terminal", backend="self",
                          ir_scaffold_mode="on", emit_llvm_only=True)
     text = output.read_text()
     body = re.search(r"^define[^\n]*@user_source_generator_terminal_source_generator__gen_resume\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)
@@ -502,7 +502,7 @@ main()
     source.write_text(GENERATOR_PREFIX + body)
     binary = tmp_path / "heap-only-generator"
     compile_python_multi([str(source)], str(binary), module_names=["heap_only_generator"],
-                         entry_module="heap_only_generator", backend="self", libpython_mode="off",
+                         entry_module="heap_only_generator", backend="self",
                          ir_scaffold_mode="on", runtime_archive=str(explicit_runtime))
     for backend in (1, 4):
         result = subprocess.run([str(binary), str(backend)], cwd=tmp_path, text=True, capture_output=True,

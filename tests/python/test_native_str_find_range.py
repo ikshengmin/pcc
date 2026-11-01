@@ -4,7 +4,7 @@ arguments, no-libpython (both tiers).
 Previously only the single-argument form lowered natively; a 2- or 3-arg
 call matched no branch in ``string_method_lowering.py`` and fell through to
 the CPython ``py_cpy_*`` surface (``PCC-PY-COMPILE-001`` under
-``--python-libpython=off``). This exercises the new ``py_str_find_range`` /
+the native pipeline). This exercises the new ``py_str_find_range`` /
 ``py_str_rfind_range`` / ``py_str_index_of_range`` /
 ``py_str_rindex_of_range`` runtime helpers (mirrored in ``py_str_accessors.c``
 and its pcc-Python port) plus both frontend lowering paths (statically-typed
@@ -69,7 +69,7 @@ def test_str_find_range_matches_cpython(tmp_path, monkeypatch, runtime_cc):
     src.write_text(PROGRAM, encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,

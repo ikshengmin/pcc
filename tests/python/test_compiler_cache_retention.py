@@ -605,7 +605,6 @@ def test_frontend_publish_survives_retention_helper_failure(
         host_python=sys.executable,
         entry_module="demo",
         sibling_inits=[],
-        libpython_mode="off",
         ir_scaffold_mode="on",
         source_root=str(Path(__file__).resolve().parents[2]),
     )

@@ -156,7 +156,7 @@ def test_native_concurrent_append_preserves_all_values_and_growth_all_gcs(
     executable = tmp_path / "append_gate"
     source.write_text(concurrent_append_source(), encoding="utf-8")
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for gc_backend in range(5):
         for mode, expected in (("original", "NEW_THREAD_IDENTITY_OK\n"),

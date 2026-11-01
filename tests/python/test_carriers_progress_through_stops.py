@@ -115,7 +115,7 @@ def test_carriers_progress_through_stops_on_five_collectors(tmp_path, threaded_p
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "carrier_stops"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         for run in range(3):

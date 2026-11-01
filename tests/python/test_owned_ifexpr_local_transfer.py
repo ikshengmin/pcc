@@ -68,7 +68,6 @@ def test_owned_ifexpr_ir_normalizes_branches_and_tracks_target(
         str(source),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -104,7 +103,6 @@ def test_owned_ifexpr_local_survives_source_rebind(
         str(source),
         str(binary),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -146,7 +144,6 @@ def test_current_pcc1_owned_ifexpr_local_survives_source_rebind(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

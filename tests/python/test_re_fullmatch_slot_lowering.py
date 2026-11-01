@@ -5,7 +5,7 @@ def emit(tmp_path,call):
     src=tmp_path/'fullmatch_slots.py'
     src.write_text('import re\nfrom re import fullmatch\ndef p(s: str): return s + "(a|ab)"\ndef t(s: str): return s + "ab"\ndef f(s: str): return 2\ndef boom(s: str): raise ValueError("second")\ndef run(s: str):\n    return '+call+'\n')
     out=tmp_path/'fullmatch.ll'
-    compile_python(str(src),str(out),emit_llvm_only=True,python_library=True,libpython_mode='off',ir_scaffold_mode='on',backend='self')
+    compile_python(str(src),str(out),emit_llvm_only=True,python_library=True,ir_scaffold_mode='on',backend='self')
     text=out.read_text();body=re.search(r'^define[^\n]*@user_fullmatch_slots_run\(.*?^}',text,re.M|re.S).group()
     assert 'strict.nolib.stub' not in body
     return body
@@ -60,7 +60,7 @@ def test_compile_keyword_source_order_and_assignment_result_are_owned(tmp_path):
     source.write_text('import re\ndef p(s: str): return s + "a"\ndef f(s: str): return 2\ndef run(s: str):\n    compiled = re.compile(flags=f(s), pattern=p(s))\n    return compiled\n')
     output = tmp_path / 'compile.ll'
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode='off', ir_scaffold_mode='on', backend='self')
+                   ir_scaffold_mode='on', backend='self')
     body = re.search(r'^define[^\n]*@user_compile_slots_run\(.*?^}', output.read_text(), re.M | re.S).group()
     assert 'strict.nolib.stub' not in body
     assert body.index('@user_compile_slots_f(') < body.index('@user_compile_slots_p(')

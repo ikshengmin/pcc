@@ -391,7 +391,6 @@ except ModuleNotFoundError:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

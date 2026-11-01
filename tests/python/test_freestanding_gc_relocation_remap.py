@@ -83,7 +83,6 @@ def test_relocation_remap_has_exact_strict_object_closure(
         str(STRICT_SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     source = llvm_ir

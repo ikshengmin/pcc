@@ -1,12 +1,12 @@
 """tuple.count(x) / tuple.index(x) under strict no-libpython.
 
 Tuples had no method dispatch, so t.count(x) / t.index(x) forced the libpython
-fallback (hard error under --python-libpython=off). Fix: runtime helpers
+fallback (hard error in the native pipeline). Fix: runtime helpers
 py_tuple_count / py_tuple_index (py_tuple_methods.c, OBJ_PY_CC_HELPERS — compare
 via py_obj_eq; index raises ValueError when absent) + a frontend tuple-method
 dispatch (_maybe_emit_tuple_method).
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
@@ -16,7 +16,7 @@ from pathlib import Path
 def _run(tmp_path, source):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], text=True, capture_output=True, timeout=30, env=env)
     assert r.returncode == 0, r.stderr

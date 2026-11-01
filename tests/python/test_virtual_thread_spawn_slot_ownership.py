@@ -384,7 +384,7 @@ def test_spawn_slot_ownership_native_all_gc(tmp_path, pcc_runtime_archive, monke
     source = tmp_path / "spawn_slot.py"
     executable = tmp_path / "spawn_slot"
     source.write_text(NATIVE_SOURCE, encoding="utf-8")
-    compile_python(str(source), str(executable), backend="self", libpython_mode="off",
+    compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         log = tmp_path / ("gc" + str(backend) + ".jsonl")

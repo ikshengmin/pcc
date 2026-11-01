@@ -33,7 +33,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "membership_owner"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
@@ -73,7 +73,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "membership_order"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -124,7 +124,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "membership_errors"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

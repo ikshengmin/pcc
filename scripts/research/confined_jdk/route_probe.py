@@ -72,7 +72,7 @@ def probe_route(source_root, direct_value="1", module_count=484, with_timing=Fal
     compile_parallel = source_function(source_root, "compile_parallel", environment)
     result = compile_parallel(
         ["input.py"] * module_count, ["input"] * module_count,
-        jobs=6, entry_module="input", sibling_inits=[], libpython_mode="off",
+        jobs=6, entry_module="input", sibling_inits=[],
         ir_scaffold_mode="on", verbose=False,
         coordinator_timing=(object() if with_timing else None),
         can_spawn_worker=callback("can_spawn_worker", True),

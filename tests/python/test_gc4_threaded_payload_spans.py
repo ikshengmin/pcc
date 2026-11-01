@@ -66,7 +66,7 @@ def test_threads_building_private_containers_match_cpython_under_every_collector
     src.write_text(PROGRAM, encoding="utf-8")
     exe = tmp_path / "spans"
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr

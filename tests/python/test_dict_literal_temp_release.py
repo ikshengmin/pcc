@@ -94,7 +94,6 @@ def dict_release_binary(tmp_path_factory):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -160,7 +159,6 @@ def test_raw_scaffold_str_call_gets_owned_management(tmp_path):
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = out.read_text(encoding="utf-8")

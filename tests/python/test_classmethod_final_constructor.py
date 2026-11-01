@@ -110,7 +110,7 @@ def test_without_an_export_graph_every_classmethod_binds_at_runtime(tmp_path, mo
 def test_classmethod_constructors_native(tmp_path, pcc_runtime_archive):
     main = _write(tmp_path)
     output = tmp_path / "clsm_main"
-    compile_python(str(main), str(output), backend="self", libpython_mode="off",
+    compile_python(str(main), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

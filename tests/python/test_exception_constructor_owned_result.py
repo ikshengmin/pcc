@@ -19,7 +19,7 @@ def _emit(tmp_path, monkeypatch, source):
     path.write_text(source)
     output = path.with_suffix(".ll")
     compile_python(str(path), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self",
+                   ir_scaffold_mode="on", backend="self",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     return verify_ir_text(text), text

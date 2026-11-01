@@ -67,7 +67,7 @@ def _compile(tmp_path, split, scaffold, *, ir_only, runtime=None):
 
     output = tmp_path / ("method.ll" if ir_only else "method")
     entry = tmp_path / "method_entry.py"
-    options = dict(backend="self", libpython_mode="off", ir_scaffold_mode=scaffold,
+    options = dict(backend="self", ir_scaffold_mode=scaffold,
                    emit_llvm_only=ir_only)
     if runtime is not None:
         options["runtime_archive"] = str(runtime)
@@ -108,7 +108,7 @@ def test_pointer_object_shape_hint_survives_abi_guard(tmp_path, monkeypatch):
     source = tmp_path / "object_hint.py"
     source.write_text(OBJECT_HINT)
     output = tmp_path / "object_hint.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, ir_scaffold_mode="on")
     text = output.read_text()
     method = re.search(r"^define[^\n]*@[^\n(]*_Machine_step\([^\n]*\)[^\n]*\{\n(.*?)^\}", text, re.M | re.S)

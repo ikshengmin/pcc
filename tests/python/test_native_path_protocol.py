@@ -110,7 +110,7 @@ def test_path_protocol_ir_uses_provider_and_intrinsics(tmp_path):
     source = tmp_path / "path_protocol.py"
     output = tmp_path / "path_protocol.ll"
     source.write_text(PATH_PROTOCOL_SOURCE)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True, emit_llvm_only=True)
     ir_text = output.read_text()
     check = _body(ir_text, "user_path_protocol_check")
@@ -130,7 +130,7 @@ def test_path_protocol_executes_natively(tmp_path, pcc_runtime_archive):
     source = tmp_path / "path_protocol.py"
     output = tmp_path / "path_protocol"
     source.write_text(PATH_PROTOCOL_SOURCE)
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True,
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
@@ -173,7 +173,7 @@ def _compile_diagnostic_entry(tmp_path, *, emit_llvm_only, runtime_archive=None)
                "pcc.diagnostics.compile_observability"]
     compile_python_multi(
         sources, str(output), module_names=modules, entry_module="diagnostic_entry",
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         recursive_stdlib=True, emit_llvm_only=emit_llvm_only,
         runtime_archive=runtime_archive,
     )
@@ -224,7 +224,7 @@ def check():
         "    print(provider_exists(" + repr(str(path)) + "))\n"
         for path in (regular, tmp_path, linked, missing, dangling)
     ) + "check()\n")
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True,
                    runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):

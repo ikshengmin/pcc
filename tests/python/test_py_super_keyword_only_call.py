@@ -23,7 +23,6 @@ def _build_and_run(tmp_path, name, source):
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run([str(exe)], text=True, capture_output=True, timeout=60)

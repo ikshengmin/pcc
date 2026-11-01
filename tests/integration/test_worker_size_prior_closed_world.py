@@ -253,7 +253,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
         compile_python_multi(
             [str(path) for path in sources], str(output), module_names=list(MODULES),
             entry_module=MODULES[0], emit_llvm_only=True, target_triple=target,
-            libpython_mode="off", ir_scaffold_mode="on", backend="self",
+            ir_scaffold_mode="on", backend="self",
             recursive_stdlib=False, profile=compile_profile,
         )
         receipt["compile_profile"] = _bounded_compile_profile(compile_profile, complete=True)

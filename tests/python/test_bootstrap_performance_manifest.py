@@ -84,7 +84,7 @@ def test_bootstrap_defaults_to_safe_auto_lanes_and_rejects_wide_override() -> No
     assert options.defer_self_link == "1"
     assert options.runtime_cc == "pcc"
     assert options.runtime_high == "py"
-    assert options.python_libpython == "off"
+    assert not hasattr(options, "python_libpython")
 
     with pytest.raises(
         bootstrap.BootstrapError, match="unsafe bootstrap worker budget"

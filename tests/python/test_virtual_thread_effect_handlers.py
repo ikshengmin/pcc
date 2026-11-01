@@ -28,7 +28,6 @@ def _compile_and_run(
         [
             str(REPO / ".venv" / "bin" / "pcc"),
             "--backend", "self",
-            "--python-libpython", "off",
             "--ir-scaffold", "on",
             str(src), "-o", str(exe),
         ],

@@ -75,7 +75,7 @@ def frontend_ir(tmp_path_factory):
     )
     compile_python(
         str(source), str(output), emit_llvm_only=True,
-        backend="self", libpython_mode="off", target_triple=TARGET,
+        backend="self", target_triple=TARGET,
     )
     return output.read_text()
 

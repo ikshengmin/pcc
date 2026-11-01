@@ -32,7 +32,7 @@ def test_list_sort_key_detects_callback_mutation(tmp_path):
     build = subprocess.run(
         [
             "uv", "run", "pcc", "--backend", "self",
-            "--python-libpython=off", "--ir-scaffold=on",
+            "--ir-scaffold=on",
             str(source), "-o", str(executable),
         ],
         text=True,
@@ -78,7 +78,6 @@ def test_dynamic_list_sort_with_callable_key_at_module_scope(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",
@@ -121,7 +120,6 @@ def test_sorted_iterable_with_named_callable_key_at_module_scope(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

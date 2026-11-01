@@ -121,4 +121,4 @@ def test_compiler_profile_schema_names_mode_and_phase(tmp_path, monkeypatch):
     assert payload["schema"] == "pcc.profile.v1"
     assert payload["metadata"]["entry"] == "cli_bootstrap"
     assert payload["metadata"]["backend"] == "self"
-    assert payload["metadata"]["python_libpython"] == "off"
+    assert "python_libpython" not in payload["metadata"]

@@ -52,7 +52,6 @@ def _compile_and_run(tmp_path, name: str, source: str) -> str:
         [
             "uv", "run", "pcc",
             "--backend", "self",
-            "--python-libpython", "off",
             "--ir-scaffold=on",
             str(src), "-o", str(binary),
         ],

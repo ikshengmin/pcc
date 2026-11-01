@@ -106,7 +106,6 @@ def _compile(tmp_path: Path, name: str, extra_env: dict[str, str]) -> Path:
             str(src),
             str(exe),
             ir_scaffold_mode="on",
-            libpython_mode="off",
         )
     finally:
         for key, value in saved.items():

@@ -148,7 +148,7 @@ def test_handoff_provider_closed_world_aarch64(tmp_path, monkeypatch):
     source_hashes = {name: _sha256(path.read_bytes()) for name, path in sources.items()}
     target = host_target_triple()
     assert target.startswith(("arm64-apple-darwin", "aarch64-apple-darwin")), target
-    options = dict(emit_llvm_only=True, target_triple=target, libpython_mode="off",
+    options = dict(emit_llvm_only=True, target_triple=target,
                    ir_scaffold_mode="on", backend="self", recursive_stdlib=False)
     # One in-process frontend path, with owned default passes. These are env
     # settings only: no fake exports, private reassembly, or compiler patching.

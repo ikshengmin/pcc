@@ -7,7 +7,7 @@ switch), while list/tuple already formatted correctly.  Dict repr uses
 emptied by ``del``.  This is on the package-import path (config/dist-info code
 prints dict-shaped data).
 
-All tests use ``libpython_mode="off"`` and the self backend, then run the
+All tests use the native pipeline and the self backend, then run the
 produced binary and compare stdout to the CPython reference output.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
 
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
 
 

@@ -63,7 +63,6 @@ def test_lambda_comprehension_target_allocas_in_lambda(tmp_path) -> None:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

@@ -1085,7 +1085,7 @@ def test_resource_acceptance_driver_native_five_collectors(
     try:
         python_program_compiler(
             str(RESOURCE_NATIVE_DRIVER), str(binary), backend="self",
-            libpython_mode="off", ir_scaffold_mode="on",
+            ir_scaffold_mode="on",
             runtime_archive=str(explicit_owned_runtime),
         )
     except Exception as error:

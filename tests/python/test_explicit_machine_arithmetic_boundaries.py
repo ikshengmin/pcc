@@ -178,7 +178,7 @@ def _pipeline_ir(tmp_path, monkeypatch, source):
     output = path.with_suffix(".ll")
     path.write_text(source)
     compile_python(str(path), str(output), emit_llvm_only=True, backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     text = output.read_text()
     verify_ir_text(text)
@@ -312,7 +312,7 @@ def _run_native_all_gc(tmp_path, monkeypatch, archive, compiler, program, expect
     source = tmp_path / "machine_arithmetic.py"
     executable = source.with_suffix("")
     source.write_text(program)
-    compiler(str(source), str(executable), backend="self", libpython_mode="off",
+    compiler(str(source), str(executable), backend="self",
              ir_scaffold_mode="on", runtime_archive=str(archive))
     for backend in range(5):
         ran = subprocess.run(

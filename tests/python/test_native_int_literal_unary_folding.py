@@ -68,7 +68,6 @@ def _pcc(tmp_path, compiler, archive, backends):
         str(source),
         str(binary),
         backend="self",
-        libpython_mode="off",
         runtime_archive=str(archive),
     )
     outputs = []

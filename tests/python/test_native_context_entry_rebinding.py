@@ -43,7 +43,7 @@ def test_context_enter_survives_previous_target_finalizer_on_every_gc(
                             text=True, timeout=20)
     assert oracle.returncode == 0, oracle.stderr
     binary = tmp_path / "context_entry"
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

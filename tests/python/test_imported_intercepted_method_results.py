@@ -235,7 +235,7 @@ def test_imported_intercepted_result_pcc0_emitted_five_gc(tmp_path, explicit_own
     executable = tmp_path / "entry.out"
     compile_python_multi([str(path) for path in paths], str(executable),
                          module_names=["hook_provider", "entry"], entry_module="entry",
-                         backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                         backend="self", ir_scaffold_mode="on",
                          runtime_archive=str(explicit_owned_runtime))
     for backend in range(5):
         result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=20,

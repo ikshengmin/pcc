@@ -95,5 +95,5 @@ main()
     manifest = tmp_path / "worker.manifest"
     workers.write_worker_manifest(str(manifest), str(tmp_path / "result.tsv"), str(tmp_path), "", "",
                                   [str(source)], ["condition"], [0], entry_module="condition", sibling_inits=(),
-                                  libpython_mode="off", ir_scaffold_mode="on", verbose=False)
+                                  ir_scaffold_mode="on", verbose=False)
     assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, (tmp_path / "result.tsv").read_text()

@@ -112,7 +112,6 @@ def _validate_stage1_checkpoint_worker(manifest, native_worker_executable):
         or manifest["assigned_indices"] not in graph["original_chunks"]
         or graph["entry_module"] != manifest["entry_module"]
         or graph["sibling_inits"] != list(manifest["sibling_inits"])
-        or graph["libpython_mode"] != manifest["libpython_mode"]
         or graph["ir_scaffold_mode"] != manifest["ir_scaffold_mode"]
         or graph["exports_sha256"] != checkpoint.file_sha256(manifest["exports_path"])
         or graph["runtime_path"] != os.path.abspath(str(os.environ.get("PCC_RUNTIME_ARCHIVE", "") or ""))
@@ -453,7 +452,6 @@ def run_codegen_worker(
         module_names = manifest["module_names"]
         entry_module = str(manifest["entry_module"])
         sibling_inits = tuple(manifest["sibling_inits"])
-        libpython_mode = str(manifest["libpython_mode"])
         ir_scaffold_mode = str(manifest["ir_scaffold_mode"])
         verbose = bool(manifest["verbose"])
         assigned_indices = manifest["assigned_indices"]
@@ -462,8 +460,8 @@ def run_codegen_worker(
         ).strip().lower() in ("1", "true", "yes", "on")
         handoff_request = str(os.environ.get("PCC_INDEXED_HANDOFF_REQUEST", "") or "")
         if handoff_request and (native_worker_executable() or not indexed_sidecar_requested
-                                or libpython_mode != "off" or len(assigned_indices) != 1):
-            raise _worker_failure("host indexed handoff requires a host singleton no-libpython sidecar worker")
+                                or len(assigned_indices) != 1):
+            raise _worker_failure("host indexed handoff requires a host singleton sidecar worker")
         if indexed_sidecar_requested and len(assigned_indices) != 1:
             raise _worker_failure(
                 "indexed sidecar output requires a singleton worker manifest"
@@ -490,7 +488,7 @@ def run_codegen_worker(
         host_batch_limit = host_codegen_batch_limit(
             os.environ, native_worker=bool(native_worker_executable()),
             indexed_split=bool(handoff_request), checkpoint_root=checkpoint_root,
-            action_cache_plan=None, libpython_mode=libpython_mode, artifact_dir=ir_dir,
+            action_cache_plan=None, artifact_dir=ir_dir,
         )
         host_batch = host_batch_limit == 2 and len(assigned_indices) > 1
         if host_batch and (len(assigned_indices) > 2 or not ast_dir or not exports_path):
@@ -661,13 +659,9 @@ def run_codegen_worker(
                 ) from exc
             try:
                 _note_worker_module(module_name)
-                codegen = L1CodeGen(
-                    typed_module,
-                    libpython_mode == "on",
-                    ir_scaffold_mode,
-                )
-                codegen._strict_no_libpython = libpython_mode == "off"
-                codegen._prefer_native_callable_values = libpython_mode == "off"
+                codegen = L1CodeGen(typed_module, False, ir_scaffold_mode)
+                codegen._strict_no_libpython = True
+                codegen._prefer_native_callable_values = True
                 codegen._module_source_path = os.path.abspath(src_paths[index])
                 codegen._skip_program_main = module_name != entry_module
                 codegen._sibling_module_inits = sibling_inits
@@ -784,9 +778,7 @@ def run_codegen_worker(
                     from pcc.frontends.python.compiled_owned_passes import run_owned_passes
 
                     pass_started = time.monotonic()
-                    ir_text = run_owned_passes(
-                        ir_text, direct_passes, libpython_mode == "off",
-                    )
+                    ir_text = run_owned_passes(ir_text, direct_passes)
                     publish_worker_resource("passes:" + str(index))
                     if worker_timing:
                         sys.stderr.write(
@@ -847,9 +839,9 @@ def run_codegen_worker(
                             )
                         )
                         direct_needs_libpython = bool(direct_libpython_edge)
-                        if libpython_mode == "off" and direct_needs_libpython:
+                        if direct_needs_libpython:
                             raise _worker_failure(
-                                "direct indexed kernel still has libpython edge "
+                                "direct indexed kernel still calls the CPython bridge: "
                                 + direct_libpython_edge
                             )
                         if (

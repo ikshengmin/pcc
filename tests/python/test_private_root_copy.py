@@ -96,7 +96,7 @@ def local(value, key, consume):
 def global_source(key, consume):
     return consume(shared[key])
 ''')
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True, ir_scaffold_mode="on")
     text = output.read_text()
     local = re.search(r"^define [^\n]*@user_root_sources_local\([^\n]*\{.*?^}", text, re.M | re.S)
@@ -178,7 +178,7 @@ def test_private_copy_native_callbacks_exceptions_and_finalizers(
     binary = tmp_path / "private_copy_callbacks"
     source.write_text(PROGRAM)
     python_program_compiler(str(source), str(binary), backend="self",
-                            libpython_mode="off", ir_scaffold_mode="on",
+                            ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         run = subprocess.run(
@@ -276,7 +276,7 @@ def main():
 main()
 ''')
     binary = tmp_path / "borrowed_movement"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
                    object_inputs=(str(helper),))
     for backend in (3, 4):

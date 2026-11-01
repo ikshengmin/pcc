@@ -141,7 +141,6 @@ def test_user_container_named_methods_are_not_hijacked(tmp_path):
         [
             sys.executable, "-m", "pcc",
             "--ir-scaffold=on", "--backend", "self",
-            "--python-libpython", "off",
             str(source), "-o", str(binary),
         ],
         cwd=str(REPO_ROOT),

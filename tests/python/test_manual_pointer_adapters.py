@@ -15,7 +15,7 @@ def compile_ir(tmp_path, source, *, runtime_library=False):
     out = tmp_path / 'manual_adapter_probe.ll'
     src.write_text(source)
     compile_python(str(src), str(out), emit_llvm_only=True, python_library=True,
-                   libpython_mode='off', backend='self',
+                   backend='self',
                    target_triple='x86_64-unknown-linux-gnu')
     return out.read_text()
 

@@ -36,7 +36,7 @@ def test_success_preserves_exact_compile_arguments_and_cleans_output(owned_temp_
         assert actual_sources is sources
         assert kwargs == {"verbose": False, "emit_llvm_only": True,
                           "entry_module": "entry", "module_names": modules,
-                          "libpython_mode": "off", "backend": "self"}
+                          "backend": "self"}
         assert kwargs["module_names"] is modules
         path = Path(output); paths.append(path)
         assert path.name == "closure.ll" and path.parent.parent == owned_temp_root

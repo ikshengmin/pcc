@@ -12,7 +12,7 @@ slot), so::
         ys = [x for x in range(5)]
         print(x, ys)
 
-printed ``5 [0, 1, 2, 3, 4]`` under ``--backend self --python-libpython=off``
+printed ``5 [0, 1, 2, 3, 4]`` under ``--backend self``
 instead of CPython's ``99 [0, 1, 2, 3, 4]`` — the last iteration value leaked
 over the outer binding.
 
@@ -23,7 +23,7 @@ after the whole comprehension is emitted. This covers list/set/dict/generator
 comprehensions and the range / list-index / string-char / tuple-unpack loop
 paths.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode
+Runs under ``--backend self`` in DEFAULT runtime mode
 and diffs the program output against ``python3`` (CPython) as the oracle.
 """
 from __future__ import annotations
@@ -84,8 +84,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

@@ -155,7 +155,7 @@ def executable(tmp_path):
     out = tmp_path / ("lock.exe" if os.name == "nt" else "lock")
     env = dict(os.environ, PCC_SELF_LINK="pcc", PCC_RUNTIME_CC=str(tmp_path / "forbidden-cc"), PCC_HOST_PYTHON=str(tmp_path / "forbidden-python"))
     env.pop("LC_ALL", None)
-    result = subprocess.run([compiler, "--backend", "self", "--python-libpython", "off", str(source), "-o", str(out)], capture_output=True, text=True, env=env, timeout=180)
+    result = subprocess.run([compiler, "--backend", "self", str(source), "-o", str(out)], capture_output=True, text=True, env=env, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
     return out
 
@@ -382,7 +382,7 @@ main()
 ''')
     executable = tmp_path / ("threaded_lock.exe" if os.name == "nt" else "threaded_lock")
     env = dict(os.environ, PCC_WITH_THREADS="1", PCC_RUNTIME_ARCHIVE=str(runtime), PCC_SELF_LINK="pcc")
-    built = subprocess.run([compiler, "--backend", "self", "--python-libpython", "off", str(source), "-o", str(executable)], env=env, capture_output=True, text=True, timeout=180)
+    built = subprocess.run([compiler, "--backend", "self", str(source), "-o", str(executable)], env=env, capture_output=True, text=True, timeout=180)
     assert built.returncode == 0, built.stdout + built.stderr
     for gc_kind in (1, 2, 3, 4):
         for marker in (started, collected):

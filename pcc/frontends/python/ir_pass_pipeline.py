@@ -50,16 +50,15 @@ def run_python_ir_pass_pipeline(ir_text, *, pass_names, module_name):
     if not owns_passes(names):
         missing = [name for name in names if name not in OWNED_PASS_NAMES]
         raise PythonIRPassError("unsupported owned IR pass(es): " + ", ".join(missing))
-    strict = str(os.environ.get("PCC_PYTHON_IR_PASS_STRICT_NO_LIBPYTHON", "")).lower() in ("1", "true", "on", "yes")
     current = str(ir_text)
     telemetry = str(os.environ.get("PCC_PYTHON_IR_PASS_TELEMETRY_PATH", "") or "").strip()
     if not telemetry:
-        return run_owned_passes(current, names, strict)
+        return run_owned_passes(current, names)
     started = time.perf_counter()
     records = [{"event": "start", "module": module_name, "passes": names,
                 "owner": "pcc", "ir_bytes": len(current.encode("utf-8"))}]
     try:
-        result = run_owned_passes(current, names, strict)
+        result = run_owned_passes(current, names)
     except Exception as error:
         records.append({"event": "error", "module": module_name,
                         "owner": "pcc", "error": str(error)})
@@ -68,7 +67,7 @@ def run_python_ir_pass_pipeline(ir_text, *, pass_names, module_name):
         raise
     record = {"event": "pass" if len(names) == 1 else "pipeline", "module": module_name,
               "passes": names, "owner": "pcc",
-              "status": "skipped" if strict and _has_py_cpy_call(current) else "run",
+              "status": "skipped" if _has_py_cpy_call(current) else "run",
               "changed": result != current, "seconds": time.perf_counter() - started}
     if len(names) == 1:
         record["pass"] = names[0]

@@ -25,7 +25,7 @@ main()
     compile_python_multi([str(Path(ir.__file__)), str(source)], str(output),
                          module_names=["pcc.ir.ir", "module_ctor"],
                          entry_module="module_ctor", recursive_stdlib=True,
-                         ir_scaffold_mode="on", backend="self", libpython_mode="off",
+                         ir_scaffold_mode="on", backend="self",
                          runtime_archive=str(pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,

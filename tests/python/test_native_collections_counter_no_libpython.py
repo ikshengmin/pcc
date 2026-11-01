@@ -31,7 +31,6 @@ def _build_and_run(tmp_path: Path, program: str) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

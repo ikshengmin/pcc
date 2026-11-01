@@ -15,7 +15,7 @@ def test_computed_int_global_reexport(tmp_path: Path):
     source.write_text("from facade import LIMIT\nprint(LIMIT)\n")
     executable = tmp_path / "main"
     compile_python(str(source), str(executable), backend="self",
-                   ir_scaffold_mode="on", libpython_mode="off")
+                   ir_scaffold_mode="on")
     ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert ran.stdout.strip() == "3"

@@ -59,7 +59,7 @@ def test_status_reporter_releases_constructor_owner_native(tmp_path, pcc_runtime
     driver.write_bytes(emit_owned_object(driver_ir, "arm64-apple-darwin"))
     binary = tmp_path / "native"
     _run_self_link_command(['/usr/bin/false'], None, binary, pcc_runtime_archive,
-                           (str(helper), str(driver)), False, needs_libpython=False)
+                           (str(helper), str(driver)), False)
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=25,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc), PATH="/nonexistent"))

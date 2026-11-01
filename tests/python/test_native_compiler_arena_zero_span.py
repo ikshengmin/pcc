@@ -38,7 +38,7 @@ def test_compiler_arena_zero_span_runs_natively(
     source.write_text(arena_source.read_text() + '\n' + PROGRAM, encoding='utf-8')
     binary = tmp_path / 'arena_zero_span'
     python_program_compiler(
-        str(source), str(binary), backend='self', libpython_mode='off',
+        str(source), str(binary), backend='self',
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

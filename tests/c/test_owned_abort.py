@@ -93,7 +93,7 @@ def test_abort_source_model_targets_calling_thread_and_never_returns(machine, ca
 def test_whole_linux_signal_module_emits_owned_abort_export(tmp_path, target):
     ir_path = tmp_path / "signal.ll"
     with patch.object(subprocess, "Popen", side_effect=AssertionError("external compiler invoked")):
-        compile_python(str(SOURCE), str(ir_path), emit_llvm_only=True, libpython_mode="off",
+        compile_python(str(SOURCE), str(ir_path), emit_llvm_only=True,
                        python_library=True, backend="self", target_triple=target)
         ir = ir_path.read_text(encoding="utf-8")
         image = emit_owned_object(ir, target)

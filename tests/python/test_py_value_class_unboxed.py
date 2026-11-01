@@ -135,7 +135,6 @@ def test_valueclass_hot_loop_zero_allocation_oracle_and_escape_semantics(tmp_pat
         compile_python(
             str(src),
             str(exe),
-            libpython_mode="off",
             ir_scaffold_mode="on",
             backend="self",
         )
@@ -262,7 +261,6 @@ def test_valueclass_wide_payload_uses_aggregate_abi_self_backend(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -353,7 +351,6 @@ def test_valueclass_nested_payload_uses_payload_abi_in_direct_calls(tmp_path):
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -414,7 +411,7 @@ def test_valueclass_return_payload_compiles_with_default_ir_passes(tmp_path):
         encoding="utf-8",
     )
 
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run(
         [str(exe)],
         text=True,
@@ -533,7 +530,6 @@ def test_valueclass_nested_payload_equality_uses_recursive_fieldwise_compare(tmp
     compile_python(
         str(src),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -576,7 +572,7 @@ def test_valueclass_payload_equality_compiles_with_default_ir_passes(tmp_path):
         encoding="utf-8",
     )
 
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run(
         [str(exe)],
         text=True,
@@ -617,7 +613,7 @@ def test_valueclass_payload_boxes_at_dyn_function_boundary(tmp_path):
     src = tmp_path / "valueclass_box.py"
     exe = tmp_path / "valueclass_box"
     src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run(
         [str(exe)],
         text=True,
@@ -1862,7 +1858,7 @@ def test_valueclass_payload_unboxes_from_dyn_function_boundary(tmp_path):
     src = tmp_path / "valueclass_unbox.py"
     exe = tmp_path / "valueclass_unbox"
     src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run(
         [str(exe)],
         text=True,
@@ -1901,7 +1897,7 @@ def test_valueclass_payload_unbox_rejects_wrong_dyn_type(tmp_path):
     src = tmp_path / "valueclass_unbox_wrong_type.py"
     exe = tmp_path / "valueclass_unbox_wrong_type"
     src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run(
         [str(exe)],
         text=True,
@@ -1948,7 +1944,7 @@ def test_valueclass_pointer_payload_crosses_dyn_boundary(tmp_path):
     src = tmp_path / "valueclass_pointer_payload.py"
     exe = tmp_path / "valueclass_pointer_payload"
     src.write_text(source, encoding="utf-8")
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     proc = subprocess.run(
         [str(exe)],
         text=True,

@@ -138,7 +138,7 @@ def test_installed_runtime_bundle_is_selected_without_host_provenance_process(
     )
 
     assert pipeline._runtime_archive_wheel_stamp_matches(str(archive))
-    assert pipeline._ensure_runtime(False, needs_libpython=False) == str(archive)
+    assert pipeline._ensure_runtime(False) == str(archive)
     assert not (archive.parent / "build_owned").exists()
 
 
@@ -163,7 +163,7 @@ def test_installed_runtime_receipt_binds_archive_manifest_and_inventory(
     with pytest.raises(provenance.ProvenanceError) as rejected:
         provenance.verify_runtime_archive_manifest(archive, runtime_root=archive.parent)
     with pytest.raises(selected.PyPipelineError) as selected_error:
-        selected._ensure_runtime(False, needs_libpython=False)
+        selected._ensure_runtime(False)
     assert str(selected_error.value) == str(rejected.value)
     assert not (archive.parent / "build_owned").exists()
 
@@ -189,7 +189,7 @@ def test_bound_installed_runtime_receipt_still_checks_target_and_config(
     assert selected._runtime_archive_wheel_stamp_matches(str(archive))
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))
     with pytest.raises(selected.PyPipelineError, match="target/source configuration"):
-        selected._ensure_runtime(False, needs_libpython=False)
+        selected._ensure_runtime(False)
     assert not (archive.parent / "build_owned").exists()
 
 

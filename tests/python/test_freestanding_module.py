@@ -34,7 +34,6 @@ def _compile_freestanding(tmp_path: Path, source: str, target_triple=None) -> st
         str(src),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple=target_triple,
     )
@@ -242,29 +241,6 @@ entry:
     assert subprocess.run([str(output)], timeout=10).returncode == 7
 
 
-def test_freestanding_directive_requires_no_libpython_library_mode(tmp_path):
-    src = tmp_path / "kernel.py"
-    out = tmp_path / "kernel.ll"
-    src.write_text("__pcc_freestanding__ = True\n", encoding="utf-8")
-
-    with pytest.raises(pipeline.PyPipelineError, match="python_library"):
-        pipeline.compile_python(
-            str(src),
-            str(out),
-            emit_llvm_only=True,
-            libpython_mode="off",
-        )
-
-    with pytest.raises(pipeline.PyPipelineError, match="python-libpython=off"):
-        pipeline.compile_python(
-            str(src),
-            str(out),
-            emit_llvm_only=True,
-            libpython_mode="auto",
-            python_library=True,
-        )
-
-
 @pytest.mark.parametrize(
     "directive",
     [
@@ -287,7 +263,6 @@ def test_freestanding_directive_fails_closed_on_noncanonical_scope_or_value(
             str(src),
             str(out),
             emit_llvm_only=True,
-            libpython_mode="off",
             python_library=True,
         )
 
@@ -552,7 +527,6 @@ def test_freestanding_cross_target_unsafe_lowering_uses_target_not_host(tmp_path
         str(source),
         str(output),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
         target_triple="x86_64-unknown-linux-gnu",
     )
@@ -899,7 +873,6 @@ def test_freestanding_accepts_generated_abi_constants_as_compile_time_scaffold(
         str(source),
         str(out),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = out.read_text(encoding="utf-8")

@@ -19,7 +19,6 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

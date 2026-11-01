@@ -633,7 +633,7 @@ def test_vthread_temporary_callback_lifetime_native(
     executable = tmp_path / "callback_lifetime"
     source.write_text(_callback_lifetime_program(failing_argument), encoding="utf-8")
     compile_python(
-        str(source), str(executable), backend="self", libpython_mode="off",
+        str(source), str(executable), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):
@@ -847,7 +847,6 @@ def _compile_dynamic_call_owned_ir(tmp_path, import_source: str, call_name: str)
         str(source_path),
         str(output_path),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     return output_path.read_text(encoding="utf-8")

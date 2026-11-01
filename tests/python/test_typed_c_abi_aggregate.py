@@ -39,7 +39,6 @@ def test_typed_c_abi_export_supports_structural_f64_pair_argument_and_return(
         str(source),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -105,7 +104,6 @@ def test_current_pcc1_compiles_structural_f64_pair_export(tmp_path: Path):
         [
             str(pcc1),
             "--python-library",
-            "--python-libpython=off",
             "--emit-llvm=" + str(llvm_ir),
             str(source),
         ],

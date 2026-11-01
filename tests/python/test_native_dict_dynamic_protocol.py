@@ -101,7 +101,7 @@ def test_dynamic_dict_protocol_executes_natively(tmp_path, pcc_runtime_archive, 
                                capture_output=True, text=True, timeout=20)
     assert reference.returncode == 0, reference.stderr
     output = tmp_path / name
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
     for collector in range(5):
         environment["PCC_GC_BACKEND"] = str(collector)

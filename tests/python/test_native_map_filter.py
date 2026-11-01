@@ -17,7 +17,6 @@ def _run(tmp_path, source):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

@@ -12,7 +12,7 @@ byte-wise compare of the UTF-8 key bytes, which matches CPython's default
 code-point ordering. ``sort_keys=False`` (and the no-kwarg form) keep the
 insertion-order ``py_json_dumps`` path.
 
-Compiles + runs under ``--backend self --python-libpython=off`` in DEFAULT
+Compiles + runs under ``--backend self`` in DEFAULT
 runtime mode, including the pcc-Python ``py_json_runtime.py`` production
 owner. Output is diffed against CPython.
 """
@@ -32,8 +32,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

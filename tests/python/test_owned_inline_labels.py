@@ -39,7 +39,7 @@ def test_native_inliner_keeps_callback_and_exact_global_tokens(
     binary = tmp_path / "inline_references"
     source.write_text(NATIVE_INLINE_REFERENCE_PROGRAM)
     python_program_compiler(
-        str(source), str(binary), backend="self", libpython_mode="off",
+        str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     for gc in range(5):

@@ -662,7 +662,6 @@ def test_current_pcc1_replaces_cpython_for_frozen_scientific_build_corpus(
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(pcc_source),
             "-o",

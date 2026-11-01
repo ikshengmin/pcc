@@ -111,7 +111,6 @@ def test_python_codegen_ir_contains_loop_and_entry_thread_safepoints(
         str(src),
         str(out_ll),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         emit_llvm_only=True,
     )
     ir_text = out_ll.read_text(encoding="utf-8")
@@ -242,7 +241,6 @@ def test_python_codegen_compiled_hot_loop_parks_via_generated_acquire_poll(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
         runtime_archive=str(threaded_pcc_runtime_archive),
     )
@@ -274,7 +272,6 @@ def test_python_codegen_zero_poll_env_disables_implicit_safepoints(
         str(src),
         str(out_ll),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         emit_llvm_only=True,
     )
 

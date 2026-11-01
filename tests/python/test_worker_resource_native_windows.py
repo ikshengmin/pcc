@@ -538,7 +538,7 @@ def test_actual_dispatch_ir_uses_counted_string_leases_and_original_posix_call(t
     source.write_text("import os\n" + ast.unparse(dispatch) + "\n")
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", backend="self", target_triple=target)
+                   backend="self", target_triple=target)
     text = output.read_text()
     verify_ir_text(text)
     body = _body(text, "user_rss_dispatch__replace_worker_resource")

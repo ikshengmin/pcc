@@ -134,7 +134,6 @@ def test_an_importing_module_may_omit_a_default_factory_field(tmp_path: Path) ->
     compile_python(
         str(app),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )
@@ -183,7 +182,6 @@ def test_the_arity_error_names_the_signature_it_rejected(tmp_path: Path) -> None
     compile_python(
         str(app),
         str(exe),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         backend="self",
     )

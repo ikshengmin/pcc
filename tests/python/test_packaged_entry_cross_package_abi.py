@@ -85,7 +85,7 @@ def test_packaged_entry_abi_provider_executes_all_collectors(
     monkeypatch.setenv("PCC_SELF_LINK", "pcc")
     output = tmp_path / "application"
     compile_python(
-        str(entry), str(output), backend="self", libpython_mode="off",
+        str(entry), str(output), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     executions = []
@@ -228,7 +228,7 @@ def test_fstring_literal_import_and_resource_calls_execute_all_collectors(
     monkeypatch.setenv("PCC_SELF_LINK", "pcc")
     output = tmp_path / "formatted_application"
     compile_python(
-        str(entry), str(output), backend="self", libpython_mode="off",
+        str(entry), str(output), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     executions = []

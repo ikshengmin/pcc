@@ -8,59 +8,16 @@ from __future__ import annotations
 import sys
 
 
-# Flags the native compiler has no implementation for: a command using one
-# stays on the host only in non-strict routing; strict use fails explicitly.
-_HOST_ONLY_VALUES = {
-    "--python-libpython": ("on", "auto"),
-}
-
-
-def _host_only_reason(argv) -> str:
-    index = 0
-    while index < len(argv):
-        arg = argv[index]
-        for flag, values in _HOST_ONLY_VALUES.items():
-            value = None
-            if arg == flag and index + 1 < len(argv):
-                value = argv[index + 1]
-            elif arg.startswith(flag + "="):
-                value = arg[len(flag) + 1:]
-            if value in values:
-                return flag + "=" + value
-        index += 1
-    return ""
-
-
 def _route_to_test_compiler(argv) -> None:
     """Exec ``PCC_TEST_COMPILER`` (the test suite's native-compiler switch).
 
     See tests/pcc1_route.py: the environment matches its native compiles.
-    Unsupported commands stay on the host only in non-strict mode; strict
-    mode records the unsupported call and fails before host compilation.
     An exec attempt is not a native completion or a passing compile.
     """
     import os
 
     target = os.environ.get("PCC_TEST_COMPILER", "")
     if not target or os.environ.get("PCC_TEST_COMPILER_ROUTED"):
-        return
-    reason = _host_only_reason(argv)
-    if reason:
-        strict = os.environ.get("PCC_TEST_COMPILER_STRICT") == "1"
-        log_path = os.environ.get("PCC_TEST_COMPILER_LOG", "")
-        if log_path:
-            import json
-
-            record = {
-                "route": "unsupported" if strict else "host",
-                "kind": "pcc",
-                "detail": reason,
-                "test": os.environ.get("PYTEST_CURRENT_TEST", ""),
-            }
-            with open(log_path, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record) + "\n")
-        if strict:
-            raise RuntimeError("strict pcc1 route unsupported: " + reason)
         return
     env = dict(os.environ)
     env.pop("LC_ALL", None)

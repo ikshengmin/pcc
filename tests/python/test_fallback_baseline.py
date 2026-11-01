@@ -274,7 +274,6 @@ def _contextual_per_module_counts(srcs, mods, *, ir_scaffold_mode: str):
         mods,
         contextual_modules,
         ir_scaffold_mode=ir_scaffold_mode,
-        strict_no_libpython=(ir_scaffold_mode == "on"),
     )
 
 
@@ -382,7 +381,6 @@ def test_self_backend_native_data_plane_closed_world_fallback_zero():
         mods,
         targets,
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
     )
 
     assert counts == {module_name: 0 for module_name in targets}
@@ -402,7 +400,7 @@ def test_native_object_encoding_closed_world_fallback_zero(tmp_path):
     }
     assert targets <= set(mods)
     counts = compile_contextual_per_module_fallback_counts(
-        srcs, mods, targets, ir_scaffold_mode="on", strict_no_libpython=True,
+        srcs, mods, targets, ir_scaffold_mode="on",
         emit_ir_dir=str(tmp_path),
     )
     assert counts == {name: 0 for name in targets}
@@ -421,7 +419,7 @@ def test_pipeline_feature_surfaces_remain_native_in_real_context(tmp_path):
     }
     srcs, mods = _tightened_closure(str(_REPO_ROOT / "pcc" / "__main__.py"))
     counts = compile_contextual_per_module_fallback_counts(
-        srcs, mods, set(owners), ir_scaffold_mode="on", strict_no_libpython=True,
+        srcs, mods, set(owners), ir_scaffold_mode="on",
         emit_ir_dir=str(tmp_path),
     )
     assert counts == {name: 0 for name in owners}
@@ -614,7 +612,6 @@ def test_pipeline_contextual_cross_module_exports_stay_clean():
         mods,
         {target},
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
     )
 
     assert counts[target] == 0
@@ -672,7 +669,8 @@ def test_capi_export_anchor_nm_fallback_keeps_native_stdout_contract(
     """The nm fallback must capture output without ``CompletedProcess``."""
     from pcc.frontends.python import pipeline
 
-    archive = tmp_path / "libpy_runtime_pcc_py_libpython.a"
+    # Not a pcc runtime archive: no verified inventory, so the nm scan runs.
+    archive = tmp_path / "libforeign_capi.a"
     observed = {}
 
     def fake_check_output(command, **kwargs):
@@ -1121,14 +1119,12 @@ def test_contextual_for_target_domain_join_cleanup_names_compile():
         mods,
         targets,
         ir_scaffold_mode="off",
-        strict_no_libpython=False,
     )
     on_counts = compile_contextual_per_module_fallback_counts(
         srcs,
         mods,
         targets,
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
     )
 
     assert set(off_counts) == targets
@@ -1163,7 +1159,6 @@ def test_contextual_valueclass_arity_projection_remains_native():
         mods,
         targets,
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
     )
 
     assert counts == {module_name: 0 for module_name in targets}
@@ -1207,7 +1202,6 @@ def test_contextual_frontend_type_tag_aliases_remain_native():
         mods,
         targets,
         ir_scaffold_mode="on",
-        strict_no_libpython=True,
     )
 
     assert counts == {module_name: 0 for module_name in targets}

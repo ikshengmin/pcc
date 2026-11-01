@@ -353,7 +353,6 @@ def test_production_guard_hit_alias_and_overflow_match_host(tmp_path, backend):
         str(source),
         str(executable),
         backend=backend,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     completed = subprocess.run(
@@ -403,7 +402,6 @@ def test_guarded_loop_pinned_multisample_speed_and_miss_budget(tmp_path, backend
         str(source),
         str(executable),
         backend=backend,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 

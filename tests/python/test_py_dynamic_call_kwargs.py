@@ -24,7 +24,6 @@ def test_dynamic_call_merges_explicit_kwargs_and_starstar_for_codegen(tmp_path):
         str(src),
         str(ll),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
 
@@ -65,7 +64,6 @@ def test_dyn_list_method_runtime_guard_preserves_user_extend(tmp_path, monkeypat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(
@@ -117,7 +115,6 @@ def test_dyn_attr_extend_runtime_guard_preserves_user_and_list(tmp_path, monkeyp
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(
@@ -169,7 +166,6 @@ def test_dynamic_async_method_accepts_keyword_args_and_varkw(tmp_path, monkeypat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(
@@ -220,7 +216,6 @@ def test_dynamic_async_method_accepts_starstar_kwargs_unpack(tmp_path, monkeypat
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     result = subprocess.run(

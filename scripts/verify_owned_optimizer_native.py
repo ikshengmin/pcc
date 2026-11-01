@@ -136,7 +136,7 @@ def _compile(output, archive):
         cg._native_function_object_exports = context._closed_world_function_object_exports(exports, module)
         cg._native_boxed_int_functions = context._closed_world_boxed_int_functions(exports, module)
         text = str(cg.generate(typed))
-        assert pipeline._apply_python_ir_pass_pipeline(text, module_name=module, default_raw='off', strict_no_libpython=True) == text
+        assert pipeline._apply_python_ir_pass_pipeline(text, module_name=module, default_raw='off') == text
         ir_path = output / (module.replace('.', '_') + '.ll')
         ir_path.write_text(text)
         inventory = MutableModule.parse(text)

@@ -290,7 +290,7 @@ def test_binder_contract_native_five_gc(tmp_path, monkeypatch, cell_id):
     files, names = write_matrix_sources(tmp_path, cell_id)
     binary = tmp_path / "binder_contract"
     compile_python_multi(files, str(binary), module_names=names, entry_module=LAUNCHER_MODULE,
-                         backend="self", libpython_mode="off", ir_scaffold_mode="on",
+                         backend="self", ir_scaffold_mode="on",
                          runtime_archive=str(archive))
     for backend in range(5):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",

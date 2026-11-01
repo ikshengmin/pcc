@@ -65,7 +65,7 @@ def test_lookahead_matches_cpython_without_libpython(tmp_path):
     src.write_text(_SOURCE, encoding="utf-8")
     # libpython off: the patterns must go through the native engine, not a
     # CPython fallback that would make this test vacuous.
-    compile_python(str(src), str(exe), libpython_mode="off", backend="self")
+    compile_python(str(src), str(exe), backend="self")
     run = subprocess.run(
         [str(exe)], text=True, capture_output=True, timeout=180, check=True
     )

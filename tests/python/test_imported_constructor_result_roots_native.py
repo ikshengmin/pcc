@@ -133,7 +133,7 @@ def test_imported_constructor_result_roots_native_five_gc(tmp_path, monkeypatch,
     compile_python_multi(
         [str(provider), str(entry)], str(binary),
         module_names=["result_provider", "entry"], entry_module="entry",
-        backend="self", libpython_mode="off", ir_scaffold_mode="on",
+        backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
     for backend in range(5):

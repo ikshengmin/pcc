@@ -81,7 +81,7 @@ def test_delegation_steps_children_through_direct_return(tmp_path):
     source.write_text(PROGRAM, encoding="utf-8")
     output = tmp_path / "delegate_return.ll"
     compile_python(str(source), str(output), emit_llvm_only=True,
-                   libpython_mode="off", ir_scaffold_mode="on")
+                   ir_scaffold_mode="on")
     text = output.read_text(encoding="utf-8")
     assert re.search(r"call ptr \([^)]*\) @py_gen_next_direct\(", text)
     assert not re.search(r"call ptr \([^)]*\) @py_gen_next\(", text)
@@ -93,7 +93,7 @@ def test_delegated_returns_on_five_collectors(tmp_path, pcc_runtime_archive):
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "delegate_return"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True,

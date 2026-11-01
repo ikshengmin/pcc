@@ -25,7 +25,6 @@ def _compile_to_ll(source: str, name: str, *, mode: str) -> str:
         str(out),
         emit_llvm_only=True,
         ir_scaffold_mode=mode,
-        libpython_mode="off",
     )
     return out.read_text(encoding="utf-8")
 
@@ -251,7 +250,6 @@ def test_native_re_match_runtime_matches_basic_prefixes(tmp_path):
             str(src),
             str(exe),
             ir_scaffold_mode="on",
-            libpython_mode="off",
         )
     run = subprocess.run(
         [str(exe)],

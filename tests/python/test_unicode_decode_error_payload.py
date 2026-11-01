@@ -254,7 +254,7 @@ def test_decode_payload_native_all_collectors(tmp_path,pcc_diagnostic_runtime_ar
     oracle=subprocess.run([sys.executable,str(path)],capture_output=True,text=True,timeout=15)
     assert oracle.returncode==0,oracle.stderr
     binary=tmp_path/'unicode_decode_payload'
-    python_program_compiler(str(path),str(binary),backend='self',libpython_mode='off',runtime_archive=str(pcc_diagnostic_runtime_archive))
+    python_program_compiler(str(path),str(binary),backend='self',runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         actual=subprocess.run([str(binary)],env=dict(os.environ,PCC_GC_BACKEND=str(backend)),capture_output=True,text=True,timeout=30)
         assert actual.returncode==0,(backend,actual.stdout,actual.stderr)
@@ -267,7 +267,7 @@ def test_decode_raw_helper_and_constructor_owned_ir(tmp_path):
     import re
     for module in ('py_exc_objects','py_format_runtime','py_capi_exc_runtime'):
         output=tmp_path/(module+'.ll')
-        compile_python(str(ROOT/'pcc/runtime/py'/(module+'.py')),str(output),backend='self',libpython_mode='off',emit_llvm_only=True,python_library=True)
+        compile_python(str(ROOT/'pcc/runtime/py'/(module+'.py')),str(output),backend='self',emit_llvm_only=True,python_library=True)
         text=output.read_text();verify_ir_text(text)
         assert 'strict.nolib.stub' not in text
         assert not re.search(r'\bcall\b[^\n]*@py_cpy_',text)
@@ -276,7 +276,7 @@ def test_decode_raw_helper_and_constructor_owned_ir(tmp_path):
     source=tmp_path/'decode_constructor.py'
     source.write_text(PROGRAM)
     output=tmp_path/'decode_constructor.ll'
-    compile_python(str(source),str(output),backend='self',libpython_mode='off',emit_llvm_only=True,python_library=True)
+    compile_python(str(source),str(output),backend='self',emit_llvm_only=True,python_library=True)
     text=output.read_text();verify_ir_text(text)
     assert '@py_obj_call(' in text
     assert not re.search(r'\bcall\b[^\n]*@py_exc_new\(i64 58,',text)

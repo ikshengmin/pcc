@@ -27,7 +27,6 @@ def test_typeddict_total_keyword_is_noop_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(
@@ -70,7 +69,6 @@ def test_typing_supports_index_alias_and_typeddict_are_compile_time_only(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

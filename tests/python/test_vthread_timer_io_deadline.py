@@ -196,7 +196,7 @@ def test_native_sleep_timer_progresses_past_quiet_fd(
     output = tmp_path / "mixed_timer_io"
     source.write_text(PROBE)
     python_program_compiler(str(source), str(output), backend="self",
-        libpython_mode="off", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
+        ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         result = run_process_group_timeout([str(output)], env=environment, timeout=5)

@@ -73,7 +73,7 @@ def _compile(tmp_path: Path, name: str, source: str, *, emit_llvm: bool):
     src = tmp_path / f"{name}.py"
     src.write_text(source, encoding="utf-8")
     out = tmp_path / (f"{name}.ll" if emit_llvm else f"{name}.bin")
-    cmd = ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", "--ir-scaffold=on"]
+    cmd = ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on"]
     cmd += [f"--emit-llvm={out}", str(src)] if emit_llvm else [str(src), "-o", str(out)]
     proc = subprocess.run(cmd, text=True, capture_output=True, timeout=420, env=_env())
     assert proc.returncode == 0, proc.stderr

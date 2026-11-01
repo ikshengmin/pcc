@@ -92,7 +92,7 @@ def test_native_label_publication_preserves_offsets_and_errors(tmp_path):
         [str(consumer), *(str(path) for path in sources)], str(output),
         entry_module="pcc.backend.label_canary",
         module_names=["pcc.backend.label_canary", *_MODULES],
-        libpython_mode="off", ir_scaffold_mode="on", backend="self",
+        ir_scaffold_mode="on", backend="self",
         recursive_stdlib=False, target_triple="arm64-apple-darwin23.6.0",
         runtime_archive=str(archive),
     )

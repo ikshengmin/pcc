@@ -159,7 +159,7 @@ def test_nullable_imported_factory_cleanup_runs_natively(tmp_path, monkeypatch, 
         [str(consumer), str(provider)], str(executable),
         module_names=["nullable_consumer", "nullable_provider"],
         entry_module="nullable_consumer", backend="self",
-        libpython_mode="off", ir_scaffold_mode="on",
+        ir_scaffold_mode="on",
         runtime_archive=str(threaded_pcc_runtime_archive),
     )
     run = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)

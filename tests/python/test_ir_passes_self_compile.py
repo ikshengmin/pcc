@@ -20,7 +20,6 @@ def test_all_owned_ir_pass_modules_emit_ir_in_strict_frontend_mode(tmp_path):
                 str(src),
                 str(out),
                 emit_llvm_only=True,
-                libpython_mode="off",
                 ir_scaffold_mode="on",
                 backend="self",
             )

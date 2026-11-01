@@ -36,7 +36,6 @@ def _run_native(tmp_path: Path, source: str) -> subprocess.CompletedProcess:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     return subprocess.run(

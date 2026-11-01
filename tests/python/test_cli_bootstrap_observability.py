@@ -265,7 +265,7 @@ def test_bootstrap_cli_pytest_mode_uses_pcc1_native_runner(monkeypatch, tmp_path
         True,
     )
     assert calls[1][0][0] == "/tmp/pcc1"
-    assert calls[1][0][-2:] == ["--python-libpython=off", "--ir-scaffold=on"]
+    assert calls[1][0][-2:] == ["--ir-scaffold=on"]
     assert calls[2][0][0].endswith(".out")
     assert not any("uv" in arg for cmd, _ in calls for arg in cmd)
 

@@ -27,7 +27,6 @@ def test_export_worker_full_lifts_native_stdlib_asyncio(tmp_path):
         [0],
         entry_module="asyncio",
         sibling_inits=(),
-        libpython_mode="off",
         ir_scaffold_mode="on",
         verbose=False,
         job_kind="export",

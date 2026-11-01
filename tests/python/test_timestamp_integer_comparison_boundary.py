@@ -81,7 +81,7 @@ def test_timestamp_range_comparisons_keep_exact_object_ir(tmp_path, monkeypatch,
     source.write_text(HEADER + _provider_body() + COMPARISONS)
     output = source.with_suffix(".ll")
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode="off", ir_scaffold_mode="on", backend="self",
+                   ir_scaffold_mode="on", backend="self",
                    target_triple=target)
     text = output.read_text()
     verify_ir_text(text)
@@ -213,7 +213,7 @@ def test_timestamp_range_native_all_gc(
     source = tmp_path / "timestamp_provider.py"
     source.write_text(HEADER + _provider_body() + CHECKS)
     binary = source.with_suffix(".out")
-    python_program_compiler(str(source), str(binary), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime))
     executions = []
     receipt = {"compiler": request.node.callspec.params["python_program_compiler"],

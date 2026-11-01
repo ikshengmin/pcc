@@ -46,7 +46,6 @@ def test_tagged_int_str_uses_pcc_python_runtime(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(src),
             "-o",

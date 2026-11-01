@@ -197,8 +197,6 @@ def _write_build_evidence(
             "--ir-scaffold=on",
             "--backend",
             "self",
-            "--python-libpython",
-            "off",
             str(logical_source_root / "pcc" / "__main__.py"),
             "-o",
             str(built_compiler),

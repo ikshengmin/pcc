@@ -71,7 +71,7 @@ def test_the_collector_cannot_change_after_the_first_allocation(tmp_path, thread
     source.write_text(PROGRAM, encoding="utf-8")
     executable = tmp_path / "fixed_backend"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60,

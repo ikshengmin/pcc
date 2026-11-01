@@ -63,7 +63,7 @@ def test_value_joins_never_convert_operands(tmp_path: Path, backend: str) -> Non
     env.pop("LC_ALL", None)
     env["PCC_GC_BACKEND"] = backend
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=600, env=env,
     )
     assert build.returncode == 0, build.stderr

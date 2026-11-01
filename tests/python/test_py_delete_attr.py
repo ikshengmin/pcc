@@ -25,7 +25,6 @@ def test_delete_attribute_statement_compiles_no_libpython_self_backend(tmp_path)
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

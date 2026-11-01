@@ -2,7 +2,7 @@
 
 An import that is INDENTED in the entry module — inside a module-level
 ``try:`` / ``if:`` block, or inside a function (lazy import) — fell back to
-libpython under ``--backend self --python-libpython=off``
+libpython under ``--backend self``
 ("imports still lower through CPython fallback"). The entry import-discovery
 (``_top_level_import_targets`` in pcc/frontends/python/pipeline.py) was called with
 ``top_level_only=True``, so it skipped every indented import line; the
@@ -57,7 +57,6 @@ def _compile_run(
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

@@ -1328,7 +1328,6 @@ def compile_contextual_per_module_fallback_counts(
     contextual_modules,
     *,
     ir_scaffold_mode: str,
-    strict_no_libpython: bool = False,
     emit_ir_dir: Optional[str] = None,
     entry_module: Optional[str] = None,
 ):
@@ -1377,8 +1376,8 @@ def compile_contextual_per_module_fallback_counts(
                 emit_cpy_main_exitcode=False,
                 ir_scaffold_mode=ir_scaffold_mode,
             )
-            codegen._strict_no_libpython = strict_no_libpython
-            codegen._prefer_native_callable_values = strict_no_libpython
+            codegen._strict_no_libpython = True
+            codegen._prefer_native_callable_values = True
             for source_path, source_module_name in zip(src_paths, module_names):
                 if source_module_name == mod_name:
                     codegen._module_source_path = os.path.abspath(source_path)

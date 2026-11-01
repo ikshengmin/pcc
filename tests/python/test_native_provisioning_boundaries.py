@@ -80,7 +80,7 @@ def test_real_provisioning_routes_reject_before_runtime_output(tmp_path, monkeyp
         elif route == "make-selection":
             pipeline._ensure_runtime(False)
         elif route == "compile":
-            pipeline.compile_python(str(src), str(output / "program"), backend="self", libpython_mode="off", ir_scaffold_mode="on")
+            pipeline.compile_python(str(src), str(output / "program"), backend="self", ir_scaffold_mode="on")
         else:
             importlib.import_module(route)._compile_and_run(output, src.read_text())
     assert _inventory(tmp_path) == before
@@ -145,7 +145,7 @@ def test_real_ir_only_compile_is_allowed_while_provisioning_is_disabled(tmp_path
     before = _inventory(tmp_path)
     pipeline.compile_python(
         str(source), str(output), backend="self", emit_llvm_only=True,
-        libpython_mode="off", ir_scaffold_mode="on",
+        ir_scaffold_mode="on",
     )
     ir = output.read_text()
     assert "define " in ir and "answer" in ir

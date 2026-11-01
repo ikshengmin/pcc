@@ -56,7 +56,7 @@ def test_sized_bytes_constructors_match_cpython(tmp_path, pcc_diagnostic_runtime
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=30)
     assert expected.returncode == 0, expected.stderr
     binary = tmp_path / "bytes_count"
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off",
+    compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_diagnostic_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

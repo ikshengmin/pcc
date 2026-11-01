@@ -31,7 +31,6 @@ def test_recursive_guard_decorator_factory_compiles_no_libpython_self_backend(tm
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -65,7 +64,6 @@ def test_errstate_style_decorator_factory_compiles_no_libpython_self_backend(tmp
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)

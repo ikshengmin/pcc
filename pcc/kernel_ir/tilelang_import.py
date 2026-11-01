@@ -71,8 +71,8 @@ class TileLangImportError(ValueError):
 # be conflated, and this module only ever provides the second one:
 #
 # * ``tilelang-package-cpython-compat`` -- a runtime ``import tilelang`` served
-#   through the package / cpython-compat path. It links libpython and executes
-#   the upstream TileLang/TVM runtime. This module DOES NOT provide it.
+#   through the package / cpython-compat C-API path. It executes the upstream
+#   TileLang/TVM runtime. This module DOES NOT provide it.
 # * ``pcc-tilelang-source-subset`` -- what ``import_tilelang_source`` and
 #   ``import_tilelang_file`` provide: an ``ast`` parse of a strict TileLang
 #   Python-DSL subset into pcc Kernel IR. It does not execute TileLang/TVM/torch,

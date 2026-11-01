@@ -19,7 +19,6 @@ def test_freestanding_strtoint_matches_lp64_c_locale_edges(tmp_path: Path) -> No
         str(SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
@@ -136,7 +135,6 @@ def test_strtoint_prefix_lookahead_stays_within_the_c_string(
         str(SOURCE),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     build = subprocess.run(

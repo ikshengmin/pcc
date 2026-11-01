@@ -19,7 +19,7 @@ the division *value* (the truediv fix) and stay robust to the separate
 no-libpython float-repr gap (``10/3`` prints ``3.333333`` rather than CPython's
 shortest-round-trip ``3.3333333333333335`` — a distinct runtime limitation,
 not a truediv bug). Compiles + runs under ``--backend self
---python-libpython=off`` in DEFAULT runtime mode (pcc-Python ports — the goal
+`` in DEFAULT runtime mode (pcc-Python ports — the goal
 mode).
 """
 from __future__ import annotations
@@ -39,8 +39,7 @@ def _run_pcc_program(tmp_path: Path, source: str) -> str:
     # is mirrored in both py_obj_ops_dispatch.c and the port py_obj_ops_dispatch.py.
     build = subprocess.run(
         [
-            "uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-            "--ir-scaffold=on", str(src), "-o", str(exe),
+            "uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe),
         ],
         text=True, capture_output=True, timeout=420, env=env,
     )

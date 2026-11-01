@@ -134,7 +134,6 @@ def test_len_and_str_use_cext_slots(tmp_path, pcc_runtime_archive):
         [
             "uv", "run", "pcc",
             "--backend", "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o", str(exe),

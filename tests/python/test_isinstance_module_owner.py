@@ -96,7 +96,7 @@ def test_alias_classinfo_real_ir_keeps_owning_module(tmp_path, monkeypatch, reve
     paths, names = _modules(tmp_path, reverse)
     output = tmp_path / "owner.ll"
     compile_python_multi(paths, str(output), module_names=names, entry_module="owner_main",
-                         emit_llvm_only=True, backend="self", libpython_mode="off",
+                         emit_llvm_only=True, backend="self",
                          ir_scaffold_mode=scaffold)
     text = output.read_text()
     for function, alias, other in (("first_match", "first", "owner_right"),
@@ -137,7 +137,7 @@ def test_host_compiled_module_alias_checks_execute(tmp_path, monkeypatch, explic
     output = tmp_path / "owner"
     before = {path: _sha(path) for path in paths + [str(explicit_runtime)]}
     compile_python_multi(paths, str(output), module_names=names, entry_module="owner_main",
-                         backend="self", libpython_mode="off", ir_scaffold_mode=scaffold,
+                         backend="self", ir_scaffold_mode=scaffold,
                          runtime_archive=str(explicit_runtime))
     for backend in (1, 4):
         result = subprocess.run([str(output)], cwd=tmp_path,

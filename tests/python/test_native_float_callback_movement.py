@@ -151,7 +151,7 @@ def test_canonical_float_callback_movement_gc4(
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     try:
         python_program_compiler(
-            str(source), str(binary), backend="self", libpython_mode="off",
+            str(source), str(binary), backend="self",
             ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime),
         )
     except Exception as error:

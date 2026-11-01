@@ -156,7 +156,6 @@ def _compile_metadata(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str
         meta["input"] = str(args[0])
     for key in (
         "emit_llvm_only",
-        "libpython_mode",
         "ir_scaffold_mode",
         "backend",
         "python_library",
@@ -196,11 +195,6 @@ def _diagnostic_for_compile_exception(
         notes[0] = "exception_type=" + str(original_exception_type)
     if metadata:
         notes.append("metadata=" + repr(metadata))
-    if options.explain_fallback:
-        notes.append(
-            "fallback_explain=libpython fallback is controlled by "
-            "--python-libpython/PCC_PYTHON_LIBPYTHON"
-        )
     return Diagnostic(
         code=diag.code,
         message=diag.message,

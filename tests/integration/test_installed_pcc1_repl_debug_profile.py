@@ -210,7 +210,7 @@ def test_installed_pcc1_cli_traceback_and_tooling_contract(
     profile_payload = json.loads(profile.read_text(encoding="utf-8"))
     assert profile_payload["schema"] == "pcc.profile.v1"
     assert profile_payload["metadata"]["backend"] == "self"
-    assert profile_payload["metadata"]["python_libpython"] == "off"
+    assert "python_libpython" not in profile_payload["metadata"]
 
     capabilities = _run(
         [str(pcc1), "--tooling-capabilities"], cwd=work, env=env

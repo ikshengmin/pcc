@@ -29,7 +29,6 @@ def test_comprehension_over_user_iterable_uses_native_iterator_protocol(tmp_path
         str(src),
         str(exe),
         backend="self",
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
@@ -49,7 +48,7 @@ print(values[2])
 """
     , encoding="utf-8")
     exe = tmp_path / "comp_range_discard_rebind.out"
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     out = subprocess.check_output([str(exe)], text=True).splitlines()
     assert out == ["3", "0"]
 
@@ -66,6 +65,6 @@ print(values[2])
 """
     , encoding="utf-8")
     exe = tmp_path / "comp_range_named_rebind.out"
-    compile_python(str(src), str(exe), libpython_mode="off", ir_scaffold_mode="on")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     out = subprocess.check_output([str(exe)], text=True).splitlines()
     assert out == ["3", "2"]

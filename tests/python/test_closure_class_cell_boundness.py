@@ -243,7 +243,7 @@ def test_class_cell_shapes_execute_all_collectors(
     source.write_text(PROGRAM)
     output = tmp_path / 'class_cells'
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES', 'off')
-    python_program_compiler(str(source), str(output), backend='self', libpython_mode='off',
+    python_program_compiler(str(source), str(output), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
     for backend in range(5):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,

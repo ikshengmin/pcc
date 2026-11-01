@@ -11,8 +11,7 @@ _FALSE = ("0", "false", "no", "off")
 
 
 def host_codegen_batch_limit(env, *, native_worker, indexed_split,
-                             checkpoint_root, action_cache_plan,
-                             libpython_mode, artifact_dir):
+                             checkpoint_root, action_cache_plan, artifact_dir):
     """Select only an explicitly requested host direct-object batch of two."""
     raw = str(env.get(HOST_BATCH_ENV, "") or "").strip()
     if raw in ("", "0", "1"):
@@ -21,8 +20,8 @@ def host_codegen_batch_limit(env, *, native_worker, indexed_split,
         raise ValueError("host codegen batch size must be 1 or 2")
     if native_worker or indexed_split or checkpoint_root or action_cache_plan is not None:
         raise ValueError("host codegen batch cannot share native, split, checkpoint or action-cache work")
-    if libpython_mode != "off" or not artifact_dir:
-        raise ValueError("host codegen batch requires no-libpython and an artifact root")
+    if not artifact_dir:
+        raise ValueError("host codegen batch requires an artifact root")
     for name in ("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "PCC_DIRECT_INDEXED_KERNEL_EMIT",
                  "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND", "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK"):
         if str(env.get(name, "") or "").strip().lower() not in _TRUE:

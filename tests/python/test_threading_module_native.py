@@ -38,7 +38,7 @@ def test_threading_stdlib_native_lock_event_smoke(tmp_path):
         if __name__ == "__main__":
             main()
         """).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == ["True", "True", "False", "True"]
@@ -65,7 +65,7 @@ def test_thread_start_runs_target_via_native_dispatch_under_default_runtime(tmp_
         if __name__ == "__main__":
             main()
         """).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == ["False", "worker", "False"]
@@ -95,7 +95,7 @@ def test_thread_start_on_for_loop_target_from_thread_list(tmp_path):
         if __name__ == "__main__":
             main()
         """).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "[0, 1, 4]"
@@ -128,7 +128,7 @@ def test_thread_start_on_for_loop_target_from_appended_thread_name(tmp_path):
         if __name__ == "__main__":
             main()
         """).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     lines = sorted(result.stdout.strip().splitlines())
@@ -161,7 +161,7 @@ def test_threading_import_from_and_sync_primitives_native(tmp_path):
         if __name__ == "__main__":
             main()
         """).lstrip(), encoding="utf-8")
-    compile_python(str(src), str(exe), ir_scaffold_mode="on", libpython_mode="off")
+    compile_python(str(src), str(exe), ir_scaffold_mode="on")
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines() == [
@@ -283,7 +283,6 @@ def test_pthread_lock_serializes_shared_list_updates(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         runtime_archive=str(work_runtime / "libpy_runtime_pcc_py.a"),
     )
     outputs: list[str] = []

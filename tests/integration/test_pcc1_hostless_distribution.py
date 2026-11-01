@@ -301,7 +301,6 @@ def test_installed_distribution_builds_and_runs_packages_with_host_tools_blocked
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",

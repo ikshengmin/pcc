@@ -182,7 +182,7 @@ def _compile(tmp_path, runtime_archive, source):
     executable = tmp_path / "byte_accounting"
     script.write_text(textwrap.dedent(source), encoding="utf-8")
     compile_python(
-        str(script), str(executable), backend="self", libpython_mode="off",
+        str(script), str(executable), backend="self",
         runtime_archive=str(runtime_archive),
     )
     return executable

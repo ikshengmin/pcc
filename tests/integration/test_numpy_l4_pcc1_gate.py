@@ -65,7 +65,6 @@ def test_numpy_l4_import_and_version_through_pcc1_no_libpython(tmp_path):
             str(pcc1),
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(main),
             "-o",

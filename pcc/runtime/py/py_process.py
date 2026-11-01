@@ -1,7 +1,7 @@
 """pcc-Python replacement for py_runtime/src/py_process.c.
 
-This module is used by the pcc-Python runtime archive. It also defines
-the argv globals consumed by the optional py_libpython bridge archive.
+This module is used by the pcc-Python runtime archive and defines the
+program argv globals.
 """
 
 __pcc_runtime_port__ = True

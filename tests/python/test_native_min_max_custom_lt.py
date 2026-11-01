@@ -13,7 +13,7 @@ per-pair compare uses _emit_direct_method_value_call (the same static dunder
 resolution the `<` operator and #54 use), returning the extreme ELEMENT object.
 int/str/custom-iterator args keep their existing paths.
 
-Runs under ``--backend self --python-libpython=off`` in DEFAULT runtime mode.
+Runs under ``--backend self`` in DEFAULT runtime mode.
 """
 from __future__ import annotations
 import os, subprocess
@@ -22,7 +22,7 @@ import os, subprocess
 def _run(tmp_path, source, *, backend=None):
     src = tmp_path / "p.py"; src.write_text(source, encoding="utf-8")
     exe = tmp_path / "p_bin"; env = os.environ.copy(); env.pop("LC_ALL", None)
-    b = subprocess.run(["uv","run","pcc","--backend","self","--python-libpython=off","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
+    b = subprocess.run(["uv","run","pcc","--backend","self","--ir-scaffold=on",str(src),"-o",str(exe)], text=True, capture_output=True, timeout=420, env=env)
     assert b.returncode == 0, b.stderr
     run_env = env if backend is None else {**env, "PCC_GC_BACKEND": backend}
     r = subprocess.run(

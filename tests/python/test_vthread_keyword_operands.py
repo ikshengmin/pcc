@@ -84,7 +84,7 @@ def test_keyword_values_spill_without_reordering_mapping_merges(
     output = tmp_path / 'keyword_operands'
     source.write_text(PROGRAM, encoding='utf-8')
     python_program_compiler(
-        str(source), str(output), backend='self', libpython_mode='off',
+        str(source), str(output), backend='self',
         runtime_archive=str(pcc_runtime_archive),
     )
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)

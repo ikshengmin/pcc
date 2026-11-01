@@ -25,7 +25,6 @@ def test_pep604_type_union_expression_compiles_self_backend(tmp_path):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
         backend="self",
     )
     run = subprocess.run(

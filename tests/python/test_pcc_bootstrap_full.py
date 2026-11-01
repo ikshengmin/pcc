@@ -197,7 +197,6 @@ def _bootstrap_success_inputs(
         "runtime_archive": _path_record(runtime_archive),
         "runtime_cc": os.environ.get("PCC_BOOTSTRAP_RUNTIME_CC", "pcc"),
         "runtime_high": os.environ.get("PCC_BOOTSTRAP_RUNTIME_HIGH", "py"),
-        "python_libpython": os.environ.get("PCC_BOOTSTRAP_PYTHON_LIBPYTHON", "off"),
         "python_ir_passes": os.environ.get(
             "PCC_BOOTSTRAP_PYTHON_IR_PASSES",
             os.environ.get("PCC_PYTHON_IR_PASSES", "off"),

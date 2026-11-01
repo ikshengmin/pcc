@@ -140,11 +140,11 @@ def test_syscall6_frontend_policy_matches_the_target(tmp_path):
     )
     if host_is_linux_x86_64:
         compile_python(
-            str(src), str(out), emit_llvm_only=True, libpython_mode="off",
+            str(src), str(out), emit_llvm_only=True,
         )
         assert 'asm sideeffect "syscall"' in out.read_text(encoding="utf-8")
     else:
         with pytest.raises(NotImplementedError, match="Linux x86_64 only"):
             compile_python(
-                str(src), str(out), emit_llvm_only=True, libpython_mode="off",
+                str(src), str(out), emit_llvm_only=True,
             )

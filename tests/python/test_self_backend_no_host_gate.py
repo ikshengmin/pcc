@@ -47,7 +47,6 @@ def test_self_backend_no_host_no_silent_fallback(tmp_path):
             "-o",
             str(out),
             "--backend=self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
         ],
         capture_output=True,

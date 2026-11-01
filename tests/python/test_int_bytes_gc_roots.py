@@ -301,7 +301,7 @@ def decode(value, order, sign):
     return int.from_bytes(value, byteorder=order, signed=sign)
 ''')
     target = tmp_path / "byte_roots.ll"
-    compile_python(str(source), str(target), backend="self", libpython_mode="off",
+    compile_python(str(source), str(target), backend="self",
                    emit_llvm_only=True, python_library=True)
     text = target.read_text()
     verify_ir_text(text)
@@ -463,7 +463,7 @@ def test_forced_gc3_program_emits_lease_protected_ir(tmp_path):
     source = tmp_path / "byte_gc3.py"
     source.write_text(_GC3_SOURCE)
     output = tmp_path / "byte_gc3.ll"
-    compile_python(str(source), str(output), backend="self", libpython_mode="off",
+    compile_python(str(source), str(output), backend="self",
                    emit_llvm_only=True)
     text = output.read_text()
     verify_ir_text(text)
@@ -482,7 +482,7 @@ def test_forced_gc3_movement_and_byte_callback_leases(
     source = tmp_path / "byte_gc3.py"
     source.write_text(_GC3_SOURCE)
     output = tmp_path / "byte_gc3"
-    python_program_compiler(str(source), str(output), backend="self", libpython_mode="off",
+    python_program_compiler(str(source), str(output), backend="self",
                             runtime_archive=str(pcc_diagnostic_runtime_archive))
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,
                             env=dict(os.environ, PCC_GC_BACKEND="3", PCC_GC_MINOR_ALLOC_MAX="4096",

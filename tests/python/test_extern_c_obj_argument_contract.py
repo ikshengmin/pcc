@@ -12,7 +12,7 @@ def _ir(tmp_path, source):
     path = tmp_path / "extern_objects.py"
     output = tmp_path / "extern_objects.ll"
     path.write_text(source)
-    compile_python(str(path), str(output), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(path), str(output), emit_llvm_only=True)
     return output.read_text()
 
 
@@ -60,7 +60,7 @@ def test_host_compile_executes_c_obj_contract_on_all_gc_backends(
     executable = tmp_path / ("extern_objects.exe" if os.name == "nt" else "extern_objects")
     source.write_text(SOURCE, encoding="utf-8")
     compile_python(
-        str(source), str(executable), backend="self", libpython_mode="off",
+        str(source), str(executable), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
     receipts = {

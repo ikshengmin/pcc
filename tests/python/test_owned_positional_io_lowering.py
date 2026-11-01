@@ -46,7 +46,7 @@ def probe_resize(fd: i64, size: i64) -> i64:
     return truncate_file(fd, size)
 ''')
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
-                   libpython_mode='off', target_triple=target)
+                   target_triple=target)
     text = output.read_text()
     verify_ir_text(text)
     assert not re.search(r'\bcall[^\n]*@py_cpy_', text)

@@ -3,7 +3,7 @@ must behave IDENTICALLY under all five GC backends.
 
 Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
 Compiled once under strict no-libpython (``--backend self
---python-libpython=off``) and run under ``PCC_GC_BACKEND`` 0..4; every backend
+``) and run under ``PCC_GC_BACKEND`` 0..4; every backend
 must produce the same correct output. Finalizer TIMING may differ across
 backends, but the POLICY may NOT: a weakref resolves while its referent is
 alive and is invalidated once the referent is reclaimed, and ``__del__`` runs at
@@ -70,8 +70,7 @@ def _wf_exe(tmp_path_factory):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert build.returncode == 0, build.stdout + build.stderr
@@ -87,8 +86,7 @@ def _wf_attr_exe(tmp_path_factory):
     env = os.environ.copy()
     env.pop("LC_ALL", None)
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
     )
     assert build.returncode == 0, build.stdout + build.stderr

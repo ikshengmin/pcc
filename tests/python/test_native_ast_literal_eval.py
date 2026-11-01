@@ -41,7 +41,6 @@ def test_ast_literal_eval_integer_tuple_subset_no_libpython(tmp_path):
             "pcc",
             "--backend",
             "self",
-            "--python-libpython=off",
             "--ir-scaffold=on",
             str(source),
             "-o",
@@ -106,8 +105,7 @@ def test_literal_eval_matches_cpython_natively(tmp_path):
     exe = tmp_path / "literals_bin"
     env = os.environ.copy()
     built = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off",
-         "--ir-scaffold=on", str(source), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(source), "-o", str(exe)],
         text=True, capture_output=True, timeout=600, env=env,
     )
     assert built.returncode == 0, built.stderr

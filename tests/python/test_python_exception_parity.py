@@ -1,7 +1,7 @@
 """CPython parity for exception handling, ported from
 ``Lib/test/test_exceptions.py``.
 
-All tests use ``libpython_mode="off"``.
+All tests compile with the native pipeline.
 
 Reference contract (from CPython):
   * ``try`` / ``except`` matches by class and subclass
@@ -29,7 +29,6 @@ def _compile(monkeypatch, src: Path, exe: Path) -> None:
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
 
 

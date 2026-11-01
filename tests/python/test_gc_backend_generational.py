@@ -63,7 +63,6 @@ def _compile_probe(
             str(src),
             str(exe),
             ir_scaffold_mode=ir_scaffold_mode,
-            libpython_mode="off",
             backend=backend,
         )
     return exe

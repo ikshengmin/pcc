@@ -415,7 +415,6 @@ def test_virtual_thread_spawn_lowers_to_typed_resume_ir(tmp_path, monkeypatch):
         str(ll),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
 
     ir_text = ll.read_text(encoding="utf-8")
@@ -440,7 +439,6 @@ def test_virtual_thread_generator_spawn_lowers_to_state_machine_resume_ir(
         str(ll),
         emit_llvm_only=True,
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
 
     ir_text = ll.read_text(encoding="utf-8")
@@ -460,7 +458,6 @@ def test_virtual_thread_spawn_runs_direct_user_function(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -484,7 +481,6 @@ def test_virtual_thread_import_from_aliases_run(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -511,7 +507,6 @@ def test_virtual_thread_generator_spawn_preserves_frame_and_parks_lock(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -538,7 +533,6 @@ def test_virtual_thread_generator_parks_threading_wait_primitives(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -564,7 +558,6 @@ def test_virtual_thread_uncaught_exception_is_task_local(tmp_path, monkeypatch):
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -597,7 +590,6 @@ def test_virtual_thread_join_parks_and_propagates_outcomes(tmp_path, monkeypatch
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -634,7 +626,6 @@ def test_virtual_thread_cancel_is_cooperative_and_runs_sync_cleanup(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],
@@ -692,7 +683,6 @@ def test_virtual_thread_sequential_readable_writable_use_platform_reactor(
         str(src),
         str(exe),
         ir_scaffold_mode="on",
-        libpython_mode="off",
     )
     result = subprocess.run(
         [str(exe)],

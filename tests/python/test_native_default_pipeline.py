@@ -33,7 +33,6 @@ main()
 
     with monkeypatch.context() as scoped:
         scoped.delenv('PCC_BACKEND', raising=False)
-        scoped.delenv('PCC_PYTHON_LIBPYTHON', raising=False)
         scoped.setattr(subprocess, 'Popen', owned_process)
         scoped.setattr(ctypes, 'CDLL', owned_library)
         compile_python(str(source), str(binary), runtime_archive=str(pcc_runtime_archive))

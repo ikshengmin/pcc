@@ -196,7 +196,7 @@ def test_virtual_threads_share_locks_across_carriers_under_every_collector(tmp_p
     src.write_text(PROGRAM, encoding="utf-8")
     exe = tmp_path / "vthread_locks"
     build = subprocess.run(
-        ["uv", "run", "pcc", "--backend", "self", "--python-libpython=off", str(src), "-o", str(exe)],
+        ["uv", "run", "pcc", "--backend", "self", str(src), "-o", str(exe)],
         cwd=repo_root(), text=True, capture_output=True, timeout=900, env=_environment(),
     )
     assert build.returncode == 0, build.stderr
@@ -222,6 +222,6 @@ def test_resumable_rlock_acquire_parks_the_virtual_thread(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     out = tmp_path / "rlock_park.ll"
-    compile_python(str(src), str(out), emit_llvm_only=True, libpython_mode="off")
+    compile_python(str(src), str(out), emit_llvm_only=True)
     text = out.read_text(encoding="utf-8")
     assert re.search(r"\bcall [^\n]*@py_threading_rlock_acquire_vthread\(", text)

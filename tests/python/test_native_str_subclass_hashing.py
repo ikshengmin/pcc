@@ -92,7 +92,7 @@ def test_str_subclass_hash_matches_cpython_on_five_collectors(tmp_path, threaded
     assert expected.returncode == 0, expected.stderr
     executable = tmp_path / "str_subclass_hashing"
     compile_python(str(source), str(executable), backend="self",
-                   libpython_mode="off", ir_scaffold_mode="on",
+                   ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,

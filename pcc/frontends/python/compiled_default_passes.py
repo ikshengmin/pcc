@@ -41,12 +41,7 @@ def is_compiled_default_tier(pass_names: list[str]) -> bool:
     return tuple(normalized) == COMPILED_DEFAULT_TIER
 
 
-def run_compiled_default_tier(
-    ir_text: str,
-    pass_names: list[str],
-    *,
-    strict_no_libpython: bool,
-) -> str:
+def run_compiled_default_tier(ir_text: str, pass_names: list[str]) -> str:
     """Run the exact self-hosted tier, leaving unsupported IR unchanged."""
 
     text = str(ir_text)
@@ -57,7 +52,7 @@ def run_compiled_default_tier(
             + " with passes "
             + ",".join(COMPILED_DEFAULT_TIER)
         )
-    if strict_no_libpython and _has_py_cpy_call(text):
+    if _has_py_cpy_call(text):
         # Match the host runner's strict-mode rule.  Declarations alone do not
         # block optimization; an actual fallback call does.
         return text

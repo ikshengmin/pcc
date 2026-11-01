@@ -45,7 +45,6 @@ def test_float_unary_minus_uses_ieee_fneg_and_preserves_negative_zero(tmp_path):
         str(src),
         str(llvm_ir),
         emit_llvm_only=True,
-        libpython_mode="off",
         python_library=True,
     )
     text = llvm_ir.read_text(encoding="utf-8")
@@ -84,7 +83,7 @@ def test_float_literal_precision_matches_cpython(tmp_path, monkeypatch):
         """).lstrip(), encoding="utf-8")
     compile_python(
         str(src), str(exe),
-        ir_scaffold_mode="on", libpython_mode="off", backend="self",
+        ir_scaffold_mode="on", backend="self",
     )
     cpython = subprocess.run(
         [sys.executable, str(src)], capture_output=True, text=True, timeout=30,
@@ -116,7 +115,6 @@ def test_current_pcc1_parses_large_and_tiny_finite_float_literals(tmp_path):
         [
             str(pcc1),
             "--python-library",
-            "--python-libpython=off",
             "--emit-llvm=" + str(llvm_ir),
             str(src),
         ],

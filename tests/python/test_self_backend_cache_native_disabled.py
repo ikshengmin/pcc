@@ -24,7 +24,6 @@ def test_disabled_object_cache_entrypoints_remain_native(tmp_path):
         str(source),
         str(ir_path),
         emit_llvm_only=True,
-        libpython_mode="off",
         ir_scaffold_mode="on",
     )
     ir_text = ir_path.read_text(encoding="utf-8")

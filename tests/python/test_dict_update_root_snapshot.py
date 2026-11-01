@@ -208,7 +208,7 @@ def test_dict_root_snapshot_native_all_gc(tmp_path, threaded_pcc_runtime_archive
     source = tmp_path / "dict_snapshot.py"
     source.write_text(PROGRAM)
     binary = source.with_suffix("")
-    compile_python(str(source), str(binary), backend="self", libpython_mode="off", ir_scaffold_mode="on",
+    compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     for gc in range(5):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=40,
