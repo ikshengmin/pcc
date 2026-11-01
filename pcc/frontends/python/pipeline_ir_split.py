@@ -46,6 +46,7 @@ def _gc_short_path_shard_metadata(
         GC_ABI_EXCLUSION_PREFIX,
         GC_ABI_MARKER,
         GC_SHORT_CALL_HELPERS,
+        GC_WALKED_FRAMES_MARKER,
     )
 
     literals: dict[str, str] = {}
@@ -64,6 +65,9 @@ def _gc_short_path_shard_metadata(
 
     metadata = [literals[GC_ABI_MARKER]]
     metadata_names = {GC_ABI_MARKER}
+    if GC_WALKED_FRAMES_MARKER in literals:
+        metadata.append(literals[GC_WALKED_FRAMES_MARKER])
+        metadata_names.add(GC_WALKED_FRAMES_MARKER)
     local_definitions = {name for name, _body, _declaration, _internal in functions}
     for callee in GC_SHORT_CALL_HELPERS:
         exclusion = GC_ABI_EXCLUSION_PREFIX + callee

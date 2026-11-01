@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from pcc.ir.compat import ir
@@ -1076,7 +1077,37 @@ class OwnershipLoweringMixin:
             generator_contexts[-1].get("resume_function") is self.current_function
         ):
             return name
+        self._mark_walked_frames()
         return name + "_mapped"
+
+    def _mark_walked_frames(self) -> None:
+        """Let the self backend drop this module's mapped frame entries.
+
+        Program code linked by the owned link runs under the stack-map table
+        its main publishes, the only root source of mapped frames; such an
+        executable cannot link with ``PCC_SELF_LINK=cc`` (main references the
+        table). Library and runtime modules can be linked without a table (a
+        C host, the cc reference route), so their entries keep asking the
+        runtime, which registers them only while no table is published.
+        """
+        if getattr(self, "_python_library", False) or getattr(
+            self, "_runtime_port_module", False
+        ):
+            return
+        from pcc.backend.self_backend_aarch64_gc_calls import GC_WALKED_FRAMES_MARKER
+
+        if self.module.globals.get(GC_WALKED_FRAMES_MARKER) is not None:
+            return
+        from pcc.backend.precise_stackmap import precise_stackmap_target_publishes_tables
+
+        if not precise_stackmap_target_publishes_tables(
+            getattr(self, "_target_triple", "") or None
+        ) or os.environ.get("PCC_SELF_LINK", "").strip().lower() == "cc":
+            return
+        marker = ir.GlobalVariable(self.module, _I8, name=GC_WALKED_FRAMES_MARKER)
+        marker.linkage = "internal"
+        marker.global_constant = True
+        marker.initializer = ir.Constant(_I8, 1)
 
     def _emit_current_gc_frame_enter(
         self,

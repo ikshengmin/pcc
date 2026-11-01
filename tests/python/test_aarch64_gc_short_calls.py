@@ -74,7 +74,10 @@ def _fixture(name, marked):
         return ("ptr" if helper in HELPERS[:2] else "void"), count
     result, count = signature(name)
     marker = "@__pcc_owned_gc_short_paths_v1 = internal constant i8 1" if marked else ""
-    client = ['target triple = "' + TARGET + '"', marker,
+    # Program code whose executable publishes the stack-map table.
+    walked = ("@__pcc_owned_gc_walked_frames_v1 = internal constant i8 1"
+              if marked == "walked" else "")
+    client = ['target triple = "' + TARGET + '"', marker, walked,
               "@frame_map = internal constant i32 1"]
     for helper in helpers:
         ret, argc = signature(helper)
@@ -95,6 +98,10 @@ def _fixture(name, marked):
         tagged_case = i == 6
         if not marked:
             called = 1
+        elif marked == "walked" and frame and name.endswith("_mapped"):
+            # The stack walk roots mapped frames on every collector, so marked
+            # program code emits no code for their entries and leaves.
+            called = 0
         elif load:
             called = int(bool(stop or (read and not null_case)))
         elif frame:
@@ -193,7 +200,7 @@ def _check_return_pcs(data):
 
 
 @pytest.mark.parametrize("name", HELPERS)
-@pytest.mark.parametrize("marked", (False, True))
+@pytest.mark.parametrize("marked", (False, True, "walked"))
 def test_gc_short_paths_execute_fast_and_cold_states(tmp_path, name, marked):
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         pytest.skip("native execution targets Darwin AArch64")

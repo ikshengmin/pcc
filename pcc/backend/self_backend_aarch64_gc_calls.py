@@ -3,6 +3,8 @@
 The IR calls remain intact for stack-map construction. Only explicitly marked
 PCC runtime clients qualify; ordinary C symbols and local definitions retain
 their calls. Slow paths use the original ABI and keep a real return-PC anchor.
+Mapped frame entries and leaves of marked program code emit nothing: the
+stack walk roots them.
 """
 from __future__ import annotations
 
@@ -17,6 +19,9 @@ from .self_backend_target_match import is_aarch64_darwin_triple
 
 GC_ABI_MARKER = "__pcc_owned_gc_short_paths_v1"
 GC_ABI_EXCLUSION_PREFIX = GC_ABI_MARKER + ".exclude."
+# Program code whose executable publishes the stack-map table (see
+# OwnershipLoweringMixin._mark_walked_frames).
+GC_WALKED_FRAMES_MARKER = "__pcc_owned_gc_walked_frames_v1"
 _LOADS = ("pcc_gc_load_ptr", "pcc_gc_load_borrowed_ptr")
 _FRAME_ENTERS = (
     "pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo",
@@ -28,6 +33,12 @@ _FRAME_LEAVES = (
 )
 _BARRIERS = ("pcc_gc_note_slot_write_barrier", "pcc_gc_note_write_barrier")
 GC_SHORT_CALL_HELPERS = _LOADS + _FRAME_ENTERS + _FRAME_LEAVES + _BARRIERS
+# Frames of code that carries stack-map records. The precise stack walk roots
+# them on every collector, so their entries register nothing.
+_WALKED_FRAME_CALLS = (
+    "pcc_gc_frame_enter_mapped", "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
+)
 
 
 def _flag(lines, name, module_symbols, *, acquire=False):
@@ -36,17 +47,35 @@ def _flag(lines, name, module_symbols, *, acquire=False):
     lines.append("  ldar w17, [x16]" if acquire else "  ldr w17, [x16]")
 
 
-def gc_short_call_lines(func, callee, call_id, ret_kind, arg_kinds, module_symbols):
-    """Return a guarded ABI expansion, or None when its proof is absent."""
+def _owned_runtime_import(callee, module_symbols) -> bool:
     # Shards retain original-module definitions as compile-time exclusions.
     # A definition in a sibling object is still not an owned runtime import.
     excluded = GC_ABI_EXCLUSION_PREFIX + callee
-    if (GC_ABI_MARKER not in module_symbols.internal_symbols
-            or GC_ABI_MARKER not in module_symbols.defined_symbols
-            or callee in module_symbols.defined_symbols
-            or (excluded in module_symbols.internal_symbols
-                and excluded in module_symbols.defined_symbols)
-            or not is_aarch64_darwin_triple(module_symbols.target_triple)):
+    return (GC_ABI_MARKER in module_symbols.internal_symbols
+            and GC_ABI_MARKER in module_symbols.defined_symbols
+            and callee not in module_symbols.defined_symbols
+            and not (excluded in module_symbols.internal_symbols
+                     and excluded in module_symbols.defined_symbols)
+            and is_aarch64_darwin_triple(module_symbols.target_triple))
+
+
+def gc_walked_frame_call_elided(callee, module_symbols) -> bool:
+    """Whether a mapped frame entry or leave emits no code at all.
+
+    In program code marked by the frontend, the executable publishes the
+    stack-map table, the only root source of mapped frames: the runtime
+    would return from these entries without registering. Precise-root
+    planning has already read the call, so only its emission goes.
+    """
+    return (callee in _WALKED_FRAME_CALLS
+            and GC_WALKED_FRAMES_MARKER in module_symbols.internal_symbols
+            and GC_WALKED_FRAMES_MARKER in module_symbols.defined_symbols
+            and _owned_runtime_import(callee, module_symbols))
+
+
+def gc_short_call_lines(func, callee, call_id, ret_kind, arg_kinds, module_symbols):
+    """Return a guarded ABI expansion, or None when its proof is absent."""
+    if not _owned_runtime_import(callee, module_symbols):
         return None
     load = callee in _LOADS
     frame = callee in _FRAME_ENTERS or callee in _FRAME_LEAVES

@@ -2082,6 +2082,11 @@ def emit_call_instruction_indexed(
         raise BackendUnavailable(
             "indexed regular-call lowering received an LLVM intrinsic"
         )
+    if not is_indirect and callee.startswith("pcc_gc_frame_"):
+        from .self_backend_aarch64_gc_calls import gc_walked_frame_call_elided
+
+        if gc_walked_frame_call_elided(callee, module_symbols):
+            return []
     if is_vararg_call and fixed_arg_count > arg_count:
         raise BackendUnavailable(
             f"self backend saw malformed variadic call in {func.name!r}: fixed args exceed actual args"
