@@ -64,7 +64,7 @@ CASES = [
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
     # The exact former integer-range original graduates in test_integer_range;
-    # pointer-to-array range still needs its separate dereference contract.
+    # pointer-to-array original is retained for its positive range obligations.
     ('non-array-range', original('func f(p *[2]int){for range p{}}')),
     ('non-array-range', original(body='for range "abc"{}')),
     ('limit-function-arity', original('func f('+','.join('a'+str(i)+' int' for i in range(257))+'){}')),
@@ -77,14 +77,16 @@ CASES = [
 ]
 
 
-# This one implemented boundary is no longer an unsupported obligation. Keep
-# every remaining original and its legacy name-index ID exactly, without
-# skip/xfail or filtering a test result. The exact graduated input has positive
-# ordinary/native/reference obligations in test_pointer_methods.GRADUATED.
+# Implemented boundaries are no longer unsupported obligations. Keep every
+# remaining original and its legacy name-index ID exactly; no skip/xfail or
+# filtering of a test result. Both exact originals have positive/native/
+# official-reference obligations in their corresponding feature tests.
 GRADUATED_RECEIVER_CASE = ('pointer-receivers', original('type T int;func(t *T)f(){}'))
-assert CASES.count(GRADUATED_RECEIVER_CASE) == 1
+GRADUATED_ARRAY_RANGE_CASE = ('non-array-range', original('func f(p *[2]int){for range p{}}'))
+GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE)
+assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
 ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)
-                if (name, text) != GRADUATED_RECEIVER_CASE]
+                if (name, text) not in GRADUATED_CASES]
 
 
 @pytest.mark.parametrize('suffix,source', [(name, text) for _, name, text in ACTIVE_CASES],

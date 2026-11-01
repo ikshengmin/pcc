@@ -730,20 +730,26 @@ class Analyzer:
                 coerce(ranged, iteration_type)
                 statement.evaluate_range = ranged.constant is None
                 value_types = (iteration_type,)
-            elif isinstance(dtype, ArrayType):
+            elif (isinstance(dtype, ArrayType) or
+                  isinstance(dtype, PointerType) and isinstance(underlying(dtype.element), ArrayType)):
+                array_type = underlying(dtype.element) if isinstance(dtype, PointerType) else dtype
                 if len(statement.targets) > 2:
                     raise GoDiagnostic(statement.token, "array range permits at most two iteration variables")
                 uses_element = len(statement.targets) == 2 and not (
                     statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
+                # len(array-or-array-pointer) is constant only in the absence
+                # of evaluated calls. A blank second variable does not read an
+                # element; never turn a real call into an unevaluated operand.
                 statement.evaluate_range = uses_element or has_evaluated_call(ranged)
                 if uses_element:
+                    # The temporary holds an array snapshot OR the captured
+                    # pointer, never a snapshot of the pointed-to array.
                     self.function.temporaries.append(ranged)
-                value_types = ("int", dtype.element)
+                value_types = ("int", array_type.element)
             else:
-                if (is_string(ranged.type) or
-                        isinstance(dtype, PointerType) and isinstance(underlying(dtype.element), ArrayType)):
-                    raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array or integer; other iterator/runtime contracts are not implemented")
-                raise GoDiagnostic(ranged.token, "range currently requires a fixed array or integer; other iterator/runtime contracts are not implemented")
+                if is_string(ranged.type):
+                    raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array or integer, or a pointer to a fixed array; other iterator/runtime contracts are not implemented")
+                raise GoDiagnostic(ranged.token, "range currently requires a fixed array or integer, or a pointer to a fixed array; other iterator/runtime contracts are not implemented")
             statement.range_index = Expr("range_index", statement.token, type=value_types[0])
             self.function.temporaries.append(statement.range_index)
             values = [Expr("range_value", statement.token, type=typ) for typ in value_types][:len(statement.targets)]

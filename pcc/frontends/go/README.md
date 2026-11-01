@@ -411,6 +411,37 @@ receiver method-set work is a separate Stage B implementation below; the old
 Stage A receipts do not qualify its new source bytes.
 
 
+### Pointer-to-array range
+
+Range over existing `*[N]E` values and their admitted defined/alias types uses
+fixed array bounds without allocating slice backing. Index-only forms, including
+a blank second variable, preserve Go's constant-length non-evaluation exception;
+real evaluated calls are not erased merely because the operand is a pointer.
+Nil index-only ranges therefore generate indices without dereferencing nil.
+Pointer-producing function results remain an explicit non-retention frontier.
+
+Element-reading forms capture the pointer once, not an array-value snapshot.
+Each iteration loads the current element before the ordinary iteration-variable
+assignment; mutations of later elements are visible, but rebinding the source
+pointer does not redirect the captured range. A nonempty element-reading range
+requires the existing independent live-region and source-nonnil proof. A zero-
+length pointer range reads no element; this is distinct from evaluating an
+explicit `*p` array expression, whose dereference obligation is unchanged.
+
+Existing parallel-assignment, short-declaration scope and per-iteration address
+restrictions apply. The complete `pointer_array_range.go` main and its 19
+full-width observers passed owned-native execution. Three captured raw pairs
+compare that complete fixture and the two exact graduated originals with
+Go 1.27.3. Nine normal invalid-source rejections and nine valid-but-unsupported
+build-only controls passed their distinct obligations; building is not execution.
+No shared backend/runtime, allocator, slice descriptor or GC change is introduced,
+and this does not qualify complete upstream packages.
+
+References: [range clauses](https://go.dev/ref/spec#For_range),
+[length and capacity](https://go.dev/ref/spec#Length_and_capacity), and
+[assignments](https://go.dev/ref/spec#Assignments).
+
+
 ### Direct non-retaining pointer-receiver methods
 
 Stage B admits a concrete local defined receiver base `T`, with receiver `T` or
@@ -464,7 +495,7 @@ evidence, not all possible programs. An inventory row with legacy `missing`
 does not mean its chapter has no implementation. An explicit capability
 rejection is not an invalid-Go classification or a positive runtime pass.
 
-Qualification source identity: `sha256:7f32b0a766e481cb49f5c3ad7e80848eca4c62ad9d4fd766313a2e3a91343923` (1,563 frozen compiler/test inputs, excluding this README and the feature-map qualification metadata). It binds published `b8761925` implementation bytes plus this Go source/test slice; unrelated later publication-tree changes are not silently described as tested.
+Qualification source identity: `sha256:dc02a5cd10db7863c298857714296f79dc49aa995fac5ae441872da170305bf0` (1,566 frozen compiler/test inputs, excluding this README and feature-map qualification metadata). It binds published `af61645d` implementation bytes plus this Go source/test slice; later unrelated publication contents are not silently described as tested.
 Execution lane **L** is host **pcc0**, owned **self** backend, **Linux x86_64**,
 no applicable GC; official **Go 1.27.3 linux/amd64** is an external reference only.
 PCC native-pcc1, Mac execution, full Go/standard library and shared runtime/GC
@@ -482,6 +513,7 @@ JSON fields are used to simulate such a migration.
 | `go.expression-switch.scalar` | Implemented: bounded scalar/static-string expression switches | Qualified in L for SW-U / -P / -D only | `supported` |
 | `go.array-range.fixed-value` | Implemented: bounded fixed value-array range and len/cap | Renewed in L for AR-U / -P / -D on the current unit file | `supported` |
 | `go.integer-range.typed-bound` | Implemented: bounded typed/untyped integer range with one-time bounds | Qualified in L for IR-U / -P / -D and the listed full-width cases | `supported` |
+| `go.pointer-array-range` | Implemented: bounded live pointer-to-array iteration | Qualified in L for PA-U / -P / -D and 19 full-width observations | `supported` |
 | `go.inventory.source` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.inventory.lexical` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.inventory.constants` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
@@ -572,6 +604,9 @@ ordinary test-process log, not invented per-node output.
 | PM-U | `tests/go/test_pointer_methods.py::test_typed_call_shapes_keep_real_pointer_receivers_and_value_wrappers_distinct` |
 | PM-P | `tests/go/test_pointer_methods.py::test_complete_pointer_method_main_executes_owned` |
 | PM-D | `tests/go/test_pointer_methods.py::test_identical_pointer_method_originals_match_official_raw_streams` |
+| PA-U | `tests/go/test_pointer_array_range.py::test_typed_range_retains_constant_length_call_and_capture_contract` |
+| PA-P | `tests/go/test_pointer_array_range.py::test_complete_pointer_array_program_main_executes_owned` |
+| PA-D | `tests/go/test_pointer_array_range.py::test_identical_pointer_array_originals_match_official_raw_streams` |
 | CAP-U | `tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir` (the existing source-located code-specific parameter cases) |
 
 Additional NP obligations are explicit tests in `tests/go/test_nullable_pointers.py`:
@@ -587,17 +622,17 @@ hashable. The 23
 native official-Go executables **without running them** and do not qualify PCC
 nil-panic/escape support.
 
-The complete selections passed **833 ordinary nodes** (31 simulated reference-
-protocol checks and 802 other checks) and **520 integration nodes** (335 standalone
-owned-native, 40 positive external-reference comparisons, 109 normal-source
-rejections, 33 build-only valid-unsupported controls, two external nil-panic
-frontiers and one diagnostic-only observer). All 184 regular official build
-receipts bind the original sources: 75 successes and 109 normal rc1 rejections.
+The complete selections passed **863 ordinary nodes** (31 simulated reference-
+protocol checks and 832 other checks) and **561 integration nodes** (355 standalone
+owned-native, 43 positive external-reference comparisons, 118 normal-source
+rejections, 42 build-only valid-unsupported controls, two external nil-panic
+frontiers and one diagnostic-only observer). All 205 regular official build
+receipts bind the original sources: 87 successes and 118 normal rc1 rejections.
 Build successes are not executions. The separate diagnostic Go-test observer
-remains excluded from acceptance. These are test outcomes, not 1,353 supported
+remains excluded from acceptance. These are test outcomes, not 1,424 supported
 features or a whole-language completeness percentage; no failed case was skipped
-or relabeled to obtain them. Prior published integer-range 791/465 outcomes
-remain historical evidence, not substitute results for this source slice.
+or relabeled to obtain them. Prior pointer-method 833/520 and integer-range
+791/465 outcomes remain historical evidence, not substitute results for this slice.
 
 `tests/go/test_pointers.py::test_retained_original_pointer_order_diagnostic`
 is excluded from acceptance: it does not execute the retained original main and

@@ -119,6 +119,9 @@ class Graph:
             # do not infer nonnil facts from an unknown trip count.
             ranged = statement.exprs[0]
             dtype = underlying(ranged.type)
+            pointer_range = isinstance(dtype, PointerType)
+            if pointer_range:
+                dtype = underlying(dtype.element)
             has_body = (dtype.count > 0 if isinstance(dtype, ArrayType) else
                         ranged.constant is None or ranged.constant > 0)
             header = self.add('range_check', has_body)
@@ -126,7 +129,14 @@ class Graph:
             if statement.init is not None:
                 body = self.statement(statement.init, body, following, header, falling)
             self.nodes[header].edges = [body, following]
-            return (self.add('evaluate', statement.exprs[0], [header])
+            uses_element = len(statement.targets) == 2 and not (
+                statement.targets[-1].kind == 'name' and statement.targets[-1].value == '_')
+            # Check the captured pointer once, before iteration assignments or
+            # body rebinding. Its pointee outlives this loop by the existing
+            # lexical/call-duration proof. An empty pointer range never loads
+            # an element (unlike evaluating an explicit array dereference).
+            entry_kind = 'range_pointer' if pointer_range and has_body and uses_element else 'evaluate'
+            return (self.add(entry_kind, ranged, [header])
                     if statement.evaluate_range else header)
         if kind == 'switch':
             bodies = [self.add('jump') for _ in statement.cases]
@@ -413,8 +423,10 @@ class PointerFlow:
         if node.kind == 'range_check':
             return [(node.edges[0], dict(state) if node.value else None),
                     (node.edges[1], dict(state))]
-        if node.kind == 'evaluate':
-            self.evaluate(node.value, state, check)
+        if node.kind in ('evaluate', 'range_pointer'):
+            fact = self.evaluate(node.value, state, check)
+            if node.kind == 'range_pointer' and check:
+                self.require_nonnull(fact, node.value.token)
         if node.kind == 'action':
             state = self.action(node.value, state, check)
         return [(edge, state) for edge in node.edges]

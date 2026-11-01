@@ -265,6 +265,9 @@ class Lowerer:
         if kind == "range":
             ranged = statement.exprs[0]
             dtype = underlying(ranged.type)
+            pointer_range = isinstance(dtype, PointerType)
+            if pointer_range:
+                dtype = underlying(dtype.element)
             array_range = isinstance(dtype, ArrayType)
             uses_element = len(statement.targets) == 2 and not (
                 statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
@@ -273,8 +276,9 @@ class Lowerer:
                 # or body effects. Constants merely materialize a typed value.
                 value = self.expression(ranged)
                 if uses_element:
-                    # An array range snapshots the entire value once, not a
-                    # pointer to the original variable or caller's storage.
+                    # Array values snapshot the entire array; pointer ranges
+                    # capture only the pointer. Body rebinding of the source
+                    # variable cannot redirect subsequent element reads.
                     self.builder.store(value, self.temps[id(ranged)])
             index_slot = self.temps[id(statement.range_index)]
             index_type = ir_type(statement.range_index.type)
@@ -297,7 +301,10 @@ class Lowerer:
                     if uses_element:
                         # The hidden induction value was checked above and is
                         # never exposed for user mutation. No panic shortcut.
-                        address = self.builder.gep(self.temps[id(ranged)], [ir.Constant(ir.IntType(32), 0), index])
+                        storage = self.temps[id(ranged)]
+                        if pointer_range:
+                            storage = self.builder.load(storage)
+                        address = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), index])
                         values.append(self.builder.load(address))
                     else:
                         values.append(self.zero(dtype.element))

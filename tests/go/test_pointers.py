@@ -91,7 +91,15 @@ UNSUPPORTED = [
 ]
 
 
-@pytest.mark.parametrize('suffix,body,declarations', UNSUPPORTED)
+# Keep the exact graduated source in this historical list, but no longer
+# present it as an unsupported obligation. Its unchanged positive/native/
+# official-reference cases are in test_pointer_array_range.GRADUATED.
+GRADUATED_ARRAY_RANGE = ('non-array-range', 'a:=[2]int{};p:=&a;for range p{}', '')
+assert UNSUPPORTED.count(GRADUATED_ARRAY_RANGE) == 1
+ACTIVE_UNSUPPORTED = [case for case in UNSUPPORTED if case != GRADUATED_ARRAY_RANGE]
+
+
+@pytest.mark.parametrize('suffix,body,declarations', ACTIVE_UNSUPPORTED)
 def test_pointer_capabilities_are_explicit_and_fail_closed(suffix, body, declarations, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unsupported pointer reached IR'))
