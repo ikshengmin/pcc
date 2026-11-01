@@ -140,10 +140,24 @@ CAS publication; stale dequeue claims recheck wakeups under the scheduler
 mutex before retirement. Sleeper registration and publication use full
 fences, and a producer observing sleepers takes their mutex before signalling.
 Queue close drains rooted nodes under the global-to-local lock order.
-Fifty-eight focused ordinary/model/IR checks pass. New deterministic overflow
-and four-carrier child-spawn probes are added but their emitted execution is
-pending, along with whole affected-language lanes, bootstrap and paired QPS.
-The earlier native results below do not qualify this deque increment.
+Frozen `86f47de37` passes 58 focused ordinary/model/IR checks, ten baseline
+program executions across GC0-4, and both new native probes across GC0-4:
+one carrier queues 600 tasks (256 local plus overflow) before collection,
+and four carriers spawn/join 1,200 children with exact per-child results.
+Three ordinary native cases and five sensitive integration cases also pass
+(ready roots, running-thread leases, channels, completion observers, locks,
+persistent carriers, migration, and timer/IO progress). The channel case here
+ran on the default GC; the other cases retain their individual matrix scope.
+
+Review after those runs found a borrowed join-waiter read after transferring
+its queue root. An immediate consumer can retire the task on GC0 before that
+read, despite the producer still holding the scheduler mutex. The publication
+fix records the known READY state without dereferencing the transferred task;
+timer/IO wakeup events likewise record their published state. The deterministic
+last-root handoff test fails on `86f47de37` and the corrected selection passes
+38 checks. The channel canary now selects GC0-4. These corrections still need
+their own emitted validation. Whole affected-language lanes, bootstrap and
+paired QPS remain pending; the preceding native passes do not close this gap.
 
 The node-pool increment over `f1d8e65d3` gives ready, join and channel free
 lists separate cache-line-spaced no-park locks. Allocation, raw freeing and

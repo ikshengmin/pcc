@@ -24,6 +24,7 @@ class Cell:
     def __init__(self, fields=None):
         self.fields = dict(fields or {})
         self.references = 0
+        self.alive = True
 
 
 class Model:
@@ -41,6 +42,7 @@ class Model:
         self.namespace = {
             "atomic_cas_i64": self.cas,
             "atomic_load_i64": lambda cell, offset, order: self.load(cell, offset),
+            "atomic_store_i64": self.atomic_store,
             "load_i64": self.load,
             "load_i32": self.load,
             "load_ptr": self.load,
@@ -48,6 +50,7 @@ class Model:
             "store_i64": self.store,
             "null": lambda: None,
             "ptr_is_null": lambda value: value is None,
+            "ptr_eq": lambda left, right: left is right,
             "is_tagged_int": lambda value: False,
             "global_addr": self.global_slot,
             "_counter_add": self.add,
@@ -56,6 +59,7 @@ class Model:
             "pcc_gc_store_root": lambda slot, value: self.store(slot, 0, value),
             "pcc_gc_load_ptr": lambda owner, slot: self.load(slot, 0),
             "_ready_release": self.release,
+            "_join_release": self.release,
             "free": self.freed.append,
             "py_incref": lambda value: self.retain(value, 1),
             "py_decref": lambda value: self.retain(value, -1),
@@ -67,7 +71,7 @@ class Model:
             "PY_TYPE_VIRTUAL_THREAD": VTHREAD_TYPE,
         }
         names = {"_enqueue", "_publish_ready_node", "_dequeue_from", "_step_finished",
-                 "_ready_node_take"}
+                 "_ready_node_take", "_join_wake_all"}
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
         assert {node.name for node in nodes} == names
@@ -83,10 +87,12 @@ class Model:
 
     @staticmethod
     def load(cell, offset):
+        assert cell.alive, "read after the published task was freed"
         return cell.fields.get(offset)
 
     @staticmethod
     def store(cell, offset, value):
+        assert cell.alive, "write after the published task was freed"
         cell.fields[offset] = value
 
     def global_slot(self, name):
@@ -99,6 +105,10 @@ class Model:
         if previous == expected:
             self.store(cell, offset, replacement)
         return previous
+
+    def atomic_store(self, cell, offset, value, order):
+        assert order == "release"
+        self.store(cell, offset, value)
 
     def add(self, cell, delta):
         value = self.load(cell, 0) + delta
@@ -266,6 +276,24 @@ def test_successful_local_claim_does_not_take_the_scheduler_mutex():
     model.count.fields[0] = 1
     assert model.namespace["_ready_node_take"](model.node(thread), 0) is thread
     assert ("lock",) not in model.events
+
+
+def test_join_waker_does_not_read_a_task_after_transferring_its_last_root():
+    model = Model()
+    waiter = model.thread(state=3, mark=0)
+    node = model.node(waiter)
+    waiter.fields.update({104: node, 120: 4})
+    target = Cell({88: node, 96: node})
+
+    def finish_waiter():
+        assert model.pop() is waiter
+        waiter.references = 0
+        waiter.alive = False
+
+    model.visible = finish_waiter
+    assert model.namespace["_join_wake_all"](target) == 0
+    assert target.fields == {88: None, 96: None}
+    assert (6, 1, 0, 1) in model.events
 
 
 @pytest.mark.parametrize("failure", ["allocation_fails", "registration_fails"])

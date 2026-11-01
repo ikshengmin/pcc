@@ -163,14 +163,16 @@ def test_bounded_mpsc_oneshot_select2_sequential_contract(
         str(executable),
         ir_scaffold_mode="on",
     )
-    ran = subprocess.run(
-        [str(executable)],
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    assert ran.returncode == 0, ran.stdout + ran.stderr
-    _assert_channel_output(ran.stdout)
+    for backend in range(5):
+        ran = subprocess.run(
+            [str(executable)],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent"),
+        )
+        assert ran.returncode == 0, (backend, ran.stdout, ran.stderr)
+        _assert_channel_output(ran.stdout)
 
 
 @pytest.mark.integration

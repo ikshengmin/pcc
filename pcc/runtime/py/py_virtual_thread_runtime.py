@@ -1051,7 +1051,9 @@ def _join_wake_all(target) -> int:
             store_i64(waiter, 120, 0)
             atomic_store_i64(waiter, 32, 1, "release")
             _publish_ready_node(waiter, node)
-            _effect(6, 1, 0, atomic_load_i64(waiter, 32, "acquire"))
+            # Publication transfers the last root: another carrier may have
+            # already run and freed this waiter. Record the published state.
+            _effect(6, 1, 0, 1)
             continue
         after = load_ptr(node, 8)
         store_ptr(target, 88, after)
@@ -2536,7 +2538,7 @@ def _io_close_waiters_locked(fd: int) -> int:
             store_ptr(thread, 64, null())
             store_i64(thread, 120, 0)
             _ready_commit(thread, ready)
-            _effect(11, 3, 0, atomic_load_i64(thread, 32, "acquire"))
+            _effect(11, 3, 0, 1)
         elif (
             ptr_is_null(thread) == 0
             and is_tagged_int(thread) == 0
@@ -2812,7 +2814,7 @@ def py_virtual_thread_poll_timers() -> int:
             store_i64(thread, 120, 0)
             _ready_commit(thread, ready_node)
             woken = woken + 1
-            _effect(9, 2, 0, atomic_load_i64(thread, 32, "acquire"))
+            _effect(9, 2, 0, 1)
         elif (
             ptr_is_null(thread) == 0
             and is_tagged_int(thread) == 0
@@ -3163,7 +3165,7 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
                 store_i64(thread, 120, 0)
                 _ready_commit(thread, ready_node)
                 woken = woken + 1
-                _effect(11, 3, 0, atomic_load_i64(thread, 32, "acquire"))
+                _effect(11, 3, 0, 1)
             elif (
                 ptr_is_null(thread) == 0
                 and is_tagged_int(thread) == 0
