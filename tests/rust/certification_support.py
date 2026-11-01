@@ -10,7 +10,7 @@ from pcc.frontends.rust.syntax import Parser
 def source_has_references(source):
     parser = Parser(source)
     functions = parser.parse()
-    return contains_references(functions, parser.records, parser.enums, parser.implementations)
+    return contains_references(functions, parser.records, parser.enums, parser.implementations, parser.traits)
 
 
 def certify_source(source, directory, *, target_triple='x86_64-unknown-linux-gnu'):

@@ -136,6 +136,13 @@ class Implementation:
     token: Token
     owner: object
     type_parameters: tuple[Token, ...] = ()
+    trait: str | None = None
+
+
+@dataclass
+class Trait:
+    token: Token
+    methods: list[Function] = field(default_factory=list)
 
 
 @dataclass
@@ -165,6 +172,8 @@ class Function:
         if self.implementation is None:
             return self.token.text
         owner = self.implementation.owner
+        if self.implementation.trait is not None:
+            return "<" + str(owner) + " as " + self.implementation.trait + ">::" + self.token.text
         return (owner.name if isinstance(owner, TypeApplication) else str(owner)) + "::" + self.token.text
 
     @property
@@ -223,6 +232,7 @@ class Parser:
         self.records: list[Record] = []
         self.enums: list[Enumeration] = []
         self.implementations: list[Implementation] = []
+        self.traits: list[Trait] = []
         self.type_argument_depth = 0
 
     @property
@@ -405,20 +415,45 @@ class Parser:
                     raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                 self.expect("]")
             public = self.accept("pub")
+            if self.accept("trait"):
+                if repr_c or enum_repr or no_mangle:
+                    raise self.token.error("attributes on traits are not implemented")
+                name = self.name()
+                if self.token.text != "{":
+                    raise self.token.error("generic traits, supertraits and trait constraints are not implemented")
+                self.expect("{")
+                trait = Trait(name)
+                while not self.accept("}"):
+                    if self.token.text != "fn":
+                        raise self.token.error("only safe required trait methods are implemented; associated types/constants and unsafe methods are not implemented")
+                    trait.methods.append(self.function("Rust", False, False, False,
+                        declaration=True, implementation=Implementation(name, "Self", trait=name.text),
+                        trait_declaration=True))
+                self.traits.append(trait)
+                continue
             if self.accept("impl"):
                 if public or repr_c or enum_repr or no_mangle:
                     raise self.token.error("visibility and attributes on impl blocks are not implemented")
                 token = self.tokens[self.pos - 1]
                 parameters = self.generic_parameters()
                 owner = self.type()
-                if self.token.text in {"for", "where"}:
-                    raise self.token.error("trait impls and impl constraints are not implemented")
-                implementation = Implementation(token, owner, parameters)
+                trait_name = None
+                if self.accept("for"):
+                    if parameters or not isinstance(owner, str):
+                        raise token.error("generic traits and blanket/generic trait impls are not implemented")
+                    trait_name, owner = owner, self.type()
+                if self.token.text == "where":
+                    raise self.token.error("impl constraints are not implemented")
+                implementation = Implementation(token, owner, parameters, trait_name)
                 self.implementations.append(implementation)
                 self.expect("{")
                 while not self.accept("}"):
                     visible = self.accept("pub")
                     unsafe = self.accept("unsafe")
+                    if trait_name is not None and (visible or unsafe):
+                        raise self.token.error("trait impl methods must be safe and have no visibility qualifier in this slice")
+                    if trait_name is not None and self.token.text != "fn":
+                        raise self.token.error("trait associated types/constants are not implemented")
                     functions.append(self.function("Rust", visible, False, unsafe,
                                                    implementation=implementation))
                 continue
@@ -456,7 +491,7 @@ class Parser:
             functions.append(self.function(abi, public, no_mangle, unsafe))
         return functions
 
-    def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None) -> Function:
+    def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None, trait_declaration=False) -> Function:
         self.expect("fn")
         name = self.name()
         parameters = self.generic_parameters(allow_lifetimes=True)
@@ -465,7 +500,7 @@ class Parser:
             # Keep one declaration-bound parameter vector for the shared
             # function registry, with a fixed impl prefix and a method suffix.
             parameters = implementation.type_parameters + parameters
-        if parameters and (abi != "Rust" or no_mangle or declaration):
+        if parameters and (abi != "Rust" or no_mangle or declaration and not trait_declaration):
             raise name.error("generic function foreign/export ABI is not implemented")
         self.expect("(")
         params = []
@@ -523,6 +558,8 @@ class Parser:
         if self.token.text == "where":
             raise self.token.error("generic where constraints require trait checking, which is not implemented")
         if declaration:
+            if trait_declaration and self.token.text == "{":
+                raise self.token.error("default trait method bodies are not implemented")
             self.expect(";")
             body = None
         else:
@@ -660,6 +697,14 @@ class Parser:
             mutable = text == "&" and self.accept("mut")
             expr = Expr("borrow" if text == "&" else "deref", token, mutable,
                         children=[self.expression(12, allow_struct=allow_struct)])
+        elif text == "<":
+            owner = self.type()
+            self.expect("as")
+            trait = self.name()
+            self.expect(">")
+            self.expect("::")
+            method = self.name()
+            expr = Expr("trait_path", token, (owner, trait.text, method.text))
         elif (token.kind == "name" and text != "_") or text in {"self", "Self"}:
             owner, variant = self.expression_path(token)
             if variant is not None:
@@ -677,7 +722,7 @@ class Parser:
             if (complete_block and expr.kind in {"if", "block", "while", "for", "unsafe", "match"}
                     and self.token.text != "."):
                 break
-            if self.token.text == "::" and expr.kind in {"field", "variant"}:
+            if self.token.text == "::" and expr.kind in {"field", "variant", "trait_path"}:
                 separator = self.take()
                 if expr.kind == "field" and expr.token.kind != "name":
                     raise separator.error("tuple fields do not have generic method arguments")
@@ -737,6 +782,8 @@ class Parser:
                 raise operator.error("comparison operators cannot be chained")
             right = self.expression(level if level == 1 else level + 1, allow_struct=allow_struct)
             expr = Expr("assign" if level == 1 else "binary", operator, op, [expr, right])
+        if expr.kind == "trait_path":
+            raise expr.token.error("qualified trait items require a direct call; stored function values are not implemented")
         return expr
 
     def enumeration(self, representation) -> None:

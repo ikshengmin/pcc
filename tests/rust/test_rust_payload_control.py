@@ -27,5 +27,8 @@ def test_development_only_rustc_checks_original_constructor_return_program(tmp_p
 
 def test_syntactically_complete_drop_implementation_is_not_silently_ignored():
     source='enum E{Value(i64)} impl Drop for E{fn drop(&mut self){}} fn f(){let e=E::Value(7);}'
-    with pytest.raises(RustError,match="trait impls"):
-        compile_rust(source,experimental_rustc_checked=True)
+    from tests.rust.analysis_only import analyze_source
+    with pytest.raises(RustError, match="trait impls"):
+        analyze_source(source)  # Non-lowering capability model, not certification.
+    with pytest.raises(RustError, match="reference-bearing Rust source requires an actual"):
+        compile_rust(source, experimental_rustc_checked=True)

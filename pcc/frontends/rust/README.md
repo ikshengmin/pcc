@@ -828,7 +828,7 @@ ignored current-file mismatch substitutes for those checks.
 | `rust.capability.75978ad8986b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.a0caa359be53` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.a8ca231e8795` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
-| `rust.capability.5b94bfcc10f1` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.5b94bfcc10f1` | explicitly_unimplemented | unverified | Remaining generic/blanket trait implementations and impl constraints are explicitly unimplemented. Concrete local static trait implementations are separately qualified under rust.traits.static-local-impls; this row no longer means all trait impls are absent. |
 | `rust.capability.f49193c1c2ca` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.cb3e74dcd215` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.cc0819c68f78` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
@@ -1024,3 +1024,54 @@ ignored current-file mismatch substitutes for those checks.
 | `rust.chapter.21.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
 | `rust.chapter.21.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
 | `rust.capability.85368199e941` | explicitly_unimplemented | unverified | Explicit message-only capability boundary; enum-owner arguments remain available. No stable diagnostic code or complete taxonomy is claimed. |
+
+## Qualified bounded static local traits
+
+`rust.traits.static-local-impls` has host pcc0/self Linux x86-64 execution
+acceptance for the bounded forms below, not a complete trait solver. Local non-generic traits may declare safe required methods;
+concrete local record/enum impls must supply exactly those members with matching
+receivers, parameters, results and alpha-equivalent method-local type parameters.
+Concrete impl identities include the trait and canonical owner, and duplicate
+impls fail before IR. Method-local inference and materialization reuse the
+existing function registry; there is no second trait body checker or cache.
+
+Qualified `<Type as Trait>::method` calls select that exact implementation.
+Dot calls search the admitted receiver candidates in Rust order, preferring an
+inherent method over trait methods *at the same candidate*, rejecting ambiguous
+traits and never retrying after a selected method fails its mutability check.
+Reference-bearing trait signatures, implementations and calls require genuine
+same-input external rustc checking before owned lowering, including unused trait
+signatures. Trait signatures themselves emit no function or vtable.
+
+Generic/blanket impls, bounds, generic traits, supertraits, defaults, associated
+types/constants, unsafe traits/methods, explicit trait lifetime parameters,
+trait objects, arbitrary autoderef and built-in trait/lang-item semantics remain
+explicit gaps. A local trait named `Drop` is just that local trait, not a hidden
+destructor or permission to implement the standard `Drop` contract. The pinned
+core/array source remains an unchanged upstream frontier, not a successful build.
+
+| Feature | Implementation | Acceptance | Boundary |
+|---|---|---|---|
+| `rust.traits.static-local-impls` | implemented | accepted | Qualified static local non-generic traits with safe required methods, concrete local record/enum impl coherence/completeness and alpha-equivalent signatures, explicit qualified calls and ordered receiver candidates. Trait methods reuse the existing generic inference/instance registry. Nine unchanged-original Linux x86-64 PCC/rustc1.91.1 raw native comparisons passed, including enum constructor namespace priority, concrete generic owners, method type parameters, receiver ordering/effects and local Drop-name identity. The three reference-bearing originals have genuine same-input checks; unused reference signatures also require actual certification. Eighteen complete invalid originals were genuinely rejected by rustc. Blanket/generic impls, bounds, defaults, associated types/constants, dyn, unsafe traits/methods, explicit trait lifetimes, nested Self/Sized obligations and built-in lang-item semantics remain gaps. Three added Darwin target cases remain explicitly unrun. |
+
+Final static-trait candidate `45118c1e175b784e020000779a2e8ff26b3ec8fc`
+passed the complete ordinary domain **1,110** (1,087 Rust +23 shared mechanism
+tests) and separate integration domain **11**. All six workers observed **1,139**
+pooled identities; **18** missing Darwin target prerequisites remain explicitly
+unselected/unrun. All **90** original native/reference pairs passed, including
+nine new trait originals. **59** runtime sources match actual metadata checking;
+**31** value-only pairs are not borrow-certification claims. Repeated checker
+observations are reported separately: **146 successes /31 genuine rejections**.
+
+The earlier method-generic and result-context qualification summaries retain
+their historical source identities. All **173** prior active evidence rows are
+unchanged; **19** new trait rows are added. The unchanged private receipt reader
+checks only those19 rows/nine raw identities, not missing historical artifacts.
+Strict current-file verification covers all four public maps; diagnostic audit
+is Rust-only. No new common ABI run or Mac execution is claimed, and this does
+not qualify unrelated later peer code merely because its bytes are preserved.
+
+Implementation proof: `pcc/frontends/rust/traits.py::StaticTraits.prepare` and
+`StaticTraits.validate_signatures`, with
+`pcc/frontends/rust/methods.py::InherentMethods.lookup`, at the exact tested
+`45118c1e` source revision. The generic registry, runtime and backend are unchanged.

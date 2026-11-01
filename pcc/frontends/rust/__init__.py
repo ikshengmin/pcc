@@ -83,14 +83,14 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     parser = Parser(source)
     functions = parser.parse()
     if rustc_check is None:
-        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations)
-    checker = Checker(functions, parser.records, parser.enums, parser.implementations, externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits)
+        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations, parser.traits)
+    checker = Checker(functions, parser.records, parser.enums, parser.implementations, parser.traits, externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits)
     checker.check()
     if rustc_check is None:
         # Fail closed if a future semantic transformation synthesizes a
         # reference not represented in the original syntax. This is presence
         # checking only; actual checked input never uses partial borrow legality.
-        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations)
+        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations, parser.traits)
         MoveChecker(checker).check()
     from .lowering import Lowerer
 

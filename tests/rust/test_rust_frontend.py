@@ -114,7 +114,6 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("fn f(){ 12i8; }", "invalid or unsupported integer"),
     ("fn f(){ let x=1; let y=&x; }", "reference-bearing Rust source requires an actual"),
     ("fn f(){ panic!(); }", "expected ';'"),
-    ("trait T {}", "expected 'fn'"),
     ("struct S {}", "zero-field structs"),
     ("fn f(){ let x=Box::new(1); }", "unsupported Rust type 'Box'"),
     ("fn f(){ 1<<2; }", "expected ';'"),
@@ -125,6 +124,12 @@ def test_loop_local_slots_are_allocated_once_in_entry():
 def test_strict_diagnostics(source, message):
     with pytest.raises(RustError, match=message.replace("(", r"\(")):
         compile_source(source)
+
+
+def test_original_empty_trait_is_a_declaration_not_an_emitted_function():
+    # Exact former capability-negative is now admitted, without fake body code.
+    result = compile_source("trait T {}")
+    assert result.symbols == {} and "define" not in result.ir_text
 
 
 @pytest.mark.parametrize("source", [

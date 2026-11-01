@@ -132,7 +132,7 @@ def cast_constant(value: int, ty: str, pointer_bits=None) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), *, externally_checked=False, pointer_bits=None):
+    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), traits=(), *, externally_checked=False, pointer_bits=None):
         if pointer_bits is None:
             from .targets import DEFAULT_TARGET, resolve_target
             pointer_bits = resolve_target(DEFAULT_TARGET).pointer_bits
@@ -168,6 +168,8 @@ class Checker:
         self.function_generics = GenericFunctions(self)
         from .methods import InherentMethods
         self.methods = InherentMethods(self, implementations)
+        from .traits import StaticTraits
+        self.traits = StaticTraits(self, traits, implementations)
 
     def bind(self, token: Token, ty: object, mutable: bool, *, parameter=False) -> Binding:
         self.serial += 1
@@ -322,6 +324,7 @@ class Checker:
             self.valid_type(name, enum.token)
         for name, record in list(self.records.items()):
             self.valid_type(name, record.token)
+        self.traits.prepare()
         self.methods.prepare()
         declarations = tuple(self.functions)
         for fn in declarations:
@@ -358,6 +361,7 @@ class Checker:
                         if (ty.mutable or isinstance(ty.referent, TypeApplication) or record is None or not record.repr_c
                                 or not record.fields or any(t not in FFI_INTEGERS for _, t in record.fields)):
                             raise token.error("foreign shared references require the separately qualified non-generic repr(C) integer record shape")
+        self.traits.validate_signatures()
         self.type_scope = {}
         self.abstract_function = False
         self.inferred_calls = []
@@ -607,6 +611,9 @@ class Checker:
                 # appears once. Its already-checked AST must not be rechecked.
                 expr.children = children = [callee, receiver] + children[1:]
                 receiver_checked = True
+            elif callee.kind == "trait_path":
+                owner, trait, associated_name = callee.value
+                fn, fixed_arguments = self.traits.qualified(owner, trait, associated_name, callee.token)
             elif callee.kind == "variant":
                 owner, associated_name = callee.value
                 selected = self.methods.lookup(owner, associated_name, callee.token)
