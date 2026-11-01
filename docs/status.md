@@ -196,8 +196,29 @@ Unicode character classification, decomposition/combining/Hangul comparisons
 against CPython 3.15.0, and owned object emission for Darwin arm64, Linux
 x86-64/AArch64 and Windows x86-64, plus cross-module export/definition
 consistency. These are not native execution results.
-The new `specs/features/python.json` row remains `missing` qualification;
-native programs, pcc1 and affected Lib/test reruns are pending.
+The Unicode-name program passes on GC0-4 with raw output equal to CPython,
+including normalized function names and Unicode class names. The owned lexer
+also compiles and runs its UTF-8 decoding, normalization and raw token spelling
+on GC0-4 after `aaae2f615` supplies the same package source to native discovery
+that the reference sees through PYTHONPATH. These ten executions are pcc0/self
+emitted programs; they do not qualify a native pcc1 compiler or fixed point.
+
+The six affected Lib/test modules complete their `--modules` rerun on frozen
+`aaae2f615`: their former Unicode lexical errors are gone, but native success
+remains 0/1,389 (0.00% before and after). The serialization modules now reach
+duplicate class `R`; traceback and reader tests reach later except-star and
+f-string parser gaps; Unicode identifier tests reach the missing frame-local
+`dir()` namespace. There is no measured whole-suite pass-count increase.
+The feature ledger retains missing final qualification; whole Python and
+native-pcc1 gates are still pending.
+
+The Unicode snapshot's runtime archive and the synchronous five-GC program
+pass. Its larger asynchronous benchmark build does not complete under the
+inherited two-GiB aggregate guard: the emitter tree peaks at 3.13 GB, with one
+huge-module emitter at 2.16 GB. Correct parent-package admission expands the
+gateway import closure; skipping those initializers is not a valid repair.
+The verified runtime archive is reused independently of that failed benchmark
+build. This failure is not a new QPS result or a successful full build.
 
 Four nearby `test_imported_constructor_binding.py` binder-shape assertions
 also fail on frozen `0fbc8d977`, including the separately rerun keyword-map

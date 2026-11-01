@@ -28,7 +28,7 @@
       "id": "python.lexical.unicode-identifiers",
       "title": "Unicode identifier classification and NFKC normalization",
       "chapter_ids": ["lexical.identifiers", "pep3131"],
-      "scope": "Implementation includes owned Unicode 17 XID and NFKC data, UTF-8 source offsets, and preservation of raw soft-keyword spelling. Missing means qualification remains incomplete: host unit checks exist; native program/reference, pcc1, and affected Lib/test results are still pending. No complete Python language claim is made.",
+      "scope": "Implementation includes owned Unicode 17 XID and NFKC data, UTF-8 source offsets, raw soft-keyword spelling, and compiler-owned symbol encoding. Host unit/object checks and pcc0/self native name and owned-lexer programs match CPython across GC0-4. Six affected Lib/test modules pass the old lexical boundary but still yield 0/1389 native successes. Missing means final qualification and normalized immutable evidence rows are incomplete; native pcc1 and whole-Python gates remain pending. No complete Python language claim is made.",
       "status": "missing",
       "tests": [
         "tests/python/test_unicode_identifiers.py::test_identifier_tokens_match_cpython_ast_normalization",
