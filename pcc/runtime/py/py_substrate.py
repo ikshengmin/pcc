@@ -49,11 +49,14 @@ from pcc.runtime.py.py_abi_constants import (
 from pcc.unsafe import (
     atomic_cas_i32,
     atomic_load_i32,
+    atomic_load_i64,
+    atomic_rmw_i64,
     define_global_cstr,
     define_global_header,
     define_global_i8,
     define_global_i32,
     define_global_i64,
+    define_global_i64_array,
     define_global_i32_array,
     define_global_null_ptr_array,
     define_global_ptr_array,
@@ -334,6 +337,17 @@ define_global_i32("py_class_attr_cache_epoch", 0)
 define_global_i64("pcc_object_type_epoch", 0)
 define_thread_local_ptr_null("py_tls_current_exc_storage")
 define_thread_local_ptr_null("py_tls_current_exc_root_handle")
+# How many threads' py_tls_current_exc_storage holds an exception, at byte
+# offset 192 of this 384-byte array: every error check of compiled code reads
+# it, so no other global shares its 128-byte line. A thread adds or removes
+# only its own empty <-> set transitions, in program order, so its pending
+# exception keeps the count nonzero for all of its own later checks.
+define_global_i64_array(
+    "py_exc_pending_threads",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 
 
 @c_abi_export("py_mem_alloc")
@@ -427,14 +441,26 @@ def py_err_occurred() -> int:
     # Compiled code asks this after nearly every call. The slot is this
     # module's thread-local, so test it here for NULL, without calling
     # py_tls_exc_get; it is never healed (py_current_exception heals).
+    # No thread holds a pending exception, so this one does not either.
+    if atomic_load_i64(global_addr("py_exc_pending_threads"), 192, "relaxed") == 0:
+        return 0
     if ptr_is_null(global_load_ptr("py_tls_current_exc_storage")):
         return 0
     return 1
 
 
+def _exc_pending_transition(was_set: int, now_set: int) -> None:
+    """Count this thread's TLS exception slot turning set or empty."""
+    if was_set != now_set:
+        atomic_rmw_i64("add", global_addr("py_exc_pending_threads"), 192, now_set - was_set, "relaxed")
+
+
 @c_abi_export("py_tls_exc_set")
 def py_tls_exc_set(exc) -> None:
     handle = global_load_ptr("py_tls_current_exc_root_handle")
+    was_set: int = 1
+    if ptr_is_null(global_load_ptr("py_tls_current_exc_storage")):
+        was_set = 0
     if ptr_is_null(exc) == 0:
         if ptr_is_null(handle) != 0:
             handle = pcc_gc_scheduler_root_register_handle(
@@ -451,6 +477,7 @@ def py_tls_exc_set(exc) -> None:
             null(), global_addr("py_tls_current_exc_storage"), exc
         )
         global_store_ptr("py_tls_current_exc_storage", exc)
+        _exc_pending_transition(was_set, 1)
         return
 
     # Publish the empty slot before unlinking its root node so a collector can
@@ -458,6 +485,7 @@ def py_tls_exc_set(exc) -> None:
     # also makes raw-pthread exit safe without a platform-specific TLS
     # destructor: normal exception teardown leaves no address into dead TLS.
     global_store_ptr("py_tls_current_exc_storage", null())
+    _exc_pending_transition(was_set, 0)
     if ptr_is_null(handle) == 0:
         pcc_gc_scheduler_root_unregister_handle(handle)
         global_store_ptr("py_tls_current_exc_root_handle", null())
@@ -490,7 +518,14 @@ def py_tls_exc_swap_slot(slot) -> None:
     global_store_ptr("py_tls_current_exc_storage", incoming)
     store_ptr(slot, 0, previous)
     empty: int = ptr_is_null(incoming)
+    was_set: int = 1
+    if ptr_is_null(previous):
+        was_set = 0
     pcc_py_gc_minor_graph_unlock()
+    now_set: int = 1
+    if empty != 0:
+        now_set = 0
+    _exc_pending_transition(was_set, now_set)
     if empty != 0 and ptr_is_null(handle) == 0:
         pcc_gc_scheduler_root_unregister_handle(handle)
         global_store_ptr("py_tls_current_exc_root_handle", null())

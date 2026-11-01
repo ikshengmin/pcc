@@ -28,6 +28,8 @@ class CleanupModel(CallObjectLoweringMixin):
     def __init__(self, owners, callback, move, pending=True):
         self.pending = 900 if pending else 0
         self.original = self.pending
+        # py_exc_pending_threads: this thread counts while its slot is set.
+        self.pending_threads = int(pending)
         self.tls_handle = int(pending)
         self.saved = None
         self.roots = {name: 100 + index * 2 for index, name in enumerate(owners)}
@@ -87,9 +89,10 @@ class CleanupModel(CallObjectLoweringMixin):
             pcc_py_gc_minor_graph_unlock=lambda: None,
             pcc_gc_note_slot_write_barrier=lambda *_: None,
             store_ptr=lambda slot, offset, value: self.roots.__setitem__(slot, value),
+            atomic_rmw_i64=self.count_pending,
         )
         _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_substrate.py",
-                   {"py_tls_exc_swap_slot"}, self.swap_ns)
+                   {"py_tls_exc_swap_slot", "_exc_pending_transition"}, self.swap_ns)
 
     def position(self, block):
         self.builder._block = block
@@ -146,9 +149,18 @@ class CleanupModel(CallObjectLoweringMixin):
         self.collect()
         return 1
 
+    def set_pending(self, value):
+        """py_tls_exc_set: the slot and its py_exc_pending_threads share."""
+        self.pending_threads += int(bool(value)) - int(bool(self.pending))
+        self.pending = value
+
     def clear(self):
-        self.pending = 0
+        self.set_pending(0)
         self.events.append(("clear",))
+
+    def count_pending(self, op, base, offset, value, order):
+        assert (op, base, offset, order) == ("add", "py_exc_pending_threads", 192, "relaxed")
+        self.pending_threads += value
 
     def weakref_store(self, base, offset, value):
         self.weakref_memory[base, offset] = value
@@ -170,7 +182,7 @@ class CleanupModel(CallObjectLoweringMixin):
     def weakref_callback(self, *_args):
         self.callback_count += 1
         self.collect()
-        self.pending = -1  # The real weakref boundary clears an unraisable error.
+        self.set_pending(-1)  # The real weakref boundary clears an unraisable error.
         return 0
 
     def call(self, runtime, arguments, **_kwargs):
@@ -203,7 +215,7 @@ class CleanupModel(CallObjectLoweringMixin):
             return self.roots[arguments[1]]
         if runtime == "py_raise":
             assert arguments[0] == self.original
-            self.pending = arguments[0]
+            self.set_pending(arguments[0])
             self.events.append(("restore", self.pending))
             return
         if runtime == "pcc_gc_foreign_lease_release":
@@ -225,9 +237,9 @@ class CleanupModel(CallObjectLoweringMixin):
             self.callback_count += 1
             saved = self.pending
             self.collect()
-            self.pending = -1  # __del__ raises after collection.
+            self.set_pending(-1)  # __del__ raises after collection.
             # The production __del__ boundary preserves caller TLS.
-            self.pending = saved + (1000 if self.move and saved else 0)
+            self.set_pending(saved + (1000 if self.move and saved else 0))
 
 
 @pytest.mark.parametrize("owners", [
@@ -243,6 +255,7 @@ def test_real_cleanup_preserves_exception_and_retires_owners(owners, callback, m
     model = CleanupModel(owners, callback, move, pending)
     model._slot_call_cleanup_block(owners, "handler")
     assert model.pending == model.original, "root disposal lost the selecting exception"
+    assert model.pending_threads == int(bool(model.pending))
     assert model.callback_count == 1
     assert model.retired == list(reversed(owners))
     kinds = [event[0] for event in model.events]
