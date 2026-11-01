@@ -446,12 +446,6 @@ class GoParser:
         self.take("func")
         receiver = None
         if self.accept("("):
-            # Pointer receivers cannot be represented by value-copy lowering.
-            for token in self.tokens[self.index:]:
-                if token.kind == ")":
-                    break
-                if token.kind == "*":
-                    self.unsupported(token, 'go.unsupported.pointer-receivers', "pointer receivers require nonescaping-pointer and method-set support")
             receiver_types, receiver_names = self.parameter_list()
             if len(receiver_types) != 1:
                 self.fail(self.current, "method receiver must be exactly one non-variadic parameter")

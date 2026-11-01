@@ -31,6 +31,8 @@ CASES = [
     ('local-type-declarations', original(body='type T int')),
     ('embedded-fields', original('type Base int;type T struct{Base}')),
     ('struct-tags', original('type T struct{x int `tag`}')),
+    # Retain the historical source/position; this implemented original is
+    # positively compiled/executed in test_pointer_methods.GRADUATED.
     ('pointer-receivers', original('type T int;func(t *T)f(){}')),
     ('pointer-escape', original(body='x:=1;p:=&x;{y:=2;p=&y};_=p')),
     ('pointer-signatures', original('func f(p *int)*int{return p}')),
@@ -75,7 +77,18 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize('suffix,source', CASES, ids=[name+'-'+str(i) for i,(name,_) in enumerate(CASES)])
+# This one implemented boundary is no longer an unsupported obligation. Keep
+# every remaining original and its legacy name-index ID exactly, without
+# skip/xfail or filtering a test result. The exact graduated input has positive
+# ordinary/native/reference obligations in test_pointer_methods.GRADUATED.
+GRADUATED_RECEIVER_CASE = ('pointer-receivers', original('type T int;func(t *T)f(){}'))
+assert CASES.count(GRADUATED_RECEIVER_CASE) == 1
+ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)
+                if (name, text) != GRADUATED_RECEIVER_CASE]
+
+
+@pytest.mark.parametrize('suffix,source', [(name, text) for _, name, text in ACTIVE_CASES],
+                         ids=[name+'-'+str(i) for i, name, _ in ACTIVE_CASES])
 def test_capability_codes_are_explicit_source_located_and_fail_before_ir(suffix, source, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('unimplemented capability reached IR'))
@@ -119,7 +132,7 @@ def test_import_capability_codes_are_file_graph_boundaries():
 
 
 def test_registry_has_no_unused_codes_and_every_code_has_one_canonical_feature():
-    expected={'go.unsupported.'+name for name,_ in CASES}
+    expected={'go.unsupported.'+name for _,name,_ in ACTIVE_CASES}
     assert expected==set(UNIMPLEMENTED_FEATURES)
     assert len(set(UNIMPLEMENTED_FEATURES.values()))==len(UNIMPLEMENTED_FEATURES)
     with pytest.raises(ValueError,match='unknown Go capability'):

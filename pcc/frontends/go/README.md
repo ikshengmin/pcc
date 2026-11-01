@@ -239,8 +239,9 @@ value records; aggregate receiver mutation affects only the local value copy.
 Sole multiple-result argument calls remain expandable after the implicit receiver,
 without treating Go multiple values as first-class tuples. There is no interface
 or virtual dispatch and no new calling convention. Stored method values or method
-expressions, pointer receivers, generic receiver declarations and escaping bound
-receivers remain explicit capability diagnostics pending their shared mechanisms.
+expressions, generic receiver declarations and escaping bound receivers remain
+explicit capability diagnostics pending their shared mechanisms. Direct pointer
+receivers have a separate bounded implementation described below.
 
 [Method declarations](https://go.dev/ref/spec#Method_declarations),
 [method sets](https://go.dev/ref/spec#Method_sets), and
@@ -384,7 +385,7 @@ Go 1.22 per-iteration declared for/range bindings fail explicitly until distinct
 iteration storage identity exists. Addresses of ordinary loop-body locals are
 usable only inside their iteration's region. Existing pointers remain aliases.
 
-Pointer-valued returns and pointer receiver declarations, unchecked or retaining callees, package pointer
+Pointer-valued returns, unchecked or retaining callees, package pointer
 storage, pointer-bearing records/arrays/pointees, unproven evaluated indirection,
 escaping aliases,
 addressed composite literals, representation-changing pointer conversions,
@@ -406,7 +407,52 @@ acceptance, including complete repository-Go ordinary and integration selections
 previously unsupported nil-storage/parameter originals, a complete deterministic
 30-observation fixture and an unchanged two-package native/official-reference
 comparison. Prior v5 receipts are not rewritten into Stage A results. Pointer
-receiver method-set work is a separate unsupported Stage B, not part of this implementation.
+receiver method-set work is a separate Stage B implementation below; the old
+Stage A receipts do not qualify its new source bytes.
+
+
+### Direct non-retaining pointer-receiver methods
+
+Stage B admits a concrete local defined receiver base `T`, with receiver `T` or
+`*T` and existing non-generic aliases. Methods remain bound to the defining base:
+`T`'s method set contains value methods, while `*T`'s includes both. An addressable
+`x.M(args)` may use `(&x).M(args)` for a pointer method; temporaries and constants
+do not gain addressability. Field, package ownership and duplicate-name rules
+are unchanged. The five exact former receiver-capability inputs are retained in
+`test_pointer_methods.GRADUATED` as positive obligations, not deleted negatives.
+
+A pointer receiver is an ordinary first nullable pointer parameter in the
+existing private ABI. The source CFG proves every evaluated dereference from the
+method body's own guards, never from observed callers. A nil-safe method may be
+called on nil; this does not create a nil-panic implementation. Receiver pointer
+facts receive the same live-region/non-retention checks as ordinary arguments.
+Automatic receiver addresses reuse the explicit address operator's lexical and
+per-iteration identity restrictions. Aliased receivers remain aliases; assigning
+to the receiver variable itself changes only that method's local parameter.
+
+The receiver expression is evaluated once. Calls within receiver/argument
+expressions preserve lexical order; tests do not assert an unspecified ordering
+of unrelated plain variable loads. Direct `(*T).PointerMethod` calls pass the
+pointer itself. Existing `(*T).ValueMethod` expressions still use their delayed
+value-copy load after all source arguments, not the pointer-method path. The
+existing pointer IR type, argument slots, address lowering and direct calls are
+reused without backend, allocator, scheduler or GC changes.
+
+The authored `pointer_methods.go` and unchanged two-package source graph passed
+owned execution and explicit official Go 1.27.3 comparisons. The fixture has
+23 independent full-width native observations; the complete main, five exact
+graduated originals and package graph also passed same-input raw comparisons.
+The 15 normal invalid-source controls and ten valid-but-unsupported build-only
+controls passed their distinct obligations; build-only is not execution. Method values, interfaces, generic receivers,
+pointer results, escaping storage, unproven nil indirection and addressed
+per-iteration bindings remain unsupported. This is not general Go method or
+runtime qualification.
+
+Rules: [method sets](https://go.dev/ref/spec#Method_sets),
+[method declarations](https://go.dev/ref/spec#Method_declarations),
+[calls](https://go.dev/ref/spec#Calls),
+[method expressions](https://go.dev/ref/spec#Method_expressions), and
+[address operators](https://go.dev/ref/spec#Address_operators).
 
 
 ## Feature inventory: implementation is separate from acceptance
@@ -418,7 +464,7 @@ evidence, not all possible programs. An inventory row with legacy `missing`
 does not mean its chapter has no implementation. An explicit capability
 rejection is not an invalid-Go classification or a positive runtime pass.
 
-Qualification source identity: `sha256:4364fba43fd7e5ae6dd433ec683262ea2176ea55fe203a00aad7ce2a934c346c` (the frozen compiler/test closure, excluding this README and the feature-map qualification metadata). It uses the reviewed `cb51679a` shared implementation plus the Go integer-range source/test changes; later unrelated publication-tree contents are not silently described as this tested snapshot.
+Qualification source identity: `sha256:7f32b0a766e481cb49f5c3ad7e80848eca4c62ad9d4fd766313a2e3a91343923` (1,563 frozen compiler/test inputs, excluding this README and the feature-map qualification metadata). It binds published `b8761925` implementation bytes plus this Go source/test slice; unrelated later publication-tree changes are not silently described as tested.
 Execution lane **L** is host **pcc0**, owned **self** backend, **Linux x86_64**,
 no applicable GC; official **Go 1.27.3 linux/amd64** is an external reference only.
 PCC native-pcc1, Mac execution, full Go/standard library and shared runtime/GC
@@ -481,7 +527,7 @@ JSON fields are used to simulate such a migration.
 | `go.capability.negative-shift-panic` | Explicitly unimplemented boundary: negative shift panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.non-array-range` | Explicitly unimplemented: string and pointer-to-array range; integer-range implementation is separate | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.package-initialization` | Explicitly unimplemented boundary: package initialization | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.pointer-receivers` | Explicitly unimplemented boundary: pointer receivers | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-receivers` | Implemented: bounded direct non-retaining pointer-receiver methods | Qualified in L for PM-U / -P / -D and 23 full-width observations | `supported` |
 | `go.capability.predeclared-shadowing` | Explicitly unimplemented boundary: predeclared shadowing | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.slice-storage` | Explicitly unimplemented boundary: slice storage | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.string-bounds-panic` | Explicitly unimplemented boundary: string bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -494,8 +540,8 @@ JSON fields are used to simulate such a migration.
 | `go.capability.pointer-composite-address` | Explicitly unimplemented boundary: addressed composite literal allocation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-conversions` | Explicitly unimplemented boundary: conversions across pointer base types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-switch` | Explicitly unimplemented boundary: pointer expression switches | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.local-pointer-regions` | Implemented: bounded local pointer alias/address/value-update semantics | Qualified in L for LP-U / -P / -D only | `supported` |
-| `go.nullable-direct-pointer-parameters` | Implemented: nullable locals and source-guarded non-retaining direct parameters | Qualified in L for NP-U / -P / -D only | `supported` |
+| `go.local-pointer-regions` | Implemented: bounded local pointer alias/address/value-update semantics | Renewed in L for LP-U / -P / -D on the current unit file | `supported` |
+| `go.nullable-direct-pointer-parameters` | Implemented: nullable locals and source-guarded non-retaining direct parameters | Renewed in L for NP-U / -P / -D on the current unit file | `supported` |
 
 ### Exact acceptance test bindings
 
@@ -523,6 +569,9 @@ ordinary test-process log, not invented per-node output.
 | NP-U | `tests/go/test_nullable_pointers.py::test_source_guards_and_unevaluated_operands_admit_pointer_parameters` |
 | NP-P | `tests/go/test_nullable_pointers.py::test_complete_nullable_pointer_main_executes_owned` |
 | NP-D | `tests/go/test_nullable_pointers.py::test_identical_nullable_pointer_program_matches_official_raw_streams` |
+| PM-U | `tests/go/test_pointer_methods.py::test_typed_call_shapes_keep_real_pointer_receivers_and_value_wrappers_distinct` |
+| PM-P | `tests/go/test_pointer_methods.py::test_complete_pointer_method_main_executes_owned` |
+| PM-D | `tests/go/test_pointer_methods.py::test_identical_pointer_method_originals_match_official_raw_streams` |
 | CAP-U | `tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir` (the existing source-located code-specific parameter cases) |
 
 Additional NP obligations are explicit tests in `tests/go/test_nullable_pointers.py`:
@@ -533,20 +582,22 @@ former nil-storage/parameter originals; and
 `test_identical_imported_pointer_project_matches_official_raw_streams` compares
 the unchanged two-package source graph. Object hashes in the observation records
 are recorded from emitted in-memory bytes; retained ELF binaries are separately
-hashable. The 24
+hashable. The 23
 `test_official_go_typechecks_identical_valid_unsupported_originals` cases build
 native official-Go executables **without running them** and do not qualify PCC
-nil-panic/escape/receiver support.
+nil-panic/escape support.
 
-The complete selections finished with **791 ordinary test nodes** (31 simulated
-reference-protocol checks + 760 other ordinary checks) and **465 integration
-nodes** (311 standalone owned-native, 33 positive external-reference, 94 normal-source
-rejections, 24 build-only valid-unsupported, two external nil-panic frontiers,
-and one diagnostic-only observer). The 59 regular official build successes are
-not 59 executions; the separate diagnostic Go-test build/observer remains
-excluded from acceptance. These are test outcomes, not 1,256 supported
-features or a whole-language completeness percentage. Both selections retain
-all cases; no failed case was skipped or relabeled to obtain these outcomes.
+The complete selections passed **833 ordinary nodes** (31 simulated reference-
+protocol checks and 802 other checks) and **520 integration nodes** (335 standalone
+owned-native, 40 positive external-reference comparisons, 109 normal-source
+rejections, 33 build-only valid-unsupported controls, two external nil-panic
+frontiers and one diagnostic-only observer). All 184 regular official build
+receipts bind the original sources: 75 successes and 109 normal rc1 rejections.
+Build successes are not executions. The separate diagnostic Go-test observer
+remains excluded from acceptance. These are test outcomes, not 1,353 supported
+features or a whole-language completeness percentage; no failed case was skipped
+or relabeled to obtain them. Prior published integer-range 791/465 outcomes
+remain historical evidence, not substitute results for this source slice.
 
 `tests/go/test_pointers.py::test_retained_original_pointer_order_diagnostic`
 is excluded from acceptance: it does not execute the retained original main and

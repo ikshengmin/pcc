@@ -84,7 +84,7 @@ UNPROVEN = [
     ('pointer-signatures', 'package main;func f(p *int)*int{return p};func main(){}'),
     ('pointer-storage', 'package main;var p *int;func f(q *int){p=q};func main(){}'),
     ('pointer-storage', 'package main;func f(p **int){};func main(){}'),
-    ('pointer-receivers', 'package main;type T int;func(p *T)M(){if p!=nil{*p=3}};func main(){}'),
+    # Exact former pointer-receiver original: test_pointer_methods.GRADUATED.
 ]
 
 

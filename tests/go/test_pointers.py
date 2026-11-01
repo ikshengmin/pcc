@@ -85,7 +85,7 @@ UNSUPPORTED = [
     ('pointer-conversions', 'var x A;p:=&x;q:=(*int)(p);_=q', 'type A int'),
     ('pointer-switch', 'x:=1;p:=&x;switch p{case nil:}', ''),
     ('non-array-range', 'a:=[2]int{};p:=&a;for range p{}', ''),
-    ('pointer-receivers', '', 'type T int;type P = *T;func(p P)M(){}'),
+    # Exact former pointer-receiver original: test_pointer_methods.GRADUATED.
     ('method-values', 'var t T;p:=&t;_=p.M', 'type T int;func(t T)M(){}'),
     ('method-values', '_=(*T).M', 'type T int;func(t T)M(){}'),
 ]

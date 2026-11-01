@@ -217,10 +217,17 @@ class Analyzer:
                                     "pointer results require an escaping lifetime contract")
             if function.receiver is not None:
                 token, syntax = function.receiver
-                dtype = self.resolve_type(syntax)
-                if isinstance(dtype, PointerType):
-                    raise UnsupportedGo(token, 'go.unsupported.pointer-receivers',
-                                        "pointer receivers require method-set and interprocedural lifetime support")
+                if isinstance(syntax, PointerSyntax):
+                    # Receiver base validity precedes the general nested-pointer
+                    # storage frontier: **T and *P (P a defined pointer) are not
+                    # legal receiver types, rather than unsupported Go methods.
+                    base = self.resolve_type(syntax.element)
+                    if isinstance(underlying(base), PointerType):
+                        raise GoDiagnostic(token, "method receiver base cannot be a defined pointer type")
+                    receiver_type = PointerType(base)
+                else:
+                    receiver_type = self.resolve_type(syntax)
+                dtype = receiver_type.element if isinstance(receiver_type, PointerType) else receiver_type
                 if isinstance(underlying(dtype), PointerType):
                     raise GoDiagnostic(token, "method receiver base cannot be a defined pointer type")
                 if not isinstance(dtype, DefinedType) or dtype.package != (self.package_path or ""):
@@ -234,8 +241,8 @@ class Analyzer:
                 if isinstance(base, StructType) and any(field.name == name for field in base.fields):
                     raise GoDiagnostic(function.token, "method name conflicts with struct field " + name)
                 dtype.methods[name] = function
-                function.receiver = (token, dtype)
-                function.params.insert(0, (token, dtype))
+                function.receiver = (token, receiver_type)
+                function.params.insert(0, (token, receiver_type))
                 function.abi_symbol = function_symbol(dtype.name + "." + name, self.package_path)
         for symbol in self.globals.values():
             self.resolve_constant(symbol)
@@ -507,6 +514,22 @@ class Analyzer:
         # validator checks only evaluated indirections before any IR is built.
         return Expr("dereference", expr.token, args=[expr], type=dtype.element,
                     addressable=True, storage_depth=expr.pointer_depth)
+
+    def address_of(self, arg, token):
+        """Use the same region/identity rules for explicit and receiver addresses."""
+        if arg.kind in ("array", "struct"):
+            raise UnsupportedGo(token, 'go.unsupported.pointer-composite-address',
+                                "addressed composite literals require distinct allocation/lifetime analysis")
+        if not arg.addressable:
+            raise GoDiagnostic(token, "address operator requires an addressable operand")
+        if isinstance(underlying(arg.type), PointerType):
+            raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
+                                "pointer-bearing pointees require a recursive lifetime/storage contract")
+        if arg.iteration_binding:
+            raise UnsupportedGo(token, 'go.unsupported.pointer-iteration-identity',
+                                "addressed loop bindings require distinct per-iteration storage identity")
+        return Expr("address", token, args=[arg], type=PointerType(arg.type),
+                    pointer_depth=arg.storage_depth, pointer_nonnull=True)
 
     def condition(self, expr):
         self.expression(expr)
@@ -964,10 +987,16 @@ class Analyzer:
                 raise UnsupportedGo(expr.token, 'go.unsupported.method-values',
                                     "stored pointer method expressions require function-value support")
             if isinstance(type_operand, DefinedType) and expr.value in type_operand.methods:
+                if isinstance(type_operand.methods[expr.value].receiver[1], PointerType):
+                    raise GoDiagnostic(expr.token, "invalid method expression: pointer receiver requires *" + str(type_operand))
                 raise GoDiagnostic(expr.token, "first-class method expressions require function-value support")
             self.expression(base)
             method_type = base.type.element if isinstance(base.type, PointerType) else base.type
             if isinstance(method_type, DefinedType) and expr.value in method_type.methods:
+                method = method_type.methods[expr.value]
+                if (isinstance(method.receiver[1], PointerType)
+                        and not isinstance(base.type, PointerType) and not base.addressable):
+                    raise GoDiagnostic(expr.token, "cannot call pointer method on a non-addressable value")
                 raise UnsupportedGo(expr.token, 'go.unsupported.method-values', "stored method values require shared closure and bound-receiver support")
             dtype = underlying(base.type)
             if isinstance(dtype, PointerType) and isinstance(underlying(dtype.element), StructType):
@@ -1017,12 +1046,9 @@ class Analyzer:
                 if not method_expression:
                     self.expression(base)
                     dtype = base.type
-                    if isinstance(dtype, PointerType):
-                        base = self.dereference(base)
-                        dtype = base.type
                 pointer_receiver_type = dtype if method_expression and isinstance(dtype, PointerType) else None
-                if pointer_receiver_type is not None:
-                    dtype = pointer_receiver_type.element
+                if isinstance(dtype, PointerType):
+                    dtype = dtype.element
                 method = dtype.methods.get(name) if isinstance(dtype, DefinedType) else None
                 if method is None:
                     if binding is not None and shadowed:
@@ -1030,8 +1056,19 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "no method " + name + " on " + str(dtype))
                 if unicodedata.category(name[0]) != "Lu" and dtype.package != (self.package_path or ""):
                     raise GoDiagnostic(expr.token, "cannot access unexported method " + name)
+                pointer_method = isinstance(method.receiver[1], PointerType)
+                if method_expression:
+                    if pointer_method and pointer_receiver_type is None:
+                        raise GoDiagnostic(expr.token, "invalid method expression: pointer receiver requires *" + str(dtype))
+                elif pointer_method:
+                    if not isinstance(base.type, PointerType):
+                        if not base.addressable:
+                            raise GoDiagnostic(expr.token, "cannot call pointer method on a non-addressable value")
+                        base = self.address_of(base, expr.token)
+                elif isinstance(base.type, PointerType):
+                    base = self.dereference(base)
                 self.call(expr, method, receiver=None if method_expression else base,
-                          pointer_receiver_type=pointer_receiver_type)
+                          pointer_receiver_type=pointer_receiver_type if not pointer_method else None)
                 return
             if name in ("len", "cap"):
                 if len(expr.args) != 1:
@@ -1069,19 +1106,9 @@ class Analyzer:
         if kind == "unary":
             arg = expr.args[0]
             if expr.value == "&":
-                if arg.kind in ("array", "struct"):
-                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-composite-address',
-                                        "addressed composite literals require distinct allocation/lifetime analysis")
-                if not arg.addressable:
-                    raise GoDiagnostic(expr.token, "address operator requires an addressable operand")
-                if isinstance(underlying(arg.type), PointerType):
-                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-storage',
-                                        "pointer-bearing pointees require a recursive lifetime/storage contract")
-                if arg.iteration_binding:
-                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-iteration-identity',
-                                        "addressed loop bindings require distinct per-iteration storage identity")
-                expr.kind, expr.type = "address", PointerType(arg.type)
-                expr.pointer_depth, expr.pointer_nonnull = arg.storage_depth, True
+                checked = self.address_of(arg, expr.token)
+                expr.kind, expr.type = checked.kind, checked.type
+                expr.pointer_depth, expr.pointer_nonnull = checked.pointer_depth, checked.pointer_nonnull
                 return
             if expr.value == "*":
                 checked = self.dereference(arg)

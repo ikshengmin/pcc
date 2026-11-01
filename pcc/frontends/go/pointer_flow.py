@@ -261,8 +261,8 @@ class PointerFlow:
             self.branches(expr, state, check, saved)
             return UNPROVEN
         if kind == 'call':
-            if expr.receiver is not None:
-                self.evaluate(expr.receiver, state, check, saved)
+            receiver = ([(expr.receiver, self.evaluate(expr.receiver, state, check, saved))]
+                        if expr.receiver is not None else [])
             arguments = [self.evaluate(arg, state, check, saved) for arg in expr.args]
             if expr.indirect_receiver and check:
                 self.require_nonnull(arguments[0], expr.token)
@@ -273,7 +273,7 @@ class PointerFlow:
                 if target is not expr.symbol:
                     raise UnsupportedGo(expr.token, 'go.unsupported.pointer-signatures',
                                         'call target lacks a checked original-source non-retention contract')
-                for argument, fact in zip(expr.args, arguments):
+                for argument, fact in [*receiver, *zip(expr.args, arguments)]:
                     if pointer(argument.type) and fact.nulls & NONNULL:
                         self.require_live(fact, argument.token)
             return UNPROVEN  # Pointer results are not admitted.
@@ -434,9 +434,6 @@ def validate_pointer_flow(program):
         if any(pointer(dtype) for dtype in result_types(function.result)):
             raise UnsupportedGo(function.token, 'go.unsupported.pointer-signatures',
                                 'pointer results have no non-retention contract')
-        if function.receiver is not None and pointer(function.receiver[1]):
-            raise UnsupportedGo(function.token, 'go.unsupported.pointer-receivers',
-                                'pointer receivers require separate method-set support')
     # Close ALL source call edges, even in an unreachable block. A body cannot
     # advertise non-retention by relying on a missing or unchecked callee.
     def expressions(statement):

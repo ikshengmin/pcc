@@ -43,7 +43,6 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.pointer-composite-address': 'go.capability.pointer-composite-address',
     'go.unsupported.pointer-conversions': 'go.capability.pointer-conversions',
     'go.unsupported.pointer-switch': 'go.capability.pointer-switch',
-    'go.unsupported.pointer-receivers': 'go.capability.pointer-receivers',
     'go.unsupported.predeclared-shadowing': 'go.capability.predeclared-shadowing',
     'go.unsupported.slice-storage': 'go.capability.slice-storage',
     'go.unsupported.string-bounds-panic': 'go.capability.string-bounds-panic',

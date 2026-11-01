@@ -12,6 +12,8 @@ from tests.go.test_execution import forbid_external_compiler, units
 from tests.go.test_records import source
 
 
+# Both original pointer-receiver declarations now live byte-for-byte in
+# test_pointer_methods.GRADUATED. These slots retain real validity errors.
 INVALID = [
     ("func(int) M(){}", "", "defined type in the same package"),
     ("type T = uint64;func(T) M(){}", "", "defined type in the same package"),
@@ -21,8 +23,8 @@ INVALID = [
     ("type T int;func(t T) M(t int){}", "", "duplicate parameter"),
     ("type T int;func(t T) M()(t int){return}", "", "duplicate parameter or result"),
     ("type T int;func(a,b T) M(){}", "", "exactly one"),
-    ("type T int;func(*T) M(){}", "", "pointer receivers"),
-    ("type T int;func(t *T) M(){}", "", "pointer receivers"),
+    ("type T int;func(*int) M(){}", "", "defined type in the same package"),
+    ("type T int;type P *T;func(t P) M(){}", "", "receiver base cannot"),
     ("type T int;func(T) _(){}", "", "blank method"),
     ("type T int;func(T) M(){};type U T", "var u U;u.M()", "no method"),
     ("type T int;func(T) M(){}", "M()", "undefined function"),
