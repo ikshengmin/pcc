@@ -101,6 +101,35 @@ performance and compatibility should README gain the requested "Why PCC?"
 claims. All five collectors, arbitrary-precision integers, identity, exceptions,
 finalizers, weakrefs and resurrection remain required.
 
+### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
+
+Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,
+threaded atomic runtime, compare the original sealed P0 batch with `s2f`.
+Each run uses 40,000 requests, concurrency 100, no artificial delay and 200
+warmups, with exact response checks. These snapshots do not qualify later
+Unicode/type-parameter source changes.
+
+One-worker median QPS is 39,336 -> 40,725 (paired median +3.43%, 7/7 positive
+pairs); four-worker QPS is 95,154 -> 103,534 (+7.81%, 7/7). Paired cycles fall
+3.12% / 7.54%. The same-run CPython 3.15.0 asyncio medians are 91,471 / 292,336:
+both throughput requirements remain unmet. Four-worker ranges are wider than
+the one-worker ranges; this is measured improvement, not target attainment.
+The separate N/2N synchronous packet comparison reduces instructions/cycles
+on GC1 by 31.43%/33.33%, GC2 by 31.80%/35.69%, GC3 by 7.28%/5.66%, and GC4 by
+2.25%/3.05%. All measured program outputs match the packet checks, and source,
+runtime and executable hashes remain unchanged across measurement.
+
+The release-statistics stages on `0fbc8d977` have completed the 100-project
+import smoke: 24 native import probes pass, 64 fail compilation, 11 fail native
+execution, and one reference installation fails. This is not package-suite
+coverage. C-testsuite executes 220/220; GCC torture executes 1,502/1,684, with
+84 compile, 29 link, 68 run and one worker failure. Ordinary frontend results
+are C++ 2,237, Go 900, Java 981 and Rust 964 passed. Darwin integration is
+mixed: C++ 78 passed / 740 failed / two errors, Go 376 failed, and Java/Rust
+have no selected integration tests. These are source/platform-labeled results;
+the Linux integration task and independent reference qualification stay open.
+Pyperformance, micro timing and the generated README report are still pending.
+
 ### P0 takeover boundary: `f11a3513d`
 
 The container dead-branch removal is published in `f11a3513d`; its recorded
