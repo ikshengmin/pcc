@@ -655,6 +655,31 @@ Repro: the archive's `freeze.py <arm> <rev>`, `fast_build.py <arm>`,
 measurement and its scripts are in the archive's
 `design/one-worker-instruction-gap.md`.
 
+The maintainer's scope is the whole organized plan (backend, runtime
+protocol costs, per-carrier scheduler, GC1-4 without reference counts,
+small items), not only the five backend items. Done after the round above:
+`de26ae07e` keeps only live registers around Darwin TLV resolver calls
+(per-function liveness of x0/x16/x17/LR/NZCV; a dead-everything access is
+5 instructions instead of 19); `3d58564db` pairs frame-slot STUR/LDUR and
+the descending zero stores that clear root slots; `cb51679ab` answers
+GC0-2 address leases before reading the slot. Correction to the plan: GC0
+pins stay, because GC0's cycle collector marks objects carrying the pin flag
+as roots (`_mark_runtime_roots`). Root-slot clearing (253 slots in
+`_encode_str`) is only halved by the pairing: every registered entry group
+is a root at every safepoint, so clearing fewer slots needs per-safepoint
+assignment state in the stack maps or slot reuse in the frontend.
+
+Generic Python semantics fixed on the way: `fe2d20df9` makes dict subclass
+instances dicts (isinstance/issubclass, construction through
+`dict.__init__`, special methods from dict's native namespace; json.dumps
+of a subclass raised TypeError); `560929fca` makes `for k, v in x.items()`
+call an overriding items() and walk subclass storage, raises CPython's
+"cannot unpack non-iterable" and implements starred unpacking as UNPACK_EX
+(it read len()/indices without error checks). Found, not fixed (same at
+HEAD): a user `__setattr__` is never invoked by assignment, `setattr()` or
+unpack targets; `dict.keys()/values()/items()` return materialized lists,
+not views (type name, repr, later changes not visible).
+
 ## Live 8082 TCP: arm1 preferred; normal traffic is silent (2026-10-29)
 
 Current route, at the user's explicit request: **arm1:8084 first, us1:8089
