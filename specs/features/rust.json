@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": true,
     "features_complete": false,
-    "notes": "LEGACY SCHEMA1 QUALIFICATION-ONLY MAP, not machine-readable dual-axis migration. README separately lists implementation and acceptance for every feature ID. All119 full-chapter coverage rows remain exact public135d inventory gaps, not a completion denominator. All141 active records are NEW observations from actual finalba525 on publiccb516 backend whole987PASS (964Rust+23shared mechanisms), with six-worker observed pool998 and11 Darwin core/std prerequisites explicitly unselected/unrun. All141 prior cad1 rows, older140 rows and all prior runs remain unchanged in immutable Git/private history, not relabeled.66 unchanged-original raw native/reference pairs include52 identities with actual metadata records;14 value-only pairs are not certification claims. Every public reference-bearing program now requires actual same-input checking; internal partial loan tests are nonlowering mechanisms only. Common ABI separately observed3PASS/1Darwin-unrun onba525 using exact publiccb516 backend and public foreign frontend bytes, original48-byte pointer and32-byte scalar outputs. Linux x86-64 runtime only. Unsupported general traits/Drop/panic/core/alloc remain explicit. Every active current-file source binding must pass the unmodified public schema1 --verify-files; no historical Git fallback. Seven additive archive maps apply only to historical artifact readers; this new active index uses current physicalba525 artifacts."
+    "notes": "LEGACY SCHEMA1 QUALIFICATION-ONLY MAP, not machine-readable dual-axis migration. README lists implementation and acceptance separately for every feature ID. All119 full-chapter coverage rows remain exact prior inventory gaps, not a completion denominator. The141 published ba525 execution records remain byte-for-JSON-value unchanged with valid current-file source bindings;15 NEW f432 records qualify the result-context increment. Actual finalf432 whole:1020PASS (997Rust+23shared mechanisms), six-worker observed1032pool/12Darwin-target core/std prerequisites unselected/unrun,73 same-original native/reference pairs (53runtime source identities with actual metadata records,20value-only noncertification pairs),139actual metadata successes and12genuine rejects. Separate common ABI:3PASS/1Darwin-unrun, original48Bpointer+32Bscalar observations. No historical observations are relabeled. Internal nonlowering analysis proves tested mechanisms, not borrow certification or executable IR. Every public reference-bearing program requires genuine same-input checking. Unmodified public --verify-files must verify all four current maps; the separate --audit-diagnostics phase covers Rust only. Old141 rows and119gaps unchanged; no archived binary read/fallback is needed for the73 active physical identities. Traits/Drop/panic/core/alloc and Mac runtime qualification remain outside scope."
   },
   "chapters": [
     {
@@ -611,7 +611,7 @@
   "features": [
     {
       "id": "rust.chapter.1.coverage",
-      "title": "Notation — full chapter qualification",
+      "title": "Notation \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.1"
       ],
@@ -623,7 +623,7 @@
     },
     {
       "id": "rust.chapter.2.coverage",
-      "title": "Lexical structure — full chapter qualification",
+      "title": "Lexical structure \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2"
       ],
@@ -635,7 +635,7 @@
     },
     {
       "id": "rust.chapter.2.1.coverage",
-      "title": "Input format — full chapter qualification",
+      "title": "Input format \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.1"
       ],
@@ -647,7 +647,7 @@
     },
     {
       "id": "rust.chapter.2.2.coverage",
-      "title": "Shebang — full chapter qualification",
+      "title": "Shebang \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.2"
       ],
@@ -659,7 +659,7 @@
     },
     {
       "id": "rust.chapter.2.3.coverage",
-      "title": "Keywords — full chapter qualification",
+      "title": "Keywords \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.3"
       ],
@@ -671,7 +671,7 @@
     },
     {
       "id": "rust.chapter.2.4.coverage",
-      "title": "Identifiers — full chapter qualification",
+      "title": "Identifiers \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.4"
       ],
@@ -683,7 +683,7 @@
     },
     {
       "id": "rust.chapter.2.5.coverage",
-      "title": "Comments — full chapter qualification",
+      "title": "Comments \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.5"
       ],
@@ -695,7 +695,7 @@
     },
     {
       "id": "rust.chapter.2.6.coverage",
-      "title": "Whitespace — full chapter qualification",
+      "title": "Whitespace \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.6"
       ],
@@ -707,7 +707,7 @@
     },
     {
       "id": "rust.chapter.2.7.coverage",
-      "title": "Tokens — full chapter qualification",
+      "title": "Tokens \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.2.7"
       ],
@@ -719,7 +719,7 @@
     },
     {
       "id": "rust.chapter.3.coverage",
-      "title": "Macros — full chapter qualification",
+      "title": "Macros \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.3"
       ],
@@ -731,7 +731,7 @@
     },
     {
       "id": "rust.chapter.3.1.coverage",
-      "title": "Macros by example — full chapter qualification",
+      "title": "Macros by example \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.3.1"
       ],
@@ -743,7 +743,7 @@
     },
     {
       "id": "rust.chapter.3.2.coverage",
-      "title": "Procedural macros — full chapter qualification",
+      "title": "Procedural macros \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.3.2"
       ],
@@ -755,7 +755,7 @@
     },
     {
       "id": "rust.chapter.4.coverage",
-      "title": "Crates and source files — full chapter qualification",
+      "title": "Crates and source files \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.4"
       ],
@@ -767,7 +767,7 @@
     },
     {
       "id": "rust.chapter.5.coverage",
-      "title": "Conditional compilation — full chapter qualification",
+      "title": "Conditional compilation \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.5"
       ],
@@ -779,7 +779,7 @@
     },
     {
       "id": "rust.chapter.6.coverage",
-      "title": "Items — full chapter qualification",
+      "title": "Items \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6"
       ],
@@ -791,7 +791,7 @@
     },
     {
       "id": "rust.chapter.6.1.coverage",
-      "title": "Modules — full chapter qualification",
+      "title": "Modules \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.1"
       ],
@@ -803,7 +803,7 @@
     },
     {
       "id": "rust.chapter.6.2.coverage",
-      "title": "Extern crates — full chapter qualification",
+      "title": "Extern crates \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.2"
       ],
@@ -815,7 +815,7 @@
     },
     {
       "id": "rust.chapter.6.3.coverage",
-      "title": "Use declarations — full chapter qualification",
+      "title": "Use declarations \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.3"
       ],
@@ -827,7 +827,7 @@
     },
     {
       "id": "rust.chapter.6.4.coverage",
-      "title": "Functions — full chapter qualification",
+      "title": "Functions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.4"
       ],
@@ -839,7 +839,7 @@
     },
     {
       "id": "rust.chapter.6.5.coverage",
-      "title": "Type aliases — full chapter qualification",
+      "title": "Type aliases \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.5"
       ],
@@ -851,7 +851,7 @@
     },
     {
       "id": "rust.chapter.6.6.coverage",
-      "title": "Structs — full chapter qualification",
+      "title": "Structs \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.6"
       ],
@@ -863,7 +863,7 @@
     },
     {
       "id": "rust.chapter.6.7.coverage",
-      "title": "Enumerations — full chapter qualification",
+      "title": "Enumerations \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.7"
       ],
@@ -875,7 +875,7 @@
     },
     {
       "id": "rust.chapter.6.8.coverage",
-      "title": "Unions — full chapter qualification",
+      "title": "Unions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.8"
       ],
@@ -887,7 +887,7 @@
     },
     {
       "id": "rust.chapter.6.9.coverage",
-      "title": "Constant items — full chapter qualification",
+      "title": "Constant items \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.9"
       ],
@@ -899,7 +899,7 @@
     },
     {
       "id": "rust.chapter.6.10.coverage",
-      "title": "Static items — full chapter qualification",
+      "title": "Static items \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.10"
       ],
@@ -911,7 +911,7 @@
     },
     {
       "id": "rust.chapter.6.11.coverage",
-      "title": "Traits — full chapter qualification",
+      "title": "Traits \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.11"
       ],
@@ -923,7 +923,7 @@
     },
     {
       "id": "rust.chapter.6.12.coverage",
-      "title": "Implementations — full chapter qualification",
+      "title": "Implementations \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.12"
       ],
@@ -935,7 +935,7 @@
     },
     {
       "id": "rust.chapter.6.13.coverage",
-      "title": "External blocks — full chapter qualification",
+      "title": "External blocks \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.13"
       ],
@@ -947,7 +947,7 @@
     },
     {
       "id": "rust.chapter.6.14.coverage",
-      "title": "Generic parameters — full chapter qualification",
+      "title": "Generic parameters \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.14"
       ],
@@ -959,7 +959,7 @@
     },
     {
       "id": "rust.chapter.6.15.coverage",
-      "title": "Associated items — full chapter qualification",
+      "title": "Associated items \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.6.15"
       ],
@@ -971,7 +971,7 @@
     },
     {
       "id": "rust.chapter.7.coverage",
-      "title": "Attributes — full chapter qualification",
+      "title": "Attributes \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7"
       ],
@@ -983,7 +983,7 @@
     },
     {
       "id": "rust.chapter.7.1.coverage",
-      "title": "Testing — full chapter qualification",
+      "title": "Testing \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.1"
       ],
@@ -995,7 +995,7 @@
     },
     {
       "id": "rust.chapter.7.2.coverage",
-      "title": "Derive — full chapter qualification",
+      "title": "Derive \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.2"
       ],
@@ -1007,7 +1007,7 @@
     },
     {
       "id": "rust.chapter.7.3.coverage",
-      "title": "Diagnostics — full chapter qualification",
+      "title": "Diagnostics \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.3"
       ],
@@ -1019,7 +1019,7 @@
     },
     {
       "id": "rust.chapter.7.4.coverage",
-      "title": "Code generation — full chapter qualification",
+      "title": "Code generation \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.4"
       ],
@@ -1031,7 +1031,7 @@
     },
     {
       "id": "rust.chapter.7.5.coverage",
-      "title": "Limits — full chapter qualification",
+      "title": "Limits \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.5"
       ],
@@ -1043,7 +1043,7 @@
     },
     {
       "id": "rust.chapter.7.6.coverage",
-      "title": "Type system — full chapter qualification",
+      "title": "Type system \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.6"
       ],
@@ -1055,7 +1055,7 @@
     },
     {
       "id": "rust.chapter.7.7.coverage",
-      "title": "Debugger — full chapter qualification",
+      "title": "Debugger \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.7.7"
       ],
@@ -1067,7 +1067,7 @@
     },
     {
       "id": "rust.chapter.8.coverage",
-      "title": "Statements and expressions — full chapter qualification",
+      "title": "Statements and expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8"
       ],
@@ -1079,7 +1079,7 @@
     },
     {
       "id": "rust.chapter.8.1.coverage",
-      "title": "Statements — full chapter qualification",
+      "title": "Statements \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.1"
       ],
@@ -1091,7 +1091,7 @@
     },
     {
       "id": "rust.chapter.8.2.coverage",
-      "title": "Expressions — full chapter qualification",
+      "title": "Expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2"
       ],
@@ -1103,7 +1103,7 @@
     },
     {
       "id": "rust.chapter.8.2.1.coverage",
-      "title": "Literal expressions — full chapter qualification",
+      "title": "Literal expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.1"
       ],
@@ -1115,7 +1115,7 @@
     },
     {
       "id": "rust.chapter.8.2.2.coverage",
-      "title": "Path expressions — full chapter qualification",
+      "title": "Path expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.2"
       ],
@@ -1127,7 +1127,7 @@
     },
     {
       "id": "rust.chapter.8.2.3.coverage",
-      "title": "Block expressions — full chapter qualification",
+      "title": "Block expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.3"
       ],
@@ -1139,7 +1139,7 @@
     },
     {
       "id": "rust.chapter.8.2.4.coverage",
-      "title": "Operator expressions — full chapter qualification",
+      "title": "Operator expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.4"
       ],
@@ -1151,7 +1151,7 @@
     },
     {
       "id": "rust.chapter.8.2.5.coverage",
-      "title": "Grouped expressions — full chapter qualification",
+      "title": "Grouped expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.5"
       ],
@@ -1163,7 +1163,7 @@
     },
     {
       "id": "rust.chapter.8.2.6.coverage",
-      "title": "Array and index expressions — full chapter qualification",
+      "title": "Array and index expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.6"
       ],
@@ -1175,7 +1175,7 @@
     },
     {
       "id": "rust.chapter.8.2.7.coverage",
-      "title": "Tuple and index expressions — full chapter qualification",
+      "title": "Tuple and index expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.7"
       ],
@@ -1187,7 +1187,7 @@
     },
     {
       "id": "rust.chapter.8.2.8.coverage",
-      "title": "Struct expressions — full chapter qualification",
+      "title": "Struct expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.8"
       ],
@@ -1199,7 +1199,7 @@
     },
     {
       "id": "rust.chapter.8.2.9.coverage",
-      "title": "Call expressions — full chapter qualification",
+      "title": "Call expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.9"
       ],
@@ -1211,7 +1211,7 @@
     },
     {
       "id": "rust.chapter.8.2.10.coverage",
-      "title": "Method call expressions — full chapter qualification",
+      "title": "Method call expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.10"
       ],
@@ -1223,7 +1223,7 @@
     },
     {
       "id": "rust.chapter.8.2.11.coverage",
-      "title": "Field access expressions — full chapter qualification",
+      "title": "Field access expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.11"
       ],
@@ -1235,7 +1235,7 @@
     },
     {
       "id": "rust.chapter.8.2.12.coverage",
-      "title": "Closure expressions — full chapter qualification",
+      "title": "Closure expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.12"
       ],
@@ -1247,7 +1247,7 @@
     },
     {
       "id": "rust.chapter.8.2.13.coverage",
-      "title": "Loop expressions — full chapter qualification",
+      "title": "Loop expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.13"
       ],
@@ -1259,7 +1259,7 @@
     },
     {
       "id": "rust.chapter.8.2.14.coverage",
-      "title": "Range expressions — full chapter qualification",
+      "title": "Range expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.14"
       ],
@@ -1271,7 +1271,7 @@
     },
     {
       "id": "rust.chapter.8.2.15.coverage",
-      "title": "If expressions — full chapter qualification",
+      "title": "If expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.15"
       ],
@@ -1283,7 +1283,7 @@
     },
     {
       "id": "rust.chapter.8.2.16.coverage",
-      "title": "Match expressions — full chapter qualification",
+      "title": "Match expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.16"
       ],
@@ -1295,7 +1295,7 @@
     },
     {
       "id": "rust.chapter.8.2.17.coverage",
-      "title": "Return expressions — full chapter qualification",
+      "title": "Return expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.17"
       ],
@@ -1307,7 +1307,7 @@
     },
     {
       "id": "rust.chapter.8.2.18.coverage",
-      "title": "Await expressions — full chapter qualification",
+      "title": "Await expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.18"
       ],
@@ -1319,7 +1319,7 @@
     },
     {
       "id": "rust.chapter.8.2.19.coverage",
-      "title": "Underscore expressions — full chapter qualification",
+      "title": "Underscore expressions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.8.2.19"
       ],
@@ -1331,7 +1331,7 @@
     },
     {
       "id": "rust.chapter.9.coverage",
-      "title": "Patterns — full chapter qualification",
+      "title": "Patterns \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.9"
       ],
@@ -1343,7 +1343,7 @@
     },
     {
       "id": "rust.chapter.10.coverage",
-      "title": "Type system — full chapter qualification",
+      "title": "Type system \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10"
       ],
@@ -1355,7 +1355,7 @@
     },
     {
       "id": "rust.chapter.10.1.coverage",
-      "title": "Types — full chapter qualification",
+      "title": "Types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1"
       ],
@@ -1367,7 +1367,7 @@
     },
     {
       "id": "rust.chapter.10.1.1.coverage",
-      "title": "Boolean type — full chapter qualification",
+      "title": "Boolean type \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.1"
       ],
@@ -1379,7 +1379,7 @@
     },
     {
       "id": "rust.chapter.10.1.2.coverage",
-      "title": "Numeric types — full chapter qualification",
+      "title": "Numeric types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.2"
       ],
@@ -1391,7 +1391,7 @@
     },
     {
       "id": "rust.chapter.10.1.3.coverage",
-      "title": "Character type — full chapter qualification",
+      "title": "Character type \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.3"
       ],
@@ -1403,7 +1403,7 @@
     },
     {
       "id": "rust.chapter.10.1.4.coverage",
-      "title": "String slice type — full chapter qualification",
+      "title": "String slice type \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.4"
       ],
@@ -1415,7 +1415,7 @@
     },
     {
       "id": "rust.chapter.10.1.5.coverage",
-      "title": "Never type — full chapter qualification",
+      "title": "Never type \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.5"
       ],
@@ -1427,7 +1427,7 @@
     },
     {
       "id": "rust.chapter.10.1.6.coverage",
-      "title": "Tuple types — full chapter qualification",
+      "title": "Tuple types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.6"
       ],
@@ -1439,7 +1439,7 @@
     },
     {
       "id": "rust.chapter.10.1.7.coverage",
-      "title": "Array types — full chapter qualification",
+      "title": "Array types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.7"
       ],
@@ -1451,7 +1451,7 @@
     },
     {
       "id": "rust.chapter.10.1.8.coverage",
-      "title": "Slice types — full chapter qualification",
+      "title": "Slice types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.8"
       ],
@@ -1463,7 +1463,7 @@
     },
     {
       "id": "rust.chapter.10.1.9.coverage",
-      "title": "Struct types — full chapter qualification",
+      "title": "Struct types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.9"
       ],
@@ -1475,7 +1475,7 @@
     },
     {
       "id": "rust.chapter.10.1.10.coverage",
-      "title": "Enumerated types — full chapter qualification",
+      "title": "Enumerated types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.10"
       ],
@@ -1487,7 +1487,7 @@
     },
     {
       "id": "rust.chapter.10.1.11.coverage",
-      "title": "Union types — full chapter qualification",
+      "title": "Union types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.11"
       ],
@@ -1499,7 +1499,7 @@
     },
     {
       "id": "rust.chapter.10.1.12.coverage",
-      "title": "Function item types — full chapter qualification",
+      "title": "Function item types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.12"
       ],
@@ -1511,7 +1511,7 @@
     },
     {
       "id": "rust.chapter.10.1.13.coverage",
-      "title": "Closure types — full chapter qualification",
+      "title": "Closure types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.13"
       ],
@@ -1523,7 +1523,7 @@
     },
     {
       "id": "rust.chapter.10.1.14.coverage",
-      "title": "Pointer types — full chapter qualification",
+      "title": "Pointer types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.14"
       ],
@@ -1535,7 +1535,7 @@
     },
     {
       "id": "rust.chapter.10.1.15.coverage",
-      "title": "Function pointer types — full chapter qualification",
+      "title": "Function pointer types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.15"
       ],
@@ -1547,7 +1547,7 @@
     },
     {
       "id": "rust.chapter.10.1.16.coverage",
-      "title": "Trait object types — full chapter qualification",
+      "title": "Trait object types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.16"
       ],
@@ -1559,7 +1559,7 @@
     },
     {
       "id": "rust.chapter.10.1.17.coverage",
-      "title": "Impl trait type — full chapter qualification",
+      "title": "Impl trait type \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.17"
       ],
@@ -1571,7 +1571,7 @@
     },
     {
       "id": "rust.chapter.10.1.18.coverage",
-      "title": "Type parameters — full chapter qualification",
+      "title": "Type parameters \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.18"
       ],
@@ -1583,7 +1583,7 @@
     },
     {
       "id": "rust.chapter.10.1.19.coverage",
-      "title": "Inferred type — full chapter qualification",
+      "title": "Inferred type \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.1.19"
       ],
@@ -1595,7 +1595,7 @@
     },
     {
       "id": "rust.chapter.10.2.coverage",
-      "title": "Dynamically sized types — full chapter qualification",
+      "title": "Dynamically sized types \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.2"
       ],
@@ -1607,7 +1607,7 @@
     },
     {
       "id": "rust.chapter.10.3.coverage",
-      "title": "Type layout — full chapter qualification",
+      "title": "Type layout \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.3"
       ],
@@ -1619,7 +1619,7 @@
     },
     {
       "id": "rust.chapter.10.4.coverage",
-      "title": "Interior mutability — full chapter qualification",
+      "title": "Interior mutability \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.4"
       ],
@@ -1631,7 +1631,7 @@
     },
     {
       "id": "rust.chapter.10.5.coverage",
-      "title": "Subtyping and variance — full chapter qualification",
+      "title": "Subtyping and variance \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.5"
       ],
@@ -1643,7 +1643,7 @@
     },
     {
       "id": "rust.chapter.10.6.coverage",
-      "title": "Trait and lifetime bounds — full chapter qualification",
+      "title": "Trait and lifetime bounds \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.6"
       ],
@@ -1655,7 +1655,7 @@
     },
     {
       "id": "rust.chapter.10.7.coverage",
-      "title": "Type coercions — full chapter qualification",
+      "title": "Type coercions \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.7"
       ],
@@ -1667,7 +1667,7 @@
     },
     {
       "id": "rust.chapter.10.8.coverage",
-      "title": "Divergence — full chapter qualification",
+      "title": "Divergence \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.8"
       ],
@@ -1679,7 +1679,7 @@
     },
     {
       "id": "rust.chapter.10.9.coverage",
-      "title": "Destructors — full chapter qualification",
+      "title": "Destructors \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.9"
       ],
@@ -1691,7 +1691,7 @@
     },
     {
       "id": "rust.chapter.10.10.coverage",
-      "title": "Lifetime elision — full chapter qualification",
+      "title": "Lifetime elision \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.10.10"
       ],
@@ -1703,7 +1703,7 @@
     },
     {
       "id": "rust.chapter.11.coverage",
-      "title": "Special types and traits — full chapter qualification",
+      "title": "Special types and traits \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.11"
       ],
@@ -1715,7 +1715,7 @@
     },
     {
       "id": "rust.chapter.12.coverage",
-      "title": "Names — full chapter qualification",
+      "title": "Names \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12"
       ],
@@ -1727,7 +1727,7 @@
     },
     {
       "id": "rust.chapter.12.1.coverage",
-      "title": "Namespaces — full chapter qualification",
+      "title": "Namespaces \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12.1"
       ],
@@ -1739,7 +1739,7 @@
     },
     {
       "id": "rust.chapter.12.2.coverage",
-      "title": "Scopes — full chapter qualification",
+      "title": "Scopes \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12.2"
       ],
@@ -1751,7 +1751,7 @@
     },
     {
       "id": "rust.chapter.12.3.coverage",
-      "title": "Preludes — full chapter qualification",
+      "title": "Preludes \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12.3"
       ],
@@ -1763,7 +1763,7 @@
     },
     {
       "id": "rust.chapter.12.4.coverage",
-      "title": "Paths — full chapter qualification",
+      "title": "Paths \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12.4"
       ],
@@ -1775,7 +1775,7 @@
     },
     {
       "id": "rust.chapter.12.5.coverage",
-      "title": "Name resolution — full chapter qualification",
+      "title": "Name resolution \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12.5"
       ],
@@ -1787,7 +1787,7 @@
     },
     {
       "id": "rust.chapter.12.6.coverage",
-      "title": "Visibility and privacy — full chapter qualification",
+      "title": "Visibility and privacy \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.12.6"
       ],
@@ -1799,7 +1799,7 @@
     },
     {
       "id": "rust.chapter.13.coverage",
-      "title": "Memory model — full chapter qualification",
+      "title": "Memory model \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.13"
       ],
@@ -1811,7 +1811,7 @@
     },
     {
       "id": "rust.chapter.13.1.coverage",
-      "title": "Memory allocation and lifetime — full chapter qualification",
+      "title": "Memory allocation and lifetime \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.13.1"
       ],
@@ -1823,7 +1823,7 @@
     },
     {
       "id": "rust.chapter.13.2.coverage",
-      "title": "Variables — full chapter qualification",
+      "title": "Variables \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.13.2"
       ],
@@ -1835,7 +1835,7 @@
     },
     {
       "id": "rust.chapter.14.coverage",
-      "title": "Panic — full chapter qualification",
+      "title": "Panic \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.14"
       ],
@@ -1847,7 +1847,7 @@
     },
     {
       "id": "rust.chapter.15.coverage",
-      "title": "Linkage — full chapter qualification",
+      "title": "Linkage \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.15"
       ],
@@ -1859,7 +1859,7 @@
     },
     {
       "id": "rust.chapter.16.coverage",
-      "title": "Inline assembly — full chapter qualification",
+      "title": "Inline assembly \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.16"
       ],
@@ -1871,7 +1871,7 @@
     },
     {
       "id": "rust.chapter.17.coverage",
-      "title": "Unsafety — full chapter qualification",
+      "title": "Unsafety \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.17"
       ],
@@ -1883,7 +1883,7 @@
     },
     {
       "id": "rust.chapter.17.1.coverage",
-      "title": "The unsafe keyword — full chapter qualification",
+      "title": "The unsafe keyword \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.17.1"
       ],
@@ -1895,7 +1895,7 @@
     },
     {
       "id": "rust.chapter.17.2.coverage",
-      "title": "Behavior considered undefined — full chapter qualification",
+      "title": "Behavior considered undefined \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.17.2"
       ],
@@ -1907,7 +1907,7 @@
     },
     {
       "id": "rust.chapter.17.3.coverage",
-      "title": "Behavior not considered unsafe — full chapter qualification",
+      "title": "Behavior not considered unsafe \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.17.3"
       ],
@@ -1919,7 +1919,7 @@
     },
     {
       "id": "rust.chapter.18.coverage",
-      "title": "Constant evaluation — full chapter qualification",
+      "title": "Constant evaluation \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.18"
       ],
@@ -1931,7 +1931,7 @@
     },
     {
       "id": "rust.chapter.19.coverage",
-      "title": "Application binary interface — full chapter qualification",
+      "title": "Application binary interface \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.19"
       ],
@@ -1943,7 +1943,7 @@
     },
     {
       "id": "rust.chapter.20.coverage",
-      "title": "The Rust runtime — full chapter qualification",
+      "title": "The Rust runtime \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.20"
       ],
@@ -1955,7 +1955,7 @@
     },
     {
       "id": "rust.chapter.21.coverage",
-      "title": "Appendices — full chapter qualification",
+      "title": "Appendices \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21"
       ],
@@ -1967,7 +1967,7 @@
     },
     {
       "id": "rust.chapter.21.1.coverage",
-      "title": "Grammar summary — full chapter qualification",
+      "title": "Grammar summary \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21.1"
       ],
@@ -1979,7 +1979,7 @@
     },
     {
       "id": "rust.chapter.21.2.coverage",
-      "title": "Syntax index — full chapter qualification",
+      "title": "Syntax index \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21.2"
       ],
@@ -1991,7 +1991,7 @@
     },
     {
       "id": "rust.chapter.21.3.coverage",
-      "title": "Macro follow-set ambiguity formal specification — full chapter qualification",
+      "title": "Macro follow-set ambiguity formal specification \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21.3"
       ],
@@ -2003,7 +2003,7 @@
     },
     {
       "id": "rust.chapter.21.4.coverage",
-      "title": "Influences — full chapter qualification",
+      "title": "Influences \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21.4"
       ],
@@ -2015,7 +2015,7 @@
     },
     {
       "id": "rust.chapter.21.5.coverage",
-      "title": "Test summary — full chapter qualification",
+      "title": "Test summary \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21.5"
       ],
@@ -2027,7 +2027,7 @@
     },
     {
       "id": "rust.chapter.21.6.coverage",
-      "title": "Glossary — full chapter qualification",
+      "title": "Glossary \u2014 full chapter qualification",
       "chapter_ids": [
         "rust.ref.21.6"
       ],
@@ -2353,7 +2353,7 @@
         "rust.ref.8.2.1",
         "rust.ref.10.1.19"
       ],
-      "scope": "Argument-constrained generic function calls infer complete type arguments from scalar, tuple, nominal aggregate and admitted shared-reference operands; body/result constraints precede integer fallback. Arguments are checked/evaluated once; generic declarations remain abstractly checked before concrete calls, and the existing shared registry owns recursive instances. Result-only inference, inferred constructors, partial underscore arguments, unresolved method/pattern receiver constraints, trait solving and reference type substitutions remain explicit boundaries. Qualified pcc0/self Linux x86-64 with seven unchanged authored-program native rustc1.91.1 comparisons; no upstream core/alloc claim and Darwin cross-emission only.",
+      "scope": "Argument-constrained generic function calls infer complete type arguments from scalar, tuple, nominal aggregate and admitted shared-reference operands; body/result constraints precede integer fallback. Arguments are checked/evaluated once; generic declarations remain abstractly checked before concrete calls, and the existing shared registry owns recursive instances. Result-context inference is tracked separately by rust.generics.result-context-call-inference. Inferred constructors, partial underscore arguments, unresolved method/pattern receiver constraints, trait solving and reference type substitutions remain explicit boundaries. Qualified pcc0/self Linux x86-64 with seven unchanged authored-program native rustc1.91.1 comparisons; no upstream core/alloc claim and Darwin cross-emission only.",
       "tests": [
         "tests/rust/test_rust_call_inference.py::test_inferred_and_explicit_calls_share_one_semantic_instance_registry",
         "tests/rust/test_rust_call_inference.py::test_original_inferred_call_programs_match_native_rustc@rust-native-reference"
@@ -2624,18 +2624,6 @@
         "rust.ref.14"
       ],
       "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/arrays.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy.",
-      "status": "explicitly_unimplemented",
-      "tests": [],
-      "diagnostics": [],
-      "evidence": []
-    },
-    {
-      "id": "rust.capability.8f66a4997af3",
-      "title": "generic parameters not constrained by call arguments require result-context inference, which is not implemented; supply explicit type arguments",
-      "chapter_ids": [
-        "rust.ref.6.14"
-      ],
-      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/call_inference.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy.",
       "status": "explicitly_unimplemented",
       "tests": [],
       "diagnostics": [],
@@ -3672,6 +3660,39 @@
       "tests": [],
       "diagnostics": [],
       "evidence": []
+    },
+    {
+      "id": "rust.generics.result-context-call-inference",
+      "title": "Result-context generic function inference",
+      "chapter_ids": [
+        "rust.ref.6.14",
+        "rust.ref.8.2.9",
+        "rust.ref.10.1.19"
+      ],
+      "scope": "Per-call inference variables combine argument structure with function results, explicit local annotations, later assignments and outer call-parameter contexts before whole-body resolution and the existing shared instance registry. Composite unknown arguments substitute call-local variables rather than leaking declaration parameters. Generic bodies remain abstractly checked; ambiguity, inconsistent constraints and occurs cycles still fail. Seven unchanged original programs have actual full-eight-byte owned/rustc1.91.1 native comparisons on Linux x86-64, including side effects, terminating recursive/composite paths and actual-certified mutable references. Infinite compile-only obligations are not executed. Method-local generics, trait solving, inferred constructors, reference substitutions and unresolved method/pattern receiver selection remain separate gaps; public references still require actual same-input checking.",
+      "status": "supported",
+      "tests": [
+        "tests/rust/test_rust_result_context.py::test_inferred_and_explicit_results_share_existing_registry",
+        "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "rust.current-f432.rust.generics.result-context-call-inference.unit",
+        "rust.current-f432.program.result_context_arrays",
+        "rust.current-f432.differential.result_context_arrays",
+        "rust.current-f432.program.result_context_composite",
+        "rust.current-f432.differential.result_context_composite",
+        "rust.current-f432.program.result_context_later",
+        "rust.current-f432.differential.result_context_later",
+        "rust.current-f432.program.result_context_mutable",
+        "rust.current-f432.differential.result_context_mutable",
+        "rust.current-f432.program.result_context_nominal",
+        "rust.current-f432.differential.result_context_nominal",
+        "rust.current-f432.program.result_context_order",
+        "rust.current-f432.differential.result_context_order",
+        "rust.current-f432.program.result_context_recursion",
+        "rust.current-f432.differential.result_context_recursion"
+      ]
     }
   ],
   "diagnostics": {
@@ -3695,15 +3716,6 @@
           "sha256": "f510bb95035e67f216259ed83bf7086e13e11c0450ad00b5d37e78dac643ef29"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 22."
-      },
-      {
-        "message": "generic parameters not constrained by call arguments require result-context inference, which is not implemented; supply explicit type arguments",
-        "feature_id": "rust.capability.8f66a4997af3",
-        "source": {
-          "path": "pcc/frontends/rust/call_inference.py",
-          "sha256": "9b3b0626a4dafb25d84e13614d5f52a790b3c62e9b222e073d759bafad020e29"
-        },
-        "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 69."
       },
       {
         "message": "external checked Rust overflow options are unsupported",
@@ -3935,7 +3947,7 @@
         "feature_id": "rust.capability.3e384f9d3e80",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 110."
       },
@@ -3944,7 +3956,7 @@
         "feature_id": "rust.capability.42c0edfbabfa",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 257."
       },
@@ -3953,7 +3965,7 @@
         "feature_id": "rust.capability.b6ad2f608ff0",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 262."
       },
@@ -3962,7 +3974,7 @@
         "feature_id": "rust.capability.47e9fc5d6566",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 769."
       },
@@ -3971,7 +3983,7 @@
         "feature_id": "rust.capability.d0970a5199e9",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 232."
       },
@@ -3980,7 +3992,7 @@
         "feature_id": "rust.capability.4b9c1fc377df",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 349."
       },
@@ -3989,7 +4001,7 @@
         "feature_id": "rust.capability.de072a10a17d",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 352."
       },
@@ -3998,7 +4010,7 @@
         "feature_id": "rust.capability.276015de773c",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 775."
       },
@@ -4007,7 +4019,7 @@
         "feature_id": "rust.capability.8f374c0f0032",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 809."
       },
@@ -4016,7 +4028,7 @@
         "feature_id": "rust.capability.c48c5f43d7bb",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 822."
       },
@@ -4025,7 +4037,7 @@
         "feature_id": "rust.capability.1a8776e6058b",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 412."
       },
@@ -4034,7 +4046,7 @@
         "feature_id": "rust.capability.ad0a8e2940d2",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 417."
       },
@@ -4043,7 +4055,7 @@
         "feature_id": "rust.capability.d0b554a3b673",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 425."
       },
@@ -4052,7 +4064,7 @@
         "feature_id": "rust.capability.10557ba208c5",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 450."
       },
@@ -4061,7 +4073,7 @@
         "feature_id": "rust.capability.a158c8e39022",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 469."
       },
@@ -4070,7 +4082,7 @@
         "feature_id": "rust.capability.c363280a66c7",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 483."
       },
@@ -4079,7 +4091,7 @@
         "feature_id": "rust.capability.a8fa7c5d5360",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 492."
       },
@@ -4088,7 +4100,7 @@
         "feature_id": "rust.capability.2297a7178b8b",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 494."
       },
@@ -4097,7 +4109,7 @@
         "feature_id": "rust.capability.1fe01c85830b",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 551."
       },
@@ -4106,7 +4118,7 @@
         "feature_id": "rust.capability.6352bd97ff85",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 587."
       },
@@ -4115,7 +4127,7 @@
         "feature_id": "rust.capability.1337d5134703",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 630."
       },
@@ -4124,7 +4136,7 @@
         "feature_id": "rust.capability.4ee292f5718c",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 593."
       },
@@ -4133,7 +4145,7 @@
         "feature_id": "rust.capability.bdcf31e67972",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 690."
       },
@@ -4142,7 +4154,7 @@
         "feature_id": "rust.capability.7d0c67a57d36",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 707."
       },
@@ -4151,7 +4163,7 @@
         "feature_id": "rust.capability.709957839ec7",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 720."
       },
@@ -4160,7 +4172,7 @@
         "feature_id": "rust.capability.cd0812091f1d",
         "source": {
           "path": "pcc/frontends/rust/semantics.py",
-          "sha256": "c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a"
+          "sha256": "5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc"
         },
         "reason": "Direct literal/f-string raise template; no stable capability code. Current source line 747."
       },
@@ -9795,6 +9807,571 @@
       },
       "command_kind": "reproduction",
       "purpose": "unit"
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.rust.generics.result-context-call-inference.unit",
+      "test_id": "tests/rust/test_rust_result_context.py::test_inferred_and_explicit_results_share_existing_registry",
+      "kind": "unit",
+      "purpose": "unit",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-m",
+        "",
+        "tests/rust",
+        "tests/test_frontend_instantiation.py",
+        "tests/test_ownership_mechanisms.py"
+      ],
+      "actual": {
+        "stdout_sha256": "43e3b30ea1cd43ac4da142ffc4d64f5bcf6fc4ac016fcad61d5c097947b1e41c",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_arrays",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "3335cbd843bf49388faec980ddec94667582f5cde387a2cc98eeae217dda2f9d",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_arrays",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "3335cbd843bf49388faec980ddec94667582f5cde387a2cc98eeae217dda2f9d",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "3335cbd843bf49388faec980ddec94667582f5cde387a2cc98eeae217dda2f9d",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_composite",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "2e0d7670a6bacca76e816616418aacf4f21d6b7b78fbe981f687b1c3437feb01",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_composite",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "2e0d7670a6bacca76e816616418aacf4f21d6b7b78fbe981f687b1c3437feb01",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "2e0d7670a6bacca76e816616418aacf4f21d6b7b78fbe981f687b1c3437feb01",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_later",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "20b5fbbe35ffbad9409d858957d63854e7b98bb36759d998a66880288fd3a2e4",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_later",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "20b5fbbe35ffbad9409d858957d63854e7b98bb36759d998a66880288fd3a2e4",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "20b5fbbe35ffbad9409d858957d63854e7b98bb36759d998a66880288fd3a2e4",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_mutable",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "04c3977488ea8913c34d553a1068ac7dc23fd28e720e928f564fb9bd90c3c0d9",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_mutable",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "04c3977488ea8913c34d553a1068ac7dc23fd28e720e928f564fb9bd90c3c0d9",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "04c3977488ea8913c34d553a1068ac7dc23fd28e720e928f564fb9bd90c3c0d9",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_nominal",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "e1ed51559431b550d43352ea4bc328bc2021a50b6dbb2a8c96a5f0329af73092",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_nominal",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "e1ed51559431b550d43352ea4bc328bc2021a50b6dbb2a8c96a5f0329af73092",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "e1ed51559431b550d43352ea4bc328bc2021a50b6dbb2a8c96a5f0329af73092",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_order",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "473dd24ed853ee5b1193c006fe7b2d458b975f648496fa58b6d07ed9bb34a5be",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_order",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "473dd24ed853ee5b1193c006fe7b2d458b975f648496fa58b6d07ed9bb34a5be",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "473dd24ed853ee5b1193c006fe7b2d458b975f648496fa58b6d07ed9bb34a5be",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.program.result_context_recursion",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "input_sha256": "0f26caf58effc01275f2f919fc80f9d19abdac52099d867042005055f2641e25",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      }
+    },
+    {
+      "source_revision": "f4327b8142a71dfc9c173387b34f8eb65b85a209",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "outcome": "passed",
+      "command_kind": "reproduction",
+      "id": "rust.current-f432.differential.result_context_recursion",
+      "test_id": "tests/rust/test_rust_result_context.py::test_unchanged_result_context_originals_match_native_rustc@rust-native-reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "input_sha256": "0f26caf58effc01275f2f919fc80f9d19abdac52099d867042005055f2641e25",
+      "source": {
+        "path": "tests/rust/test_rust_result_context.py",
+        "sha256": "79b1b583890efb8cf7ae316074283cdc370d3e052005ab7cec79adb18432028d"
+      },
+      "command": [
+        "./pcc-owned/owned-rust-c"
+      ],
+      "actual": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "expected": {
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1 (ed61e7d7e242494fb7057f2657300d9e77bb4fcb)",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "0f26caf58effc01275f2f919fc80f9d19abdac52099d867042005055f2641e25",
+        "platform": "linux-x86_64",
+        "command": [
+          "./rustc-reference"
+        ]
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
     }
   ]
 }

@@ -1,8 +1,9 @@
-"""Argument-constrained generic calls, with integer fallback deferred per body.
+"""Argument/result-constrained generic calls, with fallback deferred per body.
 
 This is language checking, not another instantiation cache: completed argument
 constraints are handed to GenericFunctions.select and its shared worklist.
-Unconstrained/result-only parameters still require explicit type arguments.
+Unbound parameters get declaration-keyed inference variables, not a guessed
+concrete type. Unresolved variables fail before any instance is registered.
 """
 from dataclasses import replace
 
@@ -36,19 +37,21 @@ def pending_integer(ty):
 
 
 def infer(checker, function, arguments, token):
-    from .semantics import NEVER, unify
+    from .semantics import InferredType, NEVER, unify
     parameters = checker.function_generics.parameters[function.declaration_name]
-    bindings = {}
+    # Keep each call's unknowns shared with its substituted result/parameters.
+    # Later annotations, return types and argument contexts constrain these
+    # same variables before finish selects the concrete shared-registry entry.
+    bindings = {parameter: InferredType(
+        token, description=f"generic parameter {parameter.name} (result-context inference)")
+        for parameter in parameters}
 
     def constrain(pattern, actual):
         actual = partial(actual)
         if actual == NEVER:
             return  # A diverging operand does not invent a concrete type.
         if isinstance(pattern, TypeParameter) and pattern in parameters:
-            if pattern in bindings:
-                bindings[pattern] = unify(bindings[pattern], actual, token)
-            else:
-                bindings[pattern] = actual
+            bindings[pattern] = unify(bindings[pattern], actual, token)
         elif isinstance(pattern, FixedArrayType) and isinstance(actual, FixedArrayType) and pattern.length == actual.length:
             constrain(pattern.element, actual.element)
         elif isinstance(pattern, TupleType) and isinstance(actual, TupleType) and len(pattern.elements) == len(actual.elements):
@@ -61,12 +64,13 @@ def infer(checker, function, arguments, token):
             for p, a in zip(pattern.arguments, actual.arguments):
                 constrain(p, a)
         else:
-            unify(pattern, actual, token)
+            # A wholly unknown actual may stand for a composite formal. Bind
+            # it to this call's variables, never to the callee's declaration
+            # parameters, so enclosing result constraints can still reach it.
+            unify(substitute(pattern, bindings), actual, token)
 
     for (_, pattern, _), actual in zip(function.params, arguments):
         constrain(pattern, actual)
-    if any(parameter not in bindings for parameter in parameters):
-        raise token.error('generic parameters not constrained by call arguments require result-context inference, which is not implemented; supply explicit type arguments')
     types = tuple(bindings[p] for p in parameters)
     signature = replace(function,
                         params=[(name, substitute(ty, bindings), mutable) for name, ty, mutable in function.params],

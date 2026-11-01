@@ -410,7 +410,7 @@ Generic instances have deterministic private symbols derived from the function
 name and complete semantic type structure. Public result metadata uses keys such
 as `identity::<u64>`; there is no single foreign export for an abstract template.
 Generic foreign/no-mangle ABI and reference type arguments are rejected. The
-compiler does not infer unconstrained result-only type arguments, prove borrow
+compiler still rejects type parameters unconstrained after all result/argument context; it does not prove borrow
 lifetimes, implement Copy or other trait bounds, or erase destructor obligations. Admitted values still
 exclude custom Drop and heap-owning types. Each compilation permits at most 128
 concrete function instances; recursively growing specialization is an explicit
@@ -445,8 +445,8 @@ solving remain explicit capability boundaries. All methods are type/move checked
 at declaration time, including unused generic methods; abstract `T` is non-Copy.
 Concrete receiver/qualified-owner types select complete impl arguments for the
 existing shared function registry. No second method monomorphization cache or
-runtime dispatcher is added. Method-local generic parameters and unconstrained
-result-only generic call inference remain unsupported.
+runtime dispatcher is added. Method-local generic parameters remain unsupported. Result-context inference
+for ordinary generic calls is described below; truly ambiguous calls still fail.
 
 The initial value-receiver domain is extended by the bounded `&self` loans
 described above. `&mut self`, explicit receiver types, general receiver
@@ -525,7 +525,7 @@ then inferred and explicit calls use the same instance registry. Generic
 bodies are still checked abstractly before any specialization; inference does
 not make T Copy or defer invalid unused bodies.
 
-Result-only unconstrained parameters, generic constructor inference, partial
+Truly unconstrained parameters, generic constructor inference, partial
 `_` type arguments, trait constraints, and method/pattern selection on unresolved
 generic results remain explicit gaps. No Rust lifetime inference, core/alloc
 qualification or production rustc dependency is introduced. The source-owned
@@ -534,6 +534,26 @@ share one xdist group under the unchanged default six workers, so external
 reference linking does not multiply peak RSS unnecessarily; each unchanged
 program still compiles and executes independently with full raw observations.
 
+
+### Result-context generic call inference
+
+Generic calls also use function results, explicitly annotated locals, later
+assignments and enclosing call parameters to resolve otherwise unknown type
+arguments. Composite formal types use fresh call-local variables, including
+nested calls and abstract outer generic contexts; declaration parameters never
+leak between calls. Resolution still occurs at the existing whole-body finish
+boundary and uses the same instance registry. Arguments evaluate once in source
+order. Ambiguous calls and infinite/inconsistent inferred types remain errors.
+Seven complete unchanged originals passed actual eight-byte PCC/rustc1.91.1
+runtime comparisons. Divergent compile-only obligations are not executed; the
+separate runtime example takes terminating branches. Mutable-reference inputs
+still require actual same-source external checking before owned lowering.
+This does not add constructor inference, method-local generic parameters,
+trait solving, reference substitutions or unresolved method/pattern dispatch.
+
+Specification: [inferred types](https://doc.rust-lang.org/reference/types/inferred.html),
+[generic parameters](https://doc.rust-lang.org/reference/items/generics.html),
+[call expressions](https://doc.rust-lang.org/reference/expressions/call-expr.html).
 
 ### Fixed-size arrays and target-sized index types
 
@@ -650,32 +670,30 @@ feature ID;119 unaudited chapter gaps are not a completion denominator.
 Implemented-but-unverified scopes are not promoted to supported by suite totals.
 No common checker/schema2 migration is included.
 
-Final Rust source `ba5252cb01aaae9643a11ff70035e3a850238783` has987 passed
-selected tests (964Rust +23shared mechanisms). All six workers recorded the same
-998-node pool and11 explicit Darwin core/std-unavailable cases, which are unrun,
-not passes or skips.66 unchanged-source full8-byte owned/rustc1.91.1 runtime
-pairs include52 identities with actual metadata checks and14 value-only pairs
-without such records. Every public reference-bearing input requires a genuine
-source/options-bound token; no bare flag authorizes reference lowering. The
-whole gate separately records138 successful checks and12 genuine rejections;
-redundant checks are counted, not presented as unique programs. Internal
-nonlowering loan/iteration models prove only their tested mechanisms, not borrow
-certification or executable IR. Linux runtime only; no Mac execution claim.
+Final result-context source `f4327b8142a71dfc9c173387b34f8eb65b85a209` passed
+1,020 selected tests (997 Rust + 23 shared mechanisms). All six workers recorded
+1,032 collected identities: 12 Darwin target core/std prerequisites were
+explicitly unselected/unrun, not passes or skips. Its 73 unchanged-original
+full-eight-byte owned/rustc1.91.1 runtime pairs include 53 identities with actual
+metadata checks and 20 value-only pairs, which are not certification claims.
+The whole gate records 139 successful checks and 12 genuine rejections;
+redundant checks are counted rather than presented as unique programs. Every
+public reference-bearing input still requires a genuine source/options-bound
+token. Internal nonlowering mechanisms do not certify borrowing or executable IR.
 
-Common ABI integration `ba5252cb01aaae9643a11ff70035e3a850238783` preserves the
-Rust/tests above and exact publiccb516 backend plus current public foreign frontend bytes. Its complete
-four-node domain observed3PASS and1Darwin-target-unavailable/unrun. The original
-record source was actually checked before owned lowering and produced two
-48-byte observations; scalar routes each produced two32-byte observations.
-Scalar exit success is bound by the existing passed assertions, not invented
-independent per-run exit receipts.
+The separately run common ABI domain on this same source observed 3 PASS and
+1 Darwin-target-unavailable/unrun. The original record source was actually
+checked before owned lowering and produced two 48-byte observations; scalar
+routes each produced two 32-byte observations. Scalar exit success remains
+bound to passed unchanged assertions, not invented per-run receipts. No Mac
+execution, managed runtime or broader foreign-aggregate ABI claim is made.
 
-All141 active qualification records have NEWba525 IDs, current test hashes and
-actual current-run parents. All141 prior cad1 records and older140 records remain unchanged in prior
-Git/private history. Original failures (including986PASS/1FAIL before the missed
-Meson test migration) remain failures. Unchanged public `--verify-files` must
-verify all four current maps; historical Git or private fallback cannot replace
-that contract. No historical binary path revalidation is implied by this renewal.
+All 141 published ba525 evidence records retain their original IDs and values;
+their test source hashes still match. Fifteen new f432 records qualify only the
+new result-context feature. Old failures and earlier qualifications remain
+historical, not relabeled. The unmodified public strict file checker must pass all four maps;
+the separate diagnostic audit covers Rust only. No archived evidence reader or historical-source
+fallback substitutes for current-file validation.
 
 ### Audited feature axes
 
@@ -698,7 +716,8 @@ that contract. No historical binary path revalidation is implied by this renewal
 | `rust.generics.functions-explicit` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Complete explicit turbofish applications with abstract non-Copy body checking and recursive placeholders; argument-constrained inference is inventoried separately. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
 | `rust.ffi.scalar-reference-c` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Unsafe extern-C calls and no_mangle exports for admitted scalar signatures; readonly references only to supported nongeneric repr(C) integer records. No C-unwind, by-value aggregates or complete FFI safety guarantee. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
 | `rust.codegen.qualified-targets` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Public target_triple drives IR triple/data layout and owned ELF Linux x86-64 or Mach-O arm64 Darwin emission; Darwin cross-emission is not Mac execution. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
-| `rust.generics.argument-call-inference` | implemented | accepted | Argument-constrained generic function calls infer complete type arguments from scalar, tuple, nominal aggregate and admitted shared-reference operands; body/result constraints precede integer fallback. Arguments are checked/evaluated once; generic declarations remain abstractly checked before concrete calls, and the existing shared registry owns recursive instances. Result-only inference, inferred constructors, partial underscore arguments, unresolved method/pattern receiver constraints, trait solving and reference type substitutions remain explicit boundaries. Qualified pcc0/self Linux x86-64 with seven unchanged authored-program native rustc1.91.1 comparisons; no upstream core/alloc claim and Darwin cross-emission only. |
+| `rust.generics.argument-call-inference` | implemented | accepted | Argument-constrained generic function calls infer complete type arguments from scalar, tuple, nominal aggregate and admitted shared-reference operands; body/result constraints precede integer fallback. Arguments are checked/evaluated once; generic declarations remain abstractly checked before concrete calls, and the existing shared registry owns recursive instances. Result-context inference is tracked separately by rust.generics.result-context-call-inference. Inferred constructors, partial underscore arguments, unresolved method/pattern receiver constraints, trait solving and reference type substitutions remain explicit boundaries. Qualified pcc0/self Linux x86-64 with seven unchanged authored-program native rustc1.91.1 comparisons; no upstream core/alloc claim and Darwin cross-emission only. |
+| `rust.generics.result-context-call-inference` | implemented | accepted | Per-call inference variables combine argument structure with function results, explicit local annotations, later assignments and outer call-parameter contexts before whole-body resolution and the existing shared instance registry. Composite unknown arguments substitute call-local variables rather than leaking declaration parameters. Generic bodies remain abstractly checked; ambiguity, inconsistent constraints and occurs cycles still fail. Seven unchanged original programs have actual full-eight-byte owned/rustc1.91.1 native comparisons on Linux x86-64, including side effects, terminating recursive/composite paths and actual-certified mutable references. Infinite compile-only obligations are not executed. Method-local generics, trait solving, inferred constructors, reference substitutions and unresolved method/pattern receiver selection remain separate gaps; public references still require actual same-input checking. |
 | `rust.references.external-certified-addresses` | implemented | accepted | Actual external-check transition owns borrow/lifetime/move admission for the same frozen UTF-8 input, edition2021, target and closed no-cfg/no-dependency options. Only an adapter-minted source-bound token enables owned pointer lowering for local shared/mutable references, implicit or explicit shared/mutable receivers, inferred generic calls, reborrows, formal/local reference rebinding, primitive and field assignment ordering, and disjoint mutable fields. The owned compiler still checks nonborrow typing and mutability and never invokes rustc or consumes MIR. The Python caller and audited direct local tool installation are trusted; this is not cryptographic attestation, an owned borrow checker, or admission of every Rust form. Reference returns, aggregate reference storage, borrow patterns, nested references, temporary lifetime extension, Drop and traits remain outside scope. Actual Linux x86-64 qualification uses16 unchanged authored originals and independent full8-byte native PCC/rustc comparisons; Darwin reference certification/native execution is not qualified. |
 | `rust.types.target-sized-integers` | implemented | accepted | Distinct usize/isize identities derive64-bit width from the admitted pointer layout, never aliases of u64/i64. Signed extension, zero extension, truncation, wrapping/bitnot/comparison, usize patterns and generic instance identity have two unchanged native raw-reference originals. Foreign ABI whitelist stays narrower; Darwin objects are cross-only. No32-bit target, Mac execution or core/alloc claim. |
 | `rust.arrays.fixed-values` | implemented | accepted | Real public IR ArrayType retains element type, Copy eligibility, non-Copy whole moves/reinitialization and private parameter/result value copies. Closed usize constant lengths and indices are statically checked; dynamic/effectful bounds explicitly reject instead of unchecked access. Literal operands run left-to-right; repeat operands run once evenN0, and len receiver effects remain. Indexed borrowing requires actual external checking; structural Index inequality is not alias proof. Twelve unchanged authored originals have full8-byte native-reference pairs. No array C ABI, slices/unsizing, const generics, destructuring/match, iterator traits, dynamic panic, Drop, complete core/alloc or Mac execution claim. |
@@ -707,7 +726,6 @@ that contract. No historical binary path revalidation is implied by this renewal
 | `rust.references.public-checked-admission` | implemented | accepted | Every reference-bearing public input, including unused/nested/generic declarations and shared/mutable receivers, requires a genuine adapter-minted CheckedRustSource. Structural guards run before semantics and again before lowering; ordinary provenance records, bare flags and token source/target/options mismatches cannot authorize IR. The separate transition actually checks the same frozen bytes with audited rustc1.91.1; owned lowering consumes no MIR and invokes no compiler. Checked input bypasses the incomplete internal MoveChecker, retaining nonborrow language checks. Nine unchanged previously caller-attested originals now execute only after actual checking; real E0382 is rejected by rustc before lowering. No cryptographic attestation or owned borrow-checker claim; supported syntax remains bounded. |
 | `rust.capability.ad1be8716230` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/__init__.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.638580601dd4` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/arrays.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
-| `rust.capability.8f66a4997af3` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/call_inference.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.2d9d7a47b49d` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/external_check.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.102e85184e90` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
 | `rust.capability.53efaab821f9` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
@@ -804,11 +822,11 @@ that contract. No historical binary path revalidation is implied by this renewal
 | `rust.references.direct-shared-call-loans` | `pcc/frontends/rust/external_check.py` / `check_rust_source` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1c2348712e7bcc46f956118026e08bfe974661c8d0bc6c124f5d0f0547ec2ec5` | Actual external checking owns readonly admission; the old partial conflict model no longer authorizes public references. |
 | `rust.references.direct-shared-call-loans` | `pcc/frontends/rust/lowering.py` / `Lowerer.place_pointer` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Admitted shared references lower to existing-place pointers and typed field addressing. |
 | `rust.lex.tokens` | `pcc/frontends/rust/syntax.py` / `lex` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Scans Rust tokens and nested comments with source positions, rather than stripping into another language. |
-| `rust.functions.scalar-items` | `pcc/frontends/rust/semantics.py` / `Checker.check` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Checks declarations and bodies before lowering typed direct calls. |
-| `rust.blocks.locals` | `pcc/frontends/rust/semantics.py` / `Checker.bind` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Serial-identified bindings preserve lexical scope and distinct storage. |
+| `rust.functions.scalar-items` | `pcc/frontends/rust/semantics.py` / `Checker.check` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Checks declarations and bodies before lowering typed direct calls. |
+| `rust.blocks.locals` | `pcc/frontends/rust/semantics.py` / `Checker.bind` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Serial-identified bindings preserve lexical scope and distinct storage. |
 | `rust.control.if-while` | `pcc/frontends/rust/lowering.py` / `Lowerer.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Builds public IR control-flow blocks and explicit terminating edges. |
-| `rust.numeric.fixed-integers` | `pcc/frontends/rust/semantics.py` / `Checker.validate` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Validates typed numeric operands and propagates supported constant expressions before IR emission. |
-| `rust.inference.integer-context` | `pcc/frontends/rust/semantics.py` / `unify` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Unifies inferred integer roots with contextual scalar types and checks literal bounds. |
+| `rust.numeric.fixed-integers` | `pcc/frontends/rust/semantics.py` / `Checker.validate` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Validates typed numeric operands and propagates supported constant expressions before IR emission. |
+| `rust.inference.integer-context` | `pcc/frontends/rust/semantics.py` / `unify` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Unifies inferred integer roots with contextual scalar types and checks literal bounds. |
 | `rust.aggregate.tuple-record` | `pcc/frontends/rust/lowering.py` / `Lowerer.type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Maps checked nominal/tuple types to typed public IR aggregates and target-owned layout. |
 | `rust.moves.value-paths` | `pcc/frontends/rust/moves.py` / `MoveChecker.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `93c6f15d2b7a7cf0d0215a82be87841f8dfdc601eb37564b8af9a45b3d2b499c` | Legacy value-only/internal path-state mechanism; actual-checked reference admission bypasses this incomplete analysis. |
 | `rust.enums.unit-discriminants` | `pcc/frontends/rust/patterns.py` / `check_enums` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `94877ffd9367c5b52c26397ddd59373c200e950448a393b9f57ce9d041dea426` | Checks enum representation/discriminant range and variant identities. |
@@ -816,26 +834,26 @@ that contract. No historical binary path revalidation is implied by this renewal
 | `rust.enums.payload-values` | `pcc/frontends/rust/lowering.py` / `Lowerer.payload_value` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Projects payload slots only after variant dispatch in the admitted match lowering. |
 | `rust.generics.data-explicit` | `pcc/frontends/rust/generics.py` / `GenericDeclarations.prepare` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `a9d5a0ffa667e4dc31e73048461264c64f6eac3a3da27709d4aa693597c62320` | Normalizes declaration-bound parameters and validates generic declarations before shared instance materialization. |
 | `rust.generics.functions-explicit` | `pcc/frontends/rust/function_generics.py` / `GenericFunctions.select` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `4e98d19ebf43d7b25677b3299c6d4960d70ccc5ab12e2b4f8db1352c2414d6de` | Registers concrete function instances using the shared worklist while abstract declarations remain checked independently. |
-| `rust.ffi.scalar-reference-c` | `pcc/frontends/rust/semantics.py` / `Checker.valid_type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Checks admitted ABI types and separately rejects unsupported reference/aggregate foreign shapes. |
+| `rust.ffi.scalar-reference-c` | `pcc/frontends/rust/semantics.py` / `Checker.valid_type` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Checks admitted ABI types and separately rejects unsupported reference/aggregate foreign shapes. |
 | `rust.codegen.qualified-targets` | `pcc/frontends/rust/targets.py` / `resolve_target` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `b9e60b36cfedc5279973686d7b00d2b92042dabf75a7f3b434de85b0fb08733e` | Resolves only qualified target/ABI combinations and fails closed on unsupported aliases. |
-| `rust.generics.argument-call-inference` | `pcc/frontends/rust/call_inference.py` / `infer` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `9b3b0626a4dafb25d84e13614d5f52a790b3c62e9b222e073d759bafad020e29` | Collects structural argument constraints while keeping unresolved integer roots shared. |
-| `rust.generics.argument-call-inference` | `pcc/frontends/rust/call_inference.py` / `finish` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `9b3b0626a4dafb25d84e13614d5f52a790b3c62e9b222e073d759bafad020e29` | Selects existing shared-worklist function instances only after whole-body constraints. |
-| `rust.generics.argument-call-inference` | `pcc/frontends/rust/semantics.py` / `Checker.check_body` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Finishes inferred calls after declaration-result unification and before typed validation. |
+| `rust.generics.argument-call-inference` | `pcc/frontends/rust/call_inference.py` / `infer` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `02a942413124dfb6b04892f92987a62dfaffdbee82c94d25f2a313bc8669b358` | Collects structural argument constraints while keeping unresolved integer roots shared. |
+| `rust.generics.argument-call-inference` | `pcc/frontends/rust/call_inference.py` / `finish` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `02a942413124dfb6b04892f92987a62dfaffdbee82c94d25f2a313bc8669b358` | Selects existing shared-worklist function instances only after whole-body constraints. |
+| `rust.generics.argument-call-inference` | `pcc/frontends/rust/semantics.py` / `Checker.check_body` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Finishes inferred calls after declaration-result unification and before typed validation. |
 | `rust.references.external-certified-addresses` | `pcc/frontends/rust/external_check.py` / `check_rust_source` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1c2348712e7bcc46f956118026e08bfe974661c8d0bc6c124f5d0f0547ec2ec5` | Actually invokes the pinned direct compiler on frozen source and validates version/sysroot/process/output before privately minting a token. |
 | `rust.references.external-certified-addresses` | `pcc/frontends/rust/external_check.py` / `CheckedRustSource.validate` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1c2348712e7bcc46f956118026e08bfe974661c8d0bc6c124f5d0f0547ec2ec5` | Binds owned admission to exact source and closed options; ordinary caller-constructed records are not authorization. |
 | `rust.references.external-certified-addresses` | `pcc/frontends/rust/__init__.py` / `compile_rust` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `7a2fbf34fcbbcda1a93b281a6462ce597c68dfec570ff44c6a47d1fa32010ef5` | Keeps the owned IR path process-free and bypasses incomplete owned move admission only for the adapter-minted token. |
-| `rust.references.external-certified-addresses` | `pcc/frontends/rust/semantics.py` / `Checker.mutable_place` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Retains language mutability and addressability checks independent of externally owned borrow checking. |
+| `rust.references.external-certified-addresses` | `pcc/frontends/rust/semantics.py` / `Checker.mutable_place` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Retains language mutability and addressability checks independent of externally owned borrow checking. |
 | `rust.references.external-certified-addresses` | `pcc/frontends/rust/lowering.py` / `Lowerer.place_pointer` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Lowers actual reference/dereference and field addresses through existing typed IR pointers. |
 | `rust.types.target-sized-integers` | `pcc/frontends/rust/types.py` / `integer_bits` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `f0d55554bbc67e706559217bc351cd75162d76ba3a34336bfb162078ab5b6f38` | Requires a qualified pointer width while preserving distinct source names. |
 | `rust.types.target-sized-integers` | `pcc/frontends/rust/targets.py` / `RustTarget.pointer_bits` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `b9e60b36cfedc5279973686d7b00d2b92042dabf75a7f3b434de85b0fb08733e` | Reads the explicit pointer data model. |
 | `rust.types.target-sized-integers` | `pcc/frontends/rust/lowering.py` / `Lowerer.type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Uses the selected target to lower pointer-sized integers. |
 | `rust.arrays.fixed-values` | `pcc/frontends/rust/types.py` / `FixedArrayType` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `f0d55554bbc67e706559217bc351cd75162d76ba3a34336bfb162078ab5b6f38` | Keeps nominal element/count shape separate from tuple representation. |
 | `rust.arrays.fixed-values` | `pcc/frontends/rust/arrays.py` / `length_value` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `f510bb95035e67f216259ed83bf7086e13e11c0450ad00b5d37e78dac643ef29` | Checks bounded closed usize constants before storage or indexing. |
-| `rust.arrays.fixed-values` | `pcc/frontends/rust/semantics.py` / `Checker.copy_type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Derives array Copy from its element, including zero-length arrays. |
+| `rust.arrays.fixed-values` | `pcc/frontends/rust/semantics.py` / `Checker.copy_type` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Derives array Copy from its element, including zero-length arrays. |
 | `rust.arrays.fixed-values` | `pcc/frontends/rust/lowering.py` / `Lowerer.type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Selects actual public IR ArrayType and target-owned layout. |
 | `rust.arrays.fixed-values` | `pcc/frontends/rust/lowering.py` / `Lowerer.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Preserves array operand, receiver and assignment evaluation while using owned aggregate values. |
 | `rust.loops.owned-array-for` | `pcc/frontends/rust/syntax.py` / `Parser.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Parses owned-array for and explicit bounded binding forms. |
-| `rust.loops.owned-array-for` | `pcc/frontends/rust/semantics.py` / `Checker.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Requires actual external check and owned-array scope/type semantics. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/semantics.py` / `Checker.expression` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Requires actual external check and owned-array scope/type semantics. |
 | `rust.loops.owned-array-for` | `pcc/frontends/rust/iteration.py` / `prove_no_drop` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `04d3583c2e8d55ce1b76949b7ad0b76823607989259022ef3b529839df7d2ea5` | Recursively proves empty destruction independently of Copy. |
 | `rust.loops.owned-array-for` | `pcc/frontends/rust/iteration.py` / `validate_iteration` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `04d3583c2e8d55ce1b76949b7ad0b76823607989259022ef3b529839df7d2ea5` | Assigns standard array identity independent of source spelling. |
 | `rust.loops.owned-array-for` | `pcc/frontends/rust/lowering.py` / `Lowerer.array_iteration` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Snapshots source and advances bounded cursor before each body. |
@@ -844,6 +862,10 @@ that contract. No historical binary path revalidation is implied by this renewal
 | `rust.syntax.blocklike-expression-boundary` | `pcc/frontends/rust/syntax.py` / `Parser.if_expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Parses else-if prefixes before attaching postfix to the whole chain. |
 | `rust.references.public-checked-admission` | `pcc/frontends/rust/reference_admission.py` / `contains_references` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `65c5796a5986a6fd47d31686909e8ede5c0340fb340ed5429749a4d8113df0ff` | Structurally detects references in all syntax/type containers without token-text guessing. |
 | `rust.references.public-checked-admission` | `pcc/frontends/rust/__init__.py` / `compile_rust` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `7a2fbf34fcbbcda1a93b281a6462ce597c68dfec570ff44c6a47d1fa32010ef5` | Checks genuine tokens and rejects reference-bearing inputs before semantics and again before lowering. |
+| `rust.generics.result-context-call-inference` | `pcc/frontends/rust/call_inference.py` / `infer` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `02a942413124dfb6b04892f92987a62dfaffdbee82c94d25f2a313bc8669b358` | Creates call-local type variables and substitutes composite argument constraints without leaking declaration-bound parameters. |
+| `rust.generics.result-context-call-inference` | `pcc/frontends/rust/call_inference.py` / `finish` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `02a942413124dfb6b04892f92987a62dfaffdbee82c94d25f2a313bc8669b358` | Resolves combined argument/result constraints at the existing body finish boundary and selects the shared instance registry. |
+| `rust.generics.result-context-call-inference` | `pcc/frontends/rust/semantics.py` / `InferredType` | `f4327b8142a71dfc9c173387b34f8eb65b85a209` | `5a8b1d53c1e24998b875e02d5d90fa974ec265ef2cd92409b368a4dc79098cbc` | Carries call-local unresolved result types with occurs and ambiguity diagnostics until enough context is available. |
+
 
 ### Full-chapter coverage gaps (not feature failure counts)
 

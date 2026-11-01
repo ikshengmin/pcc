@@ -23,6 +23,7 @@ class InferredInteger:
 class InferredType:
     token: Token
     bound: object = None
+    description: str = "empty array element"
 
 
 @dataclass
@@ -39,7 +40,7 @@ def resolve(ty: object) -> object:
         return FixedArrayType(resolve(ty.element), ty.length)
     if isinstance(ty, InferredType):
         if ty.bound is None:
-            raise ty.token.error('cannot infer empty array element type; provide a type annotation')
+            raise ty.token.error(f'cannot infer {ty.description} type; provide a type annotation')
         ty.bound = resolve(ty.bound)
         return ty.bound
     if isinstance(ty, SharedReference):
@@ -78,7 +79,7 @@ def unify(left: object, right: object, token: Token) -> object:
         while pending:
             item = _root(pending.pop())
             if item is left:
-                raise token.error("infinite inferred array element type")
+                raise token.error(f"infinite inferred {left.description} type")
             if id(item) in seen:
                 continue
             seen.add(id(item))
