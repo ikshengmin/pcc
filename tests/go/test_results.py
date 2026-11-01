@@ -8,6 +8,7 @@ import pytest
 
 from pcc.frontends.go import GoDiagnostic, compile_go, compile_go_packages, function_symbol
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
+from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler, units
 
 
@@ -151,8 +152,7 @@ BARE_SHADOW_SOURCES = [
 def test_official_go_rejects_the_same_bare_return_shadow(original, tmp_path):
     with pytest.raises(GoDiagnostic, match="shadowed at bare return"):
         compile_go(original)
-    with pytest.raises(AssertionError, match="result parameter x not in scope at return"):
-        compile_reference((("shadow.go", original),), tmp_path / "reference",
-                          compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    compile_reference_rejection((("shadow.go", original),), tmp_path / "reference",
+                      compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"], diagnostics="result parameter x not in scope at return")
     assert (tmp_path / "reference/shadow.go").read_bytes() == original.encode()
     assert not (tmp_path / "reference/oracle").exists()

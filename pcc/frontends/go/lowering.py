@@ -8,7 +8,9 @@ ordinary public IR, handled by the existing optimizer and self backend.
 
 from pcc.ir.compat import ir
 from pcc.frontends.go.records import StructType, underlying
-from pcc.frontends.go.types import ArrayType, Results, result_types, integer_bits, integer_signed, is_string
+from pcc.frontends.go.types import (
+    ArrayType, PointerType, Results, result_types, integer_bits, integer_signed, is_string,
+)
 
 
 def function_symbol(name, package_path=None):
@@ -22,6 +24,8 @@ GO_MAIN_SYMBOL = function_symbol("main")
 
 def ir_type(dtype):
     dtype = underlying(dtype)
+    if isinstance(dtype, PointerType):
+        return ir_type(dtype.element).as_pointer()
     if isinstance(dtype, StructType):
         return ir.LiteralStructType([ir_type(field.type) for field in dtype.fields])
     if isinstance(dtype, Results):
@@ -84,8 +88,8 @@ class Lowerer:
         return self.builder.load(self.string_descriptors[data])
 
     def zero(self, dtype):
-        aggregate = isinstance(underlying(dtype), (ArrayType, StructType))
-        return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if aggregate else 0)
+        null_zero = isinstance(underlying(dtype), (ArrayType, StructType, PointerType))
+        return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if null_zero else 0)
 
     def static_initializer(self, dtype, value):
         if value is None:
@@ -348,6 +352,8 @@ class Lowerer:
         return [self.expression(expr) for expr in expressions]
 
     def address(self, expr):
+        if expr.kind == "dereference":
+            return self.expression(expr.args[0])
         if expr.kind in ("name", "selector"):
             return self.slots[expr.symbol]
         if expr.kind == "field":
@@ -373,6 +379,12 @@ class Lowerer:
     def expression(self, expr):
         if id(expr) in self.saved_values:
             return self.saved_values[id(expr)]
+        if expr.kind == "address":
+            return self.address(expr.args[0])
+        if expr.kind == "nil":
+            return ir.Constant(ir_type(expr.type), None)
+        if expr.kind == "dereference":
+            return self.builder.load(self.address(expr))
         if expr.kind in ("array", "struct"):
             values = [self.expression(item) for item in expr.args]
             storage = self.temps[id(expr)]
@@ -390,7 +402,10 @@ class Lowerer:
             return self.builder.extract_value(self.expression(expr.args[0]), 1)
         if expr.kind == "array_len":
             self.expression(expr.args[0])
-            return ir.Constant(ir_type(expr.type), underlying(expr.args[0].type).count)
+            dtype = underlying(expr.args[0].type)
+            if isinstance(dtype, PointerType):
+                dtype = underlying(dtype.element)
+            return ir.Constant(ir_type(expr.type), dtype.count)
         if expr.kind == "index" and is_string(expr.args[0].type):
             base, index = expr.args
             value = self.expression(base)
@@ -409,6 +424,11 @@ class Lowerer:
         if expr.kind == "call":
             receiver = [self.expression(expr.receiver)] if expr.receiver is not None else []
             arguments = receiver + self.values(expr.args)
+            if expr.indirect_receiver:
+                # (*T).M is a derived function: capture the pointer and all
+                # other argument values before its wrapper dereferences T.
+                # Ordinary p.M calls instead snapshot the value receiver above.
+                arguments[0] = self.builder.load(arguments[0])
             if expr.symbol is None:
                 value = arguments[0]
                 target = ir_type(expr.type)
@@ -437,7 +457,10 @@ class Lowerer:
                 return self.shift(expr, left)
             right = self.expression(expr.args[1])
             if op in ("==", "!=", "<", "<=", ">", ">="):
-                compare = self.builder.icmp_signed if underlying(expr.args[0].type) in ("bool", "untyped bool") or integer_signed(expr.args[0].type) else self.builder.icmp_unsigned
+                dtype = underlying(expr.args[0].type)
+                compare = (self.builder.icmp_unsigned if isinstance(dtype, PointerType) else
+                           self.builder.icmp_signed if dtype in ("bool", "untyped bool") or integer_signed(dtype)
+                           else self.builder.icmp_unsigned)
                 return compare(op, left, right)
             if op in ("/", "%") and expr.args[1].constant == -1:
                 # Go defines MIN_INT / -1 == MIN_INT, unlike LLVM sdiv.

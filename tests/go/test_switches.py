@@ -7,6 +7,7 @@ import pytest
 
 from pcc.frontends.go import GoDiagnostic, compile_go
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
+from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler, units
 from tests.go.test_records import source
 
@@ -120,8 +121,7 @@ def test_official_go_receives_identical_original_switch_program(tmp_path):
 def test_official_go_rejects_identical_invalid_switch_source(index,reference_message,tmp_path):
     body,declarations,message=INVALID[index];original=source(declarations,body)
     with pytest.raises(GoDiagnostic,match=message):compile_go(original)
-    with pytest.raises(AssertionError,match=reference_message):
-        compile_reference((('invalid.go',original),),tmp_path/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'])
+    compile_reference_rejection((('invalid.go',original),),tmp_path/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'], diagnostics=reference_message)
     assert (tmp_path/'reference/invalid.go').read_bytes()==original.encode()
     assert not (tmp_path/'reference/oracle').exists()
 
@@ -153,7 +153,6 @@ def test_official_go_rejects_same_complete_retained_original_switch(tmp_path):
     original=invalid_original_switch()
     with pytest.raises(GoDiagnostic,match='mismatched operand types int and uint64'):
         compile_go(original[0][1])
-    with pytest.raises(AssertionError,match='mismatched types uint64 and int'):
-        compile_reference(original,tmp_path/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'])
+    compile_reference_rejection(original,tmp_path/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'], diagnostics='mismatched types uint64 and int')
     assert (tmp_path/'reference/switches.go').read_bytes()==original[0][1].encode()
     assert not (tmp_path/'reference/oracle').exists()

@@ -53,7 +53,7 @@ external compiler fallback, independent collector, or scheduler.
 
 Package defined/alias types, ordinary value structs and direct value-receiver
 methods are described below. Go predeclared-name shadowing, dynamic package
-initialization, floating/complex types, interfaces/generics, pointers, stored
+initialization, floating/complex types, interfaces/generics, escaping pointers, stored
 method values/closures, dynamically allocated strings, I/O, panic,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
@@ -208,7 +208,7 @@ accept these types without converting them into variables or first-class tuples.
 
 This private PCC Go aggregate ABI is neither the official Go ABI nor an assertion
 of cross-language C compatibility. Local type declarations, struct tags, embedded
-fields, blank fields, pointers, recursive layouts, struct comparison and
+fields, blank fields, pointer-bearing fields, recursive layouts, struct comparison and
 arrays of records remain explicit boundaries. Array bounds still require the
 existing static proof; no abort replaces a missing recoverable panic. Types have
 32 declaration-expansion levels, 256 fields and 4096 expanded scalar slots as
@@ -294,9 +294,9 @@ are reached only after the hidden induction value is proven within its static
 length; this is not a substitute for arbitrary dynamic bounds panics.
 
 Range-declared variables have per-iteration Go semantics. The current admitted
-values cannot expose stack-variable identity: pointers, captured closures and
-method values remain explicit gaps, not a claim of escaping-loop-variable
-support. Slice/pointer/string/map/channel/integer/function range remain
+values do not qualify distinct per-iteration address identity: addresses of
+per-iteration bindings, captured closures and stored method values remain
+explicit gaps, not a claim of escaping-loop-variable support. Slice/pointer/string/map/channel/integer/function range remain
 unsupported; no slice backing, UTF-8 iterator, scheduler or managed allocation
 is manufactured. Relevant rules are the official Go specification's
 [range clauses](https://go.dev/ref/spec#For_range) and
@@ -320,3 +320,215 @@ package type declarations named `init` are not described as missing features.
 A capability rejection identifies the first unsupported boundary, not proof
 that the rest of the source is valid. Generic parser gaps remain uncoded and are
 listed as incomplete inventory rather than assigned fabricated feature codes.
+
+## Bounded pointer implementation and acceptance
+
+The bounded implementation provides `*T`, address and indirection, local alias
+copy/rebinding, equality (including nil comparisons), indirect value assignment,
+struct fields, fixed-array indexing/length, and value-receiver calls through
+nonnull pointers. These use ordinary public IR addresses, loads and stores;
+there is no noalias assertion, pointer-to-integer erasure or new runtime.
+Normative pointer/address/assignment and same-original native/reference tests
+are in `tests/go/test_pointers.py`; the listed deterministic cases and complete
+repository-Go selections passed in the execution lane recorded below.
+
+Stage A adds nullable locals and direct pointer parameters. Null storage is an
+ordinary value, not a panic; indirection requires a source-control-flow nonnil
+proof at its evaluated use. Every parameter starts unknown, independently of
+callers. A frontend CFG preserves branch joins, short-circuit edges, loop
+backedges, continue/post, break and switch fallthrough. Parallel assignments
+check all old destination addresses before capturing RHS facts and committing
+stores left-to-right. Typed null initialization uses the existing public IR.
+
+Nullness and lifetime are separate proofs. A local pointer's lexical region
+conservatively bounds its possible pointees; incoming pointers carry only the
+current call's lifetime, never global lifetime. Copying an alias into an unsafe
+enclosing region still fails. All original-source callees, including imported
+and recursive calls, must be checked before lowering. Calls may mutate aliased
+pointees and globals; no pointee-value, noalias or nonnull ABI attribute follows.
+No pointee lifetime is extended to make a source program pass. Addresses of
+Go 1.22 per-iteration declared for/range bindings fail explicitly until distinct
+iteration storage identity exists. Addresses of ordinary loop-body locals are
+usable only inside their iteration's region. Existing pointers remain aliases.
+
+Pointer-valued returns and pointer receiver declarations, unchecked or retaining callees, package pointer
+storage, pointer-bearing records/arrays/pointees, unproven evaluated indirection,
+escaping aliases,
+addressed composite literals, representation-changing pointer conversions,
+pointer switches and pointer-array range are explicit capability boundaries.
+These are valid Go obligations, not invalid-program rejections. No Go heap,
+GC, panic, interprocedural escape analysis or native-pcc1 claim follows.
+
+The authored `pointers.go` is retained unchanged after a real Go 1.27.3 main
+self-check timeout: it expected a plain receiver load before an argument call,
+although Go's order-of-evaluation rule does not prescribe that relative order.
+The old reference failure is not relabeled. `pointers_deterministic.go` is a
+separate acceptance program with an explicit receiver-value capture statement.
+The retained original's 24 helpers have a separately named diagnostic observer;
+its unspecified-order result is not original-main or baseline acceptance.
+
+Stage A's listed cases now have ordinary, owned-native and same-input official-Go
+acceptance, including complete repository-Go ordinary and integration selections.
+`tests/go/test_nullable_pointers.py` retains the adversarial originals, six byte-distinct
+previously unsupported nil-storage/parameter originals, a complete deterministic
+30-observation fixture and an unchanged two-package native/official-reference
+comparison. Prior v5 receipts are not rewritten into Stage A results. Pointer
+receiver method-set work is a separate unsupported Stage B, not part of this implementation.
+
+
+## Feature inventory: implementation is separate from acceptance
+
+This is a feature-by-feature view of the **existing** IDs in
+`specs/features/go.json`, not a complete Go inventory. **Implemented** describes
+source behavior in the stated bounded domain; **acceptance** describes executed
+evidence, not all possible programs. An inventory row with legacy `missing`
+does not mean its chapter has no implementation. An explicit capability
+rejection is not an invalid-Go classification or a positive runtime pass.
+
+Qualification version: `sha256:f5ea81412a8b8dc70e4ec6159334a366478284ba6b0da079ee8277336a5beaaf` (the frozen tested source manifest).
+Execution lane **L** is host **pcc0**, owned **self** backend, **Linux x86_64**,
+no applicable GC; official **Go 1.27.3 linux/amd64** is an external reference only.
+PCC native-pcc1, Mac execution, full Go/standard library and shared runtime/GC
+qualification are not established here. Cross-object tests do not renew Mac
+execution evidence.
+
+The current **schema1** `status` remains a legacy qualification field. It has no
+independent machine-readable implementation-status axis. The two columns below
+make the distinction explicit for readers; they do **not** claim that a schema2
+migration or a new machine-enforced dual-axis report has shipped. No ignored
+JSON fields are used to simulate such a migration.
+
+| Existing feature ID | Implementation status | Acceptance status / test binding | Legacy schema1 status |
+|---|---|---|---|
+| `go.expression-switch.scalar` | Implemented: bounded scalar/static-string expression switches | Qualified in L for SW-U / -P / -D only | `supported` |
+| `go.array-range.fixed-value` | Implemented: bounded fixed value-array range and len/cap | Qualified in L for AR-U / -P / -D only | `supported` |
+| `go.inventory.source` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.lexical` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.constants` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.variables` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.types` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.properties` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.blocks` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.declarations` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.expressions` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.statements` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.builtins` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.packages` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.initialization` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.errors` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.panics` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.inventory.system` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
+| `go.capability.aggregate-comparison` | Explicitly unimplemented boundary: aggregate comparison | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.aggregate-switch` | Explicitly unimplemented boundary: aggregate switch | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.array-bounds-panic` | Explicitly unimplemented boundary: array bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.array-element-types` | Explicitly unimplemented boundary: array element types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.blank-function-declarations` | Explicitly unimplemented boundary: blank function declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.blank-method-declarations` | Explicitly unimplemented boundary: blank method declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.blank-package-variables` | Explicitly unimplemented boundary: blank package variables | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.blank-struct-fields` | Explicitly unimplemented boundary: blank struct fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.blank-type-declarations` | Explicitly unimplemented boundary: blank type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.complex-types` | Explicitly unimplemented boundary: complex types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.division-panic` | Explicitly unimplemented boundary: division panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.dot-imports` | Explicitly unimplemented boundary: dot imports | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.dynamic-string-concatenation` | Explicitly unimplemented boundary: dynamic string concatenation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.dynamic-string-conversion` | Explicitly unimplemented boundary: dynamic string conversion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.embedded-fields` | Explicitly unimplemented boundary: embedded fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.floating-types` | Explicitly unimplemented boundary: floating types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.interface-types` | Explicitly unimplemented boundary: interface types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-array-elements` | Explicitly unimplemented boundary: limit array elements | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-constant-precision` | Explicitly unimplemented boundary: limit constant precision | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-function-arity` | Explicitly unimplemented boundary: limit function arity | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-record-layout` | Explicitly unimplemented boundary: limit record layout | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-string-bytes` | Explicitly unimplemented boundary: limit string bytes | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-struct-fields` | Explicitly unimplemented boundary: limit struct fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.limit-type-expansion` | Explicitly unimplemented boundary: limit type expansion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.local-type-declarations` | Explicitly unimplemented boundary: local type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.method-values` | Explicitly unimplemented boundary: method values | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.negative-shift-panic` | Explicitly unimplemented boundary: negative shift panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.non-array-range` | Explicitly unimplemented boundary: non array range | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.package-initialization` | Explicitly unimplemented boundary: package initialization | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-receivers` | Explicitly unimplemented boundary: pointer receivers | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.predeclared-shadowing` | Explicitly unimplemented boundary: predeclared shadowing | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.slice-storage` | Explicitly unimplemented boundary: slice storage | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.string-bounds-panic` | Explicitly unimplemented boundary: string bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.struct-tags` | Explicitly unimplemented boundary: struct tags | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-escape` | Explicitly unimplemented boundary: local pointer escape | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-signatures` | Explicitly unimplemented boundary: escaping pointer results and unchecked call contracts | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-storage` | Explicitly unimplemented boundary: pointer-bearing storage | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-nil` | Explicitly unimplemented boundary: unproven evaluated pointer indirection | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-iteration-identity` | Explicitly unimplemented boundary: per-iteration pointer identity | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-composite-address` | Explicitly unimplemented boundary: addressed composite literal allocation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-conversions` | Explicitly unimplemented boundary: conversions across pointer base types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-switch` | Explicitly unimplemented boundary: pointer expression switches | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.local-pointer-regions` | Implemented: bounded local pointer alias/address/value-update semantics | Qualified in L for LP-U / -P / -D only | `supported` |
+| `go.nullable-direct-pointer-parameters` | Implemented: nullable locals and source-guarded non-retaining direct parameters | Qualified in L for NP-U / -P / -D only | `supported` |
+
+### Exact acceptance test bindings
+
+U is a unit/IR check; P is an actual owned native main; D is an identical-input
+external native reference observation. These distinct stages are not
+interchangeable. The switch/range P and D nodes independently assert the same
+raw process tuple; the pointer D nodes additionally retain both raw-stream
+files and exit receipts. U's ledger stream hash identifies the complete
+ordinary test-process log, not invented per-node output.
+
+| Binding | Existing test ID |
+|---|---|
+| SW-U | `tests/go/test_switches.py::test_retained_original_unreachable_case_still_requires_matching_type` |
+| SW-P | `tests/go/test_switches.py::test_original_switch_program_main_executes` |
+| SW-D | `tests/go/test_switches.py::test_official_go_receives_identical_original_switch_program` |
+| AR-U | `tests/go/test_array_range.py::test_fixed_array_range_grammar_scope_and_empty_values` |
+| AR-P | `tests/go/test_array_range.py::test_original_array_range_program_main_executes` |
+| AR-D | `tests/go/test_array_range.py::test_official_go_receives_identical_original_array_range_program` |
+| LP-U | `tests/go/test_pointers.py::test_nonescaping_pointer_types_and_aliases_lower_without_external_owner` |
+| LP-P | `tests/go/test_pointers.py::test_deterministic_pointer_program_main_executes` |
+| LP-D | `tests/go/test_pointers.py::test_same_deterministic_pointer_program_matches_official_raw_process_streams` |
+| NP-U | `tests/go/test_nullable_pointers.py::test_source_guards_and_unevaluated_operands_admit_pointer_parameters` |
+| NP-P | `tests/go/test_nullable_pointers.py::test_complete_nullable_pointer_main_executes_owned` |
+| NP-D | `tests/go/test_nullable_pointers.py::test_identical_nullable_pointer_program_matches_official_raw_streams` |
+| CAP-U | `tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir` (the existing source-located code-specific parameter cases) |
+
+Additional NP obligations are explicit tests in `tests/go/test_nullable_pointers.py`:
+`test_nullable_pointer_full_width_native_observations` has 30 actual 8-byte
+observations (including aliasing and internal SysV stack pointer arguments);
+`test_identical_graduated_frontiers_match_official_raw_streams` retains six exact
+former nil-storage/parameter originals; and
+`test_identical_imported_pointer_project_matches_official_raw_streams` compares
+the unchanged two-package source graph. Object hashes in the observation records
+are recorded from emitted in-memory bytes; retained ELF binaries are separately
+hashable. The 24
+`test_official_go_typechecks_identical_valid_unsupported_originals` cases build
+native official-Go executables **without running them** and do not qualify PCC
+nil-panic/escape/receiver support.
+
+The complete selections finished with **708 ordinary test nodes** (31 simulated
+reference-protocol checks + 677 other ordinary checks) and **407 integration
+nodes** (280 owned-native, 30 positive external-reference, 70 normal-source
+rejections, 24 build-only valid-unsupported, two external nil-panic frontiers,
+and one diagnostic-only observer). These are test outcomes, not 1,115 supported
+features or a whole-language completeness percentage. Both selections retain
+all cases; no failed case was skipped or relabeled to obtain these outcomes.
+
+`tests/go/test_pointers.py::test_retained_original_pointer_order_diagnostic`
+is excluded from acceptance: it does not execute the retained original main and
+admits only spec-permitted observer outcomes. The original v3 main timeout
+(1 failed, 26 unfinished) and v4 panic-message expectation failure
+(25 passed, one failed, two unfinished) remain historical failures; the early
+serial diagnostic configuration deviation remains separate. The old 65 broad
+assertion-based negative test passes did not establish normal semantic rejection;
+new strict normal-rc1/source-attributed receipts renew the classifications without
+altering those historical outcomes. Simulated protocol tests prove the harness,
+not Go semantics. Successful official nil panics are not PCC panic support.
+
+Reproduction uses the existing complete selections, bounded official compiler
+cache, default six workers and repository resource guards:
+
+```sh
+uv run python -m pytest -x --maxfail=0 -c pyproject.toml -m 'not integration' tests/go
+uv run python -m pytest -x --maxfail=0 -c pyproject.toml -m integration tests/go
+```
+
+The second command requires explicit `PCC_GO_REFERENCE` and
+`PCC_GO_REFERENCE_CACHE`. It rebuilds final native/reference outputs; retained
+binaries or old process results are never substituted as a new gate. Raw logs,
+private artifact paths and recovery receipts are not part of this source README.

@@ -84,4 +84,8 @@ def compile_packages(packages, *, main_package, target_triple):
         raise GoDiagnostic(main.token, "Go scalar frontend requires a supported 64-bit target")
     linked = Program(main.token, [function for program in order for function in program.functions], [],
                      variables=[variable for program in order for variable in program.variables])
+    # All supplied source callees (including recursion/imports) must satisfy
+    # the non-retaining contract before a nullable pointer can enter a call.
+    from pcc.frontends.go.pointer_flow import validate_pointer_flow
+    validate_pointer_flow(linked)
     return Lowerer(linked, target_triple, main.token.filename).lower()

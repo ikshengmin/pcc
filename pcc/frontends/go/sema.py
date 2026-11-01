@@ -10,10 +10,13 @@ import re
 import unicodedata
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
-from pcc.frontends.go.syntax import ArraySyntax, Expr, GoDiagnostic, Stmt, StructSyntax, TypeName
+from pcc.frontends.go.syntax import (
+    ArraySyntax, Expr, GoDiagnostic, PointerSyntax, Stmt, StructSyntax, TypeName,
+)
 from pcc.frontends.go.records import DefinedType, Field, StructType, underlying, is_named, same_underlying
 from pcc.frontends.go.types import (
-    ArrayType, Results, TYPE_NAMES, TYPES, result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
+    ArrayType, PointerType, Results, TYPE_NAMES, TYPES,
+    result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
 )
 
 
@@ -39,6 +42,8 @@ class Symbol:
     initializer: object = None
     abi_symbol: str = ""
     iota: int | None = None
+    depth: int = 0
+    iteration_binding: bool = False
 
 
 def integer_literal(expr):
@@ -99,6 +104,11 @@ def check_representable(expr):
 
 
 def coerce(expr, dtype):
+    if expr.type == "untyped nil":
+        if not isinstance(underlying(dtype), PointerType):
+            raise GoDiagnostic(expr.token, "cannot use untyped nil as " + str(dtype))
+        expr.type = dtype
+        return
     if expr.type == dtype:
         check_representable(expr)
         return
@@ -137,6 +147,9 @@ class Analyzer:
         self.allowed_fallthrough = None
         self.iota = None
         self.type_depth = 0
+        self.pointer_type_depth = 0
+        self.type_stack = []
+        self.iteration_binding = False
 
     def analyze(self):
         from pcc.frontends.go.lowering import function_symbol
@@ -198,9 +211,18 @@ class Analyzer:
         for function in self.program.functions:
             function.params = [(token, self.resolve_type(dtype)) for token, dtype in function.params]
             function.result = self.resolve_type(function.result)
+            if any(isinstance(underlying(dtype), PointerType)
+                   for dtype in result_types(function.result)):
+                raise UnsupportedGo(function.token, 'go.unsupported.pointer-signatures',
+                                    "pointer results require an escaping lifetime contract")
             if function.receiver is not None:
                 token, syntax = function.receiver
                 dtype = self.resolve_type(syntax)
+                if isinstance(dtype, PointerType):
+                    raise UnsupportedGo(token, 'go.unsupported.pointer-receivers',
+                                        "pointer receivers require method-set and interprocedural lifetime support")
+                if isinstance(underlying(dtype), PointerType):
+                    raise GoDiagnostic(token, "method receiver base cannot be a defined pointer type")
                 if not isinstance(dtype, DefinedType) or dtype.package != (self.package_path or ""):
                     raise GoDiagnostic(token, "method receiver base must be a defined type in the same package")
                 name = function.token.text
@@ -250,21 +272,42 @@ class Analyzer:
         if declaration.resolved is not None:
             return declaration.resolved
         if declaration.resolving:
+            start = next(index for index, item in enumerate(self.type_stack) if item is declaration)
+            if all(item.alias for item in self.type_stack[start:]):
+                raise GoDiagnostic(declaration.token, "invalid recursive type or alias cycle")
+            if self.pointer_type_depth > declaration.pointer_depth:
+                raise UnsupportedGo(declaration.token, 'go.unsupported.pointer-storage',
+                                    "recursive pointer types require recursive lifetime/storage analysis")
             raise GoDiagnostic(declaration.token, "invalid recursive type or alias cycle")
         if self.type_depth >= 32:
             raise UnsupportedGo(declaration.token, 'go.unsupported.limit-type-expansion', "type declaration expansion exceeds implementation limit (32 levels)")
         declaration.resolving = True
+        declaration.pointer_depth = self.pointer_type_depth
         self.type_depth += 1
+        self.type_stack.append(declaration)
         try:
             dtype = self.resolve_type(declaration.type)
             declaration.resolved = (dtype if declaration.alias else
                                     DefinedType(declaration.token.text, self.package_path or "", underlying(dtype)))
         finally:
             declaration.resolving = False
+            self.type_stack.pop()
             self.type_depth -= 1
         return declaration.resolved
 
     def resolve_type(self, dtype):
+        if isinstance(dtype, PointerSyntax):
+            # Distinguish valid pointer recursion from invalid recursive value
+            # layouts without constructing recursive/untraced storage.
+            self.pointer_type_depth += 1
+            try:
+                element = self.resolve_type(dtype.element)
+            finally:
+                self.pointer_type_depth -= 1
+            if isinstance(underlying(element), PointerType):
+                raise UnsupportedGo(dtype.token, 'go.unsupported.pointer-storage',
+                                    "pointer-bearing pointees require a recursive lifetime/storage contract")
+            return PointerType(element)
         if isinstance(dtype, Results):
             return Results(tuple(self.resolve_type(item) for item in dtype.elements))
         if isinstance(dtype, TypeName):
@@ -289,7 +332,11 @@ class Analyzer:
                     raise GoDiagnostic(token, "duplicate struct field " + token.text)
                 names.add(token.text)
                 package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
-                fields.append(Field(token.text, self.resolve_type(field_type), package))
+                field_type = self.resolve_type(field_type)
+                if isinstance(underlying(field_type), PointerType):
+                    raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
+                                        "pointer-bearing records require aggregate lifetime/storage analysis")
+                fields.append(Field(token.text, field_type, package))
             result = StructType(tuple(fields))
             pending, count = [result], 0
             while pending:
@@ -303,6 +350,9 @@ class Analyzer:
         if not isinstance(dtype, ArraySyntax):
             return dtype
         element = self.resolve_type(dtype.element)
+        if isinstance(underlying(element), PointerType):
+            raise UnsupportedGo(dtype.token, 'go.unsupported.pointer-storage',
+                                "pointer-bearing arrays require aggregate lifetime/storage analysis")
         if isinstance(underlying(element), ArrayType) or is_string(element):
             raise UnsupportedGo(dtype.token, 'go.unsupported.array-element-types', "nested arrays and string-element arrays are not implemented")
         if not is_integer(element) and not is_boolean(element):
@@ -351,6 +401,9 @@ class Analyzer:
             raise GoDiagnostic(symbol.token, "package initialization cycle" if symbol.package_variable else "constant initialization cycle")
         symbol.resolving = True
         symbol.type = self.resolve_type(symbol.type)
+        if symbol.package_variable and isinstance(underlying(symbol.type), PointerType):
+            raise UnsupportedGo(symbol.token, 'go.unsupported.pointer-storage',
+                                "package pointer storage requires an escape and initialization contract")
         expr = symbol.declaration
         if expr is not None:
             self.expression(expr)
@@ -358,6 +411,9 @@ class Analyzer:
             coerce(expr, dtype)
             symbol.type = dtype
             if symbol.package_variable:
+                if isinstance(underlying(dtype), PointerType):
+                    raise UnsupportedGo(symbol.token, 'go.unsupported.pointer-storage',
+                                        "package pointer storage requires an escape and initialization contract")
                 symbol.initializer = self.static_initializer(expr)
             else:
                 if expr.constant is None:
@@ -384,7 +440,7 @@ class Analyzer:
         self.allowed_fallthrough = None
         for token, dtype in function.params:
             self.check_name(token)
-            symbol = Symbol(token, dtype, parameter=True)
+            symbol = Symbol(token, dtype, parameter=True, depth=1)
             if token.text != "_":
                 if token.text in self.scopes[-1]:
                     raise GoDiagnostic(token, "duplicate parameter " + token.text)
@@ -397,7 +453,7 @@ class Analyzer:
             self.check_name(token)
             if token.text != "_" and token.text in self.scopes[-1]:
                 raise GoDiagnostic(token, "duplicate parameter or result " + token.text)
-            symbol = Symbol(token, dtype, parameter=True)
+            symbol = Symbol(token, dtype, parameter=True, depth=1)
             if token.text != "_":
                 self.scopes[-1][token.text] = symbol
             function.result_symbols.append(symbol)
@@ -421,12 +477,36 @@ class Analyzer:
         self.check_name(token)
         if token.text != "_" and token.text in self.scopes[-1]:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
-        symbol = Symbol(token, dtype, constant=constant)
+        symbol = Symbol(token, dtype, constant=constant, depth=len(self.scopes),
+                        iteration_binding=self.iteration_binding)
         if token.text != "_":
             self.scopes[-1][token.text] = symbol
         if constant is None:
             self.function.locals.append(symbol)
         return symbol
+
+    def pointer_store(self, expr, depth, token):
+        """Admitted aliases cannot leave the pointee's lexical region.
+
+        A pointer variable's own region is a conservative bound on everything
+        it can hold, independent of branch/loop order. Never infer noalias.
+        """
+        # Nil is a storable pointer value, not an indirection or a panic.
+        # Runtime nullness is checked independently by the typed CFG validator.
+        if expr is None or expr.kind == "nil":
+            return
+        if expr.pointer_depth > depth:
+            raise UnsupportedGo(token, 'go.unsupported.pointer-escape',
+                                "pointer may outlive its lexical storage region")
+
+    def dereference(self, expr):
+        dtype = underlying(expr.type)
+        if not isinstance(dtype, PointerType):
+            raise GoDiagnostic(expr.token, "indirection requires a pointer")
+        # Typing never claims a pointer is nonnull. The separate use-site CFG
+        # validator checks only evaluated indirections before any IR is built.
+        return Expr("dereference", expr.token, args=[expr], type=dtype.element,
+                    addressable=True, storage_depth=expr.pointer_depth)
 
     def condition(self, expr):
         self.expression(expr)
@@ -461,6 +541,8 @@ class Analyzer:
                 if expr.type == "void":
                     raise GoDiagnostic(expr.token, "void function call used as a value")
                 coerce(expr, default_type(expr.type) if target.value == "_" else target.type)
+                if target.value != "_" and isinstance(underlying(target.type), PointerType):
+                    self.pointer_store(expr, target.storage_depth, target.token)
             return
         if kind in ("var", "const", ":="):
             previous = self.iota
@@ -500,6 +582,8 @@ class Analyzer:
                     symbol = self.declare(token, dtype, constant)
                     if token.text != "_":
                         new_count += 1
+                if isinstance(underlying(symbol.type), PointerType) and token.text != "_":
+                    self.pointer_store(expr, symbol.depth, token)
                 statement.symbols.append(symbol)
             if kind == ":=" and not new_count:
                 raise GoDiagnostic(statement.token, "short declaration requires at least one new non-blank variable")
@@ -557,6 +641,9 @@ class Analyzer:
             selector = statement.exprs[0] if statement.exprs else Expr("name", statement.token, "true")
             self.expression(selector)
             coerce(selector, default_type(selector.type))
+            if isinstance(underlying(selector.type), PointerType):
+                raise UnsupportedGo(selector.token, 'go.unsupported.pointer-switch',
+                                    "pointer expression switches are not implemented")
             if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)):
                 if isinstance(underlying(selector.type), (ArrayType, StructType)):
                     raise UnsupportedGo(selector.token, "go.unsupported.aggregate-switch", "switch currently requires integer, boolean or string comparison support")
@@ -603,7 +690,8 @@ class Analyzer:
             self.expression(ranged)
             dtype = underlying(ranged.type)
             if not isinstance(dtype, ArrayType):
-                if is_integer(ranged.type) or is_string(ranged.type):
+                if (is_integer(ranged.type) or is_string(ranged.type) or
+                        isinstance(dtype, PointerType) and isinstance(underlying(dtype.element), ArrayType)):
                     raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
                 raise GoDiagnostic(ranged.token, "range currently requires a fixed array; other iterator/runtime contracts are not implemented")
             if len(statement.targets) > 2:
@@ -620,7 +708,9 @@ class Analyzer:
             if statement.targets:
                 statement.init = Stmt(":=" if statement.range_declaration else "=", statement.token,
                                       exprs=values, names=statement.names, targets=statement.targets)
+                self.iteration_binding = True
                 self.statement(statement.init)
+                self.iteration_binding = False
             self.loop_depth += 1
             self.break_depth += 1
             self.statements(statement.body)
@@ -633,7 +723,9 @@ class Analyzer:
         if kind in ("if", "for"):
             self.scopes.append({})
             if statement.init is not None:
+                self.iteration_binding = kind == "for"
                 self.statement(statement.init)
+                self.iteration_binding = False
             if statement.exprs:
                 self.condition(statement.exprs[0])
             if kind == "for":
@@ -781,6 +873,10 @@ class Analyzer:
                 expr.type = "uint8"
                 return
             array_type = underlying(base.type)
+            if isinstance(array_type, PointerType) and isinstance(underlying(array_type.element), ArrayType):
+                base = self.dereference(base)
+                expr.args[0] = base
+                array_type = underlying(base.type)
             if not isinstance(array_type, ArrayType):
                 raise GoDiagnostic(expr.token, "indexing requires an array or string (slices/maps are not implemented)")
             if not is_integer(index.type):
@@ -795,6 +891,7 @@ class Analyzer:
                     raise UnsupportedGo(index.token, 'go.unsupported.array-bounds-panic', "unproven array bounds require shared-runtime bounds-panic support")
             coerce(index, default_type(index.type))
             expr.type, expr.addressable = array_type.element, base.addressable
+            expr.storage_depth, expr.iteration_binding = base.storage_depth, base.iteration_binding
             if not base.addressable and self.function is not None:
                 self.function.temporaries.append(base)
             return
@@ -810,6 +907,8 @@ class Analyzer:
                 if self.iota is None:
                     raise GoDiagnostic(expr.token, "iota is only defined within a constant declaration")
                 expr.type, expr.constant = "untyped int", self.iota
+            elif expr.value == "nil":
+                expr.kind, expr.type = "nil", "untyped nil"
             elif expr.value in ("true", "false"):
                 expr.type, expr.constant = "untyped bool", expr.value == "true"
             else:
@@ -817,6 +916,9 @@ class Analyzer:
                 symbol.used = True
                 expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
                 expr.addressable = symbol.constant is None
+                expr.storage_depth, expr.iteration_binding = symbol.depth, symbol.iteration_binding
+                if isinstance(underlying(symbol.type), PointerType):
+                    expr.pointer_depth = symbol.depth
             return
         if kind == "selector":
             base = expr.args[0]
@@ -837,12 +939,21 @@ class Analyzer:
                     and base.value not in self.types):
                 raise GoDiagnostic(base.token, "undefined imported package " + base.value)
             type_operand = self.type_operand(base)
+            if (isinstance(type_operand, PointerType) and isinstance(type_operand.element, DefinedType)
+                    and expr.value in type_operand.element.methods):
+                raise UnsupportedGo(expr.token, 'go.unsupported.method-values',
+                                    "stored pointer method expressions require function-value support")
             if isinstance(type_operand, DefinedType) and expr.value in type_operand.methods:
                 raise GoDiagnostic(expr.token, "first-class method expressions require function-value support")
             self.expression(base)
-            if isinstance(base.type, DefinedType) and expr.value in base.type.methods:
+            method_type = base.type.element if isinstance(base.type, PointerType) else base.type
+            if isinstance(method_type, DefinedType) and expr.value in method_type.methods:
                 raise UnsupportedGo(expr.token, 'go.unsupported.method-values', "stored method values require shared closure and bound-receiver support")
             dtype = underlying(base.type)
+            if isinstance(dtype, PointerType) and isinstance(underlying(dtype.element), StructType):
+                base = self.dereference(base)
+                expr.args[0] = base
+                dtype = underlying(base.type)
             if not isinstance(dtype, StructType):
                 raise GoDiagnostic(expr.token, "field selector requires a struct value")
             names = [field.name for field in dtype.fields]
@@ -853,10 +964,17 @@ class Analyzer:
             self.field_access(field, expr.token)
             expr.kind, expr.indices = "field", [index]
             expr.type, expr.addressable = field.type, base.addressable
+            expr.storage_depth, expr.iteration_binding = base.storage_depth, base.iteration_binding
             return
         if kind == "call":
             name = expr.value
             callee = expr.callee
+            if callee is not None and callee.kind in ("unary", "type"):
+                dtype = self.type_operand(callee)
+                if dtype is None:
+                    raise GoDiagnostic(callee.token, "call requires a function or type")
+                self.conversion(expr, dtype)
+                return
             if callee is not None and callee.kind == "selector":
                 base = callee.args[0]
                 binding = (self.imports.get(expr.token.filename, {}).get(base.value)
@@ -879,6 +997,12 @@ class Analyzer:
                 if not method_expression:
                     self.expression(base)
                     dtype = base.type
+                    if isinstance(dtype, PointerType):
+                        base = self.dereference(base)
+                        dtype = base.type
+                pointer_receiver_type = dtype if method_expression and isinstance(dtype, PointerType) else None
+                if pointer_receiver_type is not None:
+                    dtype = pointer_receiver_type.element
                 method = dtype.methods.get(name) if isinstance(dtype, DefinedType) else None
                 if method is None:
                     if binding is not None and shadowed:
@@ -886,7 +1010,8 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "no method " + name + " on " + str(dtype))
                 if unicodedata.category(name[0]) != "Lu" and dtype.package != (self.package_path or ""):
                     raise GoDiagnostic(expr.token, "cannot access unexported method " + name)
-                self.call(expr, method, receiver=None if method_expression else base)
+                self.call(expr, method, receiver=None if method_expression else base,
+                          pointer_receiver_type=pointer_receiver_type)
                 return
             if name in ("len", "cap"):
                 if len(expr.args) != 1:
@@ -894,6 +1019,8 @@ class Analyzer:
                 arg = expr.args[0]
                 self.expression(arg)
                 dtype = underlying(arg.type)
+                if isinstance(dtype, PointerType):
+                    dtype = underlying(dtype.element)
                 expr.type = "int"  # Both builtins are typed int, including constants.
                 if isinstance(dtype, ArrayType):
                     expr.kind = "array_len"
@@ -921,6 +1048,26 @@ class Analyzer:
             self.expression(arg)
         if kind == "unary":
             arg = expr.args[0]
+            if expr.value == "&":
+                if arg.kind in ("array", "struct"):
+                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-composite-address',
+                                        "addressed composite literals require distinct allocation/lifetime analysis")
+                if not arg.addressable:
+                    raise GoDiagnostic(expr.token, "address operator requires an addressable operand")
+                if isinstance(underlying(arg.type), PointerType):
+                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-storage',
+                                        "pointer-bearing pointees require a recursive lifetime/storage contract")
+                if arg.iteration_binding:
+                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-iteration-identity',
+                                        "addressed loop bindings require distinct per-iteration storage identity")
+                expr.kind, expr.type = "address", PointerType(arg.type)
+                expr.pointer_depth, expr.pointer_nonnull = arg.storage_depth, True
+                return
+            if expr.value == "*":
+                checked = self.dereference(arg)
+                expr.kind, expr.type = checked.kind, checked.type
+                expr.addressable, expr.storage_depth = True, checked.storage_depth
+                return
             expr.type = arg.type
             if expr.value == "!":
                 if not is_boolean(arg.type):
@@ -940,6 +1087,16 @@ class Analyzer:
         raise GoDiagnostic(expr.token, "unsupported expression " + kind)
 
     def type_operand(self, expr):
+        if expr.kind == "type":
+            return self.resolve_type(expr.value)
+        if expr.kind == "unary" and expr.value == "*":
+            element = self.type_operand(expr.args[0])
+            if element is None:
+                return None
+            if isinstance(underlying(element), PointerType):
+                raise UnsupportedGo(expr.token, 'go.unsupported.pointer-storage',
+                                    "pointer-bearing pointees require a recursive lifetime/storage contract")
+            return PointerType(element)
         if expr.kind == "name":
             if any(expr.value in scope for scope in self.scopes) or expr.value in self.globals:
                 return None
@@ -966,6 +1123,19 @@ class Analyzer:
             raise GoDiagnostic(expr.token, "conversion requires one argument")
         arg = expr.args[0]
         self.expression(arg)
+        if isinstance(underlying(target), PointerType):
+            if arg.type == "untyped nil":
+                coerce(arg, target)
+            elif not same_underlying(target, arg.type):
+                source = underlying(arg.type)
+                if (isinstance(source, PointerType) and not is_named(target) and not is_named(arg.type)
+                        and same_underlying(source.element, underlying(target).element)):
+                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-conversions',
+                                        "pointer conversions between distinct base types are not implemented")
+                raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {target}")
+            expr.type = target
+            expr.pointer_depth, expr.pointer_nonnull = arg.pointer_depth, arg.pointer_nonnull
+            return
         if is_string(target) and is_integer(arg.type):
             if arg.constant is None:
                 raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-conversion', "integer-to-string conversion requires shared-runtime allocation support")
@@ -984,20 +1154,43 @@ class Analyzer:
         expr.type, expr.constant = target, arg.constant
         check_representable(expr)
 
-    def call(self, expr, function, *, receiver=None):
+    def call(self, expr, function, *, receiver=None, pointer_receiver_type=None):
         values = self.values(expr.args)
         parameters = function.params[1:] if receiver is not None else function.params
+        if pointer_receiver_type is not None:
+            # The derived (*T).M function has a *T source receiver, even
+            # though the implementation uses the already-owned value ABI.
+            parameters = [(parameters[0][0], pointer_receiver_type), *parameters[1:]]
         if len(values) != len(parameters):
             raise GoDiagnostic(expr.token, "argument count mismatch for " + expr.value)
         if receiver is not None:
             coerce(receiver, function.params[0][1])
         for arg, (_, dtype) in zip(values, parameters):
             coerce(arg, dtype)
+        if pointer_receiver_type is not None:
+            # Keep the source pointer argument unchanged. The CFG validator
+            # proves its nullness at the delayed wrapper load after arguments.
+            self.dereference(values[0])
         expr.type, expr.symbol, expr.receiver = function.result, function, receiver
+        expr.indirect_receiver = pointer_receiver_type is not None
 
     def binary(self, expr):
         left, right = expr.args
         op = expr.value
+        if isinstance(underlying(left.type), PointerType) or isinstance(underlying(right.type), PointerType):
+            if op not in ("==", "!="):
+                raise GoDiagnostic(expr.token, "pointers permit only equality and inequality operators")
+            if left.type == "untyped nil":
+                coerce(left, right.type)
+            elif right.type == "untyped nil":
+                coerce(right, left.type)
+            elif left.type != right.type:
+                if same_underlying(left.type, right.type) and not (is_named(left.type) and is_named(right.type)):
+                    coerce(right, left.type)
+                else:
+                    raise GoDiagnostic(expr.token, "mismatched pointer operand types")
+            expr.type = "untyped bool"
+            return
         if is_string(left.type) or is_string(right.type):
             if not (is_string(left.type) and is_string(right.type)):
                 raise GoDiagnostic(expr.token, "mismatched string operand types")

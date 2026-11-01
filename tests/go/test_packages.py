@@ -175,26 +175,15 @@ def test_init_is_reserved_in_package_block_but_allowed_in_function_block():
 @pytest.mark.parametrize("declaration", PACKAGE_DECLARATION_CONFLICTS)
 def test_official_go_rejects_same_sibling_file_import_conflict(tmp_path, declaration):
     import os
-    import subprocess
+    from tests.go.owned_execution import compile_reference_packages_rejection
 
     assert os.environ.get("PCC_GO_REFERENCE_CACHE"), "select a bounded oracle cache explicitly"
     inputs = conflicting_sibling_package(declaration)
-    gopath = tmp_path / "gopath"
-    for package, source_units in inputs.items():
-        directory = gopath / "src" / package
-        directory.mkdir(parents=True)
-        for filename, original in source_units:
-            (directory / filename).write_bytes(original.encode("utf-8"))
-    env = dict(os.environ, GOTOOLCHAIN="local", GOPROXY="off", GOSUMDB="off",
-               GOWORK="off", GO111MODULE="off", CGO_ENABLED="0", GOMAXPROCS="2",
-               GOCACHE=os.environ["PCC_GO_REFERENCE_CACHE"], GOPATH=str(gopath))
-    output = tmp_path / "must-not-exist"
-    result = subprocess.run([os.environ["PCC_GO_REFERENCE"], "build", "-p=2", "-o", str(output),
-                             str(gopath / "src/main/a.go"), str(gopath / "src/main/b.go")],
-                            env=env, capture_output=True, timeout=60, cwd=tmp_path)
-    assert result.returncode != 0
-    assert b"arithmetic already declared through import" in result.stderr, result.stderr
-    assert not output.exists()
+    compile_reference_packages_rejection(
+        inputs, tmp_path / "reference", compiler=os.environ["PCC_GO_REFERENCE"],
+        cache=os.environ["PCC_GO_REFERENCE_CACHE"],
+        diagnostics="arithmetic already declared through import",
+    )
     for package, source_units in inputs.items():
         for filename, original in source_units:
-            assert (gopath / "src" / package / filename).read_bytes() == original.encode("utf-8")
+            assert (tmp_path / "reference/gopath/src" / package / filename).read_bytes() == original.encode("utf-8")

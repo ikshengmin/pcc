@@ -10,6 +10,14 @@ from pcc.frontends.go.records import underlying
 
 
 @dataclass(frozen=True)
+class PointerType:
+    element: object
+
+    def __str__(self):
+        return "*" + str(self.element)
+
+
+@dataclass(frozen=True)
 class ArrayType:
     count: int
     element: object

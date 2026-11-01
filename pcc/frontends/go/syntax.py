@@ -136,6 +136,12 @@ def scan(source, filename="<go>"):
 
 
 @dataclass
+class PointerSyntax:
+    token: Token
+    element: object
+
+
+@dataclass
 class ArraySyntax:
     token: Token
     length: object
@@ -161,6 +167,7 @@ class TypeDeclaration:
     alias: bool = False
     resolved: object = None
     resolving: bool = False
+    pointer_depth: int = 0
 
 
 @dataclass
@@ -179,6 +186,12 @@ class Expr:
     keys: list = field(default_factory=list)
     indices: list = field(default_factory=list)
     addressable: bool = False
+    # Lexical region bounds, not alias identities or extended stack lifetimes.
+    storage_depth: int = 0
+    pointer_depth: int = 0
+    pointer_nonnull: bool = False
+    iteration_binding: bool = False
+    indirect_receiver: bool = False
 
 
 @dataclass
@@ -333,6 +346,9 @@ class GoParser:
         return imports
 
     def datatype(self, *, literal=False):
+        if self.at("*"):
+            token = self.take("*")
+            return PointerSyntax(token, self.datatype())
         if self.at("["):
             token = self.take("[")
             if self.at("]"):
@@ -398,7 +414,7 @@ class GoParser:
         index = self.index
         while self.tokens[index].kind == "name":
             index += 1
-            if self.tokens[index].kind in ("name", "[", "struct"):
+            if self.tokens[index].kind in ("name", "[", "struct", "*"):
                 return True
             if self.tokens[index].kind != ",":
                 return False
@@ -452,7 +468,7 @@ class GoParser:
 
     def function_results(self):
         if not self.accept("("):
-            if self.at("name") or self.at("[") or self.at("struct"):
+            if self.at("name") or self.at("[") or self.at("struct") or self.at("*"):
                 return self.datatype(), [None]
             return "void", []
         types, names = self.parameter_list()
@@ -485,7 +501,7 @@ class GoParser:
             names = [self.take("name")]
             while self.accept(","):
                 names.append(self.take("name"))
-            dtype = self.datatype() if self.at("name") or self.at("[") or self.at("struct") else None
+            dtype = self.datatype() if self.at("name") or self.at("[") or self.at("struct") or self.at("*") else None
             exprs = self.expression_list() if self.accept("=") else []
             if token.kind == "const" and not exprs:
                 if not grouped or previous is None or dtype is not None:
@@ -653,7 +669,7 @@ class GoParser:
 
     def expression(self, minimum=1):
         token = self.current
-        if token.kind in ("+", "-", "!", "^"):
+        if token.kind in ("+", "-", "!", "^", "&", "*"):
             self.index += 1
             left = Expr("unary", token, token.kind, [self.expression(6)])
         elif self.accept("("):
@@ -663,7 +679,8 @@ class GoParser:
             self.named_literals = previous
             left.parenthesized = True
         elif self.at("[") or self.at("struct"):
-            left = self.composite_literal(token, self.datatype(literal=True))
+            dtype = self.datatype(literal=True)
+            left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
         elif self.accept("integer"):
             left = Expr("integer", token, token.text)
         elif self.accept("string"):
@@ -685,7 +702,7 @@ class GoParser:
                     dtype = TypeName(left.token)
                 left = self.composite_literal(left.token, dtype)
             elif self.accept("("):
-                if left.kind not in ("name", "selector"):
+                if left.kind not in ("name", "selector", "type") and not (left.kind == "unary" and left.value == "*"):
                     self.fail(token, "only named function calls/conversions are supported")
                 previous, self.named_literals = self.named_literals, True
                 args = [] if self.at(")") else self.expression_list(terminator=")")

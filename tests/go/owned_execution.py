@@ -7,7 +7,10 @@ full int64 Result function. The optional official Go oracle is never a fallback.
 
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
+import json
 import os
+import re
 import subprocess
 
 from pcc.frontends.go import DEFAULT_TARGET, GO_MAIN_SYMBOL, compile_go_sources, function_symbol
@@ -86,51 +89,219 @@ def run(binary):
     return Execution(result.returncode, result.stdout, result.stderr)
 
 
-def compile_reference(units, directory, *, compiler, cache):
-    """Explicit official Go development oracle, receiving identical source bytes."""
+class ReferenceBuildFailure(RuntimeError):
+    """An oracle/tool/protocol failure, never evidence of source rejection."""
+
+    def __init__(self, kind, receipt):
+        self.kind = kind
+        self.receipt = receipt
+        super().__init__(f"official Go reference {kind}; raw receipt: {receipt}")
+
+
+def _source_messages(stderr, sources, directory):
+    """Fail closed on mixed source/tool errors, including deferred cache failure.
+
+    Go build uses '# package' headers. Its positioned source diagnostics can
+    have positioned, tab-indented suberrors, or tab-indented have/want argument
+    lists. No other unpositioned stderr is semantic-rejection evidence.
+    """
+    source_paths = {path.resolve() for path in sources}
+    messages, unexpected = [], []
+    source_attached = False
+    for line in stderr.decode('utf-8', 'replace').splitlines():
+        if not line:
+            continue
+        if line.startswith('# '):
+            source_attached = False
+            continue
+        match = re.match(r'^(.+?):[0-9]+(?::[0-9]+)?:\s*(.*)$', line.lstrip('\t'))
+        if match is not None:
+            location = Path(match[1])
+            if not location.is_absolute():
+                location = directory / location
+            source_attached = location.resolve() in source_paths
+            if source_attached:
+                messages.append(match[2])
+            else:
+                unexpected.append(line)
+        elif source_attached and re.match(r'^\t+(?:have|want) \(.*\)$', line):
+            continue
+        else:
+            source_attached = False
+            unexpected.append(line)
+    return messages, unexpected
+
+
+def _resolve_reference_compiler(compiler, directory, env):
+    """Resolve once under the same cwd/PATH rules as the child process."""
+    requested = os.fspath(compiler)
+    if os.path.dirname(requested):
+        path = Path(requested)
+        return (path if path.is_absolute() else directory / path).resolve()
+    for entry in os.get_exec_path(env):
+        folder = Path(entry)
+        if not folder.is_absolute():
+            folder = directory / folder
+        candidate = folder / requested
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise FileNotFoundError(f'reference compiler not found on child PATH: {requested}')
+
+
+def _reference_build(paths, sources, directory, *, compiler, cache, gopath=None, diagnostics=None):
+    """One observed process, with success and semantic-rejection paths distinct.
+
+    A normal source rejection requires rc1, source-attributed case diagnostics,
+    no stdout or produced binary, and no crash/resource/dependency indicators.
+    Every failure (including spawn/timeout/missing output) retains raw streams
+    and a receipt before it raises; callers cannot substitute arbitrary build
+    failure for invalid-Go agreement.
+    """
+    directory = directory.resolve()
+    binary = directory / 'oracle'
+    env = dict(os.environ, GOTOOLCHAIN='local', GOPROXY='off', GOSUMDB='off',
+               GOWORK='off', GO111MODULE='off', CGO_ENABLED='0', GOMAXPROCS='2',
+               GOCACHE=str(cache))
+    if gopath is not None:
+        env['GOPATH'] = str(gopath.resolve())
+    command = [str(compiler), 'build', '-p=2', '-o', str(binary), *map(str, paths)]
+    receipt_path = directory / 'build.execution.json'
+    receipt = {'command': command, 'requested_compiler': os.fspath(compiler), 'cwd': str(directory),
+               'purpose': 'expected_source_rejection' if diagnostics is not None else 'native_build',
+               'sources': {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest()
+                           for path in sources},
+               'environment': {name: env[name] for name in
+                               ('GOTOOLCHAIN','GOPROXY','GOSUMDB','GOWORK','GO111MODULE',
+                                'CGO_ENABLED','GOMAXPROCS','GOCACHE')},
+               'returncode': None, 'classification': 'not_started'}
+    if gopath is not None:
+        receipt['environment']['GOPATH'] = env['GOPATH']
+
+    def record(stdout=b'', stderr=b''):
+        (directory / 'build.stdout').write_bytes(stdout)
+        (directory / 'build.stderr').write_bytes(stderr)
+        receipt['stdout_sha256'] = hashlib.sha256(stdout).hexdigest()
+        receipt['stderr_sha256'] = hashlib.sha256(stderr).hexdigest()
+        receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
+
+    def fail(kind, stdout=b'', stderr=b'', error=None):
+        receipt['classification'] = kind
+        if error is not None:
+            receipt['error'] = str(error)
+        record(stdout, stderr)
+        raise ReferenceBuildFailure(kind, receipt_path)
+
+    record()
+    try:
+        executable = _resolve_reference_compiler(compiler, directory, env)
+        command[0] = str(executable)
+        receipt['compiler_sha256'] = hashlib.sha256(executable.read_bytes()).hexdigest()
+        record()
+        result = subprocess.run(command, cwd=directory, env=env, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired as error:
+        fail('timeout', error.stdout or b'', error.stderr or b'', error)
+    except OSError as error:
+        fail('tool_failure', error=error)
+    receipt['returncode'] = result.returncode
+    receipt['classification'] = 'observed_unclassified'
+    receipt['binary_present'] = binary.is_file()
+    if binary.is_file():
+        receipt['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
+    record(result.stdout, result.stderr)
+
+    if diagnostics is None:
+        if result.returncode != 0:
+            fail('build_failed', result.stdout, result.stderr)
+        if not binary.is_file():
+            fail('missing_output', result.stdout, result.stderr)
+        receipt['classification'] = 'native_build_succeeded'
+        record(result.stdout, result.stderr)
+        return binary
+
+    patterns = (diagnostics,) if isinstance(diagnostics, (str, bytes)) else tuple(diagnostics)
+    patterns = tuple(re.escape(pattern.decode()) if isinstance(pattern, bytes) else pattern
+                     for pattern in patterns)
+    if not patterns or not all(isinstance(pattern, str) and pattern for pattern in patterns):
+        fail('missing_expected_diagnostics', result.stdout, result.stderr)
+    if result.returncode != 1:
+        fail('not_normal_rejection_exit', result.stdout, result.stderr)
+    if result.stdout or binary.exists():
+        fail('unexpected_rejection_output', result.stdout, result.stderr)
+    lowered = result.stderr.lower()
+    if any(marker in lowered for marker in
+           (b'panic:', b'fatal error:', b'out of memory', b'cannot allocate memory',
+            b'signal:', b'internal compiler error', b'unexpected fault address',
+            b'runtime:', b'exec format error', b'permission denied',
+            b'cannot find package', b'no required module provides package', b'is not in std')):
+        fail('abnormal_reference_failure', result.stdout, result.stderr)
+    messages, unexpected = _source_messages(result.stderr, sources, directory)
+    receipt['source_diagnostics'] = messages
+    receipt['unexpected_stderr_lines'] = unexpected
+    receipt['expected_diagnostics'] = list(patterns)
+    if not messages:
+        fail('unattributed_rejection', result.stdout, result.stderr)
+    if unexpected:
+        fail('unclassified_reference_stderr', result.stdout, result.stderr)
+    if not all(any(re.search(pattern, message) for message in messages) for pattern in patterns):
+        fail('unexpected_source_diagnostics', result.stdout, result.stderr)
+    receipt['classification'] = 'normal_source_rejection'
+    record(result.stdout, result.stderr)
+    return receipt
+
+
+def _reference_units(units, directory):
     directory.mkdir()
     paths = []
     for filename, source in units:
         if Path(filename).name != filename:
-            raise ValueError("oracle source names must be basenames")
+            raise ValueError('oracle source names must be basenames')
         path = directory / filename
-        path.write_bytes(source.encode("utf-8"))
-        paths.append(str(path))
-    env = dict(os.environ, GOTOOLCHAIN="local", GOPROXY="off", GOSUMDB="off",
-               GOWORK="off", GO111MODULE="off", CGO_ENABLED="0", GOCACHE=str(cache),
-               GOMAXPROCS="2")
-    binary = directory / "oracle"
-    result = subprocess.run([compiler, "build", "-p=2", "-o", str(binary), *paths],
-                            capture_output=True, timeout=60, cwd=directory, env=env)
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert binary.is_file()
-    return binary
+        path.write_bytes(source.encode('utf-8'))
+        paths.append(path.resolve())
+    return paths
 
 
-def compile_reference_packages(packages, directory, *, compiler, cache):
-    """Official Go oracle for an unchanged explicit package graph (test only)."""
+def compile_reference(units, directory, *, compiler, cache):
+    """Positive API unchanged: identical original sources -> official binary."""
+    paths = _reference_units(units, directory)
+    return _reference_build(paths, paths, directory, compiler=compiler, cache=cache)
+
+
+def compile_reference_rejection(units, directory, *, compiler, cache, diagnostics):
+    """Observe normal, source-attributed rejection; tool failure always raises."""
+    paths = _reference_units(units, directory)
+    return _reference_build(paths, paths, directory, compiler=compiler, cache=cache,
+                            diagnostics=diagnostics)
+
+
+def _reference_packages(packages, directory):
     directory.mkdir()
-    gopath = directory / "gopath"
-    main_paths = []
+    gopath = directory / 'gopath'
+    main_paths, all_paths = [], []
     for import_path, source_units in packages.items():
-        parts = import_path.split("/")
-        if not parts or any(part in ("", ".", "..") for part in parts):
-            raise ValueError("oracle import paths must be relative package paths")
-        folder = gopath / "src" / import_path
+        parts = import_path.split('/')
+        if not parts or any(part in ('', '.', '..') for part in parts):
+            raise ValueError('oracle import paths must be relative package paths')
+        folder = gopath / 'src' / import_path
         folder.mkdir(parents=True)
         for filename, source in source_units:
             if Path(filename).name != filename:
-                raise ValueError("oracle source names must be basenames")
+                raise ValueError('oracle source names must be basenames')
             path = folder / filename
-            path.write_bytes(source.encode("utf-8"))
-            if import_path == "main":
-                main_paths.append(str(path))
-    env = dict(os.environ, GOTOOLCHAIN="local", GOPROXY="off", GOSUMDB="off",
-               GOWORK="off", GO111MODULE="off", CGO_ENABLED="0", GOCACHE=str(cache),
-               GOPATH=str(gopath), GOMAXPROCS="2")
-    binary = directory / "oracle"
-    result = subprocess.run([compiler, "build", "-p=2", "-o", str(binary), *main_paths],
-                            capture_output=True, timeout=60, cwd=directory, env=env)
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert binary.is_file()
-    return binary
+            path.write_bytes(source.encode('utf-8'))
+            all_paths.append(path.resolve())
+            if import_path == 'main':
+                main_paths.append(path.resolve())
+    return main_paths, all_paths, gopath
+
+
+def compile_reference_packages(packages, directory, *, compiler, cache):
+    """Positive API unchanged for an exact supplied source-package graph."""
+    paths, sources, gopath = _reference_packages(packages, directory)
+    return _reference_build(paths, sources, directory, compiler=compiler, cache=cache, gopath=gopath)
+
+
+def compile_reference_packages_rejection(packages, directory, *, compiler, cache, diagnostics):
+    paths, sources, gopath = _reference_packages(packages, directory)
+    return _reference_build(paths, sources, directory, compiler=compiler, cache=cache,
+                            gopath=gopath, diagnostics=diagnostics)

@@ -10,6 +10,7 @@ from pcc.frontends.go import GoDiagnostic, compile_go, function_symbol
 from pcc.frontends.go.strings import literal_bytes
 from pcc.frontends.go.syntax import scan
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
+from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler
 
 
@@ -170,9 +171,8 @@ def test_official_go_rejects_identical_invalid_string_semantics(body,pcc_message
     original=source(body)
     with pytest.raises(GoDiagnostic,match=pcc_message):
         compile_go(original)
-    with pytest.raises(AssertionError,match=reference_message):
-        compile_reference((("invalid.go",original),),tmp_path/"reference",
-                          compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    compile_reference_rejection((("invalid.go",original),),tmp_path/"reference",
+                      compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"], diagnostics=reference_message)
     assert (tmp_path/"reference/invalid.go").read_bytes()==original.encode()
     assert not (tmp_path/"reference/oracle").exists()
 
@@ -225,8 +225,7 @@ def test_official_go_rejects_the_same_retained_invalid_separator_originals(origi
     with pytest.raises(GoDiagnostic,match="empty (package declarations|import specifications)"):
         compile_go(original)
     reference_message = "missing import path" if original == 'package main;import(;);func main(){}' else "syntax error"
-    with pytest.raises(AssertionError,match=reference_message):
-        compile_reference((("invalid.go",original),),tmp_path/"reference",
-                          compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    compile_reference_rejection((("invalid.go",original),),tmp_path/"reference",
+                      compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"], diagnostics=reference_message)
     assert (tmp_path/"reference/invalid.go").read_bytes()==original.encode()
     assert not (tmp_path/"reference/oracle").exists()

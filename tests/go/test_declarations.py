@@ -7,6 +7,7 @@ import pytest
 
 from pcc.frontends.go import GoDiagnostic, compile_go, compile_go_packages
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
+from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler, units
 
 
@@ -137,9 +138,8 @@ def test_original_declaration_program_cross_emits_real_darwin_object(monkeypatch
 def test_official_go_rejects_identical_invalid_constant_inputs(original,pcc_message,reference_message,tmp_path):
     with pytest.raises(GoDiagnostic,match=pcc_message):
         compile_go(original)
-    with pytest.raises(AssertionError,match=reference_message):
-        compile_reference((("invalid.go",original),),tmp_path/"reference",
-                          compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    compile_reference_rejection((("invalid.go",original),),tmp_path/"reference",
+                      compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"], diagnostics=reference_message)
     assert (tmp_path/"reference/invalid.go").read_bytes()==original.encode()
     assert not (tmp_path/"reference/oracle").exists()
 
@@ -162,8 +162,7 @@ def test_official_go_rejects_same_nonterminating_empty_declaration_group(kind,tm
     original=program("func f()int{return 1;"+kind+"()}")
     with pytest.raises(GoDiagnostic,match="missing return"):
         compile_go(original)
-    with pytest.raises(AssertionError,match="missing return"):
-        compile_reference((("invalid.go",original),),tmp_path/"reference",
-                          compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    compile_reference_rejection((("invalid.go",original),),tmp_path/"reference",
+                      compiler=os.environ["PCC_GO_REFERENCE"],cache=os.environ["PCC_GO_REFERENCE_CACHE"], diagnostics="missing return")
     assert (tmp_path/"reference/invalid.go").read_bytes()==original.encode()
     assert not (tmp_path/"reference/oracle").exists()

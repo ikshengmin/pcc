@@ -7,6 +7,7 @@ import pytest
 
 from pcc.frontends.go import GoDiagnostic, compile_go, compile_go_packages
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
+from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler, units
 
 
@@ -197,8 +198,7 @@ def test_official_go_rejects_the_same_nominal_type_or_literal_error(index, refer
     original = source(declarations, body)
     with pytest.raises(GoDiagnostic, match=message):
         compile_go(original)
-    with pytest.raises(AssertionError, match=reference_message):
-        compile_reference((("invalid.go",original),), tmp_path/"reference", compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    compile_reference_rejection((("invalid.go",original),), tmp_path/"reference", compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"], diagnostics=reference_message)
     assert (tmp_path/"reference/invalid.go").read_bytes() == original.encode()
     assert not (tmp_path/"reference/oracle").exists()
 
