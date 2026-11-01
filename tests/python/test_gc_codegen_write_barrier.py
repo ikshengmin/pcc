@@ -401,9 +401,15 @@ def test_list_growth_callers_root_and_reload_retained_managed_inputs():
     strict_append = strict_src.split("def py_list_append(lst, item) -> None:", 1)[
         1
     ].split('@c_abi_export("py_list_append_fresh_native_instance")', 1)[0]
-    strict_append_fast = strict_append.split("if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:", 1)[
-        1
-    ].split("if _append_rooted", 1)[0]
+    # GC0 appends in one container-lock transaction on the caller's own
+    # references (growth included) before the general rooted path.
+    assert strict_append.index("_append_existing_capacity_gc0(cells, ptr_add(cells, 8))") < (
+        strict_append.index("_append_rooted(lst, item, 0)")
+    )
+    strict_append_fast = strict_src.split("def _append_existing_capacity_gc0(", 1)[1].split(
+        "\ndef py_list_append_from_slots(", 1
+    )[0]
+    assert "def _append_grow_gc0(" in strict_append_fast
     for forbidden in (
         "_prepare_moving_root",
         "pcc_py_gc_minor_graph_lock",
@@ -502,11 +508,10 @@ def test_list_get_pop_reverse_use_callback_free_graph_transactions():
     strict_get = strict_src.split("def py_list_get(lst, i: int):", 1)[1].split(
         '@c_abi_export("py_list_getitem")', 1
     )[0]
-    strict_get_fast = strict_get.split(
-        "if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:", 1
-    )[1].split(
-        "list_slot = stack_alloc(8)", 1
-    )[0]
+    # GC0 reads under the list's own container lock.
+    assert "fast = _list_get_gc0(lst, i, 0, taken)" in strict_get
+    strict_get_fast = strict_src.split("def _list_get_gc0(", 1)[1].split("\ndef ", 1)[0]
+    assert "_list_lock(lst)" in strict_get_fast
     assert "pcc_py_gc_minor_graph_lock" not in strict_get_fast
     assert "_prepare_moving_root" not in strict_get_fast
     # Other collectors read through the shared rooted transaction.
