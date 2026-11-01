@@ -968,23 +968,17 @@ def py_list_append_from_slots(list_slot, item_slot, borrowed_mask: int) -> None:
 def py_list_append(lst, item) -> None:
     if ptr_is_null(lst) != 0:
         return
-    if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
-        if not _list_is_sane(lst, -101):
+    # GC0's container-lock transaction, the one compiled appends take. (The
+    # single-thread path that stood here never ran: the runtime is always
+    # threaded.) The caller's references keep both objects alive and GC0
+    # moves nothing, so plain cells can stand in for the operand slots. A
+    # 0 leaves the general path below.
+    if ptr_is_null(item) == 0:
+        cells = stack_alloc(16)
+        store_ptr(cells, 0, lst)
+        store_ptr(cells, 8, item)
+        if _append_existing_capacity_gc0(cells, ptr_add(cells, 8)) != 0:
             return
-        fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-        fast_grown = _grow_if_needed(lst, fast_length + 1)
-        if ptr_is_null(fast_grown) != 0:
-            py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
-            return
-        fast_items = load_ptr(fast_grown, PYLISTOBJECT_ITEMS_OFFSET)
-        store_ptr(fast_items, fast_length * 8, null())
-        pcc_gc_store_ptr(
-            fast_grown, ptr_add(fast_items, fast_length * 8), item
-        )
-        store_i64(
-            fast_grown, PYLISTOBJECT_LENGTH_OFFSET, fast_length + 1
-        )
-        return
     if _append_rooted(lst, item, 0) == -1:
         py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
 
