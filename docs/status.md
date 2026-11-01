@@ -132,6 +132,14 @@ Pyperformance, micro timing and the generated README report are still pending.
 
 ### P0 takeover boundary: `f11a3513d`
 
+The node-pool increment over `f1d8e65d3` gives ready, join and channel free
+lists separate cache-line-spaced no-park locks. Allocation, raw freeing and
+GC-root retirement stay outside these locks; all three caches are bounded
+at 4,096 nodes. Twenty-seven pool/ready-claim model checks pass, including
+four concurrent owners for each pool and allocation failure/overflow paths.
+The queue/state paths still retain the global scheduler mutex. The native
+results below precede this pool increment; its emitted validation is pending.
+
 The ready-entry CAS preparation over `cbc4dccc8` claims the queued mark before
 publishing a node, counts it before a consumer can remove it, and transfers
 QUEUED directly to RUNNING without exposing an unclaimed intermediate state.

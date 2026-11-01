@@ -131,6 +131,9 @@ define_global_i64("pcc_vthread_scheduler_cond_bits_py", 0)
 # A wakeup requested inside a scheduler critical section; read and written
 # only under the scheduler mutex (see _scheduler_unlock).
 define_global_i64("pcc_vthread_scheduler_signal_pending_py", 0)
+# Three independently locked free lists: ready, join, and channel nodes.
+# Each lock owns 128 bytes so unrelated pool traffic does not share a line.
+define_global_null_ptr_array("pcc_vthread_node_pool_locks_py", 48)
 define_global_null_ptr_array("pcc_vthread_carrier_heads_py", 64)
 define_global_null_ptr_array("pcc_vthread_carrier_tails_py", 64)
 define_global_i64("pcc_vthread_carrier_queue_count_py", 0)
@@ -529,14 +532,38 @@ def pcc_vthread_waiter_pool_note_cached(count: int) -> None:
     _counter_set(global_addr("pcc_vthread_waiter_cached_py"), count)
 
 
+def _raw_queue_lock(word) -> None:
+    # Admit before taking ownership. A holder and its spinning waiters must
+    # not park at compiler-inserted loop polls while a collector waits for
+    # every carrier. No allocation, GC barrier or other lock is taken inside.
+    pcc_current_thread_id()
+    pcc_thread_no_park_enter()
+    while True:
+        if atomic_load_i64(word, 0, "relaxed") == 0:
+            if atomic_cas_i64(word, 0, 0, 1, "acquire", "relaxed") == 0:
+                return
+
+
+def _raw_queue_unlock(word) -> None:
+    atomic_store_i64(word, 0, 0, "release")
+    pcc_thread_no_park_exit()
+
+
+def _node_pool_lock_word(kind: int):
+    return ptr_add(global_addr("pcc_vthread_node_pool_locks_py"), (kind - 1) * 128)
+
+
 # Ready node: thread@0, next@8, root_handle@16, pool_kind@24 (32 bytes).
 def _ready_alloc():
+    word = _node_pool_lock_word(1)
+    _raw_queue_lock(word)
     node = global_load_ptr("pcc_vthread_ready_free_py")
     if ptr_is_null(node) == 0:
         global_store_ptr("pcc_vthread_ready_free_py", load_ptr(node, 8))
         _counter_add(global_addr("pcc_vthread_ready_cached_py"), -1)
         _counter_add(global_addr("pcc_vthread_ready_reuse_py"), 1)
-    else:
+    _raw_queue_unlock(word)
+    if ptr_is_null(node):
         node = malloc(32)
         if ptr_is_null(node) == 0:
             _counter_add(global_addr("pcc_vthread_ready_alloc_py"), 1)
@@ -553,12 +580,15 @@ def _ready_alloc():
 # next@56/prev@64/group@72.  Links only name stable raw arms (never an address
 # inside a relocatable core), giving select-loser removal O(1) safely.
 def _channel_group_alloc():
+    word = _node_pool_lock_word(3)
+    _raw_queue_lock(word)
     group = global_load_ptr("pcc_vthread_channel_free_py")
     if ptr_is_null(group) == 0:
         global_store_ptr("pcc_vthread_channel_free_py", load_ptr(group, 8))
         _counter_add(global_addr("pcc_vthread_channel_free_count_py"), -1)
         pcc_vthread_waiter_pool_note_reuse()
-    else:
+    _raw_queue_unlock(word)
+    if ptr_is_null(group):
         group = malloc(80)
         if ptr_is_null(group) == 0:
             pcc_vthread_waiter_pool_note_allocation()
@@ -588,14 +618,18 @@ def _channel_group_recycle(group) -> None:
     store_ptr(group, 56, null())
     store_ptr(group, 64, null())
     store_ptr(group, 72, group)
+    word = _node_pool_lock_word(3)
+    _raw_queue_lock(word)
     cached = _counter(global_addr("pcc_vthread_channel_free_count_py"))
     if cached >= 4096:
+        _raw_queue_unlock(word)
         free(group)
         return
     store_ptr(group, 8, global_load_ptr("pcc_vthread_channel_free_py"))
     global_store_ptr("pcc_vthread_channel_free_py", group)
     _counter_add(global_addr("pcc_vthread_channel_free_count_py"), 1)
     pcc_vthread_waiter_pool_note_cached(cached + 1)
+    _raw_queue_unlock(word)
 
 
 def _channel_group_release(group) -> None:
@@ -639,21 +673,31 @@ def _ready_release(node) -> None:
     if pool_kind == 3:
         _channel_group_recycle(node)
         return
-    store_ptr(node, 8, global_load_ptr("pcc_vthread_ready_free_py"))
     store_ptr(node, 16, null())
     store_i64(node, 24, 1)
+    word = _node_pool_lock_word(1)
+    _raw_queue_lock(word)
+    if _counter(global_addr("pcc_vthread_ready_cached_py")) >= 4096:
+        _raw_queue_unlock(word)
+        free(node)
+        return
+    store_ptr(node, 8, global_load_ptr("pcc_vthread_ready_free_py"))
     global_store_ptr("pcc_vthread_ready_free_py", node)
     _counter_add(global_addr("pcc_vthread_ready_cached_py"), 1)
+    _raw_queue_unlock(word)
 
 
 # Join node shares the ready prefix and carries pool_kind=2 at offset 24.
 def _join_alloc():
+    word = _node_pool_lock_word(2)
+    _raw_queue_lock(word)
     node = global_load_ptr("pcc_vthread_join_free_py")
     if ptr_is_null(node) == 0:
         global_store_ptr("pcc_vthread_join_free_py", load_ptr(node, 8))
         _counter_add(global_addr("pcc_vthread_join_free_count_py"), -1)
         pcc_vthread_waiter_pool_note_reuse()
-    else:
+    _raw_queue_unlock(word)
+    if ptr_is_null(node):
         node = malloc(32)
         if ptr_is_null(node) == 0:
             pcc_vthread_waiter_pool_note_allocation()
@@ -671,14 +715,18 @@ def _join_alloc():
 def _join_recycle(node) -> None:
     store_ptr(node, 16, null())
     store_i64(node, 24, 2)
+    word = _node_pool_lock_word(2)
+    _raw_queue_lock(word)
     cached = _counter(global_addr("pcc_vthread_join_free_count_py"))
     if cached >= 4096:
+        _raw_queue_unlock(word)
         free(node)
         return
     store_ptr(node, 8, global_load_ptr("pcc_vthread_join_free_py"))
     global_store_ptr("pcc_vthread_join_free_py", node)
     _counter_add(global_addr("pcc_vthread_join_free_count_py"), 1)
     pcc_vthread_waiter_pool_note_cached(cached + 1)
+    _raw_queue_unlock(word)
 
 
 def _join_release(node) -> None:
