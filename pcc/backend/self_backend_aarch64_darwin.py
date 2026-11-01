@@ -166,6 +166,7 @@ from .self_backend_aarch64_fragments import (
     AArch64EmissionFragments,
     EMISSION_RECORD_LABEL,
 )
+from .self_backend_aarch64_darwin_tlv import elide_dead_tlv_resolver_saves
 
 _MODULE_SYMBOLS = PreparedModuleSymbols(
     internal_prefix="",
@@ -893,6 +894,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
         )
         lines = _drop_fallthrough_uncond_branches(lines)
         lines = _drop_unreferenced_empty_local_labels(lines, metadata_labels)
+        # Last: liveness needs the final branches and labels of each function.
+        lines = elide_dead_tlv_resolver_saves(lines)
     # Run after register allocation and every instruction-deleting peephole,
     # but before compact-unwind sizing.  Even with optimization disabled this
     # finalizer removes the source-semantics barrier pseudo-directives.
