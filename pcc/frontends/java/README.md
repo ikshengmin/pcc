@@ -139,3 +139,25 @@ experiment retains its message-only errors and is not source acceptance.
 These codes do not change the object/runtime boundary: class analysis is a
 semantic model, final instance fields remain gated, and the unpublished blank
 final model/reference disagreement is not part of this source revision.
+
+### Primitive-array semantic model (not native arrays)
+
+`analyze_class_sources` now checks one-dimensional boolean/byte/short/char/int/long
+array parameters, results and locals, allocation/initializer expressions, length,
+component reads and statement stores, primitive component conversions, reference
+identity/null, and overload identity. Typed nodes retain the distinct JLS 15.26
+simple/compound assignment evaluation and check order. Negative size, null access
+and out-of-bounds access remain valid source with **unimplemented runtime effects**;
+the analyzer does not replace them with constants or stack arrays.
+
+`compile_source` / `compile_sources` still reject managed arrays before IR.
+Array fields/layout, multidimensional/reference/float/double arrays, array casts
+and inherited array methods remain outside this model. The authored complete
+sources have a separate opt-in JDK compiler/execution reference lane; its outputs
+are not PCC array-native execution or a raw native differential. The complete
+Java test domain passed 906 ordinary and 281 integration cases on Linux x86-64.
+The selected OpenJDK 21.0.12.1 reference ran 21 original programs, typechecked four
+runtime-abrupt/instance examples without executing them, and rejected 22 invalid
+originals. Its explicit source/target 21 contract uses the current runtime's
+platform library, not cross-release API compatibility. Managed-array native
+allocation and execution remain unimplemented.

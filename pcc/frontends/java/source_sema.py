@@ -120,7 +120,7 @@ class SourceAnalyzer:
                 assigned.add(self.declare(parameter, dtype, is_final))
             outgoing = self.statement(method.body, assigned)
             if method.result != "void" and outgoing is not None:
-                method.token.error("missing return in " + method.result + " method")
+                method.token.error("missing return in " + str(method.result) + " method")
         return self.program
 
     def declare(self, token, dtype="int", is_final=False):
@@ -379,7 +379,7 @@ class SourceAnalyzer:
                     node.token.error("void method cannot return a value")
             else:
                 if not node.children:
-                    node.token.error(self.method.result + " method must return a value")
+                    node.token.error(str(self.method.result) + " method must return a value")
                 self.expression(node.children[0], assigned)
                 self.assignment_value(node.children[0], self.method.result)
             assigned = None

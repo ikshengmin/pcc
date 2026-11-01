@@ -4,13 +4,41 @@ Declarations currently admit boolean/int/long. byte/short/char cast values
 participate in Java unary/binary numeric promotion and widening invocation.
 No boxing, references, floating point or varargs are approximated here.
 """
+from dataclasses import dataclass
+
+
 INTEGRAL = frozenset(("byte", "short", "char", "int", "long"))
 DECLARED = frozenset(("boolean", "int", "long"))
-DESCRIPTORS = {"boolean": "Z", "int": "I", "long": "J", "void": "V"}
+DESCRIPTORS = {"boolean": "Z", "byte": "B", "short": "S", "char": "C",
+               "int": "I", "long": "J", "void": "V"}
+ARRAY_COMPONENTS = INTEGRAL | {"boolean"}
+
+
+@dataclass(frozen=True)
+class ArrayType:
+    """One-dimensional primitive reference type, not an allocation/layout ABI."""
+    component: str
+
+    def __post_init__(self):
+        if self.component not in ARRAY_COMPONENTS:
+            raise ValueError("unsupported semantic array component")
+
+    def __str__(self):
+        return self.component + "[]"
+
+
+def descriptor(dtype):
+    return "[" + DESCRIPTORS[dtype.component] if isinstance(dtype, ArrayType) else DESCRIPTORS[dtype]
+
+
+def array_reference(dtype):
+    return isinstance(dtype, ArrayType) or dtype == "null"
 
 
 def widening(source, target):
     if source == target:
+        return True
+    if source == "null" and isinstance(target, ArrayType):
         return True
     return source in INTEGRAL and (target == "long" or target == "int" and source != "long"
                                    or source == "byte" and target == "short")
@@ -25,6 +53,10 @@ def conditional_type(yes, no, token):
     if "void" in (yes.dtype, no.dtype):
         token.error("conditional operands cannot have void type")
     if yes.dtype == no.dtype:
+        return yes.dtype
+    if yes.dtype == "null" and isinstance(no.dtype, ArrayType):
+        return no.dtype
+    if no.dtype == "null" and isinstance(yes.dtype, ArrayType):
         return yes.dtype
     if yes.dtype not in INTEGRAL or no.dtype not in INTEGRAL:
         token.error("reference/boxing conditional operands require the shared Java runtime", code="java.unsupported.reference-conditional")

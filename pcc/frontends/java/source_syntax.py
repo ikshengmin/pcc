@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import re
 
 from .diagnostics import JavaError, UnsupportedJava
-from .source_types import DECLARED, DESCRIPTORS
+from .source_types import ARRAY_COMPONENTS, ArrayType, DECLARED, descriptor
 
 
 KEYWORDS = frozenset((
@@ -55,6 +55,7 @@ class Node:
     completes: bool = True
     operation_type: str | None = None
     is_final: bool = False
+    runtime_steps: tuple[str, ...] = ()
 
 
 @dataclass
@@ -75,7 +76,7 @@ class SourceMethod:
 
     @property
     def descriptor(self):
-        return "(" + "".join(DESCRIPTORS[dtype] for dtype in self.parameter_types) + ")" + DESCRIPTORS[self.result]
+        return "(" + "".join(descriptor(dtype) for dtype in self.parameter_types) + ")" + descriptor(self.result)
 
 
 @dataclass
@@ -194,6 +195,33 @@ class SourceParser:
             location.error(message, code=code)
         location.error(message)
 
+    def array_suffix(self, dtype):
+        while self.peek().text == "[":
+            token = self.take()
+            if not self.class_model:
+                token.error("array fields require shared Java storage and class initialization",
+                            code="java.unsupported.array-storage")
+            self.expect("]")
+            if isinstance(dtype, ArrayType):
+                token.error("multidimensional arrays require the next array semantic domain",
+                            code="java.unsupported.array-model-shape")
+            if dtype == "void":
+                token.error("an array component cannot have void type")
+            dtype = ArrayType(dtype)
+        return dtype
+
+    def array_initializer(self, dtype):
+        token = self.expect("{")
+        values = []
+        while self.peek().text != "}":
+            if self.peek().text == "{":
+                self.peek().error("a primitive array component cannot have an array initializer")
+            values.append(self.expression())
+            if not self.accept(","):
+                break
+        self.expect("}")
+        return Node("array_initializer", token, dtype, values)
+
     def modifiers(self):
         result = set()
         while self.peek().text in MODIFIERS:
@@ -287,10 +315,13 @@ class SourceParser:
             if result.text not in DECLARED | {"void", "byte", "short", "char"}:
                 self.type_boundary(result, "source method results currently require boolean, int, long or void",
                                    code="java.unsupported.declared-result-type")
-            if self.peek().text == "[":
-                self.peek().error("array fields require shared Java storage and class initialization", code="java.unsupported.array-storage")
+            result_type = self.array_suffix(result.text)
             method_name = self.identifier()
             if self.peek().text != "(":
+                result_type = self.array_suffix(result_type)
+                if isinstance(result_type, ArrayType):
+                    result.error("array fields require shared Java storage and class initialization",
+                                 code="java.unsupported.array-storage")
                 if result.text == "void":
                     result.error("a field cannot have void type")
                 if mods - {"public", "private", "protected", "static", "final"}:
@@ -301,6 +332,9 @@ class SourceParser:
                 if not instance and "final" not in mods:
                     result.error("mutable static fields require shared Java class initialization", code="java.unsupported.static-initialization")
                 while True:
+                    if self.peek().text == "[":
+                        self.peek().error("array fields require shared Java storage and class initialization",
+                                          code="java.unsupported.array-storage")
                     initialized = bool(self.accept("="))
                     if not initialized and not instance:
                         method_name.error("blank final fields require shared Java class initialization", code="java.unsupported.static-initialization")
@@ -314,11 +348,17 @@ class SourceParser:
                     method_name = self.identifier()
                 self.expect(";")
                 continue
-            if result.text not in DECLARED | {"void"}:
+            # In model mode, legacy result brackets may follow the parameter
+            # list (JLS 8.4); scalar native diagnostics keep their old boundary.
+            if not self.class_model and result.text not in DECLARED | {"void"}:
                 self.type_boundary(result, "source method results currently require boolean, int, long or void",
                                    code="java.unsupported.declared-result-type")
             parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
-            methods.append(SourceMethod(method_name, result.text, parameters, self.block(),
+            result_type = self.array_suffix(result_type)
+            if result.text not in DECLARED | {"void"} and not isinstance(result_type, ArrayType):
+                self.type_boundary(result, "source method results currently require boolean, int, long or void",
+                                   code="java.unsupported.declared-result-type")
+            methods.append(SourceMethod(method_name, result_type, parameters, self.block(),
                                         owner=owner, modifiers=frozenset(mods), parameter_types=parameter_types,
                                         parameter_final=parameter_final))
         self.expect("<eof>")
@@ -334,11 +374,16 @@ class SourceParser:
                 if self.peek().text == "final":
                     self.peek().error("duplicate final parameter modifier")
                 dtype = self.take()
-                if dtype.text not in DECLARED:
+                if dtype.text not in DECLARED and not (self.class_model and dtype.text in ARRAY_COMPONENTS):
                     self.type_boundary(dtype, "source parameters require boolean, int or long",
                                        code="java.unsupported.declared-parameter-type")
-                types.append(dtype.text)
+                parameter_type = self.array_suffix(dtype.text)
                 parameters.append(self.identifier())
+                parameter_type = self.array_suffix(parameter_type)
+                if parameter_type not in DECLARED and not isinstance(parameter_type, ArrayType):
+                    self.type_boundary(dtype, "source parameters require boolean, int or long",
+                                       code="java.unsupported.declared-parameter-type")
+                types.append(parameter_type)
                 if not self.accept(","):
                     break
         self.expect(")")
@@ -461,12 +506,22 @@ class SourceParser:
         is_final = bool(self.accept("final"))
         if is_final and self.peek().text == "final":
             self.peek().error("duplicate final local modifier")
-        if self.peek().text in DECLARED:
-            dtype = self.take().text
+        if self.peek().text in DECLARED or (self.class_model and self.peek().text in ARRAY_COMPONENTS):
+            type_token = self.take()
+            dtype = self.array_suffix(type_token.text)
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
             name = self.identifier()
-            children = [self.expression()] if self.accept("=") else []
+            dtype = self.array_suffix(dtype)
+            if dtype not in DECLARED and not isinstance(dtype, ArrayType):
+                self.type_boundary(type_token, "source locals require boolean, int or long",
+                                   code="java.unsupported.declared-local-type")
+            if self.accept("="):
+                initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
+                               else self.expression())
+                children = [initializer]
+            else:
+                children = []
             if is_final and not children:
                 name.error("blank final locals require the definite-unassignment source domain", code="java.unsupported.blank-final-local")
             return Node("var", name, dtype, children, is_final=is_final)
@@ -482,6 +537,12 @@ class SourceParser:
             children = [] if operation in ("++", "--") else [self.expression()]
             return Node("assign", name, operation, children)
         expression = self.expression()
+        if self.class_model and self.peek().text in ASSIGNMENTS | {"++", "--"}:
+            operation = self.take()
+            if expression.kind not in {"array_access", "array_length", "group", "name"}:
+                operation.error("array assignment requires an array component variable")
+            children = [expression] + ([] if operation.text in {"++", "--"} else [self.expression()])
+            return Node("array_assign", operation, operation.text, children)
         if expression.kind != "call" and not (self.class_model and expression.kind == "receiver_call"):
             expression.token.error("only assignment, increment or method invocation is an expression statement")
         return Node("expression", token, children=[expression])
@@ -491,6 +552,9 @@ class SourceParser:
         if token.text in ("+", "-", "~", "!"):
             node = Node("unary", token, token.text, [self.expression(11)])
         elif token.text == "(":
+            if self.class_model and self.peek().text in ARRAY_COMPONENTS and self.peek(1).text == "[":
+                token.error("array casts require the next reference conversion domain",
+                            code="java.unsupported.array-model-shape")
             if self.peek().text in ("int", "long", "boolean", "byte", "short", "char") and self.peek(1).text == ")":
                 dtype = self.take().text
                 self.expect(")")
@@ -507,6 +571,24 @@ class SourceParser:
                     node = Node("receiver_call", member, member.text, self.arguments())
                 else:
                     node = Node("receiver_field", member, member.text)
+        elif self.class_model and token.text == "null":
+            node = Node("null", token)
+        elif self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
+            component = self.take()
+            self.expect("[")
+            dtype = ArrayType(component.text)
+            if self.accept("]"):
+                if self.peek().text == "[":
+                    self.peek().error("multidimensional arrays require the next array semantic domain",
+                                      code="java.unsupported.array-model-shape")
+                node = self.array_initializer(dtype)
+            else:
+                dimension = self.expression()
+                self.expect("]")
+                if self.peek().text == "[":
+                    self.peek().error("multidimensional arrays require the next array semantic domain",
+                                      code="java.unsupported.array-model-shape")
+                node = Node("array_new", token, dtype, [dimension])
         elif token.text in ("true", "false"):
             node = Node("bool", token, token.text == "true")
         elif token.text.startswith("'"):
@@ -544,6 +626,22 @@ class SourceParser:
             if token.text in {"class", "interface", "enum", "record"}:
                 token.error("unsupported Java expression or statement", code="java.unsupported.local-types")
             token.error("unsupported Java expression or statement")
+        if not self.class_model and (self.peek().text == "[" or
+                                     (self.peek().text == "." and self.peek(1).text == "length")):
+            self.peek().error("array access and length require shared managed-array lowering",
+                              code="java.unsupported.array-storage")
+        while self.class_model and self.peek().text in {"[", "."}:
+            postfix = self.take()
+            if postfix.text == "[":
+                index = self.expression()
+                self.expect("]")
+                node = Node("array_access", postfix, children=[node, index])
+            else:
+                member = self.identifier()
+                if member.text != "length":
+                    member.error("array members other than length require the next reference domain",
+                                 code="java.unsupported.array-model-shape")
+                node = Node("array_length", member, children=[node])
         while PRECEDENCE.get(self.peek().text, 0) >= minimum:
             operator = self.take()
             node = Node("binary", operator, operator.text,

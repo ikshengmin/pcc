@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .diagnostics import JavaError, UnsupportedJava
+from .source_array_model import ArrayModelAnalyzer
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
 from .source_syntax import Node, SourceMethod, SourceParser
@@ -41,7 +42,7 @@ class SourceClassModel:
     runtime_registered: bool = False
 
 
-class ClassAnalyzer(SourceAnalyzer):
+class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
     def __init__(self, program, project):
         super().__init__(program, project)
         self.constructor_edge = {}
@@ -123,6 +124,8 @@ class ClassAnalyzer(SourceAnalyzer):
         node.symbol, node.dtype = field, field.dtype
 
     def expression(self, node, assigned):
+        if self.array_expression(node, assigned):
+            return
         if node.kind == "this":
             self.require_receiver(node.token)
             node.dtype = ReceiverType(self.program.name)
@@ -160,6 +163,8 @@ class ClassAnalyzer(SourceAnalyzer):
             node.kind = "receiver_call"
 
     def statement(self, node, assigned):
+        if node.kind == "array_assign":
+            return self.array_assignment(node, assigned)
         if self.current_initializer is not None and node.kind == "return":
             node.token.error("return is not permitted in an instance initializer")
         if node.kind == "constructor_call":
