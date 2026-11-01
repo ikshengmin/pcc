@@ -38,6 +38,31 @@ def _pct(part: int, whole: int) -> str:
     return f"{share:.2f}%" if share < 10 else f"{share:.1f}%"
 
 
+def _language_lane(entry: dict, lane: str, audit: dict) -> str:
+    counts = entry.get(lane)
+    if counts is None:
+        return lane + ": not run"
+    outcomes = sum(counts.get(key, 0) for key in ("passed", "failed", "errors", "skipped"))
+    if outcomes:
+        text = (f"{lane}: {counts.get('passed', 0):,} passed, "
+                f"{counts.get('failed', 0):,} failed, {counts.get('errors', 0):,} errors, "
+                f"{counts.get('skipped', 0):,} skipped")
+    elif audit.get("selected") == 0 and audit.get("returncode") == 5:
+        text = lane + ": no selected tests"
+    else:
+        text = lane + ": no recorded outcomes"
+    if audit:
+        if audit.get("selected") == 0 and audit.get("returncode") not in (0, 5):
+            text += "; unrun scope unknown (collection did not complete)"
+        else:
+            text += f"; {len(audit.get('unfinished_nodes', [])):,} unfinished"
+        if audit.get("status") != "COMPLETE":
+            text += "; watchdog " + str(audit.get("status", "unknown"))
+    else:
+        text += "; completion not recorded"
+    return text
+
+
 def compatibility_rows(results: dict) -> list[tuple[str, int, int]]:
     rows = []
     if "cpython" in results:
@@ -81,9 +106,9 @@ def speed_rows(results: dict) -> tuple[list, float | None, dict]:
 def section(results: dict, image_prefix: str) -> str:
     lines = [BEGIN, "## Compatibility and speed, measured", ""]
     lines.append(f"Measured with `scripts/release_stats/run.py` ({_identity_line(results)}). "
-                 "pcc compiles every program below natively, without libpython and without "
-                 "cc, c++, rustc, javac or go. Numbers are reproduced by rerunning the script "
-                 "for each release; nothing is extrapolated.")
+                 "Native program execution and ordinary frontend/model checks are reported "
+                 "with their distinct boundaries below. External reference tools are oracle "
+                 "evidence. Numbers are reproduced by rerunning the script for each release.")
     lines.append("")
     lines.append("### Compatible with Python")
     lines.append("")
@@ -115,10 +140,15 @@ def section(results: dict, image_prefix: str) -> str:
         lines.append(f"- **C**: pcc alone compiles and runs {', '.join(parts)}.")
         ordinary = results["languages"]["language_suites"]
         named = {"cpp": "C++", "go": "Go", "java": "Java", "rust": "Rust"}
-        counts = ", ".join(
-            f"{named[name]} {entry['ordinary']['passed']:,}" for name, entry in ordinary.items())
-        lines.append(f"- **C++, Go, Java, Rust**: bounded language subsets, no official "
-                     f"conformance suite yet. Passing frontend tests: {counts}.")
+        audit = results["languages"].get("execution_audit", {})
+        lines.append("- **C++, Go, Java, Rust**: bounded language subsets, no official "
+                     "conformance suite yet. Ordinary and integration results follow; "
+                     "their reference comparisons are not separately enumerated here.")
+        for name, entry in ordinary.items():
+            lanes = audit.get("lanes", {})
+            descriptions = [_language_lane(entry, lane, lanes.get(name + "-" + lane, {}))
+                            for lane in ("ordinary", "integration")]
+            lines.append(f"- **{named[name]}**: " + "; ".join(descriptions) + ".")
     lines += ["", f"![Compatibility]({image_prefix}/compatibility.svg)", ""]
     if "packages" in results:
         lines += [f"![Native languages of the top PyPI projects]({image_prefix}/native-languages.svg)", ""]

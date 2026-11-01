@@ -16,6 +16,7 @@ sys.path.insert(0, str(STATS))
 
 import charts  # noqa: E402
 import common  # noqa: E402
+import cpython_stage  # noqa: E402
 import pyperformance_stage  # noqa: E402
 import report  # noqa: E402
 
@@ -171,3 +172,37 @@ def test_speedup_chart_places_cpython_at_one():
                                "note", 0.7)
     ElementTree.fromstring(svg)
     assert "2.00x" in svg and "0.25x" in svg and "CPython = 1.0x" in svg
+
+
+def test_language_report_retains_failures_unfinished_and_missing_lanes():
+    results = {"languages": _stage(
+        "languages", c_suites={}, language_suites={
+            "cpp": {"ordinary": {"passed": 10, "failed": 2, "errors": 1, "skipped": 0},
+                    "integration": {"passed": 3, "failed": 1, "errors": 4, "skipped": 0}},
+            "rust": {"ordinary": {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}},
+            "java": {"ordinary": {"passed": 0, "failed": 0, "errors": 1, "skipped": 0}},
+        }, execution_audit={"lanes": {
+            "cpp-ordinary": {"status": "COMPLETE", "unfinished_nodes": []},
+            "cpp-integration": {"status": "TIMEOUT", "unfinished_nodes": ["a", "b"]},
+            "rust-ordinary": {"status": "COMPLETE", "selected": 0, "returncode": 5,
+                              "unfinished_nodes": []},
+            "java-ordinary": {"status": "COMPLETE", "selected": 0, "returncode": 2,
+                              "unfinished_nodes": []},
+        }},
+    )}
+    text = report.section(results, "images")
+    assert "10 passed, 2 failed, 1 errors" in text
+    assert "3 passed, 1 failed, 4 errors" in text
+    assert "2 unfinished; watchdog TIMEOUT" in text
+    assert "ordinary: no selected tests" in text
+    assert "integration: not run" in text
+    assert "unrun scope unknown (collection did not complete)" in text
+    assert "reference comparisons are not separately enumerated" in text
+    assert "compiles every program" not in text
+
+
+def test_imported_conformance_without_source_identity_is_not_relabelled(tmp_path):
+    (tmp_path / "summary.json").write_text(json.dumps({"totals": {}}))
+    (tmp_path / "identity.json").write_text(json.dumps({"pcc_head": ""}))
+    with pytest.raises(ValueError, match="no measured pcc revision"):
+        cpython_stage._summary(tmp_path, _stage("cpython")["identity"])

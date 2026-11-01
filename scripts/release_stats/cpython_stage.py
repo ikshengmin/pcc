@@ -35,9 +35,10 @@ def _summary(run_dir: Path, identity: dict) -> dict:
     totals = summary["totals"]
     harness_identity = read_json(run_dir / "identity.json")
     measured = _measured_revision(run_dir, harness_identity)
-    if measured:
-        identity = dict(identity, pcc={"revision": measured, "source": "harness run",
-                                       "modified_paths": None})
+    if not measured:
+        raise ValueError("imported CPython run has no measured pcc revision: " + str(run_dir))
+    identity = dict(identity, pcc={"revision": measured, "source": "harness run",
+                                   "modified_paths": None})
     # The run's own completion time, not when this summary was made.
     finished = datetime.datetime.fromtimestamp((run_dir / "summary.json").stat().st_mtime,
                                                datetime.timezone.utc)
