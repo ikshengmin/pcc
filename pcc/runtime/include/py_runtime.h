@@ -1412,6 +1412,9 @@ int64_t   py_obj_truthy(PyObject *o);                /* 0 or 1 */
 int64_t   py_obj_type_tag(PyObject *o);
 int64_t   py_obj_eq(PyObject *a, PyObject *b);       /* identity-or-equality for containers */
 int64_t   py_obj_eq_value(PyObject *a, PyObject *b); /* direct Python value equality */
+/* Traced private input slots; 0/1 for exact primitives, -1 requires leases.
+ * op uses rich-compare codes (0,1,2,4,5); != negates the equality result. */
+int64_t   py_obj_compare_builtin_rooted(PyObject **left, PyObject **right, int64_t op);
 #define PY_OBJ_CMP_UNORDERED 2
 /* int (or bool) against a double by exact value, as CPython's
  * float_richcompare: -1 / 0 / 1, or PY_OBJ_CMP_UNORDERED when f is NaN. */

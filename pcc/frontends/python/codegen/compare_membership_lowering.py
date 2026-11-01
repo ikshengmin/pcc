@@ -201,7 +201,31 @@ class CompareMembershipLoweringMixin:
         self.builder.branch(done_block)
         self.builder.position_at_end(slow_block)
         if roots is not None:
-            compared = self._slot_call_runtime_call(runtime_name, roots, span=expr.span)
+            # Exact primitive pairs need no temporary owner/address lease.
+            # A negative probe result keeps the general counted-lease path,
+            # including its exception-preserving cleanup around callbacks.
+            operation = {"<": 0, "<=": 1, "==": 2, "!=": 2, ">": 4, ">=": 5}[expr.op]
+            primitive = self.builder.call(
+                self.runtime["py_obj_compare_builtin_rooted"],
+                [self._as_gc_ptr(roots[0]), self._as_gc_ptr(roots[1]), ir.Constant(_I64, operation)],
+                name=self._fresh(name_prefix + ".cmp.primitive"),
+            )
+            self._emit_post_call_err_check(self._expr_span_or_none(expr))
+            primitive_end = self.builder.block
+            leased_block = self.current_function.append_basic_block(self._fresh("obj.cmp.leased"))
+            result_block = self.current_function.append_basic_block(self._fresh("obj.cmp.value"))
+            handled = self.builder.icmp_signed(
+                ">=", primitive, ir.Constant(_I64, 0), name=self._fresh("obj.cmp.handled"),
+            )
+            self.builder.cbranch(handled, result_block, leased_block)
+            self.builder.position_at_end(leased_block)
+            leased = self._slot_call_runtime_call(runtime_name, roots, span=expr.span)
+            leased_end = self.builder.block
+            self.builder.branch(result_block)
+            self.builder.position_at_end(result_block)
+            compared = self.builder.phi(_I64, name=self._fresh("obj.cmp.value"))
+            compared.add_incoming(primitive, primitive_end)
+            compared.add_incoming(leased, leased_end)
         else:
             compared = self.builder.call(
                 self.runtime[runtime_name],
@@ -1121,7 +1145,7 @@ class CompareMembershipLoweringMixin:
         ``dynamic_operand`` ("lhs"/"rhs") names the dynamic side of an object
         comparison whose other side is statically a str.
         """
-        if object_compare:
+        if not contains:
             rooted = self._emit_frame_rooted_object_compare(expr)
             if rooted is not None:
                 return rooted

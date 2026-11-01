@@ -167,6 +167,7 @@ def _runtime_signatures_part_2():
     "py_super_new_lookup_slots": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_eq": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_eq_value": (_I64, [_PYOBJ, _PYOBJ], False),
+    "py_obj_compare_builtin_rooted": (_I64, [_PTR, _PTR, _I64], False),
     "py_obj_lt": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_le": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_gt": (_I64, [_PYOBJ, _PYOBJ], False),

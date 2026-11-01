@@ -1244,6 +1244,41 @@ def py_obj_ge(a, b) -> int:
     return _obj_order(a, b, _ORDER_GE)
 
 
+@c_abi_export("py_obj_compare_builtin_rooted")
+def py_obj_compare_builtin_rooted(left_slot, right_slot, op: int) -> int:
+    """0/1 for an exact numeric/string pair, -1 for the caller's leased path.
+
+    Inputs remain in traced caller roots. These primitive implementations
+    invoke neither Python callbacks nor managed allocation: bigint scratch
+    copies use raw malloc. Runtime polls may run, but another collector cannot
+    relocate a mutator parked inside runtime code. This is not a declaration
+    that the transitive implementation contains no safepoints.
+    """
+    left = pcc_gc_load_borrowed_ptr(null(), left_slot)
+    right = pcc_gc_load_borrowed_ptr(null(), right_slot)
+    if ptr_is_null(left) != 0 or ptr_is_null(right) != 0:
+        return -1
+    left_type: int = _type_of(left)
+    right_type: int = _type_of(right)
+    primitive: int = 0
+    if _is_number_tag(left_type) != 0 and _is_number_tag(right_type) != 0:
+        primitive = 1
+    elif left_type == PY_TYPE_STR and right_type == PY_TYPE_STR:
+        primitive = 1
+    if primitive == 0:
+        return -1
+    if (pcc_capi_is_cext_type_tag(left_type) != 0
+            or pcc_capi_is_cext_type_tag(right_type) != 0):
+        return -1
+    # Use the existing comparison owners, including exact int/float order
+    # and NaN handling. Py_EQ is 2; != is normalized by the caller.
+    if op == 2:
+        return py_obj_eq_value(left, right)
+    if op == _ORDER_LT or op == _ORDER_LE or op == _ORDER_GT or op == _ORDER_GE:
+        return _obj_order(left, right, op)
+    return -1
+
+
 @c_abi_export("py_builtin_any_all")
 def py_builtin_any_all(iterable, want_all: int) -> int:
     """any(iterable) (``want_all`` 0) or all(iterable) (1): 1/0, -1 on error.

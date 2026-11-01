@@ -140,9 +140,16 @@ cleared as operand temporaries; the inline tagged-int path needs no leases.
 Globals, attributes, callbacks, closure cells and resumable frames retain the
 existing capture path. Seven focused IR/static-signature checks pass, including
 truth-test non-regression and direct lease arguments naming the caller slots.
-The new unchanged-source CPython/five-GC comparison probe is not yet run.
-Runtime rooted primitive entries, leaf-call effects and the membership/
-arithmetic extensions remain open, as do whole-language and native-pcc1 gates.
+The unchanged-source CPython comparison probe passes on frozen `6647faebd`
+across GC0-4, including large integers, NaN, allocating comparison callbacks,
+exception cleanup, reassignment, closure rebinding and a generator.
+The follow-up primitive entry reads caller slots and delegates exact numeric
+and string pairs to the existing comparison owners. Other types and extension
+tags stay on the counted-lease path. Runtime polls remain allowed; this is not
+a no-safepoint promise. Fifty-six focused IR/model checks pass, but this entry
+and the additional reflected-callback probe have not yet executed natively.
+Leaf-call effects and the membership/arithmetic extensions remain open, as do
+whole-language and native-pcc1 gates.
 Static-method generation also exposes the pre-existing `_call_user` and
 `_emit_post_call_err_check` signature drift; this batch preserves those entries
 and adds only its two new method schemas.

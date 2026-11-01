@@ -7,6 +7,8 @@ programs with CPython and execute every selected collector.
 
 from __future__ import annotations
 
+import ast
+import operator
 import os
 from pathlib import Path
 import re
@@ -16,6 +18,13 @@ import sys
 import pytest
 
 from pcc.frontends.python.pipeline import compile_python
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_BOOL,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INT,
+    PY_TYPE_STR,
+    PY_TYPE_USER_CLASS_START,
+)
 
 
 def _ir(tmp_path, source):
@@ -45,24 +54,87 @@ def test_frame_operand_helpers_have_static_self_host_signatures(name):
     )
 
 
+def _primitive_probe():
+    path = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_obj_ops_compare.py"
+    node = next(item for item in ast.parse(path.read_text()).body
+                if isinstance(item, ast.FunctionDef) and item.name == "py_obj_compare_builtin_rooted")
+    node.decorator_list = []
+    calls = []
+    tags = {bool: PY_TYPE_BOOL, int: PY_TYPE_INT, float: PY_TYPE_FLOAT, str: PY_TYPE_STR}
+    extensions = set()
+    operations = {0: operator.lt, 1: operator.le, 2: operator.eq, 4: operator.gt, 5: operator.ge}
+
+    def compare(left, right, op):
+        calls.append((left, right, op))
+        return int(operations[op](left, right))
+
+    namespace = {
+        "null": lambda: None,
+        "ptr_is_null": lambda value: value is None,
+        "pcc_gc_load_borrowed_ptr": lambda owner, slot: slot[0],
+        "_type_of": lambda value: tags.get(type(value), PY_TYPE_USER_CLASS_START),
+        "_is_number_tag": lambda tag: tag in (PY_TYPE_BOOL, PY_TYPE_INT, PY_TYPE_FLOAT),
+        "pcc_capi_is_cext_type_tag": lambda tag: tag in extensions,
+        "PY_TYPE_STR": PY_TYPE_STR,
+        "_ORDER_LT": 0, "_ORDER_LE": 1, "_ORDER_GT": 4, "_ORDER_GE": 5,
+        "py_obj_eq_value": lambda left, right: compare(left, right, 2),
+        "_obj_order": compare,
+    }
+    exec(compile(ast.Module([node], type_ignores=[]), str(path), "exec"), namespace)
+    return namespace["py_obj_compare_builtin_rooted"], calls, extensions, operations
+
+
+@pytest.mark.parametrize("op", (0, 1, 2, 4, 5))
+@pytest.mark.parametrize("left,right", (
+    (1, 2), (2 ** 100, 2 ** 100 + 1), (2 ** 53 + 1, float(2 ** 53)),
+    (True, 1.0), (-0.0, 0.0), (float("nan"), float("nan")),
+    ("", "alpha"), ("same", "same"), ("alpha", "beta"),
+))
+def test_primitive_probe_preserves_comparison_and_leaves_input_slots_intact(left, right, op):
+    probe, calls, _extensions, operations = _primitive_probe()
+    slots = ([left], [right])
+    assert probe(*slots, op) == int(operations[op](left, right))
+    assert len(calls) == 1
+    assert slots[0][0] is left and slots[1][0] is right
+
+
+@pytest.mark.parametrize("left,right", (([], []), ({}, {}), (None, None), ("1", 1), (object(), object())))
+def test_nonprimitive_pairs_are_left_to_the_leased_callback_path(left, right):
+    probe, calls, _extensions, _operations = _primitive_probe()
+    assert probe([left], [right], 2) == -1
+    assert calls == []
+
+
+def test_extension_tag_overrides_and_unknown_operations_do_not_enter_the_primitive_path():
+    probe, calls, extensions, _operations = _primitive_probe()
+    extensions.add(PY_TYPE_FLOAT)
+    assert probe([1.0], [2.0], 2) == -1
+    assert probe([1], [2], 99) == -1
+    assert calls == []
+
+
 def test_local_comparisons_reuse_frame_slots_and_keep_leases_on_the_slow_path(tmp_path):
     text = _ir(tmp_path, '''
 def equal(left, right):
     return left == right
 def less(left, right):
     return left < right
+def strings(left: str, right: str):
+    return left == right
 def owned(left, right):
     first = [left]
     second = [right]
     return first == second
-print(equal(1, 2), less(1, 2), owned(1, 2))
+print(equal(1, 2), less(1, 2), strings("a", "b"), owned(1, 2))
 ''')
-    for name in ("equal", "less", "owned"):
+    for name in ("equal", "less", "strings", "owned"):
         body = _function(text, name)
         assert "frame.cmp.lhs" in body and "frame.cmp.rhs" in body
         assert "int.cmp.fast" in body and "int.cmp.slow" in body
         assert "@pcc_gc_foreign_lease_release(" in body
-    for name in ("equal", "less"):
+        assert "@py_obj_compare_builtin_rooted(" in body
+        assert "obj.cmp.leased" in body and "obj.cmp.handled" in body
+    for name in ("equal", "less", "strings"):
         body = _function(text, name)
         assert "@pcc_gc_pin(" not in body
         assert "@pcc_gc_retain(" not in body
@@ -91,6 +163,8 @@ print(global_compare([1]))
 
 PROGRAM = '''import gc
 import math
+
+calls = []
 
 def compare(left, right):
     return (left == right, left != right, left < right,
@@ -121,6 +195,23 @@ class Broken:
     def __eq__(self, other):
         gc.collect()
         raise ValueError("comparison failed")
+
+class Left:
+    def __init__(self):
+        self.label = "left"
+    def __eq__(self, other):
+        calls.append(self.label)
+        gc.collect()
+        return NotImplemented
+
+class Right:
+    def __eq__(self, other):
+        calls.append("right")
+        gc.collect()
+        return other.label == "left"
+
+def equal(left, right):
+    return left == right
 
 def after_error(left, right):
     try:
@@ -164,6 +255,9 @@ def main():
     same = Number(7)
     print(compare(same, same))
     after_error(Broken("left"), Broken("right"))
+    left = Left()
+    right = Right()
+    print(equal(left, right), calls)
     owned(1, 2)
     print(rebind([1], [2]))
     print(closure([1], [2]))
