@@ -148,8 +148,10 @@ def test_cpp_main_discovery_is_owned_and_semantic(source, expected, monkeypatch)
 def test_cpp_discovery_rejects_unsupported_semantics_without_regex_fallback(monkeypatch):
     from pcc.driver.project import _has_main
     monkeypatch.setattr(c_evaluator.CEvaluator, '_system_cpp', lambda *a, **k: pytest.fail('external tool'))
-    with pytest.raises(CppDiagnostic):
-        _has_main('namespace N{struct Guard{~Guard();};} int main(){return 0;}', '/tmp/unit.cpp')
+    assert _has_main('namespace N{struct Guard{~Guard();};} int main(){return 0;}', '/tmp/unit.cpp')
+    with pytest.raises(CppDiagnostic) as error:
+        _has_main('namespace N{struct Guard{~Guard(){}};} int main(){return 0;}', '/tmp/unit.cpp')
+    assert error.value.code == 'cpp.unsupported.inline-member-functions'
 
 
 @pytest.mark.parametrize('expression,expected', [

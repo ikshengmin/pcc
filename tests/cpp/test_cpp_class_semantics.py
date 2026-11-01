@@ -188,8 +188,8 @@ CLASS_UNIMPLEMENTED_CASES = (
     "struct S;int f(S *p){*p;return 0;}",
     # Original member-alias source moved verbatim to test_cpp_class_enums.
     "union S{int value;};",
-    "struct S{S();};",
-    "struct S{~S();};",
+    # Original S(); declaration is now positive in test_cpp_constructors.
+    # Original ~S(); declaration is now positive in test_cpp_destructors.
     # Original declaration is retained verbatim as a positive member-function obligation.
     "struct Base{};struct S:Base{};",
     "struct S{virtual int method();};",

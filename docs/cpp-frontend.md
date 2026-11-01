@@ -99,8 +99,10 @@ evaluation; C's existing assignment policy is unchanged. Assignment result
 values are supported, while uses requiring the result's C++ lvalue category,
 compound assignment, pointer arithmetic/order, multilevel/function/member
 pointers, volatile access, references, arrays, pointer type-pattern/deduction
-overload sets and object lifetime/allocation features still fail explicitly.
-These are boundaries of the increment, not a reduced C++17 goal.
+overload sets were outside that pointer increment. Bounded complete-object
+construction and normal-exit destruction are now described below; allocation
+and unmodeled lifetime paths still fail explicitly. These increment boundaries
+do not reduce the C++17 goal.
 
 The function-template increment admits deduced, by-value arithmetic type
 parameters. A template retains `TypeParameter` identities, a structured `Pattern`
@@ -120,7 +122,8 @@ call. Shift operands undergo independent integral promotions. `if`/`else` and
 have their own lexical scopes. Templates retain these statements as patterns
 and re-check them after substitution. Condition declarations, init-statements,
 `if constexpr`, remaining loop forms and switch remain unsupported. This does
-not introduce object cleanup or erase a future destructor at a branch/return.
+not itself introduce object cleanup; the normal-exit lifetime owner described
+below now inserts supported complete-object cleanup at branches and returns.
 
 The void/return increment admits void free-function results, explicit discarded
 expressions and `return;` / `return void_expression;`. A sole unnamed `void`
@@ -167,7 +170,7 @@ particular, none of these are implemented merely by accepting their syntax:
 | Expressions | Value categories, conversions and sequencing, full Pratt/operator coverage, casts, constant evaluation and constexpr |
 | Functions | Remaining overload conversions and tie-breaks, defaults, operators, function/member pointers, linkage and complete target ABI |
 | Templates | Remaining dependent types/lookup, ADL, explicit/default arguments, parameter packs, NTTPs, template-template parameters, SFINAE, partial ordering, class/variable templates, specialization and complete ODR/COMDAT publication |
-| Objects | Layout, initialization, constructors, copy/move, temporaries, destructors, reverse-order scope cleanup, inheritance, virtual dispatch and RTTI |
+| Objects | Extend bounded complete-object construction/normal-exit cleanup to copy/move, temporaries, arrays/subobjects, inline ODR, inheritance, virtual dispatch and RTTI |
 | Exceptions | Throw/catch matching, unwind cleanup, rethrow and noexcept; never erase handlers or destructors |
 | Statements | Remaining control flow, lambdas, captures, structured bindings and statement attributes |
 | Input | C++ preprocessing modes, all literal/token forms, headers, diagnostics and language/extension CLI routing |
@@ -357,3 +360,63 @@ implemented [shift operand promotions](https://github.com/llvm/llvm-project/blob
 and [logical operand checks](https://github.com/llvm/llvm-project/blob/923a5c4f83d2b3675bb88e9fe441daeaa4d69488/clang/lib/Sema/SemaExpr.cpp#L13169-L13298).
 The C++ bool projection and lazy evaluation are implemented in PCC's existing
 C AST/IR path; no Clang runtime dependency or copied implementation is added.
+
+### Non-inline static member function boundary
+
+Static member declarations and out-of-class bodies use the same nominal class
+scope, access checks, explicit-parameter overload resolution and Itanium name
+encoding as ordinary members. They have no implicit object ABI parameter and
+cannot use `this` or unqualified non-static members without an object. Calls
+through a class-qualified name need no object; object-qualified calls preserve
+the base expression's effects before evaluating arguments without reading the
+class value. A dot base whose discarded evaluation has not been modeled remains
+an explicit capability error.
+
+The first static-function slice admits homogeneous static overload sets.
+Same-signature static/non-static declarations are invalid; distinct-signature
+mixed overload sets remain explicitly unsupported pending implicit-object
+ranking. In-class inline bodies, member templates, static data, function
+pointers and their ODR/lifetime requirements are not implied by this slice.
+The original TinyXML2 `XMLUtil` static declaration shapes are useful focused
+inputs, but their admission is not compilation of TinyXML2's original header,
+translation unit, inline definitions or project.
+
+The authored ordinary and execution/reference cases are in
+`test_cpp_static_members.py` and `test_cpp_static_member_execution.py`.
+They distinguish no-object ABI, class access/lookup, effects ordering and
+cross-translation-unit calls. The rules follow C++17 N4659
+[class.static](https://timsong-cpp.github.io/cppwp/n4659/class.static),
+[class.static.mfct](https://timsong-cpp.github.io/cppwp/n4659/class.static.mfct)
+and [over.load](https://timsong-cpp.github.io/cppwp/n4659/over.load).
+
+
+### Complete-object construction and normal-exit destruction
+
+Non-inline constructor declarations and out-of-class definitions now lower to
+complete-object C1 entry points using the existing class layout and explicit
+`this` ABI. Automatic direct/default construction initializes scalar/pointer
+fields in declaration order, irrespective of mem-initializer spelling order.
+Explicit empty member initializers value-initialize; omitted scalar members
+remain indeterminate, never receive invented zero stores. Const member
+initialization is distinct from a later assignment. Default member initializers,
+copy/list construction, arrays, bases, delegation and nontrivial subobjects are
+not included in this published boundary.
+
+Non-inline destructor declarations and out-of-class definitions lower to D1.
+Completed automatic objects are registered in lexical lifetime scopes, including
+implicit single-statement scopes. Fallthrough, return, break and continue clean
+up in reverse construction order; return-value conversion and capture happen
+before destructor effects. A for-init object survives continue and is destroyed
+once on loop exit. Switch entry cannot bypass initialization. This is normal
+structured exit only, not exception unwinding, noexcept support, delete/D0,
+base/D2, virtual dispatch, temporary materialization or inline/COMDAT ownership.
+Unsupported lifetime paths fail before emission rather than lose cleanup.
+
+`constructors.py`, `destructors.py` and `lifetimes.py` own these rules and reuse
+the C AST/control backend. Ordinary and same-original G++17 execution pairs live
+in `test_cpp_constructors.py`, `test_cpp_constructor_execution.py`,
+`test_cpp_destructors.py` and `test_cpp_destructor_execution.py`; two-TU tests
+exercise actual C1/D1 linkage. These host-pcc0 results do not qualify native
+pcc1, full bootstrap, the five collectors, NumPy or unmodified TinyXML2. Its
+in-class constructor/method bodies still require genuine inline/ODR support.
+Rules follow N4659 [class.base.init], [class.dtor], [stmt.jump] and [stmt.return].

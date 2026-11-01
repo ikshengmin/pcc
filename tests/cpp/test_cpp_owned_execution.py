@@ -167,7 +167,6 @@ def test_cpp_project_link_does_not_synthesize_missing_definitions(owned_only):
 @pytest.mark.parametrize(
     "source,code",
     (
-        ("struct Guard { ~Guard(); };", "cpp.unsupported.classes"),
         ("template<class T> struct Box {};", "cpp.unsupported.classes"),
         ("int cpp_test_entry(){throw 1;}", "cpp.unsupported.exceptions"),
         ("int cpp_test_entry(){return missing;}", "cpp.undeclared"),
@@ -269,3 +268,14 @@ def test_cpp_host_owned_matches_explicit_cpp17_oracle(tmp_path, name, units, val
     reference_result = run_executable(reference)
     assert_exact(reference_result, expected)
     assert_exact(run_executable(owned), reference_result)
+
+
+def test_original_unused_destructor_declaration_compiles_to_stable_native_artifact(owned_only):
+    # Keep the original declaration TU unchanged. A separate entry TU supplies
+    # the harness, without inventing a destructor definition that is not used.
+    units = (("original-declaration.cpp", "struct Guard { ~Guard(); };"),
+             ("entry.cpp", "int cpp_test_entry(){return 42;}"))
+    first, second = compile_host_cpp(units), compile_host_cpp(units)
+    assert first.objects == second.objects
+    assert first.executable == second.executable
+    assert first.ir == second.ir

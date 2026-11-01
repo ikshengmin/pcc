@@ -127,7 +127,8 @@ class CppParserTests(unittest.TestCase):
         self.diagnostic("template<class T> struct Box {};", "cpp.unsupported.classes")
 
     def test_lifetimes_and_exceptions_are_never_dropped(self):
-        self.diagnostic("struct Guard { ~Guard(); };", "cpp.unsupported.classes")
+        ast = self.parse("struct Guard { ~Guard(); };")
+        self.assertEqual(ast.ext[1].name, "_ZN5GuardD1Ev")
         self.diagnostic("int main(){throw 1;}", "cpp.unsupported.exceptions")
         self.diagnostic("int main(){try{return 1;}catch(...){return 0;}}",
                         "cpp.unsupported.exceptions")
@@ -138,7 +139,10 @@ class CppParserTests(unittest.TestCase):
 
     def test_preprocessor_and_unknown_trailing_source_do_not_disappear(self):
         self.diagnostic("#include <vector>\nint main(){}", "cpp.unsupported.preprocessor")
-        self.diagnostic("int main(){return 0;} namespace n{struct Guard{~Guard();};}", "cpp.unsupported.classes")
+        ast = self.parse("int main(){return 0;} namespace n{struct Guard{~Guard();};}")
+        self.assertEqual(ast.ext[-1].name, "_ZN1n5GuardD1Ev")
+        self.diagnostic("int main(){return 0;} namespace n{struct Guard{~Guard(){}};}",
+                        "cpp.unsupported.inline-member-functions")
 
     def test_reusing_parser_does_not_retain_prior_names(self):
         parser = CppParser()

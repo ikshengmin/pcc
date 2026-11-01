@@ -1,8 +1,9 @@
-"""Non-static member functions with nominal ownership and an implicit object.
+"""Member functions with nominal ownership and explicit static/object rules.
 
 N4659 [class.mfct], [over.match.funcs], [class.access], [expr.call]; Itanium
-ABI 3.1.2.1 and 5.1.5. The implicit this argument is a real first parameter,
-not part of the source parameter list or its mangled encoding. No object
+ABI 3.1.2.1 and 5.1.5. For non-static members, the implicit this argument is
+a real first parameter, not part of the source parameter list or its mangled
+encoding. Static members have no object parameter ([class.static.mfct]). No object
 header, second layout engine, virtual dispatch or private runtime is added.
 
 The first emission boundary is non-inline declarations and out-of-class
@@ -35,7 +36,9 @@ def mangle_member(owner, name, parameters, const=False):
                               for t in parameters) or "v")
 
 
-def declare_member_function(definition, symbol, const=False, outside=False):
+def declare_member_function(definition, symbol, const=False, outside=False, static=False):
+    if static and const:
+        raise CppDiagnostic("cpp.static-member-cv", "a static member function cannot have cv-qualifiers", symbol.coord)
     scope = definition.scope
     group = scope.names.get(symbol.name)
     if group is not None and (group.kind != "function"
@@ -45,6 +48,13 @@ def declare_member_function(definition, symbol, const=False, outside=False):
         raise CppDiagnostic("cpp.invalid-constructor", "a constructor cannot have a return type", symbol.coord)
     if group is not None:
         for previous in group.overloads:
+            previous_static = getattr(previous, "method_static", False)
+            if previous.parameters == symbol.parameters and (static or previous_static):
+                if not outside and static != previous_static:
+                    raise CppDiagnostic("cpp.static-nonstatic-overload",
+                                        "static and non-static members cannot share an explicit signature", symbol.coord)
+                if const:
+                    raise CppDiagnostic("cpp.static-member-cv", "a static member function cannot have cv-qualifiers", symbol.coord)
             if previous.parameters != symbol.parameters or previous.method_const != const:
                 continue
             if not same_type(previous.dtype, symbol.dtype):
@@ -57,8 +67,13 @@ def declare_member_function(definition, symbol, const=False, outside=False):
             return previous
     if outside:
         raise CppDiagnostic("cpp.no-matching-member", "definition does not match a declared member function", symbol.coord)
+    if group is not None and any(getattr(previous, "method_static", False) != static
+                                 for previous in group.overloads):
+        raise CppDiagnostic("cpp.unsupported.mixed-static-overloads",
+                            "mixed static/non-static overload sets require implicit-object ranking", symbol.coord)
     symbol.class_owner = definition.dtype
     symbol.method_const = const
+    symbol.method_static = static
     symbol.access = definition.access
     symbol.owner = scope
     symbol.language_linkage = "C++"
@@ -119,3 +134,34 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     dtype = unqualified(selected.dtype)
     return type(object_expression)(node, dtype,
         constant_fact=not_constant(dtype, "call to a non-constexpr member function", coord))
+
+
+def is_static_group(group):
+    """Every admitted overload set is homogeneous until object-rank support."""
+    return bool(group.overloads) and all(getattr(method, "method_static", False)
+                                         for method in group.overloads)
+
+
+def call_static_member(parser, group, arguments, coord, discarded_base=None):
+    # [class.static.mfct]: no this parameter. [expr.ref]/[expr.call]: an
+    # object-qualified postfix expression is still evaluated before arguments.
+    from pcc.frontends.cpp.classes import is_class_type
+    from pcc.frontends.cpp.parser import Expression
+
+    if parser.template_function is not None or parser.instantiating_template:
+        raise CppDiagnostic("cpp.unsupported.member-templates",
+                            "member calls in templates require dependent lookup", coord)
+    arguments = [parser._decay_array(arg) for arg in arguments]
+    if any(is_class_type(arg.dtype) for arg in arguments):
+        raise CppDiagnostic("cpp.unsupported.class-value-abi", "class by-value arguments need lifetime ABI", coord)
+    selected = resolve_overload(group, [arg.dtype for arg in arguments], parser.types,
+                                coord, [arg.null_pointer for arg in arguments])
+    parser.scope.check_member_access(selected, coord)
+    converted = [parser._convert(arg, dtype, coord)
+                 for arg, dtype in zip(arguments, selected.parameters)]
+    node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
+    if discarded_base is not None:
+        node = c_ast.ExprList([discarded_base, node], coord)
+    dtype = unqualified(selected.dtype)
+    return Expression(node, dtype,
+                      constant_fact=not_constant(dtype, "call to a non-constexpr static member function", coord))

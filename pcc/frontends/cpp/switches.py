@@ -55,10 +55,19 @@ def parse_switch(parser):
     context = SwitchContext(dtype, body_scope)
     parser.scope = body_scope
     parser.switch_contexts.append(context)
+    parser.lifetimes.push_control("switch")
+    parser.lifetimes.enter()
     try:
         body = (parser._block(new_scope=False) if parser._peek().value == "{"
                 else parser._statement())
+        cleanup = parser.lifetimes.current_cleanup(token.coord)
+        if isinstance(body, list):
+            body = c_ast.Compound(body + cleanup, token.coord)
+        elif cleanup:
+            body = c_ast.Compound([body] + cleanup, token.coord)
     finally:
+        parser.lifetimes.leave()
+        parser.lifetimes.pop_control()
         parser.switch_contexts.pop()
         parser.scope = parent
     if not context.labels:
@@ -119,5 +128,6 @@ def parse_case(parser):
         raise CppDiagnostic("cpp.case-statement-required", "C++17 labels require a following statement", token.coord)
     statement = parser._statement()
     statement = c_ast.EmptyStatement(token.coord) if statement is None else statement
-    return (c_ast.Default([statement], token.coord) if expression is None
-            else c_ast.Case(expression, [statement], token.coord))
+    statements = statement if isinstance(statement, list) else [statement]
+    return (c_ast.Default(statements, token.coord) if expression is None
+            else c_ast.Case(expression, statements, token.coord))

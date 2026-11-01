@@ -137,7 +137,7 @@ class Declarator:
 
 
 class DeclaratorParser:
-    """Recursive named-declarator parser on the frontend's buffered cursor.
+    """Recursive named/abstract declarator syntax on the buffered cursor.
 
     Callbacks are called after an opening delimiter and must leave its closing
     delimiter unconsumed. They return checked parameter/bound objects, which
@@ -145,8 +145,9 @@ class DeclaratorParser:
     recognized. Callbacks used during tentative parsing must be scope-read-only,
     just as this parser is. The caller owns declaration/expression ambiguity.
 
-    Abstract declarators, attributes, packs, trailing returns, template-ids and
-    exception specifications are not silently accepted by this component.
+    Abstract syntax is entered only through parse_abstract; its semantic
+    admission stays with the caller. Attributes, packs, trailing returns,
+    template-ids and exception specifications remain explicit boundaries.
     """
 
     def __init__(self, cursor, parse_identifier, parse_parameters=None,
@@ -170,7 +171,16 @@ class DeclaratorParser:
     def parse(self, parse_suffixes=True):
         return self._parse(parse_suffixes, False)
 
-    def _parse(self, parse_suffixes, plain_only):
+    def parse_abstract(self):
+        """Read real abstract-declarator chunks, without a synthetic name.
+
+        The caller supplies the already-resolved base type. A parenthesized
+        pointer/reference declarator differs from a function suffix; no source
+        token is inserted or changed to reuse the named grammar.
+        """
+        return self._parse(True, False, abstract=True)
+
+    def _parse(self, parse_suffixes, plain_only, abstract=False):
         start = self.cursor.peek()
         prefixes = []
         while self.cursor.peek().value in ("*", "&", "&&"):
@@ -189,11 +199,16 @@ class DeclaratorParser:
                     self.cursor.peek().coord,
                 )
             prefixes.append(DeclaratorChunk(kind, token, qualifiers))
-        if self.cursor.peek().value == "(":
+        grouping = (self.cursor.peek().value == "(" and
+                    (not abstract or self.cursor.tokens[self.cursor.position + 1].value
+                     in ("*", "&", "&&", "(", "[")))
+        if grouping:
             self.cursor.take()
-            inner = self._parse(parse_suffixes, plain_only)
+            inner = self._parse(parse_suffixes, plain_only, abstract)
             self._expect(")")
             name, chunks = inner.name, list(inner.chunks)
+        elif abstract:
+            name, chunks = None, []
         else:
             name = parse_qualified_name(self.cursor, self.parse_identifier)
             if self.on_name is not None:

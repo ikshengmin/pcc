@@ -5,7 +5,7 @@
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:cda211ae5a20eadbc4b5ede75c354f18d0fd849a55c94a1b2a0408572b6b35fa",
       "suite_source_sha256": "cda211ae5a20eadbc4b5ede75c354f18d0fd849a55c94a1b2a0408572b6b35fa",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -24,17 +24,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "e530ffdfbcce58be67e59223744063f032d9a25d5445329b3e9ce443c2c86db3",
-        "reference_receipt_sha256": "d7095c95e903db4a6dd754376c74f8ee32abee925ea5a22d1f91ddb4c6354e4f",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "a4e9cb0173af8f6ebdfbf0cd220a68bd509ea5dbb05186fa775c6356964af617",
+        "reference_receipt_sha256": "7be1bbb7ce3434953cafd8c3bebed5af6fcd1d0cede9dd05657ccd28ee1abcdb",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:0a79a74861cd519940ba5ac40a7bd614374ae5658c0b63e0cd7ab96b782b8e0a",
       "suite_source_sha256": "0a79a74861cd519940ba5ac40a7bd614374ae5658c0b63e0cd7ab96b782b8e0a",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -53,17 +53,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "22570cf9f41e03b3c1b9da1b75ec6de0fe5ed4d795f101d110675858059e2b34",
-        "reference_receipt_sha256": "44a642ed9dbb7864650520c1e885da97c044d3e2b1523b03e49425b2ee69b99c",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "af30e274c9b6eebff3179bb22736123523c0b106680b0ea09b3a3997480ab589",
+        "reference_receipt_sha256": "807dfff389b29d9dcbce191fa1a4339ce4fc3ce9252fad97b93fbe00c658236e",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:68bc8dc82a784569515c0a21255e9d3216d00da5175de72157dbbdde92eb5501",
       "suite_source_sha256": "68bc8dc82a784569515c0a21255e9d3216d00da5175de72157dbbdde92eb5501",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -82,17 +82,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "f478099c5e4789804737b1ca539daae14cfa7e2afd1c1c04995cfad20f52f92d",
-        "reference_receipt_sha256": "85990785ef1626442ed90b95b4761691713d9cb1a01d1d9dfb084e5283571a88",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "6083d6163939e6d63c1bedba7b2f4f6b997ba56364e9d07b31aa355eab784ff6",
+        "reference_receipt_sha256": "819c5ebb4bae011308dafdaad03d721d1d085afa8a6bcd23dc80318b5d684f48",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:38b446881fe7def4bca7e8ab05f1f8576f97b4759e1d5d1ffa57015a271ed983",
       "suite_source_sha256": "38b446881fe7def4bca7e8ab05f1f8576f97b4759e1d5d1ffa57015a271ed983",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -111,17 +111,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "222d7fdbd156b8cd1764a1b0327476e2d71d168f21275e130d1f46a0e5553772",
-        "reference_receipt_sha256": "7eb782576c93752233beada1d91247eeb5ae5b7d8fdc7c3afc3e7bf09b2a57b4",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "a722b4b1ac0b8c83873c68f990baea994f978318df0528893144bf7e3e6ed459",
+        "reference_receipt_sha256": "de961f99903c4fe8d980b9bd02e294ccda6ebda6c0c61944be072a08d6583f72",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:2e59bd4a81cfe2453a0b6bf1a418159300537e6f5131db5835b12274fbe40c59",
       "suite_source_sha256": "2e59bd4a81cfe2453a0b6bf1a418159300537e6f5131db5835b12274fbe40c59",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -140,17 +140,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "9bdfff3d030e44fc0419812e12cb6be50c7d7935ebd982747191388e2d71a588",
-        "reference_receipt_sha256": "cfcd4d9ff1e44ed1c5d97333abb63ad14a4d74baa58c9631c83ff79d285733c8",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "de9a90003500b12d6d35c7bc358753d9563b29951dca0608c07474177c4722cb",
+        "reference_receipt_sha256": "ccd061df5f4a852216b979b3a3e0d3f4d78c539c4308a370a5e7a3e8b351b5c6",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:f6aa16f6fc0880e24b37717b98109c1e6fc3669b6e56ccc4b6ed13d5b4a26afd",
       "suite_source_sha256": "f6aa16f6fc0880e24b37717b98109c1e6fc3669b6e56ccc4b6ed13d5b4a26afd",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -169,17 +169,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "50ce747ea37280941781e1896ba01b2d25258fd067b5aeb7ddca3de75687c071",
-        "reference_receipt_sha256": "ae71035b7272eb28666f1214b17132d59242e86a3dbfc425d423099cadf9468b",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "7b8db4598ab1c854859f9df9a2d284eaa3f722d0d420008f409b0167b5d9d0c2",
+        "reference_receipt_sha256": "8d3cb7e127dad53824ebb081f1a1d011030e41e682fc0d08c3e3d5868897ad37",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:7fcec586f0fbf1c29fcfb4b3f2d215fb95b83159aeb7f4f9407745cd9471386a",
       "suite_source_sha256": "7fcec586f0fbf1c29fcfb4b3f2d215fb95b83159aeb7f4f9407745cd9471386a",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -198,17 +198,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "fc2371ccc53c2d6c6e563cb00d884b09f0919ed5927871d7b51d2ce8a538a4b4",
-        "reference_receipt_sha256": "993fdb3ac433be1c522f5e25d1d6ef1fa0af0e5693d5ec45d35b7c90d92801d5",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "e3e3a9b481321142c7a1364a472f85aab349a6cab4e865808d8239345bce3ad5",
+        "reference_receipt_sha256": "5d44e472e19cd85de80e24b28225ad4f0ea1949377e0065117e19a058e5f6f1e",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:6ef884a48b96ecc8cebcaeb50f1c73f04abb56440d68d503fdce26c4e394e5a7",
       "suite_source_sha256": "6ef884a48b96ecc8cebcaeb50f1c73f04abb56440d68d503fdce26c4e394e5a7",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -227,17 +227,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "ff4e50baf8794602b0f5bec80fbf2fde3d614015b63983531133ba16156ab0d4",
-        "reference_receipt_sha256": "3ff04a7c1c89d45dd7256da5d19e66a52c684f167d2e0cdcf7bdcadcf8aa4914",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "9ce4313cc95ce49e07d1e0c663e22b5d7fc7b781a26580e5d82c48c4a24ad923",
+        "reference_receipt_sha256": "4eee229c21d568c10c61102d23ae7ac3c493378bcdf2f6630f08fc9ffa9ba8da",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:07bb7a5939953e19800795d26b14b2b74957de45dd27f82e8a1d965b5dd62e7c",
       "suite_source_sha256": "07bb7a5939953e19800795d26b14b2b74957de45dd27f82e8a1d965b5dd62e7c",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -256,17 +256,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "b02029325e1de00973cf1005248166be55359be134da02dfa40ecf60985cddfa",
-        "reference_receipt_sha256": "1ed59f53864118a71d02d1607f62d1e7d54150687ae37758a1441d46404f98c1",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "e032d2fed9cf3de0ea47839a99127dac111b23a734d31c321af200807f868ca5",
+        "reference_receipt_sha256": "2a5ba6056b040a7ff52ba4507cc2f9853591f56cf38946b59ea6effc4dc65e02",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:89b1967a3252d3f200c836991a4b1323ba39f2d4e635c0ab4ee3d032bff27a89",
       "suite_source_sha256": "89b1967a3252d3f200c836991a4b1323ba39f2d4e635c0ab4ee3d032bff27a89",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -285,17 +285,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "062fbb92180489cdf68ec2d2e1655064460046902294fbe2f35c4b96ccd6d14b",
-        "reference_receipt_sha256": "0b70233edccd169c242a040db71da349664071f83284cef109a769788606f1c0",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "06526d0bb1f8594608a000bf7ba80bc05c4abbfea386d7697ecb916618bfb2da",
+        "reference_receipt_sha256": "22c0e36bc26c7f67d961a35fbbf7c9eec40b198b88fb30d29d0998c6ba336a96",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:893dae4aa02984616a6287ffff550d105d106a0323332d2bc7f57733502046b2",
       "suite_source_sha256": "893dae4aa02984616a6287ffff550d105d106a0323332d2bc7f57733502046b2",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -314,17 +314,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "cc873a7242c05b76a135217e4d9b99f662f96a9d506acca79fc7ea0623c9db34",
-        "reference_receipt_sha256": "a2865e7830e0dd052db6ad58015a57a7059aed1a3df84a4b27d5bd735892e59b",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "71fff5c1e504641bbaf8682f1b4ac008b81f1ef3833e751fa2ca88ef1fffce23",
+        "reference_receipt_sha256": "21408a666a35e9c90a22811d57cfaba4758bae0d4cfa4295d90c2841153bed94",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:735b1053a2517a46ce67aaea72e906fddc3013a9ec99ef8c170305604f2726d1",
       "suite_source_sha256": "735b1053a2517a46ce67aaea72e906fddc3013a9ec99ef8c170305604f2726d1",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -343,17 +343,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "54c8cd0d29cda047e7a192d72a9ea5fac5e107195fa273d714b29923e8bc87d3",
-        "reference_receipt_sha256": "b977fd6d34a2be04eafca540dbf72f6ce36dd9e0cf525858b2a24e0de1c09fc0",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "da4be0f18e6383941c5b9d3470933be980021345af39cee57fa9e4851a529283",
+        "reference_receipt_sha256": "57652e3af3b8eb51b71ed164e2d8218ba93f65d6fbe4c730dc69709f2e365e7b",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:5f36833d22452bf2f855b6cba972d771428fefc1cf215d96b20d6422e99334cf",
       "suite_source_sha256": "5f36833d22452bf2f855b6cba972d771428fefc1cf215d96b20d6422e99334cf",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -372,17 +372,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "aa2280a9b1322db6a8b9d22e3284a416403868881e1250f048dacdfe0bd97f95",
-        "reference_receipt_sha256": "b38d24a9c648d6bbdd2665589498095170102a219c897cc0e0ca370b3b3b1eac",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "604a68d5ef66738f16d828a341f0e354461d3fce8526f825cf5b359241ca9c55",
+        "reference_receipt_sha256": "e348d14fe86c6bce10b27fd9f17b04ed3c47070595c979e94d54318ea9b882f1",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:ce24280f0706b78f84f7a8bb674a6dc3a1b2ea356e180b104cab057e34b3349b",
       "suite_source_sha256": "ce24280f0706b78f84f7a8bb674a6dc3a1b2ea356e180b104cab057e34b3349b",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -401,17 +401,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "04390f78fe12c53d36e5a1a358a2cb1abc9f906a499d96eb357379a6273ca6f2",
-        "reference_receipt_sha256": "afc3c16e7f4993b93b880a4fac9021bf678ad38cc8aef982f3562b679f76bd11",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "533241960434eafc4a0cdd266b8fef214b19d02f1128516cbc5a27baf23973ea",
+        "reference_receipt_sha256": "d5f85c0be1e4d988fd2a004902f5ac9f139439a85e92aeaaf6756362f946fdb7",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:d0ff1b3c72a82d213aeec16d520f4f59d26d1293f771658a22f6dda5fbb2d604",
       "suite_source_sha256": "d0ff1b3c72a82d213aeec16d520f4f59d26d1293f771658a22f6dda5fbb2d604",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -430,17 +430,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "c5bd06357c66f64f77f5c30774749b24cb794f3302f1765c097e6c775f5ed94c",
-        "reference_receipt_sha256": "42f67aaa01df5db1dd97baf8812663df35b00756d326ac8eb47bf8ad6df03785",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "a516643b89d5ccfaec13653ffe0e4eb161711c7e640f4bed93be001cb675181e",
+        "reference_receipt_sha256": "68e0b9e7329e0d7fe7db0b30cc6ff86f7b7f8174438a2b8cf7063859597ac356",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:04ba51f2a6910f7374bb3f58c22af27deb9b8797ce34ea0c6a2ab4fb80fcf3ab",
       "suite_source_sha256": "04ba51f2a6910f7374bb3f58c22af27deb9b8797ce34ea0c6a2ab4fb80fcf3ab",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -459,17 +459,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "efd2292c1700d695f0dea982758618c886f19b168799c67b2a9e5d73d160bd62",
-        "reference_receipt_sha256": "309400d85d989f9da821e5f8fb27ccb663fbd7bce3539746ad08d6754b0c74bc",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "50c18efb46734ccbd6a1c7f66b2a1083af8897c959c9e1a72692ee3932fb43a1",
+        "reference_receipt_sha256": "b96ca75c1e8da2c4f9f234345452064b7b8da0e762abfe151f4b86572eefefed",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:9fc1c53db2d5553002a68a294a5a8d187607f7403e726bc1daebbd30dbdb9347",
       "suite_source_sha256": "9fc1c53db2d5553002a68a294a5a8d187607f7403e726bc1daebbd30dbdb9347",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -488,17 +488,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "67563b80ef28db701e86e3ba50010ff3b3566d5a4e4a07fce9d2c58e7196175c",
-        "reference_receipt_sha256": "0d116082deafe2e98d247a6f985bada9f90b8b1cea529e34a664c52e14788c85",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "6a353319d25fa77d4b2ecea5cabb0206e472f08100eaee2206f5ac966f4dda0a",
+        "reference_receipt_sha256": "bc5cb4f8e53acaf15b14bd0414c42219e15cef0e05f26f8a9d984540e973ac50",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:2e001ee661c7619ea025b4880dca81666bcb5e32dd81fefcb209fc3792601bb1",
       "suite_source_sha256": "2e001ee661c7619ea025b4880dca81666bcb5e32dd81fefcb209fc3792601bb1",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -517,17 +517,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "37be9366d5306f08c3ab6a9ff1246cb83de00a8061ea86419aa6fb6b4f31355e",
-        "reference_receipt_sha256": "1482ad74203b6b429d249e3ba5392b2a147b80cb2f63fdb12468c3ba9788dbf9",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "57717dea8943a5ed3eff523de26ff39f4ff194fcd87fc6b6afda8d97e8bffebe",
+        "reference_receipt_sha256": "14cf88d0f7307f3d87730d130298d067e2b401954ff30bf98f1a25d889fc2353",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:a178c8dd8d273035cca9536ebfb517cc382ec8676d58245867ca012baf17e2b5",
       "suite_source_sha256": "a178c8dd8d273035cca9536ebfb517cc382ec8676d58245867ca012baf17e2b5",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -546,17 +546,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "92a6f13fad7b21e116eba9e31325613eedf3c2ee7468651face22c53a477bb25",
-        "reference_receipt_sha256": "8dd21ef010f6217d77e9e346d20db394a653da73e3c2694e9bfadcd3a19b1f17",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "1763deb9b9857651fc1af69fb42e21b948ec7cfca4f887efbf85a72222c6fb35",
+        "reference_receipt_sha256": "c5a2388e6adeb8472c88d6f6cae2520c4bc2459b8c1315fe6ffb86982bd98065",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:730e7c643beffab5cd3e2cb11943116183ec9b3b781d723d5659eb9bdd6e809f",
       "suite_source_sha256": "730e7c643beffab5cd3e2cb11943116183ec9b3b781d723d5659eb9bdd6e809f",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -575,17 +575,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "384b9f41818fec48399f3bd59977a273a79a6ceb435abf7427a6746db89ca156",
-        "reference_receipt_sha256": "aa211a25b010fe2b783087ab4764d60722cf41b383d774fa28ed9d1ee708f961",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "be140be5bcb5f33e8722a85da71cf011663a94823cb4db8f29128e04f92ad8ec",
+        "reference_receipt_sha256": "5ce145ec86bedbdf59db9092b9cd24c32d9f45d9e07f6d8b53f70d834ff01e1b",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:5ccfc296deb87e3a08b7ad2b8a10072c5b71e3fea12a6495aa7920315acb0773",
       "suite_source_sha256": "5ccfc296deb87e3a08b7ad2b8a10072c5b71e3fea12a6495aa7920315acb0773",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -604,17 +604,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "7c3a928f82e14300d5abf338fb46c415690d78f2ef5d8b425f3bfe30cff18f47",
-        "reference_receipt_sha256": "d03d2255adabeea188bc1b89c281bc1a57dc25896af5147159c964294b383bd3",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "da4eea554a3b761651ebe79049166e3eb024e2f1da584402aa209fb6e437657c",
+        "reference_receipt_sha256": "bc029544404ec827d8d4d5265d69ac92c0091ab68e10e9ee30a1363491385b9f",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:e91ee02324dc27fd7a3a8fa914e5c9923ffd0537fcaff82ff51a239dc7ef39ff",
       "suite_source_sha256": "e91ee02324dc27fd7a3a8fa914e5c9923ffd0537fcaff82ff51a239dc7ef39ff",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -633,17 +633,17 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "8c74f1340c03d1c43a409618ed24acb164db8187e68ea5cff640de827e746655",
-        "reference_receipt_sha256": "0ee599dcc25c23296a3d73670d5c503e2631b65ac86f5dbb1a7a6a8e18f2c7a6",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "bdbf25a1ff47919e5d060d486ec74c1ef036d527a15a2d536da1d32df56eec15",
+        "reference_receipt_sha256": "06393d525c91e53188c5243ae6d5f7dc3b42b888a8d49d45010c6bdb917894bd",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
       }
     },
     {
       "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:c3a10a9565a8a515ee3217085d65fa74f8efbf20c29a4d4116838098c5f1c2ae",
       "suite_source_sha256": "c3a10a9565a8a515ee3217085d65fa74f8efbf20c29a4d4116838098c5f1c2ae",
-      "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
       "mode": "pcc0",
       "platform": "linux-x86_64",
       "backend": "self",
@@ -662,10 +662,126 @@
       "verification": {
         "level": "retained_process_artifacts",
         "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "cb41aa65c516b0266c5c0528e72643c17ad0b428",
-        "actual_receipt_sha256": "908f05eef9b55b72d191251786f4c0e6458392fe8e80b68f7442a7d4207a1c3f",
-        "reference_receipt_sha256": "cd8ca42e6cbc37ceea2e8a1388c8ef8e24722f90d7b4f75a72362c5d90cea8b2",
-        "test_source_sha256": "5d9e1818838e184a498484d63ebfdfb0a8bf42e16eb33590b3d1980a00680b9e"
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "0b246484939e2c8a8b10b7df3a81882eb3f36278219022b63173123396f2498e",
+        "reference_receipt_sha256": "0753cbcf20722c8f47a4b582f3039a074674dab66d5486992433771f3febae1f",
+        "test_source_sha256": "0c9904c5d8ad1add95f730572ec2e07a91367a1f1e3d7669b504d1e88776cb10"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:353f4e2851301ce10dc66a2bc6082497b08b4a012652937be95362dd68237ecb",
+      "suite_source_sha256": "353f4e2851301ce10dc66a2bc6082497b08b4a012652937be95362dd68237ecb",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_static_member_execution.py::test_static_original_program_matches_explicit_reference[qualified-no-object]",
+      "input_sha256": "353f4e2851301ce10dc66a2bc6082497b08b4a012652937be95362dd68237ecb",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "a09063b72487d829d3635c910fb2f9d86d846fef3b27013a7a3679b42ae0843b",
+        "reference_receipt_sha256": "e2a78ea3539b2cd55caa3a85f5b28f54c2314ecd2b3f10c61c3922f033b00880",
+        "test_source_sha256": "ad7fd25ede36a73a1065c19794c0b3a8a84fedc29f9cc0b445140f89dffd5094"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:d260f8b1a971c1ace1b65d7fe837ea49efee3ea7f837847f84c6f758717af795",
+      "suite_source_sha256": "d260f8b1a971c1ace1b65d7fe837ea49efee3ea7f837847f84c6f758717af795",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_sizeof.py::test_sizeof_same_original_native_and_reference[fundamental-type]",
+      "input_sha256": "d260f8b1a971c1ace1b65d7fe837ea49efee3ea7f837847f84c6f758717af795",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "049f1f40ce08da56a14ba5d42116b0a4e51ab164659daefdd2172859c43373eb",
+        "reference_receipt_sha256": "c89d5247bf881ee676b26d03dd3f562fb89894f0358c4e1deee3e625f63635e2",
+        "test_source_sha256": "cf59b7d7c11fd394819a38b24e763173ee584e1f5b646f446c28a845998c43af"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "suite_source_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
+      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "36ad616eab3740f54850b567d30c268eb35933cdfef43b3c6a2bfde6b3cf06fb",
+        "reference_receipt_sha256": "afd221eef3173670f1e7bccf77701b019328b62964fc7af776eee9c7fabf968a",
+        "test_source_sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:6bfc26fcfca29a86c5458bd0b2e03e675ea8b2302d69660538620770d5a1e845",
+      "suite_source_sha256": "6bfc26fcfca29a86c5458bd0b2e03e675ea8b2302d69660538620770d5a1e845",
+      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_destructor_execution.py::test_destructor_original_programs_match_reference[reverse-declaration-order]",
+      "input_sha256": "6bfc26fcfca29a86c5458bd0b2e03e675ea8b2302d69660538620770d5a1e845",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
+        "actual_receipt_sha256": "e327919b44b96709fa8c97f556543940a05591b86be55335920c40283f178b3c",
+        "reference_receipt_sha256": "2b90cd296d2fe4442cd17ebae2c9a4f999c4914d3175d8fca1b6bdce57c8225a",
+        "test_source_sha256": "0bb81470d01b09fed4e86ac917f3c80b8c5d716af30e0f72a4da58160463fb62"
       }
     }
   ]

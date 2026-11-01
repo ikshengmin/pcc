@@ -8,6 +8,7 @@ semantics. Unimplemented features remain explicit errors.
 """
 
 from pcc.frontends.c.ast import c_ast
+from pcc.frontends.c.c_abi_layout import c_size_type_name
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.support.instantiation import InstanceRegistry
@@ -121,7 +122,8 @@ class TentativeParse:
 class Expression:
     def __init__(self, node, dtype="int", lvalue=False, symbol=None, null_pointer=False,
                  assignment_result=False, constant_fact=None, discarded_known=False,
-                 discarded_node=None, discarded_fact=None, static_address=None):
+                 discarded_node=None, discarded_fact=None, static_address=None,
+                 qualified_member=None):
         self.node = node
         self.dtype = dtype
         self.lvalue = lvalue
@@ -136,11 +138,17 @@ class Expression:
         self.discarded_node = discarded_node
         self.discarded_fact = discarded_fact
         self.static_address = static_address
+        # An unparenthesized qualified-id retains its declaration identity for
+        # [expr.unary.op]/3-4. In particular &S::x is not an ordinary T* even
+        # in an unevaluated operand. Parentheses remove this syntactic role,
+        # but do not remove the implicit object's cv-qualified member type.
+        self.qualified_member = qualified_member
 
 
 class CppParser:
     def __init__(self, target_triple=None):
         self.types = ArithmeticTypes(target_triple)
+        self.unevaluated_depth = 0
         self.instantiating_template = False
 
     def parse(self, text, filename=""):
@@ -151,9 +159,12 @@ class CppParser:
         self.this_symbol = None
         self.parsing_template = False
         self.instantiating_template = False
+        self.unevaluated_depth = 0
         self.instance_registry = InstanceRegistry()
         self.loop_depth = 0
         self.switch_contexts = []
+        from pcc.frontends.cpp.lifetimes import AutomaticLifetimes
+        self.lifetimes = AutomaticLifetimes()
         self.assignment_index = 0
         self.local_projection_index = 0
         self.function_projection_names = set()
@@ -208,7 +219,7 @@ class CppParser:
                 declaration = parse_class(self)
                 declarations.append(declaration)
                 # A class has no storage field for a method. Publish real C
-                # prototypes after its record definition, with explicit this.
+                # prototypes after its record definition, with this only for non-static members.
                 dtype = self.last_class_definition
                 if dtype is not None:
                     declarations.extend(dtype.method_declarations)
@@ -219,7 +230,14 @@ class CppParser:
             elif value == "template":
                 self._template()
             else:
-                declaration = self._function(implicit_extern=single)
+                from pcc.frontends.cpp.constructors import constructor_ahead, parse_constructor
+                from pcc.frontends.cpp.destructors import destructor_ahead, parse_destructor
+                if destructor_ahead(self):
+                    declaration = parse_destructor(self)
+                elif constructor_ahead(self):
+                    declaration = parse_constructor(self)
+                else:
+                    declaration = self._function(implicit_extern=single)
                 if declaration is not None:
                     declarations.append(declaration)
             if single:
@@ -369,7 +387,7 @@ class CppParser:
                                 "pointer/cv template types are not implemented", token.coord)
         if dependent(dtype):
             return dtype
-        if not self.types.value_lowering_supported(dtype):
+        if not self.types.value_lowering_supported(dtype) and not self.unevaluated_depth:
             raise CppDiagnostic("cpp.unsupported.extended-float",
                                 "target long double value/ABI lowering is not implemented",
                                 token.coord)
@@ -647,6 +665,55 @@ class CppParser:
             self.scope = parent
             self.parsing_template = False
 
+    def _parameter_clause(self, params=None, parameter_symbols=None):
+        # Share the existing fixed-parameter grammar with sizeof type-id
+        # parsing. A supplied list keeps the ordinary function's declaration
+        # identities and parameter-scope point-of-declaration behavior.
+        if params is None:
+            params = []
+        if parameter_symbols is None:
+            parameter_symbols = []
+        if self._peek().value != ")":
+            while True:
+                dtype_token = self._peek()
+                dtype = self._type()
+                # Exactly one unnamed void parameter denotes an empty
+                # parameter list, including a typedef naming void. A named
+                # or additional void parameter is never silently removed.
+                if dtype == "void" and self._peek().value == ")" and not params:
+                    break
+                param = None
+                with self.cursor.tentative():
+                    self._abstract_pointer_type(dtype)
+                    unnamed = self._peek().value in (",", ")")
+                if unnamed:
+                    dtype = self._abstract_pointer_type(dtype)
+                else:
+                    param, dtype = self._declarator(dtype)
+                if array_type(dtype):
+                    leaf = dtype.element
+                    while array_type(leaf):
+                        leaf = leaf.element
+                    if pointer_type(leaf):
+                        raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "array-of-pointer parameter qualification is not implemented", dtype_token.coord)
+                    dtype = PointerType(dtype.element)
+                if unqualified(dtype) == "void":
+                    raise CppDiagnostic("cpp.invalid-parameter",
+                                        "void must be the sole unnamed parameter",
+                                        dtype_token.coord)
+                if param is not None:
+                    # A preceding parameter can hide an outer type in a
+                    # later parameter declaration, including prototypes.
+                    parameter_symbols.append(self.scope.declare(
+                        Symbol(param.value, "value", param.coord, dtype=dtype)))
+                else:
+                    parameter_symbols.append(None)
+                params.append((param, dtype))
+                if self._peek().value == ")":
+                    break
+                self._expect(",")
+        return tuple(params)
+
     def _function(self, template_parameters=(), declaration_scope=None, implicit_extern=False,
                   member_definition=None):
         storage = None
@@ -707,46 +774,7 @@ class CppParser:
             parameter_scope.parent = member_owner.scope
 
         def parameter_clause():
-            if self._peek().value != ")":
-                while True:
-                    dtype_token = self._peek()
-                    dtype = self._type()
-                    # Exactly one unnamed void parameter denotes an empty
-                    # parameter list, including a typedef naming void. A named
-                    # or additional void parameter is never silently removed.
-                    if dtype == "void" and self._peek().value == ")" and not params:
-                        break
-                    param = None
-                    with self.cursor.tentative():
-                        self._abstract_pointer_type(dtype)
-                        unnamed = self._peek().value in (",", ")")
-                    if unnamed:
-                        dtype = self._abstract_pointer_type(dtype)
-                    else:
-                        param, dtype = self._declarator(dtype)
-                    if array_type(dtype):
-                        leaf = dtype.element
-                        while array_type(leaf):
-                            leaf = leaf.element
-                        if pointer_type(leaf):
-                            raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "array-of-pointer parameter qualification is not implemented", dtype_token.coord)
-                        dtype = PointerType(dtype.element)
-                    if unqualified(dtype) == "void":
-                        raise CppDiagnostic("cpp.invalid-parameter",
-                                            "void must be the sole unnamed parameter",
-                                            dtype_token.coord)
-                    if param is not None:
-                        # A preceding parameter can hide an outer type in a
-                        # later parameter declaration, including prototypes.
-                        parameter_symbols.append(self.scope.declare(
-                            Symbol(param.value, "value", param.coord, dtype=dtype)))
-                    else:
-                        parameter_symbols.append(None)
-                    params.append((param, dtype))
-                    if self._peek().value == ")":
-                        break
-                    self._expect(",")
-            return tuple(params)
+            return self._parameter_clause(params, parameter_symbols)
 
         try:
             declarator = DeclaratorParser(self.cursor, self._identifier, parameter_clause, self._array_bound,
@@ -760,13 +788,16 @@ class CppParser:
         for accessed, access_coord in return_lookup.deferred_member_access:
             access_scope.check_member_access(accessed, access_coord)
         if not is_function:
+            if member_owner is not None:
+                raise CppDiagnostic("cpp.unsupported.static-data-members",
+                                    "static data members require separate storage and ODR semantics", name.coord)
             if template_parameters:
                 raise CppDiagnostic("cpp.unsupported.variable-templates",
                                     "variable templates require instantiation and ODR semantics", name.coord)
             return parse_namespace_object(self, name, result_type, storage, implicit_extern)
         if array_type(result_type):
             raise CppDiagnostic("cpp.invalid-function-return", "a function cannot return an array", name.coord)
-        if storage is not None and (storage.value == "static" or template_parameters):
+        if member_owner is None and storage is not None and (storage.value == "static" or template_parameters):
             raise CppDiagnostic("cpp.unsupported.function-storage",
                                 "function storage specifiers require function linkage semantics", storage.coord)
         if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind == "template-type":
@@ -792,8 +823,9 @@ class CppParser:
         if member_owner is not None:
             if template_parameters or self.parsing_template:
                 raise CppDiagnostic("cpp.unsupported.member-templates", "member templates require separate deduction/ODR semantics", name.coord)
-            if storage is not None:
-                raise CppDiagnostic("cpp.unsupported.member-storage", "static member functions require separate object rules", name.coord)
+            if storage is not None and (member_definition is None or storage.value != "static"):
+                raise CppDiagnostic("cpp.invalid-member-storage",
+                                    "only an in-class declaration may specify static for a member function", storage.coord)
             if member_definition is not None and definition:
                 raise CppDiagnostic("cpp.unsupported.inline-member-functions", "in-class bodies need C++ inline/ODR emission", name.coord)
             if member_definition is None and not definition:
@@ -827,7 +859,8 @@ class CppParser:
             from pcc.frontends.cpp.members import declare_member_function
             const = "const" in declarator.chunks[0].qualifiers
             symbol = declare_member_function(member_owner, new_symbol, const,
-                                             outside=member_definition is None)
+                                             outside=member_definition is None,
+                                             static=storage is not None and storage.value == "static")
         else:
             symbol = registry.declare_function(new_symbol, definition)
         if template_parameters:
@@ -863,7 +896,7 @@ class CppParser:
                                  dtype, p.coord if p else name.coord)
                        for index, (p, dtype) in enumerate(params)]
         this_symbol = None
-        if member_owner is not None:
+        if member_owner is not None and not getattr(symbol, "method_static", False):
             from pcc.frontends.cpp.members import object_pointer_type
             this_symbol = Symbol("this", "value", name.coord,
                                  c_name=self._local_projection_name("this"),
@@ -901,14 +934,19 @@ class CppParser:
         if new_scope:
             self.scope = Scope(parent)
         items = []
+        self.lifetimes.enter()
         try:
             while not self._accept("}"):
                 if self._peek().kind == "EOF":
                     self._expect("}")
                 item = self._statement()
-                if item is not None:
+                if isinstance(item, list):
+                    items.extend(item)
+                elif item is not None:
                     items.append(item)
+            items.extend(self.lifetimes.current_cleanup(start.coord))
         finally:
+            self.lifetimes.leave()
             self.scope = parent
         if self.template_function is not None:
             return Pattern("block", start.coord, children=items)
@@ -960,9 +998,11 @@ class CppParser:
             self.cursor.take()
             condition = self._condition()
             self.loop_depth += 1
+            self.lifetimes.push_control("loop")
             try:
                 body = self._substatement()
             finally:
+                self.lifetimes.pop_control()
                 self.loop_depth -= 1
             if self.template_function is not None:
                 return Pattern("while", token.coord, children=[condition, body])
@@ -975,7 +1015,8 @@ class CppParser:
             self._expect(";")
             if self.template_function is not None:
                 return Pattern(token.value, token.coord)
-            return c_ast.Break(token.coord) if token.value == "break" else c_ast.Continue(token.coord)
+            jump = c_ast.Break(token.coord) if token.value == "break" else c_ast.Continue(token.coord)
+            return self.lifetimes.jump(token.value, jump, token.coord)
         if self._accept("return"):
             expression = None if self._peek().value == ";" else self._expression()
             self._expect(";")
@@ -1009,6 +1050,11 @@ class CppParser:
             if is_class_type(dtype):
                 if self.template_function is not None:
                     raise CppDiagnostic("cpp.unsupported.class-templates", "class objects in templates are not implemented", name.coord)
+                if unqualified(dtype).definition.constructors.overloads:
+                    from pcc.frontends.cpp.constructors import construct_local
+                    statements = construct_local(self, symbol)
+                    self.lifetimes.register(self, symbol)
+                    return statements
                 equals = self._accept("=")
                 if self._peek().value == "{":
                     initializer_list = parse_initializer_list(self)
@@ -1022,7 +1068,9 @@ class CppParser:
                     init = default_initialize(dtype, name.coord)
                 self._expect(";")
                 symbol.jump_entry = "class-default" if init is None else "initialized"
-                return self._decl(symbol.c_name, dtype, name.coord, init)
+                declaration = self._decl(symbol.c_name, dtype, name.coord, init)
+                self.lifetimes.register(self, symbol)
+                return declaration
             if self._accept("="):
                 if is_enum_type(dtype) and self._peek().value == "{":
                     raise CppDiagnostic("cpp.unsupported.enum-list-initialization",
@@ -1084,6 +1132,7 @@ class CppParser:
         self._expect("(")
         parent = self.scope
         self.scope = Scope(parent)
+        self.lifetimes.enter()
         try:
             init = None
             if self._accept(";"):
@@ -1109,25 +1158,33 @@ class CppParser:
                 step = self._discarded_expression_sequence()
                 self._expect(")")
             self.loop_depth += 1
+            self.lifetimes.push_control("loop")
             try:
                 body = self._substatement(for_scope=self.scope)
             finally:
+                self.lifetimes.pop_control()
                 self.loop_depth -= 1
+            cleanup = self.lifetimes.current_cleanup(start.coord)
         finally:
+            self.lifetimes.leave()
             self.scope = parent
         if self.template_function is not None:
             return Pattern("for", start.coord, children=[init, condition, step, body])
         # C's For owner scopes only its body, not its init-declaration. A real
         # compound gives the header its own lowering scope without changing C.
-        return c_ast.Compound([c_ast.For(init, None if condition is None else condition.node,
-                                         step, body, start.coord)], start.coord)
+        before = init if isinstance(init, list) else []
+        loop_init = None if isinstance(init, list) else init
+        return c_ast.Compound(before + [c_ast.For(loop_init, None if condition is None else condition.node,
+                                                  step, body, start.coord)] + cleanup, start.coord)
 
     def _do_while_statement(self):
         start = self._expect("do")
         self.loop_depth += 1
+        self.lifetimes.push_control("loop")
         try:
             body = self._substatement()
         finally:
+            self.lifetimes.pop_control()
             self.loop_depth -= 1
         self._expect("while")
         # Unlike while/for, this grammar requires an expression, not a
@@ -1183,17 +1240,30 @@ class CppParser:
         if for_scope is not None:
             self.scope.forbidden_redeclarations = frozenset(for_scope.names)
         coord = self._peek().coord
+        self.lifetimes.enter()
         try:
             statement = (self._block(new_scope=False)
                          if for_scope is not None and self._peek().value == "{"
                          else self._statement())
+            cleanup = self.lifetimes.current_cleanup(coord)
         finally:
+            self.lifetimes.leave()
             self.scope = parent
         if statement is None:
             return Pattern("empty", coord) if self.template_function is not None else c_ast.EmptyStatement(coord)
+        if isinstance(statement, list):
+            return c_ast.Compound(statement + cleanup, coord)
+        if cleanup:
+            return c_ast.Compound([statement] + cleanup, coord)
         return statement
 
     def _check_object_type(self, dtype, coord):
+        element = dtype
+        while array_type(element):
+            element = element.element
+        if array_type(dtype) and is_class_type(element) and unqualified(element).definition.constructors.overloads:
+            raise CppDiagnostic("cpp.unsupported.constructor-arrays",
+                                "array element construction requires element lifetime handling", coord)
         require_complete_array(dtype, coord)
         require_complete(dtype, coord)
         if is_enum_type(dtype) and not unqualified(dtype).complete:
@@ -1202,6 +1272,10 @@ class CppParser:
             raise CppDiagnostic("cpp.invalid-object-type", "an object cannot have type void", coord)
 
     def _return_statement(self, expression, coord):
+        if getattr(self.member_function, "destructor", False) and expression is not None:
+            raise CppDiagnostic("cpp.destructor-return-value", "destructors cannot return an expression", coord)
+        if getattr(self.member_function, "constructor", False) and expression is not None:
+            raise CppDiagnostic("cpp.constructor-return-value", "constructors cannot return an expression", coord)
         result_type = unqualified(self.return_type)
         if expression is None:
             if not dependent(result_type) and result_type != "void":
@@ -1221,12 +1295,12 @@ class CppParser:
                 self._convert(expression, self.return_type, coord)
             return Pattern("return", coord, children=[] if expression is None else [expression])
         if expression is None:
-            return c_ast.Return(None, coord)
+            return self.lifetimes.return_statement(self, None, coord)
         if result_type == "void":
             # Existing C lowering evaluates node.expr before ret void. Keep the
             # checked void expression intact so calls and other effects survive.
-            return c_ast.Return(expression.node, coord)
-        return c_ast.Return(self._convert(expression, self.return_type, coord), coord)
+            return self.lifetimes.return_statement(self, expression.node, coord)
+        return self.lifetimes.return_statement(self, self._convert(expression, self.return_type, coord), coord)
 
     def _require_value(self, expression, allow_void=False, allow_class=False):
         if is_class_type(expression.dtype) and not allow_class:
@@ -1462,8 +1536,87 @@ class CppParser:
             self._constant_fact(expression), target, self.types, coord, allow_scoped=True,
         ))
 
+    def _sizeof_type_id_ahead(self):
+        if self._peek().value != "(":
+            return False
+        with self.cursor.tentative():
+            self.cursor.take()
+            if not self._is_type(self._peek()):
+                return False
+            self._type(check_lowering=False)
+            if self._peek().value != "(":
+                return self._peek().value in (")", "*", "&", "&&", "[")
+            # Distinguish sizeof(int(42)) (a functional-cast expression) from
+            # sizeof(int()) / sizeof(int(*)(int)) (actual function type-ids).
+            while self._peek().value == "(":
+                self.cursor.take()
+            return self._peek().value in ("*", "&", "&&", ")", "[") or self._is_type(self._peek())
+
+    def _sizeof_parameter_syntax(self):
+        # Function types will be rejected by sizeof Sema, but parse their
+        # parameter declarations in an isolated scope instead of discarding
+        # syntax or installing names in the surrounding source scope.
+        parent = self.scope
+        self.scope = Scope(parent, kind="function")
+        try:
+            return self._parameter_clause()
+        finally:
+            self.scope = parent
+
+    def _sizeof_type_id(self):
+        dtype = self._type(check_lowering=False)
+        declaration = DeclaratorParser(
+            self.cursor, self._identifier,
+            parse_parameters=self._sizeof_parameter_syntax,
+            parse_array_bound=self._array_bound,
+        ).parse_abstract()
+        chunks = declaration.chunks
+        if any(chunk.kind == "function" for chunk in chunks):
+            if chunks[0].kind == "function":
+                raise CppDiagnostic("cpp.invalid-sizeof", "sizeof cannot apply to a function type", declaration.coord)
+            raise CppDiagnostic("cpp.unsupported.function-pointers", "function pointer sizeof requires a function-type model", declaration.coord)
+        for chunk in reversed(chunks):
+            if chunk.kind == "array":
+                dtype = make_array_type(dtype, chunk.bound, self.types, chunk.coord)
+            elif chunk.kind == "pointer":
+                dtype = self._pointer(dtype, chunk.token, chunk.qualifiers)
+            else:
+                raise CppDiagnostic("cpp.unsupported.references", "reference sizeof requires a reference-type model", chunk.coord)
+        return dtype
+
+    def _sizeof_expression(self, token):
+        from pcc.frontends.cpp.size_queries import sizeof_type
+        if self.parsing_template or self.instantiating_template:
+            raise CppDiagnostic("cpp.unsupported.sizeof-templates", "dependent sizeof and template replay are not implemented", token.coord)
+        if self._peek().value == "...":
+            raise CppDiagnostic("cpp.unsupported.sizeof-packs", "sizeof... requires parameter pack semantics", token.coord)
+        self.unevaluated_depth += 1
+        try:
+            if self._sizeof_type_id_ahead():
+                self._expect("(")
+                dtype = self._sizeof_type_id()
+                self._expect(")")
+            else:
+                expression = self._unary()
+                if expression.symbol is not None and expression.symbol.kind == "function":
+                    raise CppDiagnostic("cpp.invalid-sizeof", "sizeof cannot apply to a function or overload set", token.coord)
+                dtype = expression.dtype
+            size = sizeof_type(dtype, self.types, token.coord)
+        finally:
+            self.unevaluated_depth -= 1
+        # Only a typed target-sized constant reaches C lowering. No operand
+        # AST, object address, call, load, temporary or side effect is emitted.
+        result_type = c_size_type_name(self.types.target_triple)
+        return Expression(self._convert(
+            Expression(c_ast.Constant("int", str(size) + "ULL", token.coord), "unsigned long long"),
+            result_type, token.coord, force=True), result_type,
+            constant_fact=known(result_type, size, token.coord))
+
     def _unary(self):
         token = self._peek()
+        if token.value == "sizeof":
+            self.cursor.take()
+            return self._sizeof_expression(token)
         if self._c_style_cast_ahead():
             self.cursor.take()
             dtype = self._abstract_pointer_type(self._type())
@@ -1572,6 +1725,9 @@ class CppParser:
                           constant_fact=fact)
 
     def _unary_expression(self, operator, expression, coord):
+        if operator == "&" and expression.qualified_member is not None:
+            raise CppDiagnostic("cpp.unsupported.member-pointers",
+                                "qualified member address requires a pointer-to-member type and representation", coord)
         if operator != "&":
             expression = self._decay_array(expression)
         self._require_value(expression, allow_class=operator == "&")
@@ -1673,7 +1829,7 @@ class CppParser:
                                         "enum results in template definitions require dependent lookup", coord)
             return Expression(Pattern("call", coord, snapshot, arguments), dtype)
         selected = resolve_overload(group, argument_types, self.types, coord, null_constants)
-        if selected.template_origin is not None:
+        if selected.template_origin is not None and not self.unevaluated_depth:
             origin = selected.template_origin
             entry = self.instance_registry.request(
                 (origin, selected.template_arguments), selected, context=coord,
@@ -1705,7 +1861,7 @@ class CppParser:
         return arguments
 
     def _implicit_object(self, owner, coord):
-        if self.member_function is None or self.member_function.class_owner is not owner:
+        if self.member_function is None or self.this_symbol is None or self.member_function.class_owner is not owner:
             raise CppDiagnostic("cpp.nonstatic-member-without-object", "a non-static member requires an object", coord)
         symbol = self.this_symbol
         return Expression(c_ast.ID(symbol.c_name, coord), symbol.dtype,
@@ -1714,7 +1870,7 @@ class CppParser:
     def _primary(self):
         token = self.cursor.take()
         if token.value == "this":
-            if self.member_function is None:
+            if self.member_function is None or self.this_symbol is None:
                 raise CppDiagnostic("cpp.this-outside-member", "this requires a non-static member function", token.coord)
             return self._implicit_object(self.member_function.class_owner, token.coord)
         if token.value == "static_cast":
@@ -1732,6 +1888,7 @@ class CppParser:
         if token.value == "(":
             expression = self._expression()
             self._expect(")")
+            expression.qualified_member = None
             return expression
         if token.kind.startswith("INT_CONST_"):
             if (token.kind == "INT_CONST_DEC" and len(token.value) > 1
@@ -1801,7 +1958,9 @@ class CppParser:
                         break
                     self._expect(",")
             if getattr(symbol, "class_owner", None) is not None:
-                from pcc.frontends.cpp.members import call_member
+                from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
+                if is_static_group(symbol):
+                    return call_static_member(self, symbol, arguments, token.coord)
                 return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord)
             if not name.global_scope and len(name.parts) == 1:
                 symbol = argument_dependent_lookup(token.value, [arg.dtype for arg in arguments], symbol, token.coord)
@@ -1816,7 +1975,21 @@ class CppParser:
         if symbol.kind == "enumerator":
             return self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
         if symbol.kind == "member":
-            return member_access(self, self._implicit_object(symbol.class_owner, token.coord), "->", token)
+            object_available = (self.member_function is not None and self.this_symbol is not None
+                                and self.member_function.class_owner is symbol.class_owner)
+            if self.unevaluated_depth and not object_available:
+                # [expr.prim.id]/2.3 permits a no-object data member name in
+                # an unevaluated operand, with ordinary lookup/access intact.
+                result = Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
+                                    True, symbol)
+            else:
+                # [class.mfct.non-static]/3 still transforms the id through
+                # implicit this in unevaluated contexts. Reuse the same cv and
+                # mutable-member checks; sizeof must not admit writes to const.
+                result = member_access(self, self._implicit_object(symbol.class_owner, token.coord), "->", token)
+            if name.global_scope or len(name.parts) > 1:
+                result.qualified_member = symbol
+            return result
         if self.template_function is not None and getattr(symbol, "namespace_object", False):
             raise CppDiagnostic("cpp.unsupported.namespace-object-templates",
                                 "template namespace object bindings are not implemented", token.coord)

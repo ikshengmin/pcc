@@ -156,7 +156,6 @@ NEGATIVE_CASES = (
     ("namespace A {int f(int);}int g(){ {using A::f;}return f(1);}", "cpp.undeclared"),
     ("namespace A {template<class T>T f(T x){return x;}}", "cpp.unsupported.namespace-templates"),
     ("template<class T>int f(T x){return T::g(x);}", "cpp.unsupported.dependent-lookup"),
-    ("namespace A {struct S {~S();};}", "cpp.unsupported.classes"),
     ("namespace A {int f();}int A::f(){return 1;}", "cpp.unsupported.qualified-names"),
     ("namespace A {int f(){return 1;}}int g(){return A : : f();}", "cpp.invalid-qualified-name"),
 )
@@ -201,3 +200,9 @@ def test_namespace_owned_execution_and_explicit_cpp17_reference(tmp_path, monkey
     for index, (ir, obj) in enumerate(zip(artifact.ir, artifact.objects)):
         (tmp_path / ("owned-" + str(index) + ".ll")).write_text(ir)
         (tmp_path / ("owned-" + str(index) + ".o")).write_bytes(obj)
+
+
+def test_original_namespace_destructor_declaration_retains_real_prototype():
+    ast = CppParser().parse("namespace A {struct S {~S();};}")
+    assert ast.ext[1].name == "_ZN1A1SD1Ev"
+    assert len(ast.ext[1].type.args.params) == 1

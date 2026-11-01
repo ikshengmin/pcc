@@ -2,9 +2,11 @@
 
 This layer owns class declaration/completeness, non-static data members and
 access. It does not erase class syntax or give a C struct C++ constructor
-semantics. Only classes with implicit trivial special members can currently
-reach the projection; user-declared special members, bases, virtual functions,
-unions and default member initializers remain explicit capability boundaries.
+semantics. Implicit trivial special members and bounded complete-object
+constructors use this layout; constructors.py owns explicit construction of
+scalar/pointer subobjects. destructors.py and lifetimes.py own bounded normal
+exits for complete automatic objects. Bases, virtual functions, unions,
+non-trivial subobject destruction and default member initializers remain gaps.
 
 The parser and this module share ``Scope``/``Symbol``. There is no second
 ordinary-name lookup implementation. Physical layout is performed by the
@@ -91,6 +93,8 @@ class ClassDefinition:
         self.access = "private" if class_key == "class" else "public"
         self.members = []
         self.method_declarations = []
+        self.constructors = Symbol(dtype.name, "function", dtype.coord)
+        self.destructor = None
         self.complete = False
         # The enclosing declaration provides the injected name for the current
         # non-nested/non-template class boundary. A data member can hide it just
@@ -127,12 +131,24 @@ class ClassDefinition:
         return symbol
 
     def finish(self):
+        if self.destructor is not None and any(is_class_type(member.dtype) or array_type(member.dtype)
+                                               for member in self.members):
+            raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                "explicit destructor subobjects currently require scalar or pointer fields", self.dtype.coord)
+        if self.constructors.overloads:
+            for member in self.members:
+                if is_class_type(member.dtype) or array_type(member.dtype):
+                    raise CppDiagnostic("cpp.unsupported.constructor-subobjects",
+                                        "constructor subobjects currently require scalar or pointer fields", member.coord)
+                if member.name == self.dtype.name:
+                    raise CppDiagnostic("cpp.class-name-member",
+                                        "a class with a constructor cannot have a same-named data member", member.coord)
         self.complete = True
         return self
 
     @property
     def aggregate(self):
-        return all(member.access == "public" for member in self.members)
+        return not self.constructors.overloads and all(member.access == "public" for member in self.members)
 
     @property
     def const_default_constructible(self):
@@ -291,7 +307,11 @@ def parse_class(parser):
                     alias = definition.scope.names[added]
                     alias.access, alias.class_owner = definition.access, dtype
                 continue
-            if token.value in ("class", "struct", "union", "friend", "static", "virtual", "~",
+            if token.value == "~":
+                from pcc.frontends.cpp.destructors import parse_destructor
+                definition.method_declarations.append(parse_destructor(parser, definition))
+                continue
+            if token.value in ("class", "struct", "union", "friend", "virtual",
                                "template", "constexpr", "explicit", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":
@@ -300,10 +320,24 @@ def parse_class(parser):
                 continue
             if (token.value == dtype.name
                     and parser.cursor.tokens[parser.cursor.position + 1].value == "("):
-                _unsupported(token, "user-declared constructor semantics are not implemented")
+                from pcc.frontends.cpp.constructors import parse_constructor
+                definition.method_declarations.append(parse_constructor(parser, definition))
+                continue
             member_start = parser.cursor.position
             mutable = parser._accept("mutable") is not None
-            base = parser._type()
+            if parser._peek().value in ("static", "extern"):
+                if mutable:
+                    raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to non-static data members", token.coord)
+                definition.method_declarations.append(parser._function(member_definition=definition))
+                continue
+            storage = []
+            base = parser._type(storage_specifiers=storage)
+            if storage:
+                if mutable:
+                    raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to non-static data members", token.coord)
+                parser.cursor.position = member_start
+                definition.method_declarations.append(parser._function(member_definition=definition))
+                continue
             prior_data = False
             while True:
                 member, member_type = parser._declarator(base)
@@ -352,7 +386,19 @@ def member_access(parser, expression, operator, member):
     if symbol is None:
         raise CppDiagnostic("cpp.no-member", "class '" + owner.name + "' has no member '" + member.value + "'", member.coord)
     if symbol.kind == "function":
-        from pcc.frontends.cpp.members import call_member
+        from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
+        if is_static_group(symbol):
+            if not parser._accept("("):
+                raise CppDiagnostic("cpp.unsupported.function-pointers", "static function names require an immediate call", member.coord)
+            arguments = parser._call_arguments()
+            if operator == ".":
+                if not expression.lvalue or not expression.discarded_known:
+                    raise CppDiagnostic("cpp.unsupported.discarded-class-expression",
+                                        "static call base needs modeled discarded class evaluation", member.coord)
+                discarded = expression.discarded_node
+            else:
+                discarded = expression.node
+            return call_static_member(parser, symbol, arguments, member.coord, discarded)
         if operator == ".":
             if not expression.lvalue:
                 _unsupported(member, "class temporary materialization is not implemented")
@@ -415,6 +461,14 @@ def default_initialize(dtype, coord):
     owner = unqualified(dtype)
     if not isinstance(owner, ClassType):
         raise TypeError("default_initialize requires a class type")
+    pending = [owner.definition]
+    while pending:
+        current = pending.pop()
+        if current.constructors.overloads:
+            raise CppDiagnostic("cpp.unsupported.constructor-subobjects",
+                                "implicit subobject construction requires lifetime integration", coord)
+        pending.extend(unqualified(member.dtype).definition for member in current.members
+                       if is_class_type(member.dtype))
     if owner.definition.default_constructor_deleted:
         raise CppDiagnostic("cpp.deleted-default-constructor", "default constructor of '" + owner.name + "' is deleted", coord)
     if isinstance(dtype, ConstType) and not owner.definition.const_default_constructible:
@@ -434,6 +488,9 @@ def empty_list_initialize(dtype, coord):
     if not isinstance(owner, ClassType):
         raise TypeError("empty_list_initialize requires a class type")
     definition = owner.definition
+    if definition.constructors.overloads:
+        raise CppDiagnostic("cpp.unsupported.constructor-list-initialization",
+                            "constructor list initialization requires separate overload rules", coord)
     if not definition.aggregate and definition.default_constructor_deleted:
         raise CppDiagnostic("cpp.deleted-default-constructor", "default constructor of '" + owner.name + "' is deleted", coord)
     if (not definition.aggregate and isinstance(dtype, ConstType)
