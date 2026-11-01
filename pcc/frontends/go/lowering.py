@@ -58,6 +58,8 @@ class Lowerer:
         self.function = None
         self.string_literals = {}
         self.string_descriptors = {}
+        from pcc.frontends.go.builtin_io import BuiltinIO
+        self.builtin_io = BuiltinIO(self)
 
     def string_constant(self, data):
         if not data:
@@ -212,6 +214,8 @@ class Lowerer:
         if kind == "switch":
             if statement.init is not None:
                 self.statement(statement.init)
+                if self.builder.block.is_terminated:
+                    return
             selector = statement.exprs[0]
             self.saved_values[id(selector)] = self.expression(selector)
             bodies = [self.function.append_basic_block("switch_case") for _ in statement.cases]
@@ -245,6 +249,8 @@ class Lowerer:
         if kind == "if":
             if statement.init is not None:
                 self.statement(statement.init)
+                if self.builder.block.is_terminated:
+                    return
             condition = self.expression(statement.exprs[0])
             yes = self.function.append_basic_block("if_yes")
             no = self.function.append_basic_block("if_no")
@@ -330,6 +336,8 @@ class Lowerer:
         if kind == "for":
             if statement.init is not None:
                 self.statement(statement.init)
+                if self.builder.block.is_terminated:
+                    return
             check = self.function.append_basic_block("for_check")
             body = self.function.append_basic_block("for_body")
             post = self.function.append_basic_block("for_post")
@@ -436,6 +444,8 @@ class Lowerer:
             return self.builder.extract_value(self.expression(expr.args[0]), expr.indices[0])
         if expr.kind in ("name", "selector", "index"):
             return self.builder.load(self.address(expr))
+        if expr.kind == "builtin_io":
+            return self.builtin_io.emit(expr)
         if expr.kind == "call":
             receiver = [self.expression(expr.receiver)] if expr.receiver is not None else []
             arguments = receiver + self.values(expr.args)

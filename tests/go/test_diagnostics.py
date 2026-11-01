@@ -74,6 +74,7 @@ CASES = [
     ('limit-array-elements', original('var a [4097]int')),
     ('limit-struct-fields', original('type T struct{'+ ';'.join('x'+str(i)+' int' for i in range(257))+'}')),
     ('limit-record-layout', original('type T struct{a [4096]int;b int}')),
+    ('builtin-io', original('func f(p *int){print(p)}')),
 ]
 
 
@@ -118,9 +119,10 @@ def test_invalid_source_is_not_labeled_as_an_unimplemented_feature(source):
 
 
 def test_uncoded_legacy_capability_is_not_misclassified_as_invalid_source():
-    # panic is a valid builtin; its runtime contract is not in this code batch.
-    with pytest.raises(GoDiagnostic, match='unsupported builtin panic') as caught:
-        compile_go(original(body='panic("unimplemented runtime")'))
+    # The exact old panic original graduates in test_builtin_io. General
+    # recovery/unwinding is still a valid, uncoded legacy capability gap.
+    with pytest.raises(GoDiagnostic, match='unsupported builtin recover') as caught:
+        compile_go(original(body='recover()'))
     assert not isinstance(caught.value, UnsupportedGo)
     assert caught.value.code is None and caught.value.kind == 'unclassified'
 

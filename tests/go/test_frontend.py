@@ -63,7 +63,7 @@ def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(litera
         compile_go(source("_ = " + literal))
 
 
-@pytest.mark.parametrize("body,helpers,message", [
+SEMANTIC_BOUNDARIES = [
     ("x := true; x = 1; _ = x", "", "cannot use untyped int as bool"),
     ("var x int; var y int64; x = y; _ = x", "", "cannot use int64 as int"),
     ("if 1 {}", "", "condition must be bool"),
@@ -105,7 +105,14 @@ def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(litera
     ("var x string", "", "declared and not used"),
     ("var x []int", "", "slice types require"),
     ("var true bool", "", "shadowing predeclared"),
-])
+ ]
+# The exact former panic original is a positive compile/terminal-execution
+# obligation in test_builtin_io; do not relabel it as an invalid program.
+GRADUATED_PANIC = ("panic(1)", "", "unsupported builtin panic")
+assert SEMANTIC_BOUNDARIES.count(GRADUATED_PANIC) == 1
+
+
+@pytest.mark.parametrize("body,helpers,message", [case for case in SEMANTIC_BOUNDARIES if case != GRADUATED_PANIC])
 def test_go_rejects_invalid_or_unimplemented_semantics(body, helpers, message):
     with pytest.raises(GoDiagnostic, match=message) as error:
         compile_go(source(body, helpers), "negative.go")
@@ -162,10 +169,12 @@ def test_go_original_upstream_source_and_license_are_pinned():
     assert "Redistribution and use in source and binary forms" in (ROOT / "upstream/go1.27.3/LICENSE").read_text()
 
 
-@pytest.mark.parametrize("filename,message", [
+UPSTREAM_FRONTIERS = [
     ("test/ken/for.go", "unsupported builtin panic"),
     ("src/math/bits/bits.go", "requires package main"),
-])
+]
+# The unchanged ken/for.go is now an executed original-source obligation.
+@pytest.mark.parametrize("filename,message", [case for case in UPSTREAM_FRONTIERS if case[0] != "test/ken/for.go"])
 def test_go_upstream_frontier_is_a_diagnostic_not_a_claimed_pass(filename, message):
     original = (ROOT / "upstream/go1.27.3" / filename).read_text()
     with pytest.raises(GoDiagnostic, match=message):

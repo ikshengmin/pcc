@@ -53,8 +53,10 @@ def test_go_emits_deterministic_owned_elf_without_external_tools(monkeypatch):
 
 def test_go_failure_never_publishes_an_artifact(tmp_path):
     binary = tmp_path / "rejected"
-    with pytest.raises(GoDiagnostic, match="unsupported builtin panic"):
-        write_artifact(compile_owned((("bad.go", "package main\nfunc main(){panic(1)}"),)), binary)
+    # The old exact panic(1) original now executes in test_builtin_io.
+    # An actually invalid zero-argument call still must publish no artifact.
+    with pytest.raises(GoDiagnostic, match="panic requires exactly one argument"):
+        write_artifact(compile_owned((("bad.go", "package main\nfunc main(){panic()}"),)), binary)
     assert not binary.exists()
 
 

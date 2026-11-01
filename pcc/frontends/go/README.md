@@ -54,7 +54,7 @@ external compiler fallback, independent collector, or scheduler.
 Package defined/alias types, ordinary value structs and direct value-receiver
 methods are described below. Go predeclared-name shadowing, dynamic package
 initialization, floating/complex types, interfaces/generics, escaping pointers, stored
-method values/closures, dynamically allocated strings, I/O, panic,
+method values/closures, dynamically allocated strings, general I/O and panic unwind,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
 C-parity, or a shared-runtime/GC integration claim.
@@ -78,8 +78,9 @@ is a compiler dependency. Resource limits and shared performance locks apply.
 
 The unmodified Go 1.27.3 `test/ken/for.go` and `src/math/bits/bits.go`, including
 BSD-3-Clause license and per-file hashes, are in `tests/go/upstream`. They are
-frontier tests, **not successful upstream-program qualification**: the former
-requires shared-runtime panic support; the latter parses its named/multiple result lists and local grouped constants,
+separate project frontiers: the former now compiles and executes unchanged in the
+pinned five-original shard. This does not qualify the complete upstream suite.
+The latter parses its named/multiple result lists and local grouped constants,
 then requires the original `ntz8tab` string-table dependency.
 The normal package closure now includes the original string tables and
 non-bootstrap error declarations; shared error/panic/linkname support is still
@@ -486,6 +487,46 @@ Rules: [method sets](https://go.dev/ref/spec#Method_sets),
 [address operators](https://go.dev/ref/spec#Address_operators).
 
 
+### Fixed official shard: bootstrap output and terminal panic
+
+1. **Measured frontier:** the unchanged pinned five-source Go 1.27.3 shard now
+   passes every original obligation: three native/reference executions, one
+   compile-only acceptance and one expected source rejection. `ken/for.go` and
+   `helloworld.go` no longer stop at their original panic/print calls. This is
+   the selected shard, not the full upstream test suite or standard library.
+2. **Next dependencies:** original normal `math/bits` error-interface declarations,
+   unsafe/linkname runtime symbol binding, and genuine error-payload panic support.
+   No upstream assertion, `main`, source selection or oracle was rewritten.
+3. **Gate command:** the guarded `scripts/go_conformance.py run --manifest
+   specs/conformance/suites/go1.27.3-representative.json --go-src "$GO_SOURCE_ROOT"
+   --go "$GO_REFERENCE_COMPILER" --reference-cache "$BOUNDED_GO_CACHE"
+   --pcc-source "$FROZEN_PCC_SOURCE" --compiler-revision "$PCC_REVISION"
+   --out "$EXTERNAL_OUTPUT" --timeout 6`; retain the original outer resource bounds.
+
+Linux `print`/`println` lower admitted integer/bool/string values through existing
+owned IR and syscall primitives. All argument values are captured before output;
+integer formatting handles full unsigned width and signed minima, and writes
+handle partial progress and EINTR. No allocator or shared runtime changes are
+introduced. Builtin shadowing retains the existing explicit capability boundary,
+rather than silently dispatching a shadowed name to the builtin.
+
+`panic` is implemented only as the genuine **terminal uncaught case** in the
+already restricted no-defer/no-recover/no-goroutine/no-foreign-callback domain:
+evaluate its scalar payload once, report it, terminate the process, and provide
+no normal CFG successor. This is **not general panic/recover/unwind support**.
+Nil/non-scalar payloads, scalar payloads with value-receiver `Error()`/`String()`
+formatting callbacks, and non-Linux I/O remain explicit boundaries. Callback
+effects are not silently discarded; their interface/runtime protocol is missing. Authored
+triggered-panic checks retain the full official stdout/stderr/exit; implementation-
+specific stack-report differences are not normalized into identical-stream PASS.
+Actual qualification includes 16 triggered native panics and 16 same-input
+Go 1.27.3 status/payload comparisons, two raw-identical complete programs, two
+real broken-stderr pairs and five calling-thread signal-state observers. Every
+panic reference report differs in complete stderr; these differences remain
+explicit, not normalized into identical-stream PASS. The combined legacy feature
+status stays `missing`/partial; source implementation and measured semantic
+acceptance are separate from raw-report equality and general unwind support.
+
 ## Feature inventory: implementation is separate from acceptance
 
 This is a feature-by-feature view of the **existing** IDs in
@@ -495,7 +536,7 @@ evidence, not all possible programs. An inventory row with legacy `missing`
 does not mean its chapter has no implementation. An explicit capability
 rejection is not an invalid-Go classification or a positive runtime pass.
 
-Qualification source identity: `sha256:dc02a5cd10db7863c298857714296f79dc49aa995fac5ae441872da170305bf0` (1,566 frozen compiler/test inputs, excluding this README and feature-map qualification metadata). It binds published `af61645d` implementation bytes plus this Go source/test slice; later unrelated publication contents are not silently described as tested.
+Qualification source identity: `sha256:e86870884e77d3322d17d7d726bb6f40eaefb8a2be2f13cea165a0deeaf5db18` (1,558 frozen compiler/test inputs, excluding this README and feature map). It binds the tested a6e482c7 base plus this source/test slice; later peer publications are preserved, not silently claimed as compiled in this snapshot.
 Execution lane **L** is host **pcc0**, owned **self** backend, **Linux x86_64**,
 no applicable GC; official **Go 1.27.3 linux/amd64** is an external reference only.
 PCC native-pcc1, Mac execution, full Go/standard library and shared runtime/GC
@@ -510,6 +551,8 @@ JSON fields are used to simulate such a migration.
 
 | Existing feature ID | Implementation status | Acceptance status / test binding | Legacy schema1 status |
 |---|---|---|---|
+| `go.bootstrap-output-terminal-panic` | Implemented: Linux scalar output/terminal uncaught panic only | Original shard and authored native/reference obligations UNRUN | `missing` |
+| `go.capability.builtin-io` | Explicit payload/target boundaries | Stable rejection obligations authored, UNRUN | `explicitly_unimplemented` |
 | `go.expression-switch.scalar` | Implemented: bounded scalar/static-string expression switches | Qualified in L for SW-U / -P / -D only | `supported` |
 | `go.array-range.fixed-value` | Implemented: bounded fixed value-array range and len/cap | Renewed in L for AR-U / -P / -D on the current unit file | `supported` |
 | `go.integer-range.typed-bound` | Implemented: bounded typed/untyped integer range with one-time bounds | Qualified in L for IR-U / -P / -D and the listed full-width cases | `supported` |
@@ -622,7 +665,22 @@ hashable. The 23
 native official-Go executables **without running them** and do not qualify PCC
 nil-panic/escape support.
 
-The complete selections passed **863 ordinary nodes** (31 simulated reference-
+The current complete Go selections passed **900 ordinary nodes** (including31
+simulated reference-protocol checks, not executions) and **619 integration nodes**.
+Integration categories are376 standalone owned-native checks,45 raw-process
+reference comparisons,16 terminal-status/payload comparisons with unequal raw
+panic reports,2 real broken-stderr comparisons,125 normal source rejections,
+52 valid-but-unsupported build-only controls,2 external nil-panic frontiers and
+one diagnostic-only observer. The242 regular official build receipts comprise
+117 successful builds and125 normal rc1 rejections; building is not execution.
+No skip or expected-failure conversion hid a failure. The earlier ordinary
+57PASS/1FAIL/127unfinished and integration53PASS/5FAIL attempts remain failed
+history; their corrections were authored IR/ABI-observer tests, not production
+semantics or shared-backend changes. The assembler's original memory-immediate
+compare remains unsupported; the successful observer uses an equivalent load
+and register comparison, not a backend-support claim.
+
+The prior published pointer-array selections passed **863 ordinary nodes** (31 simulated reference-
 protocol checks and 832 other checks) and **561 integration nodes** (355 standalone
 owned-native, 43 positive external-reference comparisons, 118 normal-source
 rejections, 42 build-only valid-unsupported controls, two external nil-panic
@@ -657,3 +715,17 @@ The second command requires explicit `PCC_GO_REFERENCE` and
 `PCC_GO_REFERENCE_CACHE`. It rebuilds final native/reference outputs; retained
 binaries or old process results are never substituted as a new gate. Raw logs,
 private artifact paths and recovery receipts are not part of this source README.
+
+The Linux builtin writer blocks SIGPIPE only on the calling thread, preserves
+preexisting pending signals, consumes its own broken-pipe notification and
+restores the exact prior signal mask. It never changes process-wide signal
+dispositions. This applies equally to calls through exported Go functions.
+Failure to save/restore the mask or drain a new SIGPIPE fails closed with
+process status 2. Failure to query pending signals suppresses the write, restores
+the original mask and returns; an enclosing terminal panic still exits 2.
+These OS-policy boundaries are not described as Go source panics.
+Native and official broken-stderr tests use real closed-reader pipes; unavailable
+stderr bytes are not fabricated. Named-scalar and multiline panic reports retain
+full implementation-specific stderr differences rather than claiming byte identity.
+The initial authored rune-literal fixture is retained as a separate valid but
+unsupported parser frontier; this output slice does not implement rune syntax.

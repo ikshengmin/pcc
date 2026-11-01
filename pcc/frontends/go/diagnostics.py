@@ -15,6 +15,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.blank-package-variables': 'go.capability.blank-package-variables',
     'go.unsupported.blank-struct-fields': 'go.capability.blank-struct-fields',
     'go.unsupported.blank-type-declarations': 'go.capability.blank-type-declarations',
+    'go.unsupported.builtin-io': 'go.capability.builtin-io',
     'go.unsupported.complex-types': 'go.capability.complex-types',
     'go.unsupported.division-panic': 'go.capability.division-panic',
     'go.unsupported.dot-imports': 'go.capability.dot-imports',

@@ -628,7 +628,9 @@ class Analyzer:
         if kind == "expression":
             expr = statement.exprs[0]
             self.expression(expr)
-            if expr.kind != "call" or expr.symbol is None:
+            if expr.kind == "builtin_io":
+                statement.terminates = expr.value == "panic"
+            elif expr.kind != "call" or expr.symbol is None:
                 raise GoDiagnostic(expr.token, "only function calls may be expression statements")
             return
         if kind == "return":
@@ -1097,6 +1099,29 @@ class Analyzer:
             # Values in a lexical scope shadow package type/function names.
             if any(name in scope for scope in self.scopes) or name in self.globals:
                 raise GoDiagnostic(expr.token, "cannot call non-function " + name)
+            if name in ("print", "println", "panic"):
+                values = self.values(expr.args)
+                if name == "panic" and len(values) != 1:
+                    raise GoDiagnostic(expr.token, "panic requires exactly one argument")
+                for argument in values:
+                    if argument.type == "void":
+                        raise GoDiagnostic(argument.token, "void function call used as a value")
+                    if argument.type == "untyped nil" and name != "panic":
+                        raise GoDiagnostic(argument.token, "cannot print untyped nil")
+                    if not (is_integer(argument.type) or is_boolean(argument.type) or is_string(argument.type)):
+                        raise UnsupportedGo(argument.token, 'go.unsupported.builtin-io',
+                                            "non-scalar or nil builtin payload requires shared interface/runtime support")
+                    if name == "panic" and isinstance(argument.type, DefinedType):
+                        for method_name in ("Error", "String"):
+                            method = argument.type.methods.get(method_name)
+                            if (method is not None and len(method.params) == 1 and
+                                    method.result == "string" and
+                                    not isinstance(method.receiver[1], PointerType)):
+                                raise UnsupportedGo(argument.token, 'go.unsupported.builtin-io',
+                                                    "panic formatting methods require shared interface/runtime support")
+                    coerce(argument, default_type(argument.type))
+                expr.kind, expr.type = "builtin_io", "void"
+                return
             if name in TYPE_NAMES or name in self.types:
                 target = TYPE_NAMES[name] if name in TYPE_NAMES else self.resolve_type_declaration(self.types[name])
                 self.conversion(expr, target)

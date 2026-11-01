@@ -94,7 +94,11 @@ class Graph:
             target = {'break': breaking, 'continue': continuing, 'fallthrough': falling}[kind]
             assert target is not None, 'Sema must resolve legal control targets'
             return self.add('jump', edges=[target])
-        if kind == 'return':
+        if (kind == 'return' or
+                kind == 'expression' and statement.exprs[0].kind == 'builtin_io'
+                and statement.exprs[0].value == 'panic'):
+            # A real terminal panic has no normal successor. Its argument
+            # effects are still evaluated; later edges cannot resurrect it.
             return self.add('action', statement)
         if kind == 'if':
             yes = self.sequence(statement.body, following, breaking, continuing, falling)
