@@ -668,6 +668,13 @@ as roots (`_mark_runtime_roots`). Root-slot clearing (253 slots in
 `_encode_str`) is only halved by the pairing: every registered entry group
 is a root at every safepoint, so clearing fewer slots needs per-safepoint
 assignment state in the stack maps or slot reuse in the frontend.
+`f903b1583` answers `py_err_occurred` without thread-local storage while no
+thread holds a pending exception (`py_exc_pending_threads`, counted by the
+only two TLS writers). r80, seven alternating pairs `be77` -> `f903b1583`
+(load 9-12): one worker 38,987 -> 39,118 QPS, paired median +0.02% (4/7),
+cycles -0.99% (7/7), instructions -2.83%; four workers 92,556 -> 96,180,
++4.54% (5/7), cycles -4.60%, instructions -3.37%. Same-run asyncio
+90,934 / 296,845 (about 2.3x / 3.1x).
 
 Generic Python semantics fixed on the way: `fe2d20df9` makes dict subclass
 instances dicts (isinstance/issubclass, construction through
