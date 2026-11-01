@@ -128,6 +128,7 @@ def _runtime_signatures_part_1():
     "py_call_require_star_iterable": (_I64, [_PYOBJ], False),
     "py_exc_handle_uncaught": (_I64, [_PYOBJ], False),
     "pcc_gc_reset_relocation_set": (_VOID, [], False),
+    "py_obj_truthy_rooted": (_I64, [_PTR], False),
     }
 
 

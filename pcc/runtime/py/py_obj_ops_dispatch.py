@@ -419,6 +419,9 @@ py_obj_call_context_is_deferred = extern("py_obj_call_context_is_deferred", (), 
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_retain = extern("pcc_gc_retain", (c_ptr,), c_ptr)
+pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
@@ -931,6 +934,44 @@ def py_obj_truthy(o) -> int:
                 return 0
             free(handled)
     return 1
+
+
+@c_abi_export("py_obj_truthy_rooted")
+def py_obj_truthy_rooted(slot) -> int:
+    """Truth of the object in one of the caller frame's own root slots.
+
+    Nothing else rebinds that slot during the call, so it keeps the object
+    alive and the caller needs no retain, pin or lease of its own. A value
+    whose truth is a header or field read is decided here without a call:
+    nothing can move it meanwhile. Every other value may run __bool__ or
+    __len__ (and reach a safepoint), so it is retained and pinned around
+    py_obj_truthy exactly as the caller did before.
+    """
+    o = pcc_gc_load_borrowed_ptr(null(), slot)
+    if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
+        return py_obj_truthy(o)
+    # Static singletons never move; NotImplemented raises in py_obj_truthy.
+    if (ptr_eq(o, global_load_ptr("py_None")) != 0
+            or ptr_eq(o, global_load_ptr("py_False")) != 0
+            or ptr_eq(o, global_load_ptr("py_True")) != 0
+            or ptr_eq(o, global_load_ptr("py_NotImplemented")) != 0):
+        return py_obj_truthy(o)
+    tag: int = load_i32(o, 8)
+    if tag == PY_TYPE_FLOAT:
+        if (load_i64(o, 16) & 0x7fffffffffffffff) != 0:
+            return 1
+        return 0
+    if (tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE or tag == PY_TYPE_STR
+            or tag == PY_TYPE_DICT or tag == PY_TYPE_SET):
+        if load_i64(o, 16) != 0:
+            return 1
+        return 0
+    held = pcc_gc_retain(o)
+    pcc_gc_pin(held)
+    truth: int = py_obj_truthy(held)
+    pcc_gc_unpin(held)
+    pcc_gc_release(held)
+    return truth
 
 
 @c_abi_export("py_obj_type_tag")

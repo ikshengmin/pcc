@@ -28,16 +28,19 @@ from pcc.frontends.python.py_ast import (
     While,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.cpy_import_state import live_import_name_slot
 from pcc.frontends.python.codegen.generator_lowering import (
     begin_generator_statement_spills,
     finish_generator_statement_spills,
     plan_generator_expression_spills,
     unbind_generator_statement_spills,
 )
+from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
 
 
 _CSTR = ir.IntType(8).as_pointer()
+_I1 = ir.IntType(1)
 _TARGET_SYS_VERSION_INFO = PYTHON_TARGET_VERSION_INFO
 
 
@@ -156,6 +159,18 @@ class ControlFlowLoweringMixin:
         payload = self._maybe_emit_valueclass_constructor_payload(cond_expr.ty, cond_expr)
         if payload is not None:
             return self._truthy(payload, cond_expr.ty)
+        rooted = self._frame_root_slot_for_truth(cond_expr)
+        if rooted is not None:
+            # The runtime reads the object from this frame's own root and
+            # protects it only on the path that can run user code.
+            check_local_bound(self, cond_expr)
+            truth = self.builder.call(
+                self.runtime["py_obj_truthy_rooted"],
+                [self._as_gc_ptr(rooted, name=self._fresh(cond_expr.ident + ".truth.slot"))],
+                name=self._fresh("cond.rooted.truth"),
+            )
+            self._emit_post_call_err_check(None)
+            return self.builder.trunc(truth, _I1, name=self._fresh("cond.rooted.i1"))
         value = self._emit_expr(cond_expr)
         if value in getattr(self, "_cpy_values", ()):
             if not self._cpy_value_is_owned(value):
@@ -187,6 +202,44 @@ class ControlFlowLoweringMixin:
         self._gc_unpin(value)
         self._gc_release(value)
         return result
+
+    def _frame_root_slot_for_truth(self, expr):
+        """The current activation's own root slot holding ``expr``'s object.
+
+        Only a local Name of this function qualifies: a registered frame root
+        that no global, class namespace, import binding or CPython value
+        shares. Nothing else rebinds such a slot during one runtime call, so
+        a truth test can pass the slot instead of a retained, pinned copy of
+        its value. Every other operand keeps the general path.
+        """
+        if not isinstance(expr, Name):
+            return None
+        if expr.ident not in getattr(self, "_gc_rooted_local_names", set()):
+            return None
+        context = getattr(self, "_class_namespace_context", None)
+        if context is not None and context[0] is self.current_function:
+            return None
+        if live_import_name_slot(self, expr.ident) is not None:
+            return None
+        if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+            return None
+        entry = self.env.get(expr.ident)
+        if entry is None:
+            return None
+        slot, ir_ty, declared_ty = entry
+        if not isinstance(ir_ty, ir.PointerType) or not self._ir_type_matches(ir_ty, _CSTR):
+            return None
+        if isinstance(declared_ty, RawPointerType):
+            return None
+        module_binding = self._module_globals.get(expr.ident)
+        if module_binding is not None and module_binding[0] is slot:
+            return None
+        registry = getattr(self, "_fn_gc_root_slot_registry", {}).get(
+            self.current_function.name, ()
+        )
+        if not any(item[1] is slot for item in registry):
+            return None
+        return slot
 
     def _emit_condition_exits(
         self,
