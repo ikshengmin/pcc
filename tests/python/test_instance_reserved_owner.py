@@ -3,6 +3,8 @@
 This covers physical storage, teardown and replacement ownership. Forwarding
 is injected only for the reserved payload while instance/class addresses stay
 stable; it does not qualify the legacy raw-entry ABI or native moving GC.
+Container mode (GC0 without the probe) copies under both instances' own
+locks, the lock their field writers hold, and releases after them.
 """
 from __future__ import annotations
 
@@ -68,6 +70,8 @@ class _Memory:
         self.retains, self.releases = Counter(), Counter()
         self.allocations, self.freed, self.tracked = [], [], []
         self.store_calls, self.resolved_slots, self.barriers = [], [], []
+        self.container_mode, self.container_depth = 0, 0
+        self.graph_locks, self.pair_locks = 0, []
         ns = dict(self.abi)
         ns.update({
             "null": lambda: None, "ptr_is_null": lambda p: int(p is None),
@@ -100,6 +104,15 @@ class _Memory:
             "pcc_gc_object_index_find": lambda p: p,
             "_gc_backend_selected_fast": lambda: self.backend,
             "_lookup_field_index": lambda _cls, _name: -1,
+            "_fields_lock_themselves": lambda: self.container_mode,
+            "stack_alloc": lambda size: {"size": size},
+            "pcc_container_lock_pair": self.lock_pair,
+            "pcc_container_unlock_pair": self.unlock_pair,
+            "pcc_gc_retain_plan_prepare_locked": self.retain_prepare,
+            "pcc_gc_retain_plan_finish": self.retain_finish,
+            "pcc_gc_store_ptr_plan_init": self.store_plan_init,
+            "pcc_gc_store_ptr_plan_commit_locked": self.store_plan_commit,
+            "pcc_gc_store_ptr_plan_finish": self.store_plan_finish,
         })
         exec(_production_code(), ns)
         self.ns = ns
@@ -189,6 +202,8 @@ class _Memory:
                 self.finalizers[value]()
 
     def lock(self):
+        assert self.container_depth == 0, "a container lock holder takes no graph lock"
+        self.graph_locks += 1
         if self.depth == 0 and self.on_lock is not None:
             hook, self.on_lock = self.on_lock, None
             hook()
@@ -197,6 +212,40 @@ class _Memory:
     def unlock(self):
         self.depth -= 1
         assert self.depth >= 0
+
+    def lock_pair(self, first, second):
+        assert self.container_mode and self.container_depth == 0
+        self.container_depth += 1
+        self.pair_locks.append((self.location(first)[0], self.location(second)[0]))
+
+    def unlock_pair(self, first, second):
+        assert self.pair_locks[-1] == (self.location(first)[0], self.location(second)[0])
+        self.container_depth -= 1
+
+    def retain_prepare(self, plan, value):
+        assert plan["size"] == 56 and self.container_depth > 0
+        self.retain(value)
+        return value
+
+    def retain_finish(self, plan):
+        assert plan["size"] == 56 and self.container_depth == 0
+
+    def store_plan_init(self, plan, owner, backend):
+        assert plan["size"] == 128 and backend == 0
+        plan.update(owner=self.location(owner)[0], old=None, committed=False)
+
+    def store_plan_commit(self, plan, owner, slot, value):
+        assert self.container_depth > 0, "a field swap holds its owner's lock"
+        assert plan["owner"] is self.location(owner)[0] is self.location(slot)[0]
+        self.retain(value)
+        plan.update(old=self.read_ptr(slot), committed=True)
+        self.write(slot, 0, value)
+        return 1
+
+    def store_plan_finish(self, plan):
+        assert self.container_depth == 0, "a displaced value is released after the lock"
+        if plan["committed"]:
+            self.release(plan["old"])
 
     def resolve_slot(self, slot, offset):
         assert self.depth > 0, "owning resolution must be protected"
@@ -346,11 +395,66 @@ def test_empty_reserved_owner_copy_is_balanced(flags):
     assert not model.retains and not model.releases and not model.barriers
 
 
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
+def test_container_mode_copies_reserved_owner_under_both_instances_locks(flags):
+    model = _Memory(0)
+    model.container_mode = 1
+    source, cls = model.instance(2, flags)
+    destination = model.ns["py_instance_new"](cls)
+    _fields, owner = model.populate(source, 2)
+    model.graph_locks = 0
+    model.ns["_copy_instance_reserved_owner"](source, destination, cls)
+    assert model.container_depth == 0 and model.graph_locks == 0
+    assert model.pair_locks == [(model.location(source)[0], model.location(destination)[0])]
+    assert model.read_ptr(model.reserved(source, 2)) is owner
+    assert model.read_ptr(model.reserved(destination, 2)) is owner
+    assert owner.data[0] == 2 and model.retains[owner] == 1
+    assert not model.releases and not model.barriers
+
+
+@pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
+def test_container_mode_empty_reserved_owner_copy_is_balanced(flags):
+    model = _Memory(0)
+    model.container_mode = 1
+    source, cls = model.instance(0, flags)
+    destination = model.ns["py_instance_new"](cls)
+    model.retains.clear()
+    model.ns["_copy_instance_reserved_owner"](source, destination, cls)
+    assert model.container_depth == 0
+    assert model.read_ptr(model.reserved(destination, 0)) is None
+    assert not model.retains and not model.releases
+
+
+def test_container_mode_copies_builtin_payload_under_both_instances_locks():
+    model = _Memory(0)
+    model.container_mode = 1
+    cls = model.class_object(2, 0)
+    pointer = model.abi["C_POINTER_SIZE"]
+    # Two declared fields, the reserved owner, then the builtin payload.
+    cls.data[model.abi["PYCLASSOBJECT_INSTANCE_SIZE_OFFSET"]] = model.abi["PYINSTANCEOBJECT_FIELDS_OFFSET"] + 4 * pointer
+    source = model.ns["py_instance_new"](cls)
+    destination = model.ns["py_instance_new"](cls)
+    payload_offset = model.abi["PYINSTANCEOBJECT_FIELDS_OFFSET"] + 3 * pointer
+    payload = model.payload()
+    model.write(source, payload_offset, payload)
+    model.retains.clear()
+    model.graph_locks = 0
+    model.ns["py_instance_copy_builtin_payload"](source, destination)
+    assert model.container_depth == 0 and model.graph_locks == 0
+    assert model.pair_locks == [(model.location(source)[0], model.location(destination)[0])]
+    assert model.read_ptr(source, payload_offset) is payload
+    assert model.read_ptr(destination, payload_offset) is payload
+    assert payload.data[0] == 2 and model.retains == Counter({payload: 1})
+    assert not model.releases
+
+
+@pytest.mark.parametrize("container_mode", [0, 1])
 @pytest.mark.parametrize("api", ["py_dataclass_replace", "py_dataclass_replace_from_dict"])
 @pytest.mark.parametrize("flags", [0, SLOTS_ONLY])
 @pytest.mark.parametrize("n_fields", [-1, 2])
-def test_both_replacement_variants_preserve_and_balance_reserved_owner(api, flags, n_fields):
-    model = _Memory()
+def test_both_replacement_variants_preserve_and_balance_reserved_owner(api, flags, n_fields, container_mode):
+    model = _Memory(4 - 4 * container_mode)
+    model.container_mode = container_mode
     source, _cls = model.instance(n_fields, flags)
     fields, owner = model.populate(source, n_fields)
     if api == "py_dataclass_replace":

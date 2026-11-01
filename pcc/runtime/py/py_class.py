@@ -280,6 +280,10 @@ pcc_gc_pointer_register = extern(
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
+pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
+pcc_container_lock_pair = extern("pcc_container_lock_pair", (c_ptr, c_ptr), c_void)
+pcc_container_unlock_pair = extern("pcc_container_unlock_pair", (c_ptr, c_ptr), c_void)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
@@ -380,6 +384,13 @@ def _gc_backend_selected_fast() -> int:
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
         return pcc_gc_backend()
     return load_i32(global_addr("pcc_gc_backend_selected"), 0)
+
+
+def _fields_lock_themselves() -> int:
+    """py_obj's rule for instance fields: their owner's container lock when
+    the collector fixed GC0 without the probe (one word, set once), the
+    graph lock otherwise. Readers here and writers there decide alike."""
+    return load_i32(global_addr("pcc_gc_list_container_mode"), 0)
 
 
 def _dealloc_ptr_is_instance(o) -> bool:
@@ -1474,6 +1485,23 @@ def py_tuple_check(value) -> int:
 def py_instance_copy_builtin_payload(source, destination) -> None:
     if not _ptr_is_instance(source) or not _ptr_is_instance(destination):
         return
+    if _fields_lock_themselves() != 0:
+        # Both instances' fields are under their own locks (GC0 moves
+        # neither); the displaced destination value is released after them.
+        cls = load_ptr(source, PYINSTANCEOBJECT_CLS_OFFSET)
+        source_slot = _instance_builtin_payload_slot(source, cls)
+        if ptr_is_null(source_slot) != 0:
+            return
+        plan = stack_alloc(128)
+        pcc_gc_store_ptr_plan_init(plan, destination, 0)
+        pcc_container_lock_pair(source, destination)
+        pcc_gc_store_ptr_plan_commit_locked(
+            plan, destination, _instance_builtin_payload_slot(destination, cls),
+            load_ptr(source_slot, 0),
+        )
+        pcc_container_unlock_pair(source, destination)
+        pcc_gc_store_ptr_plan_finish(plan)
+        return
     pcc_py_gc_minor_graph_lock()
     source = pcc_gc_note_relocation_read(source)
     destination = pcc_gc_note_relocation_read(destination)
@@ -1527,7 +1555,20 @@ def _instance_dynamic_dict(inst, create: int):
 def _copy_instance_reserved_owner(obj, dst, cls) -> None:
     # The surrounding legacy replace entry still owns its raw object-entry
     # contract. Within this physical copy, heal the owning source and publish
-    # the additional destination owner in one graph transaction.
+    # the additional destination owner in one graph transaction (on GC0, in
+    # both instances' own locks, which their field writers hold).
+    if _fields_lock_themselves() != 0:
+        plan = stack_alloc(56)
+        pcc_container_lock_pair(obj, dst)
+        destination = _instance_reserved_owner_slot(dst, cls)
+        value = pcc_gc_retain_plan_prepare_locked(
+            plan, load_ptr(_instance_reserved_owner_slot(obj, cls), 0)
+        )
+        if ptr_is_null(value) == 0:
+            store_ptr(destination, 0, value)
+        pcc_container_unlock_pair(obj, dst)
+        pcc_gc_retain_plan_finish(plan)
+        return
     pcc_py_gc_minor_graph_lock()
     source = _instance_reserved_owner_slot(obj, cls)
     destination = _instance_reserved_owner_slot(dst, cls)
@@ -2861,6 +2902,15 @@ def _instance_field_load(inst, offset: int, out) -> int:
         ):
             store_ptr(out, 0, immediate)
             return 0
+        if _fields_lock_themselves() != 0:
+            # The field's writers hold this instance's container lock.
+            owned_plan = stack_alloc(56)
+            pcc_container_lock(inst)
+            owned = pcc_gc_retain_plan_prepare_locked(owned_plan, load_ptr(inst, offset))
+            pcc_container_unlock(inst)
+            pcc_gc_retain_plan_finish(owned_plan)
+            store_ptr(out, 0, owned)
+            return 0
         # GC0 never relocates: one transaction around the load and retain,
         # unless acquiring it parked through a backend switch.
         pcc_py_gc_minor_graph_lock()
@@ -2929,13 +2979,21 @@ def _instance_field_clear(inst, offset: int) -> int:
         return -1
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, inst, _gc_backend_selected_fast())
-    pcc_py_gc_minor_graph_lock()
+    own_lock: int = _fields_lock_themselves()
+    if own_lock != 0:
+        # GC0 does not move the receiver: its lock is the writers' lock.
+        pcc_container_lock(inst)
+    else:
+        pcc_py_gc_minor_graph_lock()
     receiver = _instance_reload_moving_root(receiver_slot, receiver_handle_slot)
     slot = ptr_add(receiver, offset)
     bound: int = 0
     if ptr_is_null(pcc_gc_load_ptr(receiver, slot)) == 0:
         bound = pcc_gc_store_ptr_plan_commit_locked(plan, receiver, slot, null())
-    pcc_py_gc_minor_graph_unlock()
+    if own_lock != 0:
+        pcc_container_unlock(inst)
+    else:
+        pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
     _instance_finish_moving_root(receiver_handle_slot)
     return bound

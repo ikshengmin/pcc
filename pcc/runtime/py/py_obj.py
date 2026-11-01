@@ -299,6 +299,8 @@ pcc_debug_note_alloc_size = extern(
     "pcc_debug_note_alloc_size", (c_ptr, c_int64), c_void
 )
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
+pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
@@ -736,21 +738,31 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
     pcc_gc_store_ptr_plan_finish(plan)
 
 
+def _fields_lock_themselves() -> int:
+    """Whether an object's shared fields take its own container lock.
+
+    Fixed with the collector (pcc_gc_fix_backend): GC0 without the refcount
+    provenance probe, as for lists. Every reader and writer of such a field
+    decides by this one word, so both always take the same lock: the
+    owner's container lock here, the graph lock otherwise.
+    """
+    return load_i32(global_addr("pcc_gc_list_container_mode"), 0)
+
+
 @c_abi_export("pcc_gc_store_field_ptr")
 def pcc_gc_store_field_ptr(owner, slot, value) -> None:
     """Rebind a field other carriers may read or rebind (an instance field).
 
-    The GC0 store above is an unlocked read-modify-write: two concurrent
-    stores released one old value twice, and a reader's retain raced the
-    release. With threads enabled every collector swaps such a field inside
-    a graph transaction and releases the displaced value after it; readers
-    load and retain inside one. Private and runtime-owned slots keep
+    An unlocked read-modify-write released one old value twice under two
+    concurrent stores, and a reader's retain raced the release. Every
+    collector swaps such a field inside one transaction and releases the
+    displaced value after it; readers load and retain inside one. On GC0
+    the transaction holds the owner's container lock, so carriers touching
+    different objects no longer wait on the one graph lock; elsewhere it is
+    a graph transaction. Private and runtime-owned slots keep
     pcc_gc_store_ptr.
     """
     if ptr_is_null(slot):
-        return
-    if pcc_threads_enabled() == 0:
-        pcc_gc_store_ptr(owner, slot, value)
         return
     backend: int = 0
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
@@ -759,9 +771,14 @@ def pcc_gc_store_field_ptr(owner, slot, value) -> None:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
-    pcc_py_gc_minor_graph_unlock()
+    if _fields_lock_themselves() != 0:
+        pcc_container_lock(owner)
+        pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+        pcc_container_unlock(owner)
+    else:
+        pcc_py_gc_minor_graph_lock()
+        pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+        pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
 
 
@@ -776,11 +793,6 @@ def pcc_gc_store_field_ptr_if_empty(owner, slot, value) -> int:
     """
     if ptr_is_null(slot):
         return 0
-    if pcc_threads_enabled() == 0:
-        if ptr_is_null(load_ptr(slot, 0)) == 0:
-            return 0
-        pcc_gc_store_ptr(owner, slot, value)
-        return 1
     backend: int = 0
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
         backend = pcc_gc_backend()
@@ -789,10 +801,16 @@ def pcc_gc_store_field_ptr_if_empty(owner, slot, value) -> int:
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
     stored: int = 0
-    pcc_py_gc_minor_graph_lock()
-    if ptr_is_null(pcc_gc_load_ptr(owner, slot)) != 0:
-        stored = pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
-    pcc_py_gc_minor_graph_unlock()
+    if _fields_lock_themselves() != 0:
+        pcc_container_lock(owner)
+        if ptr_is_null(load_ptr(slot, 0)) != 0:
+            stored = pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+        pcc_container_unlock(owner)
+    else:
+        pcc_py_gc_minor_graph_lock()
+        if ptr_is_null(pcc_gc_load_ptr(owner, slot)) != 0:
+            stored = pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+        pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
     return stored
 

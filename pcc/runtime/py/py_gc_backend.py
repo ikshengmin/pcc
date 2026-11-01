@@ -2645,9 +2645,11 @@ def pcc_gc_fix_backend() -> None:
     if load_i32(global_addr("pcc_gc_backend_frozen"), 0) != 0:
         return
     _init_config()
-    # GC0 lists lock themselves; the tracing and moving collectors' markers
-    # and relocation take the graph lock, and the provenance probe's checked
-    # lease path takes it inside a list transaction.
+    # GC0 lists and instance fields lock themselves (py_list, and
+    # pcc_gc_store_field_ptr with its readers); the tracing and moving
+    # collectors' markers and relocation take the graph lock, and the
+    # provenance probe's checked lease path takes it inside a list
+    # transaction.
     if (
         load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0

@@ -8,6 +8,11 @@ True and False are never freed and need no count, so the read returns them
 from one word load; any other value still loads and retains inside the
 transaction. Only the address is examined, never a header.
 test_shared_slot_concurrent_access's mixed shape runs the native race.
+
+When the collector fixed GC0 without the probe, field writers swap under
+the instance's own container lock (py_obj's pcc_gc_store_field_ptr), so the
+read loads and retains under that lock instead and finishes the retain
+after leaving it; carriers reading different instances no longer meet.
 """
 from __future__ import annotations
 
@@ -23,7 +28,7 @@ STATICS = {"py_none_storage": 0x1000, "py_true_storage": 0x1020, "py_false_stora
 
 
 class Field:
-    def __init__(self, word):
+    def __init__(self, word, own_lock=0):
         self.word = word
         self.events = []
         tree = ast.parse(RUNTIME.read_text())
@@ -43,6 +48,12 @@ class Field:
             "pcc_py_gc_minor_graph_lock": lambda: self.events.append("lock"),
             "pcc_py_gc_minor_graph_unlock": lambda: self.events.append("unlock"),
             "py_incref": lambda value: self.events.append(("incref", value)),
+            "_fields_lock_themselves": lambda: own_lock,
+            "stack_alloc": lambda size: ("plan", size),
+            "pcc_container_lock": lambda inst: self.events.append(("container lock", inst)),
+            "pcc_container_unlock": lambda inst: self.events.append(("container unlock", inst)),
+            "pcc_gc_retain_plan_prepare_locked": self.prepare,
+            "pcc_gc_retain_plan_finish": self.finish,
         }
         code = compile(ast.Module([node], type_ignores=[]), str(RUNTIME), "exec")
         for const in code.co_consts:
@@ -60,6 +71,15 @@ class Field:
         self.events.append("locked load")
         return self.word
 
+    def prepare(self, plan, value):
+        assert plan == ("plan", 56)
+        self.events.append(("retain prepare", value))
+        return value
+
+    def finish(self, plan):
+        assert plan == ("plan", 56)
+        self.events.append("retain finish")
+
     def store(self, slot, offset, value):
         assert (slot, offset) == ("out", 0)
         self.out = value
@@ -69,9 +89,10 @@ class Field:
         return self.events
 
 
+@pytest.mark.parametrize("own_lock", (0, 1))
 @pytest.mark.parametrize("word", (0, 1, (42 << 1) | 1, (-7 << 1) | 1, *STATICS.values()))
-def test_an_immediate_or_static_value_is_read_without_the_transaction(word):
-    field = Field(word)
+def test_an_immediate_or_static_value_is_read_without_the_transaction(word, own_lock):
+    field = Field(word, own_lock)
     assert field.run() == ["word"]
     assert field.out == word
 
@@ -87,3 +108,16 @@ def test_a_value_next_to_a_static_singleton_is_not_mistaken_for_it():
     # them is an ordinary heap value.
     field = Field(STATICS["py_true_storage"] + 16)
     assert "lock" in field.run()
+
+
+def test_a_heap_value_is_retained_under_the_instances_own_lock():
+    field = Field(0x5000, own_lock=1)
+    assert field.run() == [
+        "word",
+        ("container lock", "inst"),
+        "locked load",
+        ("retain prepare", 0x5000),
+        ("container unlock", "inst"),
+        "retain finish",
+    ]
+    assert field.out == 0x5000
