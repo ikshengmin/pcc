@@ -5,7 +5,8 @@ Rust. No address-to-integer shim, symbol alias, source/IR rewrite, separate
 allocator, object header, or GC/runtime contract is introduced here.
 
 Only Linux x86-64 is executed. Darwin arm64 support here is object emission,
-not linking or execution. Rust's opt-in is attestation, not a rustc oracle.
+not linking or execution. Every reference-bearing Rust source requires a genuine
+source/target-bound external check before the owned compilation phase.
 """
 
 from dataclasses import dataclass
@@ -104,7 +105,7 @@ def original_record_inputs() -> RecordInputs:
     )
 
 
-def compile_record_objects(inputs: RecordInputs, target: str) -> RecordObjects:
+def compile_record_objects(inputs: RecordInputs, target: str, *, rustc_check) -> RecordObjects:
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.driver.project import TranslationUnit
     from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
@@ -120,16 +121,19 @@ def compile_record_objects(inputs: RecordInputs, target: str) -> RecordObjects:
     )
     ((name, cpp_ir, _return_metadata, _external_definitions),) = compiled
     assert name == "record-caller.cpp"
+    # rustc uses its canonical target spelling; both aliases select the same
+    # existing owned Darwin backend. Never reuse a Linux certification token.
+    rust_target = 'aarch64-apple-darwin' if target == DARWIN_TARGET else target
     rust = compile_rust(
         inputs.rust.decode("utf-8"),
-        experimental_rustc_checked=True,
+        rustc_check=rustc_check,
         overflow_checks=False,
         module_name="record_pointer",
-        target_triple=target,
+        target_triple=rust_target,
     )
-    assert rust.module.triple == rust.target_triple == target
+    assert rust.module.triple == rust.target_triple == rust_target
     assert rust.module.data_layout == rust.data_layout
-    assert rust.experimental and not rust.borrow_checked_by_pcc
+    assert rust.experimental and rust.externally_checked and not rust.borrow_checked_by_pcc
     assert not rust.overflow_checks
     assert rust.symbols[RUST_ENTRY] == RUST_ENTRY
     return RecordObjects(
@@ -138,7 +142,7 @@ def compile_record_objects(inputs: RecordInputs, target: str) -> RecordObjects:
     )
 
 
-def compile_record_executable(inputs: RecordInputs) -> RecordExecutable:
+def compile_record_executable(inputs: RecordInputs, *, rustc_check) -> RecordExecutable:
     from pcc.backend.elf_x86_64 import (
         emit_relocatable,
         link_static_executable,
@@ -146,7 +150,7 @@ def compile_record_executable(inputs: RecordInputs) -> RecordExecutable:
     )
     from pcc.backend.x86_64_asm_driver import assemble_file
 
-    compiled = compile_record_objects(inputs, LINUX_TARGET)
+    compiled = compile_record_objects(inputs, LINUX_TARGET, rustc_check=rustc_check)
     observer = emit_relocatable(assemble_file(LINUX_OBSERVER))
     executable = link_static_executable(
         [parse_relocatable(data) for data in

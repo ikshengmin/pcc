@@ -6,6 +6,8 @@ import sys
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.analysis_only import analyze_source
+from tests.rust.certification_support import source_has_references
 from pcc.frontends.rust.semantics import Checker
 from pcc.frontends.rust.syntax import Parser
 from pcc.frontends.rust.types import TypeParameter
@@ -36,7 +38,6 @@ INVALID = [
     ('fn bad<T>(x:T)->bool{if x{true}else{false}}', 'type mismatch'),
     ('fn bad<T>(x:T)->i64{x as i64}', 'supported casts'),
     ('fn bad<T>(x:i64)->T{x as T}', 'supported casts'),
-    ('fn bad<T>(x:T)->T{x} fn answer()->i64{bad(1)}', 'explicit type arguments'),
     ('fn id<T>(x:T)->T{x} fn answer()->i64{id::<i64,u64>(1)}', 'argument count'),
     ('fn id(x:i64)->i64{x} fn answer()->i64{id::<i64>(1)}', 'nongeneric'),
     ('fn id<T>(x:T)->T{x} fn answer()->i64{id::<bool>(true)}', 'type mismatch'),
@@ -57,7 +58,10 @@ def test_declarations_and_calls_fail_before_lowering_even_when_uncalled(source, 
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('invalid generic body reached IR'))
     with pytest.raises(RustError, match=message):
-        compile_source(source)
+        # Reference diagnostics here inspect an internal, non-certifying model.
+        # They do not authorize public compilation or produce pointer IR.
+        if source_has_references(source): analyze_source(source)
+        else: compile_source(source)
 
 
 @pytest.mark.parametrize('body', [

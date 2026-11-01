@@ -62,16 +62,23 @@ def test_target_entry_emits_real_arm64_macho_symbols_and_branch_relocations(trip
 
 
 @pytest.mark.parametrize("name", ["control", "values", "short_circuit", "integer_rules", "grouping", "high_bits"])
-def test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite(name, monkeypatch):
+def test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite(name, monkeypatch, tmp_path=None):
     from pcc.backend import macho_spec
 
     source = PROGRAMS / (name + ".rs")
     original = source.read_bytes()
+    from tests.rust.certification_support import source_has_references, certify_source
+    check = None
+    target = 'arm64-apple-darwin'
+    if source_has_references(original.decode()):
+        assert tmp_path is not None, 'reference cross-emission needs a real target-bound checking phase'
+        target = 'aarch64-apple-darwin'
+        check = certify_source(original.decode(),tmp_path/'darwin-check',target_triple=target)
     def forbidden(*args, **kwargs):
         raise AssertionError("cross-emission must use owned tools only")
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, "Popen", forbidden)
-        result = compile_source(original.decode(), target_triple="arm64-apple-darwin")
+        result = compile_source(original.decode(), target_triple=target, **({'rustc_check':check} if check is not None else {}))
         parsed = macho_spec.parse_object(result.emit_object())
     assert parsed.header["cputype"] == macho_spec.CPU_TYPE_ARM64
     assert "_" + result.symbols["answer"] in {symbol["name"] for symbol in parsed.symbols()}

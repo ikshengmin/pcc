@@ -23,7 +23,7 @@ def compile_source(source: str):
     return compile_rust(source, experimental_rustc_checked=True)
 
 
-def test_borrow_checker_attestation_is_required():
+def test_value_only_experimental_opt_in_is_required_and_is_not_a_borrow_check():
     with pytest.raises(RustError, match="no borrow checker"):
         compile_rust("fn answer() -> i32 { 42 }")
     for value in (1, "true", None):
@@ -112,11 +112,10 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("/* never closed", "unterminated block comment"),
     ("fn f(){ 0b102; }", "invalid or unsupported integer"),
     ("fn f(){ 12i8; }", "invalid or unsupported integer"),
-    ("fn f(){ let x=1; let y=&x; }", "borrowing"),
+    ("fn f(){ let x=1; let y=&x; }", "reference-bearing Rust source requires an actual"),
     ("fn f(){ panic!(); }", "expected ';'"),
     ("trait T {}", "expected 'fn'"),
     ("struct S {}", "zero-field structs"),
-    ("fn f(){ [1,2]; }", "unsupported expression"),
     ("fn f(){ let x=Box::new(1); }", "unsupported Rust type 'Box'"),
     ("fn f(){ 1<<2; }", "expected ';'"),
     ("extern \"C\" fn f(x:bool){}", "extern C currently supports"),
@@ -277,3 +276,8 @@ def test_literal_operator_constant_overflow_crosses_cast_and_bitwise_nodes(expre
 ])
 def test_constant_casts_and_division_follow_rust_bit_and_sign_rules(expression):
     assert "define" in compile_source("fn f(){" + expression + ";}").ir_text
+
+
+# Exact former capability-negative is now an array-syntax positive.
+# Keep its original bytes distinct from authored runtime programs.
+RETAINED_ARRAY_LITERAL_SOURCE = "fn f(){ [1,2]; }"

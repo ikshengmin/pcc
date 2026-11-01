@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.analysis_only import analyze_source
+from tests.rust.certification_support import source_has_references
 from tests.rust.test_rust_patterns import test_original_match_fixture_full_width_owned_execution as _native
 from tests.rust.test_rust_frontend import test_development_only_rustc_checks_the_same_source as _rustc
 from tests.rust.test_rust_targets import test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite as _cross
@@ -51,7 +53,11 @@ def compile_source(source):
 ])
 def test_payload_and_binding_capability_or_type_errors(source,message):
     with pytest.raises(RustError,match=message):
-        compile_source(source)
+        # Reference diagnostics below are internal analysis only, never admission.
+        if source_has_references(source):
+            analyze_source(source)
+        else:
+            compile_source(source)
 
 
 PREFIX='struct P{x:i64} enum E{None,Pair(P,P)} fn take(p:P){} fn consume(e:E){} '

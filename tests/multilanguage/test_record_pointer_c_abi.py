@@ -26,6 +26,9 @@ from tests.multilanguage.record_pointer_execution import (
     original_record_inputs,
 )
 from tests.multilanguage.test_scalar_c_abi import forbid_external_owners
+from tests.rust.certification_support import (
+    actual_check_prerequisite, certify_source, darwin_check_prerequisite,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -46,17 +49,19 @@ def save_objects(directory, compiled, inputs):
 
 
 @pytest.mark.pcc_gate(
-    unavailable=None if sys.platform == "linux" and platform.machine() == "x86_64"
-    else "requires actual Linux x86-64 owned execution",
+    unavailable=actual_check_prerequisite() or (
+        None if sys.platform == "linux" and platform.machine() == "x86_64"
+        else "requires actual Linux x86-64 owned execution"),
 )
 def test_cpp_stack_record_calls_rust_readonly_reference_native(tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import SHN_UNDEF, parse_relocatable
 
     inputs = original_record_inputs()
+    checked = certify_source(inputs.rust.decode('utf-8'), tmp_path / 'rust-certifier')
     with monkeypatch.context() as owned:
         forbid_external_owners(owned)
-        first = compile_record_executable(inputs)
-        second = compile_record_executable(inputs)
+        first = compile_record_executable(inputs, rustc_check=checked)
+        second = compile_record_executable(inputs, rustc_check=checked)
     assert first == second
     assert original_record_inputs() == inputs
     compiled = first.compiled
@@ -111,6 +116,9 @@ def test_cpp_stack_record_calls_rust_readonly_reference_native(tmp_path, monkeyp
         "c_abi_undefined_relocations": sorted(foreign),
         "fresh_builds_byte_identical": 2, "native_runs": runs,
         "returned_u64": EXPECTED_RESULT, "rustc_reference_executed": False,
+        "rustc_metadata_check_executed": True,
+        "rustc_check_source_sha256": checked.provenance.source_sha256,
+        "rustc_check_target": checked.provenance.target_triple,
         "object_sha256": {"cpp": hashlib.sha256(compiled.cpp_object).hexdigest(),
                           "rust": hashlib.sha256(compiled.rust_object).hexdigest(),
                           "observer": hashlib.sha256(first.observer_object).hexdigest()},
@@ -120,14 +128,17 @@ def test_cpp_stack_record_calls_rust_readonly_reference_native(tmp_path, monkeyp
     assert original_record_inputs() == inputs
 
 
+@pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 def test_record_pointer_arm64_darwin_cross_objects_and_relocations(tmp_path, monkeypatch):
     from pcc.backend import macho_spec
 
     inputs = original_record_inputs()
+    checked = certify_source(inputs.rust.decode('utf-8'), tmp_path / 'rust-certifier',
+                             target_triple='aarch64-apple-darwin')
     with monkeypatch.context() as owned:
         forbid_external_owners(owned)
-        first = compile_record_objects(inputs, DARWIN_TARGET)
-        second = compile_record_objects(inputs, DARWIN_TARGET)
+        first = compile_record_objects(inputs, DARWIN_TARGET, rustc_check=checked)
+        second = compile_record_objects(inputs, DARWIN_TARGET, rustc_check=checked)
     assert first == second
     assert original_record_inputs() == inputs
     save_objects(tmp_path, first, inputs)
@@ -148,6 +159,9 @@ def test_record_pointer_arm64_darwin_cross_objects_and_relocations(tmp_path, mon
     (tmp_path / "cross-object.json").write_text(json.dumps({
         "owner": "host-python/pcc-cpp+rust/public-ir/pcc-self/macho-cross-object",
         "target": DARWIN_TARGET, "executed": False, "linked": False,
+        "rustc_metadata_check_executed": True,
+        "rustc_check_source_sha256": checked.provenance.source_sha256,
+        "rustc_check_target": checked.provenance.target_triple,
         "fresh_builds_byte_identical": 2, "external_branch26": sorted(branches),
         "remaining_test_observer_symbol": "_" + SNAPSHOT,
         "input_sha256": {"cpp": hashlib.sha256(inputs.cpp).hexdigest(),

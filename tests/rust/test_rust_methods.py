@@ -16,6 +16,8 @@ import sys
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.analysis_only import analyze_source
+from tests.rust.certification_support import source_has_references
 from pcc.frontends.rust.semantics import Checker
 from pcc.frontends.rust.syntax import Parser
 from pcc.support.instantiation import InstanceState
@@ -45,7 +47,7 @@ def compile_source(source):
     ('struct R{x:i64} impl R{fn f(x:i64,self){}}', 'first parameter'),
     ('fn f(self){}', 'inherent method'),
     ('struct R{x:i64} impl R{fn f(self:Self){}}', 'explicit receiver'),
-    ('struct R{x:i64} impl R{fn f(&mut self){}}', 'reference receivers'),
+    ('struct R{x:i64} impl R{fn f(&mut self){}}', 'mutable references require a matching external rustc check record'),
     ('struct R{x:i64} impl R{fn f<T>(self,x:T){}}', 'method-local generic'),
     ('struct R{x:i64} impl Trait for R{}', 'trait impls'),
     ('struct R<T>{x:T} impl<T:Copy> R<T>{}', 'bounds'),
@@ -67,7 +69,10 @@ def test_invalid_or_unimplemented_impls_and_methods_fail_before_ir(source, messa
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('invalid inherent method reached IR'))
     with pytest.raises(RustError, match=message):
-        compile_source(source)
+        # Reference diagnostics here inspect an internal, non-certifying model.
+        # They do not authorize public compilation or produce pointer IR.
+        if source_has_references(source): analyze_source(source)
+        else: compile_source(source)
 
 
 @pytest.mark.parametrize('source', [

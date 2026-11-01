@@ -20,6 +20,8 @@ import sys
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.analysis_only import analyze_source
+from tests.rust.certification_support import actual_check_prerequisite, darwin_check_prerequisite
 from tests.rust.test_rust_frontend import test_development_only_rustc_checks_the_same_source as _rustc
 from tests.rust.test_rust_patterns import test_original_match_fixture_full_width_owned_execution as _native
 from tests.rust.test_rust_targets import test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite as _cross
@@ -37,11 +39,11 @@ INVALID_BODIES = [
 
 
 @pytest.mark.parametrize('body', INVALID_BODIES)
-def test_receiver_loan_stays_live_during_all_later_arguments(body, monkeypatch):
+def test_internal_noncertifying_receiver_loan_model_stays_live_during_all_later_arguments(body, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('conflicting loan reached IR'))
     with pytest.raises(RustError,match='while borrowed'):
-        compile_rust(PRELUDE+'fn f(){'+body+'}',experimental_rustc_checked=True)
+        analyze_source(PRELUDE+'fn f(){'+body+'}')
 
 
 @pytest.mark.parametrize('source,message', [
@@ -63,11 +65,11 @@ def test_receiver_loan_stays_live_during_all_later_arguments(body, monkeypatch):
     ('fn f(p:&()){}', 'unit and nested references'),
     ('fn f(){let x=1;*x;}', 'dereference requires'),
 ])
-def test_reference_lifetime_alias_move_and_foreign_boundaries_fail_closed(source,message,monkeypatch):
+def test_internal_noncertifying_reference_type_and_move_model_boundaries(source,message,monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('unsupported reference reached IR'))
     with pytest.raises(RustError,match=message):
-        compile_rust(source,experimental_rustc_checked=True)
+        analyze_source(source)
 
 
 # These are the EXACT older unsupported inputs, moved into positive coverage;
@@ -88,19 +90,20 @@ PREVIOUS_UNIMPLEMENTED = [
     PRELUDE+'fn f()->u64{let r=R{x:1};r.read(r.read(0))}',
     'struct R{x:()} fn f(p:&R){p.x;}',
 ])
-def test_readonly_private_references_and_closed_call_loans_are_admitted(source):
-    compile_rust(source,experimental_rustc_checked=True)
+def test_internal_readonly_reference_model_without_ir_or_admission(source):
+    analyze_source(source)
 
 
-@pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution')
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or (None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution'))
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_shared_loan_program_full_width_owned_execution(name,tmp_path,monkeypatch):
     _native(name,tmp_path,monkeypatch)
 
 
+@pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 @pytest.mark.parametrize('name',PROGRAMS)
-def test_original_shared_loan_program_arm64_macho_cross_only(name,monkeypatch):
-    _cross(name,monkeypatch)
+def test_original_shared_loan_program_arm64_macho_cross_only(name,monkeypatch,tmp_path):
+    _cross(name,monkeypatch,tmp_path)
 
 
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development rustc unavailable')
@@ -110,7 +113,8 @@ def test_original_shared_loan_program_rustc_typechecks(name,tmp_path):
 
 
 @pytest.mark.integration
-@pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} and shutil.which('rustc') and shutil.which('cc') else 'requires Linux rustc/system linker oracle')
+@pytest.mark.xdist_group(name="rust-native-reference")
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or (None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} and shutil.which('rustc') and shutil.which('cc') else 'requires Linux rustc/system linker oracle'))
 def test_original_shared_loan_programs_match_native_rustc(tmp_path,monkeypatch):
     from tests.rust import test_rust_method_reference as reference
     monkeypatch.setattr(reference,'PROGRAMS',PROGRAMS)
@@ -138,21 +142,21 @@ def test_original_conflicting_loans_are_rejected_by_rustc(body,tmp_path):
 INVALID_PARAMETER_REBINDING = Path(__file__).with_name('programs') / 'shared_rebinding.rs'
 
 
-def test_exact_original_parameter_rebinding_requires_lifetime_constraints(monkeypatch):
+def test_internal_model_exact_original_parameter_rebinding_requires_lifetime_constraints(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('unqualified parameter lifetime reached IR'))
     with pytest.raises(RustError,match='reference parameter reassignment requires lifetime constraints'):
-        compile_rust(INVALID_PARAMETER_REBINDING.read_text(),experimental_rustc_checked=True,overflow_checks=False)
+        analyze_source(INVALID_PARAMETER_REBINDING.read_text())
 
 
 @pytest.mark.parametrize('source', [
     'fn f(mut p:&u64,q:&u64){p=q;}',
     'fn f<T>(mut p:&T,q:&T){p=q;}',
-    'fn f(mut p:&u64){p=p;}',  # Valid Rust, explicitly unsupported until regions.
+    'fn f(mut p:&u64){p=p;}',  # Valid Rust; internal legacy model rejects, actual checked public route permits.
 ])
-def test_parameter_reference_rebinding_has_an_explicit_conservative_boundary(source):
+def test_internal_model_parameter_rebinding_conservative_boundary_is_not_public_admission(source):
     with pytest.raises(RustError,match='reference parameter reassignment requires lifetime constraints'):
-        compile_rust(source,experimental_rustc_checked=True)
+        analyze_source(source)
 
 
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development rustc unavailable')

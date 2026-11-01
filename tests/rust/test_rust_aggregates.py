@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.certification_support import actual_check_prerequisite, certify_source
 from tests.rust.test_rust_frontend import (
     test_development_only_rustc_checks_the_same_source as _rustc_check,
     test_unchanged_rust_source_runs_owned_native as _run_owned,
@@ -136,11 +137,18 @@ def test_parenthesized_struct_in_unary_condition_is_accepted(keyword, condition)
     assert "define" in compile_source("struct P{x:bool} struct N{x:i32} fn f(){" + keyword + " " + condition + " {}}").ir_text
 
 
-def test_upstream_meson_adder_is_unchanged_and_lowers_declared_foreign_calls():
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
+def test_upstream_meson_adder_is_unchanged_and_lowers_declared_foreign_calls(tmp_path, monkeypatch):
     path = Path(__file__).parent / "upstream" / "meson_adder.rs"
     source = path.read_bytes()
     assert hashlib.sha256(source).hexdigest() == "654d4f498384c21d51627908a842fe8454e5918ef7ba9317a740d7623c9c0933"
-    result = compile_source(source.decode())
+    checked = certify_source(source.decode(), tmp_path / "certifier")
+    import subprocess
+    with monkeypatch.context() as owned:
+        owned.setattr(subprocess, "Popen", lambda *args, **kwargs: pytest.fail("owned lowering invoked an external checker"))
+        result = compile_rust(source.decode(), rustc_check=checked)
+    assert result.externally_checked
+    assert path.read_bytes() == source
     assert "declare i32 @zero()" in result.ir_text
     assert "declare i32 @zero_static()" in result.ir_text
     assert "getelementptr { i32 }" in result.ir_text

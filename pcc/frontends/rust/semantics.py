@@ -5,14 +5,23 @@ import re
 from dataclasses import dataclass
 
 from .syntax import Enumeration, Expr, Function, Record, RustError, Token
-from .types import SharedReference, TupleType, TypeApplication, TypeParameter
+from .types import (
+    INTEGER_TYPES, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
+)
 
-INTEGERS = {"i32", "i64", "u32", "u64"}
+INTEGERS = INTEGER_TYPES
+FFI_INTEGERS = frozenset({"i32", "i64", "u32", "u64"})
 NEVER = "!"
 
 
 @dataclass(eq=False)
 class InferredInteger:
+    bound: object = None
+
+
+@dataclass(eq=False)
+class InferredType:
+    token: Token
     bound: object = None
 
 
@@ -26,9 +35,18 @@ class Binding:
 
 
 def resolve(ty: object) -> object:
+    if isinstance(ty, FixedArrayType):
+        return FixedArrayType(resolve(ty.element), ty.length)
+    if isinstance(ty, InferredType):
+        if ty.bound is None:
+            raise ty.token.error('cannot infer empty array element type; provide a type annotation')
+        ty.bound = resolve(ty.bound)
+        return ty.bound
     if isinstance(ty, SharedReference):
-        return SharedReference(resolve(ty.referent))
-    if isinstance(ty, (TypeApplication, TypeParameter)):
+        return SharedReference(resolve(ty.referent), ty.mutable, ty.lifetime)
+    if isinstance(ty, TypeApplication):
+        return TypeApplication(ty.name, tuple(resolve(item) for item in ty.arguments))
+    if isinstance(ty, TypeParameter):
         return ty
     if isinstance(ty, TupleType):
         return TupleType(tuple(resolve(item) for item in ty.elements))
@@ -41,7 +59,7 @@ def resolve(ty: object) -> object:
 
 
 def _root(ty: object) -> object:
-    while isinstance(ty, InferredInteger) and ty.bound is not None:
+    while isinstance(ty, (InferredInteger, InferredType)) and ty.bound is not None:
         ty = ty.bound
     return ty
 
@@ -54,12 +72,31 @@ def unify(left: object, right: object, token: Token) -> object:
         return left
     if left is right or left == right:
         return left
+    if isinstance(left, InferredType):
+        from .generics import children
+        pending, seen = [right], set()
+        while pending:
+            item = _root(pending.pop())
+            if item is left:
+                raise token.error("infinite inferred array element type")
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            pending.extend(children(item))
+        left.bound = right
+        return right
+    if isinstance(right, InferredType):
+        return unify(right, left, token)
+    if isinstance(left, FixedArrayType) and isinstance(right, FixedArrayType) and left.length == right.length:
+        return FixedArrayType(unify(left.element, right.element, token), left.length)
     if isinstance(left, TupleType) and isinstance(right, TupleType) and len(left.elements) == len(right.elements):
         return TupleType(tuple(unify(a, b, token) for a, b in zip(left.elements, right.elements)))
-    if isinstance(left, SharedReference) and isinstance(right, SharedReference):
-        return SharedReference(unify(left.referent, right.referent, token))
+    if isinstance(left, TypeApplication) and isinstance(right, TypeApplication) and left.name == right.name and len(left.arguments) == len(right.arguments):
+        return TypeApplication(left.name, tuple(unify(a, b, token) for a, b in zip(left.arguments, right.arguments)))
+    if isinstance(left, SharedReference) and isinstance(right, SharedReference) and left.mutable == right.mutable:
+        return SharedReference(unify(left.referent, right.referent, token), left.mutable)
     if isinstance(left, InferredInteger):
-        if isinstance(right, InferredInteger) or right in INTEGERS:
+        if isinstance(right, InferredInteger) or isinstance(right, str) and right in INTEGERS:
             left.bound = right
             return right
     elif isinstance(right, InferredInteger):
@@ -68,9 +105,9 @@ def unify(left: object, right: object, token: Token) -> object:
 
 
 def integer_literal(expr: Expr) -> tuple[int, object]:
-    match = re.fullmatch(r"(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(i32|i64|u32|u64)?", str(expr.value))
+    match = re.fullmatch(r"(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(i32|i64|u32|u64|isize|usize)?", str(expr.value))
     if match is None:
-        raise expr.token.error("invalid or unsupported integer literal (supported suffixes: i32, i64, u32, u64)")
+        raise expr.token.error("invalid or unsupported integer literal (supported suffixes: i32, i64, u32, u64, isize, usize)")
     raw = match.group(1).replace("_", "")
     try:
         value = int(raw, 0 if raw.startswith(("0x", "0o", "0b")) else 10)
@@ -79,14 +116,14 @@ def integer_literal(expr: Expr) -> tuple[int, object]:
     return value, match.group(2) or InferredInteger()
 
 
-def bounds(ty: str) -> tuple[int, int]:
-    bits = int(ty[1:])
+def bounds(ty: str, pointer_bits=None) -> tuple[int, int]:
+    bits = integer_bits(ty, pointer_bits)
     return (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if ty[0] == "i" else (0, (1 << bits) - 1)
 
 
-def cast_constant(value: int, ty: str) -> int:
+def cast_constant(value: int, ty: str, pointer_bits=None) -> int:
     """Rust integer casts truncate modulo 2**width, then interpret signedness."""
-    bits = int(ty[1:])
+    bits = integer_bits(ty, pointer_bits)
     value &= (1 << bits) - 1
     if ty.startswith("i") and value >= (1 << (bits - 1)):
         value -= 1 << bits
@@ -94,7 +131,14 @@ def cast_constant(value: int, ty: str) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=()):
+    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), *, externally_checked=False, pointer_bits=None):
+        if pointer_bits is None:
+            from .targets import DEFAULT_TARGET, resolve_target
+            pointer_bits = resolve_target(DEFAULT_TARGET).pointer_bits
+        if pointer_bits != 64:
+            raise RustError('Rust pointer data model is not yet qualified')
+        self.pointer_bits = pointer_bits
+        self.externally_checked = externally_checked
         self.functions = functions
         self.records: dict[str, Record] = {}
         for record in records:
@@ -116,6 +160,7 @@ class Checker:
         self.unsafe_depth = 0
         self.type_scope = {}
         self.abstract_function = False
+        self.inferred_calls = []
         from .generics import GenericDeclarations
         from .function_generics import GenericFunctions
         self.generics = GenericDeclarations(self)
@@ -136,6 +181,8 @@ class Checker:
         return None
 
     def fields(self, ty: object) -> tuple[object, ...]:
+        if isinstance(ty, FixedArrayType):
+            return (ty.element,) * ty.length
         if isinstance(ty, TupleType):
             return ty.elements
         if ty in self.records:
@@ -143,31 +190,55 @@ class Checker:
         return ()
 
     def aggregate(self, ty: object) -> bool:
-        return isinstance(ty, TupleType) or ty in self.records
+        return isinstance(ty, (TupleType, FixedArrayType)) or ty in self.records
 
     def copy_type(self, ty: object) -> bool:
-        if isinstance(ty, SharedReference):
+        from .call_inference import partial
+        ty = partial(ty)
+        if isinstance(ty, InferredInteger):
             return True
+        if isinstance(ty, (TypeApplication, TypeParameter)):
+            return False
+        if isinstance(ty, SharedReference):
+            return not ty.mutable
+        if isinstance(ty, FixedArrayType):
+            return self.copy_type(ty.element)
         if isinstance(ty, TupleType):
             return all(self.copy_type(item) for item in ty.elements)
         # Named Rust structs do NOT become Copy just because their fields are.
         return ty in INTEGERS | {"bool", "()"}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
-        if isinstance(ty, InferredInteger):
+        if isinstance(ty, (InferredInteger, InferredType)):
             return  # Local borrow inference resolves after all call constraints.
         if isinstance(ty, TypeParameter):
             if self.abstract_function and ty in self.type_scope.values():
                 return
             raise token.error("unbound generic type parameter")
         if isinstance(ty, TypeApplication):
+            from .call_inference import partial, pending_integer
+            ty = partial(ty)
+            if pending_integer(ty):
+                for argument in ty.arguments:
+                    self.valid_type(argument, token, allow_reference=False)
+                return  # Declaration layout was already checked; storage waits for body constraints.
             self.generics.instantiate(ty, token)
         if isinstance(ty, SharedReference):
+            if ty.lifetime and not self.externally_checked:
+                raise token.error("explicit reference lifetimes require a matching external rustc check record")
+            if ty.mutable and not self.externally_checked:
+                raise token.error("mutable references require a matching external rustc check record")
             if not allow_reference:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
             if ty.referent == "()" or isinstance(ty.referent, SharedReference):
                 raise token.error("unit and nested references require additional reference layout/lifetime support")
             self.valid_type(ty.referent, token, stack, allow_reference=False)
+            return
+        if isinstance(ty, FixedArrayType):
+            from .arrays import length_value, storage_units
+            length_value(self, ty.length, token)
+            self.valid_type(ty.element, token, stack, allow_reference=False)
+            storage_units(self, ty, token)
             return
         if isinstance(ty, TupleType):
             for item in ty.elements:
@@ -203,6 +274,11 @@ class Checker:
             return self.place(expr.children[0])
         if expr.kind == "name":
             return expr.binding, ()
+        if expr.kind == "index":
+            from pcc.analysis.ownership import Index
+            base = self.place(expr.children[0])
+            if base is not None:
+                return base[0], base[1] + (Index(expr.value),)
         if expr.kind == "field":
             base = self.place(expr.children[0])
             if base is not None:
@@ -214,9 +290,26 @@ class Checker:
             return True
         if expr.kind == "group":
             return self.through_reference(expr.children[0])
-        if expr.kind == "field":
+        if expr.kind in {"field", "index"}:
             return isinstance(expr.children[0].ty, SharedReference) or self.through_reference(expr.children[0])
         return False
+
+    def through_array_index(self, expr):
+        return expr.kind == "index" or expr.kind in {"group", "field"} and self.through_array_index(expr.children[0])
+
+    def mutable_place(self, expr: Expr) -> bool:
+        """Mutability/addressability only; lifetime and alias checking is external."""
+        if expr.kind == "group":
+            return self.mutable_place(expr.children[0])
+        if expr.kind == "deref":
+            pointer = expr.children[0].ty
+            return isinstance(pointer, SharedReference) and pointer.mutable
+        if expr.kind in {"field", "index"}:
+            base = expr.children[0]
+            if isinstance(base.ty, SharedReference):
+                return base.ty.mutable
+            return self.mutable_place(base)
+        return expr.kind == "name" and expr.binding.mutable
 
     def check(self) -> None:
         from .patterns import check_enums
@@ -231,6 +324,10 @@ class Checker:
         self.methods.prepare()
         declarations = tuple(self.functions)
         for fn in declarations:
+            if fn.explicit_receiver and not self.externally_checked:
+                raise fn.token.error("explicit receiver types require a matching external rustc check record")
+            if fn.lifetime_parameters and not self.externally_checked:
+                raise fn.token.error("explicit function lifetimes require a matching external rustc check record")
             self.type_scope = self.function_generics.prepare(fn)
             self.abstract_function = bool(fn.type_parameters)
             fn.result = self.generics.normalize(fn.result, fn.token)
@@ -251,17 +348,18 @@ class Checker:
             if fn.no_mangle and fn.abi != "C":
                 raise fn.token.error("no_mangle is supported only on extern C function definitions")
             self.names[name] = fn
-            if fn.abi == "C" and (any(ty not in INTEGERS and not isinstance(ty, SharedReference) for _, ty, _ in fn.params) or fn.result not in INTEGERS | {"()"}):
+            if fn.abi == "C" and (any(ty not in FFI_INTEGERS and not isinstance(ty, SharedReference) for _, ty, _ in fn.params) or fn.result not in FFI_INTEGERS | {"()"}):
                 raise fn.token.error("extern C currently supports integer/shared-reference parameters and integer/unit returns; aggregate ABI requires a separately qualified repr(C) shape")
             if fn.abi == "C":
                 for token, ty, _ in fn.params:
                     if isinstance(ty, SharedReference):
                         record = self.records.get(ty.referent)
-                        if (isinstance(ty.referent, TypeApplication) or record is None or not record.repr_c
-                                or not record.fields or any(t not in INTEGERS for _, t in record.fields)):
+                        if (ty.mutable or isinstance(ty.referent, TypeApplication) or record is None or not record.repr_c
+                                or not record.fields or any(t not in FFI_INTEGERS for _, t in record.fields)):
                             raise token.error("foreign shared references require the separately qualified non-generic repr(C) integer record shape")
         self.type_scope = {}
         self.abstract_function = False
+        self.inferred_calls = []
         # Rust checks declarations, not only the bodies selected by concrete
         # calls. Generic parameters stay non-Copy even if every current call
         # happens to substitute a primitive Copy type.
@@ -269,7 +367,8 @@ class Checker:
         for fn in declarations:
             if fn.type_parameters:
                 self.check_body(fn, self.function_generics.scope(fn), abstract=True)
-                MoveChecker(self).check_function(fn)
+                if not self.externally_checked:
+                    MoveChecker(self).check_function(fn)
         for fn in declarations:
             if not fn.type_parameters:
                 self.check_body(fn, self.function_generics.scope(fn))
@@ -279,6 +378,7 @@ class Checker:
         if fn.body is None:
             return
         previous_scope, previous_abstract = self.type_scope, self.abstract_function
+        previous_calls, self.inferred_calls = self.inferred_calls, []
         self.type_scope, self.abstract_function = type_scope, abstract
         try:
             self.scopes = [{}]
@@ -292,9 +392,12 @@ class Checker:
                 params.append(self.bind(name, ty, mutable, parameter=True))
             self.parameters[fn.identity] = params
             unify(fn.result, self.expression(fn.body), fn.body.token)
+            from .call_inference import finish
+            finish(self, self.inferred_calls)
             self.validate(fn.body)
         finally:
             self.type_scope, self.abstract_function = previous_scope, previous_abstract
+            self.inferred_calls = previous_calls
 
     def expression(self, expr: Expr, *, allow_borrow=False, place_context=False) -> object:
         kind, children = expr.kind, expr.children
@@ -303,12 +406,18 @@ class Checker:
         elif kind == "group":
             ty = self.expression(children[0], allow_borrow=allow_borrow, place_context=place_context)
         elif kind == "borrow":
-            if not allow_borrow:
+            if expr.value and not self.externally_checked:
+                raise expr.token.error("mutable borrowing requires a matching external rustc check record")
+            if not allow_borrow and not self.externally_checked:
                 raise expr.token.error("local borrowing is supported only as a direct shared-reference call argument; reference storage/escape lifetime analysis is not implemented")
             referent = self.expression(children[0], place_context=True)
+            if self.through_array_index(children[0]) and not self.externally_checked:
+                raise expr.token.error("indexed borrowing requires an actual external rustc check; legacy partial loans do not prove array disjointness")
             if self.place(children[0]) is None:
                 raise expr.token.error("shared borrowing of temporaries requires lifetime extension, which is not implemented")
-            ty = SharedReference(referent)
+            if expr.value and not self.mutable_place(children[0]):
+                raise expr.token.error("cannot borrow an immutable place as mutable")
+            ty = SharedReference(referent, bool(expr.value))
             self.valid_type(ty, expr.token)
         elif kind == "deref":
             pointer = self.expression(children[0])
@@ -351,6 +460,32 @@ class Checker:
                     unify("()", child_ty, expr.token)
                 if child_ty == NEVER:
                     ty = NEVER
+        elif kind in {"array", "array_repeat"}:
+            from .arrays import MAX_ARRAY_ELEMENTS, length_value
+            element = InferredType(expr.token)
+            for child in children:
+                child_type = self.expression(child)
+                if child_type == NEVER:
+                    raise child.token.error("diverging array operands require additional never-type inference, which is not implemented")
+                element = unify(element, child_type, child.token)
+            count = length_value(self, expr.value, expr.token) if kind == "array_repeat" else len(children)
+            if count > MAX_ARRAY_ELEMENTS:
+                raise expr.token.error("array length exceeds implementation limit (4096 elements)")
+            expr.value = count
+            ty = FixedArrayType(element, count)
+        elif kind == "index":
+            from .arrays import closed_constant
+            from .call_inference import partial
+            base_type = partial(self.expression(children[0], place_context=True))
+            if isinstance(base_type, SharedReference):
+                base_type = base_type.referent
+            if not isinstance(base_type, FixedArrayType):
+                raise expr.token.error("indexing requires an array; slices and Index traits are not implemented")
+            unify("usize", self.expression(children[1]), children[1].token)
+            closed_constant(children[1], children[1].token)
+            ty = base_type.element
+            if not place_context and not self.copy_type(ty):
+                raise expr.token.error("cannot move a non-Copy value out of an array index")
         elif kind == "tuple":
             elements = tuple(self.expression(child) for child in children)
             if NEVER in elements:
@@ -381,7 +516,8 @@ class Checker:
             expr.value = indices
             ty = record_name
         elif kind == "field":
-            base_ty = self.expression(children[0], place_context=True)
+            from .call_inference import partial
+            base_ty = partial(self.expression(children[0], place_context=True))
             if isinstance(base_ty, SharedReference):
                 base_ty = base_ty.referent
             if isinstance(base_ty, TupleType):
@@ -389,8 +525,14 @@ class Checker:
                     raise expr.token.error("unknown tuple field")
                 index = int(expr.value)
                 ty = base_ty.elements[index]
-            elif base_ty in self.records:
-                fields = self.records[base_ty].fields
+            elif isinstance(base_ty, TypeApplication) or isinstance(base_ty, str) and base_ty in self.records:
+                if isinstance(base_ty, TypeApplication):
+                    declaration = self.generics.definitions[base_ty.name]
+                    if not isinstance(declaration, Record):
+                        raise expr.token.error("field access requires a struct or tuple")
+                    fields = list(zip((f for f, _ in declaration.fields), self.generics.specialized_fields(base_ty)))
+                else:
+                    fields = self.records[base_ty].fields
                 names = [field.text for field, _ in fields]
                 if expr.value not in names:
                     raise expr.token.error("unknown struct field")
@@ -399,6 +541,8 @@ class Checker:
             else:
                 raise expr.token.error("field access requires a struct or tuple")
             expr.value = index
+            if self.through_array_index(expr) and not place_context and not self.copy_type(ty):
+                raise expr.token.error("cannot move a non-Copy field out of an array index")
             if self.through_reference(expr) and not place_context and not self.copy_type(ty):
                 raise expr.token.error("cannot move a non-Copy field out of a shared reference")
         elif kind == "name":
@@ -428,14 +572,30 @@ class Checker:
                 callee = callee.children[0]
             fn = None
             receiver_checked = False
+            arguments_checked = False
             if callee.kind == "field":
                 receiver = callee.children[0]
-                receiver_type = self.expression(receiver, place_context=True)
+                from .call_inference import partial, pending_integer
+                receiver_type = partial(self.expression(receiver, place_context=True))
+                array_type = receiver_type.referent if isinstance(receiver_type, SharedReference) else receiver_type
+                if isinstance(array_type, FixedArrayType) and callee.value == "len":
+                    if len(children) != 1:
+                        raise callee.token.error("array len expects no arguments")
+                    expr.kind, expr.value, expr.children, expr.ty = "array_len", array_type.length, [receiver], "usize"
+                    return "usize"
+                if pending_integer(receiver_type):
+                    raise receiver.token.error("method selection on an unresolved inferred receiver requires later constraint solving, which is not implemented")
                 fn = self.methods.select(receiver_type, callee.value, callee.token, receiver=True)
                 if isinstance(fn.params[0][1], SharedReference) and not isinstance(receiver_type, SharedReference):
+                    if self.through_array_index(receiver) and not self.externally_checked:
+                        raise receiver.token.error("indexed receiver borrowing requires an actual external rustc check; legacy partial loans do not prove array disjointness")
                     if self.place(receiver) is None:
                         raise receiver.token.error("shared receiver borrowing of temporaries requires lifetime extension, which is not implemented")
-                    receiver = Expr("borrow", receiver.token, children=[receiver], ty=SharedReference(receiver_type))
+                    if fn.params[0][1].mutable and not self.mutable_place(receiver):
+                        raise receiver.token.error("cannot borrow an immutable receiver as mutable")
+                    receiver = Expr("borrow", receiver.token, fn.params[0][1].mutable, children=[receiver], ty=SharedReference(receiver_type, fn.params[0][1].mutable))
+                elif self.through_array_index(receiver) and not self.copy_type(receiver_type):
+                    raise receiver.token.error("cannot move a non-Copy value receiver out of an array index")
                 elif self.through_reference(receiver) and not self.copy_type(receiver_type):
                     raise receiver.token.error("cannot move a value receiver out of a shared reference")
                 # Canonical typed direct-call operands: receiver is first and
@@ -471,16 +631,34 @@ class Checker:
                 fn = self.names.get(name)
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
-                fn = self.function_generics.select(
-                    fn, path.arguments if isinstance(path, TypeApplication) else None, callee.token)
+                if fn.type_parameters and not isinstance(path, TypeApplication):
+                    if fn.unsafe and not self.unsafe_depth:
+                        raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
+                    if len(children) - 1 != len(fn.params):
+                        raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
+                    from .call_inference import infer
+                    types = [self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
+                             for arg, (_, param_ty, _) in zip(children[1:], fn.params)]
+                    declaration = fn
+                    fn, arguments = infer(self, declaration, types, callee.token)
+                    self.inferred_calls.append((expr, declaration, arguments, callee.token))
+                    arguments_checked = True
+                else:
+                    fn = self.function_generics.select(
+                        fn, path.arguments if isinstance(path, TypeApplication) else None, callee.token)
             if fn.unsafe and not self.unsafe_depth:
                 raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
             if len(children) - 1 != len(fn.params):
                 raise expr.token.error(f"function {fn.token.text!r} expects {len(fn.params)} arguments")
             expr.binding = fn
             for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params)):
-                arg_ty = arg.ty if receiver_checked and index == 0 else self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
-                unify(param_ty, arg_ty, arg.token)
+                arg_ty = arg.ty if arguments_checked or receiver_checked and index == 0 else self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
+                if (isinstance(param_ty, SharedReference) and isinstance(arg_ty, SharedReference)
+                        and not param_ty.mutable and arg_ty.mutable):
+                    unify(param_ty.referent, arg_ty.referent, arg.token)
+                    children[index + 1] = Expr("reference_coerce", arg.token, children=[arg], ty=param_ty)
+                else:
+                    unify(param_ty, arg_ty, arg.token)
             ty = fn.result
         elif kind == "unary":
             ty = self.expression(children[0])
@@ -502,15 +680,13 @@ class Checker:
                 ty = common
         elif kind == "assign":
             lhs = children[0]
-            target = self.expression(lhs)
+            target = self.expression(lhs, place_context=True)
             place = self.place(lhs)
             if place is None:
                 raise lhs.token.error("assignment target must be a local binding or field")
-            if self.through_reference(lhs):
-                raise lhs.token.error("cannot assign through a shared reference")
-            if not place[0].mutable:
-                raise lhs.token.error(f"cannot assign to immutable binding {place[0].name!r}")
-            if place[0].parameter and isinstance(target, SharedReference):
+            if not self.mutable_place(lhs):
+                raise lhs.token.error("cannot assign through a shared reference" if self.through_reference(lhs) else f"cannot assign to immutable binding {place[0].name!r}")
+            if not self.externally_checked and place[0].parameter and isinstance(target, SharedReference):
                 raise lhs.token.error("reference parameter reassignment requires lifetime constraints, which are not implemented")
             unify(target, self.expression(children[1]), expr.token)
             ty = "()"
@@ -525,13 +701,34 @@ class Checker:
         elif kind == "match":
             from .patterns import check_pattern
 
-            scrutinee_ty = self.expression(children[0])
+            from .call_inference import partial, pending_integer
+            scrutinee_ty = partial(self.expression(children[0]))
+            if isinstance(scrutinee_ty, TypeApplication) and pending_integer(scrutinee_ty):
+                raise expr.token.error("matching an unresolved inferred generic type requires later pattern constraints, which is not implemented")
             ty = NEVER
             for pattern, arm in zip(expr.value, children[1:]):
                 self.scopes.append({})
                 check_pattern(self, pattern, scrutinee_ty)
                 ty = unify(ty, self.expression(arm), arm.token)
                 self.scopes.pop()
+        elif kind == "for":
+            if not self.externally_checked:
+                raise expr.token.error("for ownership/borrowing admission requires an actual external rustc check")
+            from .call_inference import partial
+            source = partial(self.expression(children[0]))
+            if not isinstance(source, FixedArrayType):
+                raise expr.token.error("for supports concrete owned arrays only; borrowed/custom iterators and traits are not implemented")
+            pattern = expr.value
+            self.scopes.append({})
+            if pattern.kind == "binding":
+                expr.binding = self.bind(pattern.token, source.element, pattern.value)
+            self.loops += 1
+            try:
+                unify("()", self.expression(children[1]), children[1].token)
+            finally:
+                self.loops -= 1
+                self.scopes.pop()
+            ty = "()"
         elif kind == "while":
             unify("bool", self.expression(children[0]), children[0].token)
             self.loops += 1
@@ -555,14 +752,30 @@ class Checker:
         # Resolve only after the complete function has contributed constraints:
         # `let x = 1; takes_i64(x)` must infer i64, not prematurely default i32.
         expr.ty = resolve(expr.ty)
+        if isinstance(expr.ty, (TypeApplication, FixedArrayType)):
+            self.valid_type(expr.ty, expr.token)
         values = [self.validate(child) for child in expr.children if not (expr.kind == "call" and child is expr.children[0])]
         if isinstance(expr.binding, Binding):
             expr.binding.ty = resolve(expr.binding.ty)
         kind, op = expr.kind, expr.value
+        if kind == "for":
+            from .iteration import validate_iteration
+            validate_iteration(self, expr)
         if kind == "match":
             from .patterns import validate_match
 
             validate_match(self, expr)
+        if kind == "array_repeat" and expr.value > 1 and not self.copy_type(expr.ty.element):
+            raise expr.token.error("array repeat operands of length greater than one require Copy; const-item/block repetition and trait bounds are not implemented")
+        if kind == "index":
+            base = expr.children[0].ty
+            array = base.referent if isinstance(base, SharedReference) else base
+            index = values[1]
+            if type(index) is not int:
+                raise expr.token.error("dynamic array bounds/panic support is not implemented")
+            if not 0 <= index < array.length:
+                raise expr.token.error("constant array index is out of bounds")
+            expr.value = index
         if kind == "variant":
             return expr.value
         if kind == "group":
@@ -572,7 +785,7 @@ class Checker:
         if kind == "block" and expr.value == 0 and values:
             return values[0]
         if kind == "integer":
-            low, high = bounds(expr.ty)
+            low, high = bounds(expr.ty, self.pointer_bits)
             if expr.binding == "negative-literal" and expr.ty.startswith("i"):
                 high += 1
             if not low <= op <= high:
@@ -580,24 +793,24 @@ class Checker:
             return op
         if kind == "unary":
             operand_ty = expr.children[0].ty
-            if op == "-" and operand_ty not in {"i32", "i64", NEVER}:
+            if op == "-" and operand_ty not in {"i32", "i64", "isize", NEVER}:
                 raise expr.token.error("unary '-' requires a signed integer")
             if op == "!" and operand_ty not in INTEGERS | {"bool", NEVER}:
                 raise expr.token.error("unary '!' requires bool or integer")
             if op == "-" and values[0] is not None:
                 value = -values[0]
-                if not bounds(expr.ty)[0] <= value <= bounds(expr.ty)[1]:
+                if not bounds(expr.ty, self.pointer_bits)[0] <= value <= bounds(expr.ty, self.pointer_bits)[1]:
                     raise expr.token.error("constant integer overflow")
                 return value
             if op == "!" and values[0] is not None:
-                return not values[0] if expr.ty == "bool" else cast_constant(~values[0], expr.ty)
+                return not values[0] if expr.ty == "bool" else cast_constant(~values[0], expr.ty, self.pointer_bits)
         if kind == "cast":
             if expr.ty not in INTEGERS or (expr.children[0].ty not in INTEGERS | {"bool"} and expr.children[0].ty not in self.enums):
                 raise expr.token.error("supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer")
             if expr.children[0].ty in self.enums and self.enums[expr.children[0].ty].payloads:
                 raise expr.token.error("an enum with payload fields cannot be cast to an integer")
             if values[0] is not None:
-                return cast_constant(int(values[0]), expr.ty)
+                return cast_constant(int(values[0]), expr.ty, self.pointer_bits)
         if kind == "binary":
             operand_ty = expr.children[0].ty
             allowed = INTEGERS | {"bool"} if op in {"&", "|", "^", "==", "!=", "<", "<=", ">", ">=", "&&", "||"} else INTEGERS
@@ -610,7 +823,7 @@ class Checker:
             if op in {"+", "-", "*"} and all(value is not None for value in values):
                 left, right = values
                 value = left + right if op == "+" else left - right if op == "-" else left * right
-                if not bounds(operand_ty)[0] <= value <= bounds(operand_ty)[1]:
+                if not bounds(operand_ty, self.pointer_bits)[0] <= value <= bounds(operand_ty, self.pointer_bits)[1]:
                     raise expr.token.error("constant integer overflow")
                 return value
             if all(value is not None for value in values):

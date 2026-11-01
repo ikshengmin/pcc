@@ -7,34 +7,33 @@ resolver, integer inference, type checker and control-flow lowering. It does not
 strip Rust syntax, translate into Python/C, invoke rustc, or substitute a Python
 interpreter. The shared PCC self backend emits and links the native program.
 
-**Not a safe primary Rust compiler:** no general Rust borrow checker exists. The mandatory
-experimental flag is a caller attestation that rustc checked the *unchanged*
-source; it is not proof or an automatically verified receipt. The normal/default
-call rejects compilation. Host-PCC evidence is not native pcc1/fixed-point proof.
+**Not a safe primary Rust compiler:** no general owned Rust borrow checker exists.
+The legacy experimental flag enables **value-only** inputs; it is never proof
+that rustc ran and cannot authorize any reference-bearing program. Unused
+reference declarations, shared/mutable receivers, borrowed arguments, nested
+reference types and semantically synthesized references all require a genuine
+source/options-bound `CheckedRustSource` from the explicit external checker.
+The default call without either explicit value-only opt-in or a checked token
+rejects compilation. Host-PCC evidence is not native pcc1/fixed-point proof.
 
-## Bounded read-only direct-call loans (experimental)
+## Reference lowering requires actual external checking
 
-Private Rust parameters may carry shared references to admitted value types.
-`&self` methods, incoming shared-reference forwarding, Copy-value dereference,
-and field projections use the existing target pointer/data layout. A local
-`&place` is admitted only as a direct shared-reference call argument (parentheses
-are allowed). A method may borrow an existing receiver place automatically;
-borrowing arbitrary temporaries is explicitly unimplemented. Non-Copy values
-cannot be moved out through a shared reference, including generic `T` even if a
-particular call would instantiate a scalar.
+Use `check_rust_source(...)` followed by `compile_rust(..., rustc_check=checked)`,
+or `compile_rust_checked(...)`. The checker actually invokes the audited rustc
+on unchanged bytes with exact target/options and records successful metadata.
+The owned phase uses only PCC parsing, semantics, IR and backend. It consumes no
+MIR and launches no rustc process. A caller-created provenance dataclass or the
+legacy boolean cannot substitute for the adapter-minted token.
 
-The frontend tracks each local loan's binding identity and field path through
-**all** subsequent argument evaluation and the call. It rejects overlapping
-moves or mutations while that loan is active, permits independent sibling
-places, and ends the loan after the call. Nested calls retain outer loans.
-This small conservative conflict check is not non-lexical lifetime analysis or
-general borrow checking: creating stored local references, escaping reference
-returns/aggregate fields, mutable loans, raw pointers, Drop, interior mutability
-and arbitrary receiver adjustment remain gated. Existing unsafe external calls
-still require the caller to uphold the foreign lifetime/alias contract; the
-frontend does not prove an external callee's body or certify unsafe source.
-The public `experimental_rustc_checked` flag remains caller attestation, and
-`borrow_checked_by_pcc` remains false.
+Supported shared/mutable references lower to target pointers, preserving
+mutability, field addressing, receiver/argument evaluation and reference-slot
+rebinding. On the checked route the old partial loan/move model is **not** an
+admission gate: rustc owns borrowing/lifetime/move validity, while PCC still
+checks its own non-borrow language semantics and explicit lowering boundaries.
+Unsupported reference representations remain explicit failures; this does not
+mean every program accepted by rustc is implemented. The legacy partial loan
+model is retained only for internal, non-certifying analysis tests that return
+facts, never pointer IR or executable objects. `borrow_checked_by_pcc` stays false.
 
 The foreign boundary is **not** widened: `extern "C"` shared parameters still
 require the separately qualified non-generic `repr(C)` integer record shape.
@@ -49,8 +48,9 @@ method at line 737 also needs const functions, dereference/pattern borrowing and
 a returned `Option<&T>` with real lifetimes; this bounded slice does not compile
 that method or the full crate. The eight `shared_*.rs` programs are clearly
 authored tests, not extracted upstream successes. Their spec-linked unit,
-owned-native, Darwin cross-only and actual rustc runtime/rejection checks live
-in `test_rust_shared_loans.py`; unrun tests are not evidence of support.
+owned-native, target-certified Darwin cross-only and actual rustc runtime/rejection checks live
+in `test_rust_shared_loans.py`. Missing target std/core is an explicit unavailable
+prerequisite, not permission to reuse a Linux token; unrun tests are not support.
 
 ## Admitted language
 
@@ -95,7 +95,7 @@ cross-compiler ABI is claimed; no native Rust standard-library objects are linke
 ## Boundaries and next owners
 
 This is not C-level language/ecosystem parity. General references/lifetimes/borrowing,
-Drop analysis, user-defined Copy, zero-field structs, tuple structs, arrays, general patterns/match ergonomics, modules/imports, never-typed tuple operands,
+Drop analysis, user-defined Copy, zero-field structs, tuple structs, slices/dynamic array bounds, general patterns/match ergonomics, modules/imports, never-typed tuple operands,
 full generics/traits/impls, closures, macros, pointer operations, heap allocation,
 `core`/`alloc`/`std`, panic/unwind, and the shared public driver are unfinished.
 Unsupported syntax fails closed. Accepted no_std arithmetic does **not** mean
@@ -246,12 +246,13 @@ record whose fields are i32/i64/u32/u64. The two admitted LP64 targets use their
 existing backend's natural scalar struct layout and 64-bit pointer ABI. Field
 reads use typed GEP/load, not a copied struct or a Python object. Shared
 references are Copy, may be forwarded or rebound as values, and never permit
-referent writes. Mutable references, reference creation/dereference/casts,
-reference returns, references stored inside aggregates and lifetime syntax
-remain explicit capability gaps. Default Rust aggregates are not an FFI layout.
+referent writes. Mutable **foreign** references, reference casts/returns and references stored
+inside aggregates remain explicit capability gaps. The checked private-reference
+mode below is separate from this foreign ABI. Default Rust aggregates are not an
+FFI layout.
 
-This remains **caller-attested compilation, not borrow checking**. The caller
-must supply independently rustc-checked unchanged Rust source. Foreign callers
+Every public reference compilation requires actual unchanged-source checking;
+PCC still does not implement a borrow checker. Foreign callers
 must additionally provide nonnull, aligned, initialized, live objects and must
 not mutate the shared referent during its lifetime. The compiler does not prove
 these foreign obligations, add noalias promises, or create a new allocation owner.
@@ -269,8 +270,8 @@ provenance rather than treating a library-shaped fixture as project completion.
 Unit-only nominal enums admit qualified `Type::Variant` constructors, checked
 explicit/incrementing discriminants, and integer casts. Explicit integer repr
 supports i32/i64/u32/u64; default logical discriminants use the admitted targets'
-64-bit isize range but only unsuffixed constant expressions are accepted until
-isize is a source type. Default storage is a PCC-private i64 tag, **not rustc's
+64-bit isize range; this bounded enum domain still accepts only unsuffixed
+constant expressions, separately from ordinary isize source arithmetic. Default storage is a PCC-private i64 tag, **not rustc's
 repr(Rust) layout**. Enum values are not automatically Copy or PartialEq. All
 foreign enum parameters/results remain rejected, even with integer repr.
 
@@ -289,8 +290,8 @@ Empty enums, named-field payload variants, ref/match ergonomics, guards/ranges,
 trait-derived Copy, macros and general const evaluation remain explicit gaps.
 No enum code imports a runtime, allocator or unwinder. The unchanged official
 Rust sources in `tests/rust/upstream/` remain frontier inputs, not core/alloc or
-upstream-project qualification. Caller attestation and missing borrow-checker
-limitations are unchanged. Darwin is still cross-object emission only.
+upstream-project qualification. PCC still has no complete borrow checker. Value-only opt-in is not a proof;
+every reference-bearing public input requires the actual external transition. Darwin is still cross-object emission only.
 
 Specification references: [enums](https://doc.rust-lang.org/reference/items/enumerations.html),
 [match](https://doc.rust-lang.org/reference/expressions/match-expr.html),
@@ -375,8 +376,9 @@ generic enum declarations at lines 593 and 548 motivate this domain, but their
 first documentation-attribute frontier, imports, derives, full impl/method obligations, trait and
 closure bounds, references, lang items and intrinsics are still unmet. Authored
 generic programs are specification fixtures, **not** original core/alloc success.
-Optional rustc checks remain unavailable when the tool is absent; the public flag
-is only caller attestation, never proof that PCC checked ownership or lifetimes.
+Development reference checks remain explicitly unavailable when their tool or
+target library is absent. The public flag enables value-only experimental input;
+reference-bearing programs require actual source-bound external checking.
 
 References: [generic parameters](https://doc.rust-lang.org/reference/items/generics.html),
 [expression/pattern paths](https://doc.rust-lang.org/reference/paths.html),
@@ -395,7 +397,8 @@ Unused function type parameters themselves are legal (unlike unused data-type
 parameters). Existing valid generic functions previously rejected as a capability
 have their exact original source retained in positive tests.
 
-Calls require explicit Rust turbofish type arguments (`identity::<u64>(value)`).
+Calls accept explicit turbofish type arguments (`identity::<u64>(value)`) or the
+argument-constrained inference described below.
 Concrete signatures/placeholders are registered through the same shared registry
 used by C++ functions and Rust data. Bodies discovered by other instances enter
 the FIFO once; direct and mutual function recursion reuse in-progress signatures.
@@ -407,8 +410,8 @@ Generic instances have deterministic private symbols derived from the function
 name and complete semantic type structure. Public result metadata uses keys such
 as `identity::<u64>`; there is no single foreign export for an abstract template.
 Generic foreign/no-mangle ABI and reference type arguments are rejected. The
-compiler does not infer type arguments, prove borrow lifetimes, implement Copy
-or other trait bounds, or erase destructor obligations. Admitted values still
+compiler does not infer unconstrained result-only type arguments, prove borrow
+lifetimes, implement Copy or other trait bounds, or erase destructor obligations. Admitted values still
 exclude custom Drop and heap-owning types. Each compilation permits at most 128
 concrete function instances; recursively growing specialization is an explicit
 resource limit, not a claim that ordinary function recursion is invalid.
@@ -442,11 +445,12 @@ solving remain explicit capability boundaries. All methods are type/move checked
 at declaration time, including unused generic methods; abstract `T` is non-Copy.
 Concrete receiver/qualified-owner types select complete impl arguments for the
 existing shared function registry. No second method monomorphization cache or
-runtime dispatcher is added. Method-local generic parameters and general call
-argument inference remain unsupported.
+runtime dispatcher is added. Method-local generic parameters and unconstrained
+result-only generic call inference remain unsupported.
 
-Only value receivers are admitted. `&self`, `&mut self`, explicit receiver types,
-autoderef/autoborrow, reference-returning methods, traits, Drop, vtables, closures,
+The initial value-receiver domain is extended by the bounded `&self` loans
+described above. `&mut self`, explicit receiver types, general receiver
+adjustment, reference-returning methods, traits, Drop, vtables, closures,
 const methods and C method ABI remain outside this slice. Method symbols encode
 nominal owner plus method and concrete arguments privately; they do not claim
 rustc ABI/layout. Static access with receiver-call syntax is diagnosed.
@@ -461,10 +465,506 @@ References: [inherent implementations](https://doc.rust-lang.org/reference/items
 [associated functions/methods](https://doc.rust-lang.org/reference/items/associated-items.html#associated-functions-and-methods),
 [method calls](https://doc.rust-lang.org/reference/expressions/method-call-expr.html).
 
-Reference parameter reassignment is explicitly unsupported until lifetime
-constraints are represented; each elided input reference has its own lifetime.
-This includes conservatively rejecting valid self-assignment. A local Copy
-reference binding initialized from incoming references can still be rebound.
-The original `shared_rebinding.rs` is retained as a PCC-before-IR / actual-rustc
-negative after the first reference gate rejected its parameter assignment;
-`shared_local_rebinding.rs` is a distinct positive input, not an edited original.
+Historical internal loan analysis conservatively rejects reference-parameter
+reassignment; it no longer controls public reference admission. Actual checked
+input may rebind formal/self or locally inferred reference slots where rustc
+accepts it. The original `shared_rebinding.rs` remains an unchanged actual-rustc
+lifetime-error input; `shared_local_rebinding.rs` and explicitly lifetime-bound
+formal rebinding programs are distinct positives, not edits to that negative.
+
+
+### Trusted external-check reference mode (not an owned borrow checker)
+
+`check_rust_source(source, toolchain=RustcToolchain(...), evidence_directory=...)`
+is a supported **explicit external transition phase**. It runs the audited pinned
+installation's direct `rustc`, verifies full `-vV` and actual sysroot (not a
+rustup/PATH proxy), writes and checks exactly the supplied UTF-8 bytes with the
+closed edition2021/target/overflow options, and requires successful fresh metadata.
+Failures, timeouts, missing metadata or source/tool drift cannot mint a token.
+`compile_rust_checked(...)` is the convenience check-then-owned-lower entry.
+
+Only that adapter can normally construct `CheckedRustSource`; its `compile_owned()`
+phase or `compile_rust(source, rustc_check=checked_source)` invokes no external
+process and consumes no MIR. A caller-constructed `ExternalRustcCheck` provenance
+record is explicitly rejected as authorization. The token's private creation seal
+is a trusted-Python API boundary, not a cryptographic or reflection-proof sandbox;
+the audited tool configuration/local environment must also be trusted. The legacy
+`experimental_rustc_checked=True` flag is only a value-only experimental opt-in
+and admits **no** reference-bearing source, including previously admitted readonly forms. The transition checker is not a
+production dependency of the final owned compiler.
+
+On this certified path, PCC does not run its partial loan/move dataflow pass,
+either for ordinary bodies or abstract/concrete generic bodies. Borrow/lifetime
+and move invalidity belongs to the external check; own syntax, declaration/type,
+mutability, numeric semantics and explicit lowering capability checks remain.
+References lower as typed pointers without `noalias` assumptions. Mutable
+references retain non-Copy type identity and writable-referent rules; ordinary
+reference slot rebinding changes that slot, not its former referent. Named
+function lifetime parameters and reference annotations are retained as syntax
+metadata, checked externally, and have no runtime storage.
+
+This first address mode admits existing-place local references, scalar/record
+read/write, shared/mutable receivers and bounded function lifetime annotations.
+Reference returns, nested/unit references, aggregate reference fields, data/impl
+lifetime parameters, reference type substitutions into generic parameters,
+borrow patterns, temporaries, Drop, traits, raw pointers and foreign mutable
+reference ABI remain explicit representation/language capability gaps. No claim
+of full Rust, full borrow checking, arbitrary cfg/dependencies, core or alloc.
+Actual unchanged-original native rustc comparisons are required before this
+source candidate can be called qualified; no new Mac execution is claimed.
+
+
+### Argument-constrained generic call inference
+
+Direct free-function calls can omit the full turbofish when every generic
+parameter is constrained by actual argument types. Tuple, nominal application
+and shared-reference parameter structure participates; repeated parameters
+must agree. Integer defaulting waits until the entire function body supplies
+its constraints (including return types, annotated locals and later calls),
+then inferred and explicit calls use the same instance registry. Generic
+bodies are still checked abstractly before any specialization; inference does
+not make T Copy or defer invalid unused bodies.
+
+Result-only unconstrained parameters, generic constructor inference, partial
+`_` type arguments, trait constraints, and method/pattern selection on unresolved
+generic results remain explicit gaps. No Rust lifetime inference, core/alloc
+qualification or production rustc dependency is introduced. The source-owned
+fixtures are not upstream successes. The native rustc observer nodes
+share one xdist group under the unchanged default six workers, so external
+reference linking does not multiply peak RSS unnecessarily; each unchanged
+program still compiles and executes independently with full raw observations.
+
+
+### Fixed-size arrays and target-sized index types
+
+`usize` and `isize` are distinct source types, not aliases of `u64`/`i64`.
+Their widths derive from the admitted target pointer data model. This domain
+currently qualifies only the existing 64-bit Linux and Darwin object targets;
+it does not extend the narrower scalar foreign ABI whitelist.
+
+Fixed `[T; N]` values retain their element type and use public IR `ArrayType`,
+including nested arrays and arrays inside ordinary records/tuples. Private
+parameters/results copy or move the entire value according to the element's
+Rust Copy eligibility; a named record does not become Copy from its fields,
+and even `[NonCopy; 0]` remains non-Copy. No Rust/rustc or C by-value ABI claim
+is made. Empty arrays require enough type context to infer their element type.
+
+Literal operands evaluate individually left-to-right. A repeat operand is
+evaluated exactly once, even at length zero; a length greater than one requires
+an already admitted Copy element. Const-item/block repetition, user-defined
+Copy, destructuring and Drop are not emulated. A scalar Copy field can be read
+through an indexed record, but moving a non-Copy indexed element/field is
+rejected. Whole-array reassignment may reinitialize a moved owner.
+
+Lengths and indices currently require bounded closed scalar constant
+expressions with type `usize`; invalid constant indices fail before IR.
+Dynamic/effectful index expressions explicitly require unimplemented
+bounds/panic support, never an unchecked pointer access. Array `.len()` yields
+`usize` while preserving evaluation of its receiver. Each dimension and the
+concrete aggregate work budget are bounded to 4096 elements/scalar slots.
+Zero-length and unit-element arrays keep their real typed public-IR layout;
+known lengths do not erase operand side effects or create destruction support.
+
+Reference reads/stores use the existing actual external-check transition for
+borrowed programs, then owned typed-address lowering. This does not introduce
+another partial borrow-analysis admission rule. Creating an indexed borrow or
+auto-borrowing an indexed method receiver requires that actual external check;
+legacy field/index path inequality is not an array-disjointness proof.
+Slices/unsizing, const generics,
+array matching/equality and general iterator traits remain independent gaps.
+The concrete owned-array `for` source slice below does not implement those traits.
+Complete original `core::array` is pinned as dependency evidence, not a core or
+alloc build success. Authored native/reference fixtures are separate originals.
+
+Specification: [array types](https://doc.rust-lang.org/reference/types/array.html),
+[array expressions and repeat evaluation](https://doc.rust-lang.org/reference/expressions/array-expr.html),
+[operand evaluation](https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands),
+[target-sized integers](https://doc.rust-lang.org/reference/types/numeric.html#machine-dependent-integer-types).
+
+
+### Owned fixed-array `for` (bounded qualification)
+
+The first iterator-loop domain accepts concrete owned `[T; N]` values only
+when the full element graph has proven-empty destruction in the currently
+admitted type system. This is not the same as Copy: ordinary non-Copy records
+are consumed, while Copy arrays snapshot their values before the first body.
+Unknown generic elements, Drop implementations, arbitrary iterator traits,
+ranges, borrowed-array iterators and destructuring patterns remain explicit
+capability gaps. Generic functions with fully concrete iteration elements may
+still use the existing shared instantiation mechanism.
+
+Every new `for` requires a source/options-bound token minted by the actual
+external `check_rust_source` transition. The caller-attestation flag is not
+sufficient, and the legacy partial move/loan checker is not extended. PCC still
+performs its own type/mutability and panic-capability checks: successful rustc
+metadata checking does not establish runtime panic absence. No MIR or external
+compiler is consumed by the owned lowering phase.
+
+A dedicated standard-array iteration identity cannot be captured by source
+names `IntoIterator`, `Iterator`, `Option`, `into_iter` or `next`. The iterable
+is evaluated once and its owned storage outlives every iteration. A hidden
+bounded cursor advances before the body; per-iteration bindings have separate
+semantic identities from outer names. Loop targets retain scope-exit depths:
+continue retains the iterator, break retires its remaining range, and return
+evaluates its operand before retiring enclosing iterator scopes. Empty cleanup
+is eliminated only under the concrete no-Drop proof, never inferred from a
+borrow check. Zero-length arrays still evaluate their source/operand effects.
+The internal proven-bounded cursor does not admit general dynamic indexing.
+
+`tests/rust/test_rust_array_for.py` ties the source models and fifteen new
+original programs to the specification. Its actual public adapter and full
+8-byte owned/reference execution lane passed on Linux x86-64 in finalba525; this
+is not a Mac execution or cross-target certification claim.
+
+Specification: [iterator-loop identity and desugaring](https://doc.rust-lang.org/reference/expressions/loop-expr.html#iterator-loops),
+[drop scopes](https://doc.rust-lang.org/reference/destructors.html#drop-scopes),
+[moved/copied values](https://doc.rust-lang.org/reference/expressions.html#moved-and-copied-types).
+Pinned dependency audit: Rust commit
+`1159e78c4747b02ef996e55082b704c09b970588`,
+[`array/iter.rs`](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/array/iter.rs)
+and [`array/iter/iter_inner.rs`](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/array/iter/iter_inner.rs).
+Their live-range/destruction design was inspected, not compiled; traits,
+MaybeUninit, const generics and destructor glue still block original core.
+
+### Public reference-admission regression boundary
+
+`test_rust_reference_admission.py` covers bare-flag refusal before IR, unused and
+nested reference declarations, post-semantics synthesis, genuine token context
+mismatch, actual checked readonly sources and actual E0382 rejection. Existing
+reference program bytes and runtime oracles are retained. `analysis_only.py` is
+a test-internal facts-only model, not an unchecked compile API. The shared C++
+record-pointer fixture likewise checks the original Rust source before entering
+its external-tools-forbidden owned compilation phase; scalar interop does not
+acquire a new rustc dependency. The repaired boundary passed63 focused and987 whole-language/shared-core tests
+(11 additional Darwin-target cases explicitly unrun). The earlier959-pass run
+used the older boundary and remains historical evidence, not qualification of
+this repair. The common ABI domain separately passed3 available nodes; its
+Darwin record-reference node remains explicitly unrun.
+
+## Implementation and acceptance map (legacy schema1 qualification only)
+
+The public schema1 `status` is a qualification view, not a machine-readable
+dual-axis implementation migration. `missing` does not prove absent code.
+The tables below preserve implementation and acceptance separately for every
+feature ID;119 unaudited chapter gaps are not a completion denominator.
+Implemented-but-unverified scopes are not promoted to supported by suite totals.
+No common checker/schema2 migration is included.
+
+Final Rust source `ba5252cb01aaae9643a11ff70035e3a850238783` has987 passed
+selected tests (964Rust +23shared mechanisms). All six workers recorded the same
+998-node pool and11 explicit Darwin core/std-unavailable cases, which are unrun,
+not passes or skips.66 unchanged-source full8-byte owned/rustc1.91.1 runtime
+pairs include52 identities with actual metadata checks and14 value-only pairs
+without such records. Every public reference-bearing input requires a genuine
+source/options-bound token; no bare flag authorizes reference lowering. The
+whole gate separately records138 successful checks and12 genuine rejections;
+redundant checks are counted, not presented as unique programs. Internal
+nonlowering loan/iteration models prove only their tested mechanisms, not borrow
+certification or executable IR. Linux runtime only; no Mac execution claim.
+
+Common ABI integration `ba5252cb01aaae9643a11ff70035e3a850238783` preserves the
+Rust/tests above and exact publiccb516 backend plus current public foreign frontend bytes. Its complete
+four-node domain observed3PASS and1Darwin-target-unavailable/unrun. The original
+record source was actually checked before owned lowering and produced two
+48-byte observations; scalar routes each produced two32-byte observations.
+Scalar exit success is bound by the existing passed assertions, not invented
+independent per-run exit receipts.
+
+All141 active qualification records have NEWba525 IDs, current test hashes and
+actual current-run parents. All141 prior cad1 records and older140 records remain unchanged in prior
+Git/private history. Original failures (including986PASS/1FAIL before the missed
+Meson test migration) remain failures. Unchanged public `--verify-files` must
+verify all four current maps; historical Git or private fallback cannot replace
+that contract. No historical binary path revalidation is implied by this renewal.
+
+### Audited feature axes
+
+| Feature ID | Implementation | Acceptance | Scope |
+|---|---|---|---|
+| `rust.impl.value-methods` | implemented | accepted | Checked nongeneric/generic local record and enum impls; self/mut self, Self names, qualified calls, explicit full impl type arguments, declaration-checked non-Copy generic bodies, source-order one-time receiver evaluation and recursion via shared instance registry. Excludes reference receivers, autoderef/autoborrow, trait impls, coherence specialization, method-local generic parameters, arbitrary self types and reference/Drop runtime. Qualified only in host pcc0/self Linux x86-64, with actual unchanged-source native rustc1.91.1 differential; Darwin remains cross-emission only. |
+| `rust.references.direct-shared-call-loans` | implemented | accepted | Readonly references and &self receivers to admitted places use actual same-input source/options-bound external checking before owned typed-pointer lowering. All original eight shared-reference programs retain their bytes and full-eight-byte native/reference outputs. The flag alone never authorizes any public reference-bearing input; the checked route bypasses incomplete owned loan/move admission while retaining nonborrow type, addressability and mutability checks. The old partial loan algorithm is only an explicitly nonlowering internal mechanism, not a public admission gate or borrow certification. Reference returns, aggregate reference storage, nested references, temporary lifetime extension, arbitrary traits and Drop remain outside scope. Linux x86-64 runtime qualification only; missing Darwin target core/std leaves reference cases explicitly unrun. |
+| `rust.lex.tokens` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. ASCII identifiers, integer/bool tokens, nested ordinary comments, Pattern_White_Space and retained explicit parentheses; doc attributes and unsupported token families fail explicitly. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.functions.scalar-items` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Private typed function signatures, direct calls and forward references in a single parsed crate; no function values, modules or complete item grammar. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.blocks.locals` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Block tails, let/mut bindings and lexical shadowing for admitted types; no arbitrary Rust statement/item grammar. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.control.if-while` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Boolean if/while conditions, break/continue and return for admitted expressions; not for/IntoIterator, labeled loops or full loop-value semantics. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.numeric.fixed-integers` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Current i32/u32/i64/u64 and bool arithmetic/comparisons, explicit casts and short-circuit evaluation with overflow_checks=False; panic-capable paths remain gated. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.inference.integer-context` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Unresolved integer literals share constraints through supported body expressions before i32 defaulting; generic-call argument inference is inventoried separately. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.aggregate.tuple-record` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Named records, tuple values, field access, construction order and private aggregate value ABI; default layout is private PCC layout, not a Rust ABI compatibility claim. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.moves.value-paths` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Place-sensitive non-Copy move facts and live-branch/loop joins for destructor-free value types; no Drop glue, user Copy trait, complete borrow checker or partial initialization of uninitialized locals. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.enums.unit-discriminants` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Unit variants with checked default/explicit integer discriminants; no foreign enum ABI, trait-derived comparisons or empty-enum lowering. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.patterns.finite-match` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Single-evaluation match, admitted integer literals, wildcard and finite constructor matrices; no guards, borrow patterns, ranges or full match ergonomics. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.enums.payload-values` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Private typed payload representation with selected-variant reads, value bindings and precise field consumption; no C/rustc layout or Drop obligations erased. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.generics.data-explicit` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Explicit full type applications, nominal instance identity and finite layout validation even for unused templates; no trait bounds, const generics or inferred constructors. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.generics.functions-explicit` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Complete explicit turbofish applications with abstract non-Copy body checking and recursive placeholders; argument-constrained inference is inventoried separately. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.ffi.scalar-reference-c` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Unsafe extern-C calls and no_mangle exports for admitted scalar signatures; readonly references only to supported nongeneric repr(C) integer records. No C-unwind, by-value aggregates or complete FFI safety guarantee. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.codegen.qualified-targets` | implemented | unverified | Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Public target_triple drives IR triple/data layout and owned ELF Linux x86-64 or Mach-O arm64 Darwin emission; Darwin cross-emission is not Mac execution. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance. |
+| `rust.generics.argument-call-inference` | implemented | accepted | Argument-constrained generic function calls infer complete type arguments from scalar, tuple, nominal aggregate and admitted shared-reference operands; body/result constraints precede integer fallback. Arguments are checked/evaluated once; generic declarations remain abstractly checked before concrete calls, and the existing shared registry owns recursive instances. Result-only inference, inferred constructors, partial underscore arguments, unresolved method/pattern receiver constraints, trait solving and reference type substitutions remain explicit boundaries. Qualified pcc0/self Linux x86-64 with seven unchanged authored-program native rustc1.91.1 comparisons; no upstream core/alloc claim and Darwin cross-emission only. |
+| `rust.references.external-certified-addresses` | implemented | accepted | Actual external-check transition owns borrow/lifetime/move admission for the same frozen UTF-8 input, edition2021, target and closed no-cfg/no-dependency options. Only an adapter-minted source-bound token enables owned pointer lowering for local shared/mutable references, implicit or explicit shared/mutable receivers, inferred generic calls, reborrows, formal/local reference rebinding, primitive and field assignment ordering, and disjoint mutable fields. The owned compiler still checks nonborrow typing and mutability and never invokes rustc or consumes MIR. The Python caller and audited direct local tool installation are trusted; this is not cryptographic attestation, an owned borrow checker, or admission of every Rust form. Reference returns, aggregate reference storage, borrow patterns, nested references, temporary lifetime extension, Drop and traits remain outside scope. Actual Linux x86-64 qualification uses16 unchanged authored originals and independent full8-byte native PCC/rustc comparisons; Darwin reference certification/native execution is not qualified. |
+| `rust.types.target-sized-integers` | implemented | accepted | Distinct usize/isize identities derive64-bit width from the admitted pointer layout, never aliases of u64/i64. Signed extension, zero extension, truncation, wrapping/bitnot/comparison, usize patterns and generic instance identity have two unchanged native raw-reference originals. Foreign ABI whitelist stays narrower; Darwin objects are cross-only. No32-bit target, Mac execution or core/alloc claim. |
+| `rust.arrays.fixed-values` | implemented | accepted | Real public IR ArrayType retains element type, Copy eligibility, non-Copy whole moves/reinitialization and private parameter/result value copies. Closed usize constant lengths and indices are statically checked; dynamic/effectful bounds explicitly reject instead of unchecked access. Literal operands run left-to-right; repeat operands run once evenN0, and len receiver effects remain. Indexed borrowing requires actual external checking; structural Index inequality is not alias proof. Twelve unchanged authored originals have full8-byte native-reference pairs. No array C ABI, slices/unsizing, const generics, destructuring/match, iterator traits, dynamic panic, Drop, complete core/alloc or Mac execution claim. |
+| `rust.loops.owned-array-for` | implemented | accepted | Concrete owned fixed arrays only, with recursive no-Drop proof independent of Copy. Standard iterator identity cannot be captured by source names; source evaluates once, Copy snapshots/non-Copy moves, cursor advances before body, and per-iteration binding/temporary scopes are retired across break/continue/return. Actual source/options-bound external checking is mandatory; PCC does not extend its legacy partial borrow checker. Fifteen unchanged authored originals pass actual rustc1.91.1 and full8-byte owned/reference process comparisons in the final complete987-selected gate (11 additional Darwin-target cases explicitly unrun). Unknown generic element destruction, arbitrary traits/ranges/borrowed iterators/destructuring, Drop, dynamic panic and original core/alloc remain outside scope; existing division/bounds guards stay enforced. Linux x86-64 runtime only, no Mac certification claim. |
+| `rust.syntax.blocklike-expression-boundary` | implemented | accepted | Admitted blocklike expression statements and match arms stop ambiguous unparenthesized call/index/infix continuation; dot access and grouped/value contexts stay ordinary expressions. Else-if is parsed as the grammar prefix, so indexing/dot apply to the complete chain. Original failing for-array source is preserved; the distinct native statement-values original observes both branch results and length effects. This is not a claim of all Rust expression or pattern syntax. |
+| `rust.references.public-checked-admission` | implemented | accepted | Every reference-bearing public input, including unused/nested/generic declarations and shared/mutable receivers, requires a genuine adapter-minted CheckedRustSource. Structural guards run before semantics and again before lowering; ordinary provenance records, bare flags and token source/target/options mismatches cannot authorize IR. The separate transition actually checks the same frozen bytes with audited rustc1.91.1; owned lowering consumes no MIR and invokes no compiler. Checked input bypasses the incomplete internal MoveChecker, retaining nonborrow language checks. Nine unchanged previously caller-attested originals now execute only after actual checking; real E0382 is rejected by rustc before lowering. No cryptographic attestation or owned borrow-checker claim; supported syntax remains bounded. |
+| `rust.capability.ad1be8716230` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/__init__.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.638580601dd4` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/arrays.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.8f66a4997af3` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/call_inference.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.2d9d7a47b49d` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/external_check.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.102e85184e90` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.53efaab821f9` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.05e266c798ff` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/function_generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.791904d28fad` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.a1a67307ea48` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.8b991334a1bf` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.c7ec835f4a43` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.b108adcc58fb` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.635b37d0353a` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/generics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.76ffe4b8b11f` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/iteration.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.6cffe8ef2ad3` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/iteration.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.bcfda66ea41a` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/iteration.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.ca7ab0b6c7b5` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/lowering.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.b29def7fd8da` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/lowering.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.1f486aaf9ee4` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.cafda895c2ac` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.9feb1bfbec86` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.d465b452d5cd` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/methods.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.8a0b20e95290` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.e80fe5661a8b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.85bfd5395b7c` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.eafc49a3531e` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.f166c52a3112` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.1377c97a7cf9` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/patterns.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.3e384f9d3e80` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.42c0edfbabfa` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.b6ad2f608ff0` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.47e9fc5d6566` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.d0970a5199e9` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.4b9c1fc377df` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.de072a10a17d` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.276015de773c` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.8f374c0f0032` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.c48c5f43d7bb` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.1a8776e6058b` | explicitly_unimplemented | unverified | Internal nonlowering legacy analysis only: Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. This restriction cannot authorize public reference execution and is bypassed by the actual-checked public route. |
+| `rust.capability.ad0a8e2940d2` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.d0b554a3b673` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.10557ba208c5` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.a158c8e39022` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.c363280a66c7` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.a8fa7c5d5360` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.2297a7178b8b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.1fe01c85830b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.6352bd97ff85` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.1337d5134703` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.4ee292f5718c` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.bdcf31e67972` | explicitly_unimplemented | unverified | Internal nonlowering legacy analysis only: Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. This restriction cannot authorize public reference execution and is bypassed by the actual-checked public route. |
+| `rust.capability.7d0c67a57d36` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.709957839ec7` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.cd0812091f1d` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/semantics.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.fe93fd5bf188` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.bd733be37d9b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.e99bc3baff05` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.d1d178589dd9` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.bba567d753cb` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.7acd3663c2c4` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.e05bbaab24e2` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.80a1daa28726` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.c3e20b9f0176` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.33589f37c948` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.2f56a4aba18c` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.bb5c218be67c` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.23e389b95dff` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.ef2051156beb` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.d45b3de1ec8e` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.75978ad8986b` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.a0caa359be53` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.a8ca231e8795` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.5b94bfcc10f1` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.f49193c1c2ca` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.cb3e74dcd215` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.cc0819c68f78` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.ef1aabaa4f26` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.76572c67a8a9` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.9d2f182c387d` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.9a13e1881e59` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.9c7be91de66a` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.066e96807a59` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.e6d5b211f058` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.551845180510` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.d70994f47d79` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.ed147b2399ee` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.18728c522946` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.1ecc344c3e40` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+| `rust.capability.e43cffed9774` | explicitly_unimplemented | unverified | Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy. |
+
+### Current immutable implementation observations
+
+| Feature ID | Source / symbol | Revision | SHA-256 | Mechanism |
+|---|---|---|---|---|
+| `rust.impl.value-methods` | `pcc/frontends/rust/methods.py` / `InherentMethods.prepare` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `5d15493a93285ab8e564c0717d807bae1d2cfbeaa62721bee05982d1abc200fc` | Checks local nominal impl declarations and resolves Self; explicit method selection preserves language-specific identities. |
+| `rust.impl.value-methods` | `pcc/frontends/rust/function_generics.py` / `GenericFunctions.select` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `4e98d19ebf43d7b25677b3299c6d4960d70ccc5ab12e2b4f8db1352c2414d6de` | Selected concrete methods use the shared frontend instance registry; abstract declarations remain independently checked. |
+| `rust.references.direct-shared-call-loans` | `pcc/frontends/rust/external_check.py` / `check_rust_source` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1c2348712e7bcc46f956118026e08bfe974661c8d0bc6c124f5d0f0547ec2ec5` | Actual external checking owns readonly admission; the old partial conflict model no longer authorizes public references. |
+| `rust.references.direct-shared-call-loans` | `pcc/frontends/rust/lowering.py` / `Lowerer.place_pointer` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Admitted shared references lower to existing-place pointers and typed field addressing. |
+| `rust.lex.tokens` | `pcc/frontends/rust/syntax.py` / `lex` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Scans Rust tokens and nested comments with source positions, rather than stripping into another language. |
+| `rust.functions.scalar-items` | `pcc/frontends/rust/semantics.py` / `Checker.check` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Checks declarations and bodies before lowering typed direct calls. |
+| `rust.blocks.locals` | `pcc/frontends/rust/semantics.py` / `Checker.bind` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Serial-identified bindings preserve lexical scope and distinct storage. |
+| `rust.control.if-while` | `pcc/frontends/rust/lowering.py` / `Lowerer.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Builds public IR control-flow blocks and explicit terminating edges. |
+| `rust.numeric.fixed-integers` | `pcc/frontends/rust/semantics.py` / `Checker.validate` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Validates typed numeric operands and propagates supported constant expressions before IR emission. |
+| `rust.inference.integer-context` | `pcc/frontends/rust/semantics.py` / `unify` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Unifies inferred integer roots with contextual scalar types and checks literal bounds. |
+| `rust.aggregate.tuple-record` | `pcc/frontends/rust/lowering.py` / `Lowerer.type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Maps checked nominal/tuple types to typed public IR aggregates and target-owned layout. |
+| `rust.moves.value-paths` | `pcc/frontends/rust/moves.py` / `MoveChecker.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `93c6f15d2b7a7cf0d0215a82be87841f8dfdc601eb37564b8af9a45b3d2b499c` | Legacy value-only/internal path-state mechanism; actual-checked reference admission bypasses this incomplete analysis. |
+| `rust.enums.unit-discriminants` | `pcc/frontends/rust/patterns.py` / `check_enums` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `94877ffd9367c5b52c26397ddd59373c200e950448a393b9f57ce9d041dea426` | Checks enum representation/discriminant range and variant identities. |
+| `rust.patterns.finite-match` | `pcc/frontends/rust/patterns.py` / `validate_match` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `94877ffd9367c5b52c26397ddd59373c200e950448a393b9f57ce9d041dea426` | Checks constructor coverage and rejects non-exhaustive admitted pattern matrices. |
+| `rust.enums.payload-values` | `pcc/frontends/rust/lowering.py` / `Lowerer.payload_value` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Projects payload slots only after variant dispatch in the admitted match lowering. |
+| `rust.generics.data-explicit` | `pcc/frontends/rust/generics.py` / `GenericDeclarations.prepare` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `a9d5a0ffa667e4dc31e73048461264c64f6eac3a3da27709d4aa693597c62320` | Normalizes declaration-bound parameters and validates generic declarations before shared instance materialization. |
+| `rust.generics.functions-explicit` | `pcc/frontends/rust/function_generics.py` / `GenericFunctions.select` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `4e98d19ebf43d7b25677b3299c6d4960d70ccc5ab12e2b4f8db1352c2414d6de` | Registers concrete function instances using the shared worklist while abstract declarations remain checked independently. |
+| `rust.ffi.scalar-reference-c` | `pcc/frontends/rust/semantics.py` / `Checker.valid_type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Checks admitted ABI types and separately rejects unsupported reference/aggregate foreign shapes. |
+| `rust.codegen.qualified-targets` | `pcc/frontends/rust/targets.py` / `resolve_target` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `b9e60b36cfedc5279973686d7b00d2b92042dabf75a7f3b434de85b0fb08733e` | Resolves only qualified target/ABI combinations and fails closed on unsupported aliases. |
+| `rust.generics.argument-call-inference` | `pcc/frontends/rust/call_inference.py` / `infer` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `9b3b0626a4dafb25d84e13614d5f52a790b3c62e9b222e073d759bafad020e29` | Collects structural argument constraints while keeping unresolved integer roots shared. |
+| `rust.generics.argument-call-inference` | `pcc/frontends/rust/call_inference.py` / `finish` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `9b3b0626a4dafb25d84e13614d5f52a790b3c62e9b222e073d759bafad020e29` | Selects existing shared-worklist function instances only after whole-body constraints. |
+| `rust.generics.argument-call-inference` | `pcc/frontends/rust/semantics.py` / `Checker.check_body` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Finishes inferred calls after declaration-result unification and before typed validation. |
+| `rust.references.external-certified-addresses` | `pcc/frontends/rust/external_check.py` / `check_rust_source` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1c2348712e7bcc46f956118026e08bfe974661c8d0bc6c124f5d0f0547ec2ec5` | Actually invokes the pinned direct compiler on frozen source and validates version/sysroot/process/output before privately minting a token. |
+| `rust.references.external-certified-addresses` | `pcc/frontends/rust/external_check.py` / `CheckedRustSource.validate` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1c2348712e7bcc46f956118026e08bfe974661c8d0bc6c124f5d0f0547ec2ec5` | Binds owned admission to exact source and closed options; ordinary caller-constructed records are not authorization. |
+| `rust.references.external-certified-addresses` | `pcc/frontends/rust/__init__.py` / `compile_rust` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `7a2fbf34fcbbcda1a93b281a6462ce597c68dfec570ff44c6a47d1fa32010ef5` | Keeps the owned IR path process-free and bypasses incomplete owned move admission only for the adapter-minted token. |
+| `rust.references.external-certified-addresses` | `pcc/frontends/rust/semantics.py` / `Checker.mutable_place` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Retains language mutability and addressability checks independent of externally owned borrow checking. |
+| `rust.references.external-certified-addresses` | `pcc/frontends/rust/lowering.py` / `Lowerer.place_pointer` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Lowers actual reference/dereference and field addresses through existing typed IR pointers. |
+| `rust.types.target-sized-integers` | `pcc/frontends/rust/types.py` / `integer_bits` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `f0d55554bbc67e706559217bc351cd75162d76ba3a34336bfb162078ab5b6f38` | Requires a qualified pointer width while preserving distinct source names. |
+| `rust.types.target-sized-integers` | `pcc/frontends/rust/targets.py` / `RustTarget.pointer_bits` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `b9e60b36cfedc5279973686d7b00d2b92042dabf75a7f3b434de85b0fb08733e` | Reads the explicit pointer data model. |
+| `rust.types.target-sized-integers` | `pcc/frontends/rust/lowering.py` / `Lowerer.type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Uses the selected target to lower pointer-sized integers. |
+| `rust.arrays.fixed-values` | `pcc/frontends/rust/types.py` / `FixedArrayType` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `f0d55554bbc67e706559217bc351cd75162d76ba3a34336bfb162078ab5b6f38` | Keeps nominal element/count shape separate from tuple representation. |
+| `rust.arrays.fixed-values` | `pcc/frontends/rust/arrays.py` / `length_value` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `f510bb95035e67f216259ed83bf7086e13e11c0450ad00b5d37e78dac643ef29` | Checks bounded closed usize constants before storage or indexing. |
+| `rust.arrays.fixed-values` | `pcc/frontends/rust/semantics.py` / `Checker.copy_type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Derives array Copy from its element, including zero-length arrays. |
+| `rust.arrays.fixed-values` | `pcc/frontends/rust/lowering.py` / `Lowerer.type` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Selects actual public IR ArrayType and target-owned layout. |
+| `rust.arrays.fixed-values` | `pcc/frontends/rust/lowering.py` / `Lowerer.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Preserves array operand, receiver and assignment evaluation while using owned aggregate values. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/syntax.py` / `Parser.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Parses owned-array for and explicit bounded binding forms. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/semantics.py` / `Checker.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `c35db2e68407afe25f4ddd92ad76126c41e44ff029e0ab34ff95a72c768cb78a` | Requires actual external check and owned-array scope/type semantics. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/iteration.py` / `prove_no_drop` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `04d3583c2e8d55ce1b76949b7ad0b76823607989259022ef3b529839df7d2ea5` | Recursively proves empty destruction independently of Copy. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/iteration.py` / `validate_iteration` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `04d3583c2e8d55ce1b76949b7ad0b76823607989259022ef3b529839df7d2ea5` | Assigns standard array identity independent of source spelling. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/lowering.py` / `Lowerer.array_iteration` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Snapshots source and advances bounded cursor before each body. |
+| `rust.loops.owned-array-for` | `pcc/frontends/rust/lowering.py` / `Lowerer.finish_iteration_scopes` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `1ccdafe7b164465b71714825b235132e790e89da793c10b8b86618b3aecab0e1` | Retires only crossed iterator/binding scopes with proof-empty destruction. |
+| `rust.syntax.blocklike-expression-boundary` | `pcc/frontends/rust/syntax.py` / `Parser.expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Carries statement/match-arm completion context while retaining grouped/value and dot continuations. |
+| `rust.syntax.blocklike-expression-boundary` | `pcc/frontends/rust/syntax.py` / `Parser.if_expression` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `700d425907dde32d3289fbdfd6d072f65856e311646984dd847869839ce34163` | Parses else-if prefixes before attaching postfix to the whole chain. |
+| `rust.references.public-checked-admission` | `pcc/frontends/rust/reference_admission.py` / `contains_references` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `65c5796a5986a6fd47d31686909e8ede5c0340fb340ed5429749a4d8113df0ff` | Structurally detects references in all syntax/type containers without token-text guessing. |
+| `rust.references.public-checked-admission` | `pcc/frontends/rust/__init__.py` / `compile_rust` | `ba5252cb01aaae9643a11ff70035e3a850238783` | `7a2fbf34fcbbcda1a93b281a6462ce597c68dfec570ff44c6a47d1fa32010ef5` | Checks genuine tokens and rejects reference-bearing inputs before semantics and again before lowering. |
+
+### Full-chapter coverage gaps (not feature failure counts)
+
+| Feature ID | Implementation | Acceptance | Inventory scope |
+|---|---|---|---|
+| `rust.chapter.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.2.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.3.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.3.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.8.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.9.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.10.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.11.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.12.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.13.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.14.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.6.15.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.7.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.8.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.9.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.10.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.11.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.12.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.13.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.14.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.15.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.16.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.17.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.18.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.8.2.19.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.9.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.8.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.9.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.10.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.11.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.12.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.13.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.14.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.15.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.16.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.17.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.18.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.1.19.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.7.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.8.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.9.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.10.10.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.11.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.12.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.13.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.13.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.13.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.14.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.15.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.16.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.17.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.17.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.17.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.17.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.18.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.19.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.20.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.1.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.2.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.3.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.4.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.5.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |
+| `rust.chapter.21.6.coverage` | unaudited chapter inventory | unverified | Full chapter feature decomposition and unit/native/reference evidence are not yet complete. This missing coverage row does not negate separately qualified narrow features or claim that every construct in this chapter is rejected. |

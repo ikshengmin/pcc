@@ -76,3 +76,21 @@ Both complete files still fail at their initial documentation attributes. No
 methods are extracted, renamed or rewritten to claim original core success.
 See [Option original](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/option.rs)
 and [Result original](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/result.rs).
+
+
+## Original fixed-array dependency
+
+`rust-1.90.0/core_array.rs` is the complete original
+[`library/core/src/array/mod.rs`](https://github.com/rust-lang/rust/blob/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/array/mod.rs)
+at the same immutable Rust release commit, obtained through authorized official
+source access before implementing the array domain. SHA-256
+`29adca8337dddeddf9d43ec943767bf9ffb917e43e234b91630573b5484f991e`,
+32,784 bytes, 999 lines. The independent repository Git-blob identity was not
+verified for this file; the complete downloaded bytes and SHA pin are retained.
+The same original MIT/Apache-2.0 licenses above apply unchanged.
+
+The first whole-file parser frontier is its documentation attributes. Remaining
+original dependencies include module imports/visibility, `Borrow`/`BorrowMut`,
+`Index`, Clone/Copy bounds, const-generic lengths, slice and iterator traits,
+`MaybeUninit` and destruction guards. The added frontier test preserves every
+original byte and is a capability rejection, not upstream compilation/execution.

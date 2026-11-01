@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.analysis_only import analyze_source
+from tests.rust.certification_support import source_has_references, certify_source, actual_check_prerequisite, darwin_check_prerequisite
 from pcc.frontends.rust.targets import DEFAULT_TARGET
 
 HERE = Path(__file__).parent
@@ -88,7 +90,8 @@ def record_run(image, expected, tmp_path):
 ])
 def test_ffi_capability_and_unsafe_errors_fail_before_object_emission(source, message):
     with pytest.raises(RustError, match=message):
-        compile_rust(source, **ATTEST)
+        if source_has_references(source): analyze_source(source)
+        else: compile_rust(source, **ATTEST)
 
 
 @pytest.mark.parametrize("source", [
@@ -96,21 +99,23 @@ def test_ffi_capability_and_unsafe_errors_fail_before_object_emission(source, me
     'unsafe extern "C" {pub fn f();} fn g(){unsafe{f();}}',
     'extern {fn f();} unsafe fn g(){f();}',
     'unsafe fn f(){} fn g(){unsafe {unsafe {f();}}}',
-    RECORD + 'fn f(p:&P)->i32{let q=p; q.value+p.value}',
-    RECORD + '#[no_mangle] pub extern fn f(p:&P)->i32{p.value}',
+    pytest.param(RECORD + 'fn f(p:&P)->i32{let q=p; q.value+p.value}', marks=pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())),
+    pytest.param(RECORD + '#[no_mangle] pub extern fn f(p:&P)->i32{p.value}', marks=pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())),
 ])
-def test_ffi_valid_source_shapes(source):
-    assert "define" in compile_rust(source, **ATTEST).ir_text
+def test_ffi_valid_source_shapes(source, tmp_path):
+    check=certify_source(source,tmp_path/'certifier') if source_has_references(source) else None
+    assert "define" in compile_rust(source, **ATTEST, **({'rustc_check':check} if check is not None else {})).ir_text
 
 
-@pytest.mark.pcc_gate(unavailable=NATIVE)
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or NATIVE)
 def test_original_meson_rust_and_c_objects_link_and_execute_full_width(tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
     from pcc.backend.x86_64_asm_driver import assemble_file
     originals = {name: original(UPSTREAM / name) for name in HASHES}
+    check=certify_source(originals['meson_adder.rs'],tmp_path/'certifier')
     with monkeypatch.context() as guard:
         guard.setattr(subprocess, "Popen", forbidden)
-        rust = compile_rust(originals["meson_adder.rs"], target_triple=DEFAULT_TARGET, **ATTEST)
+        rust = compile_rust(originals["meson_adder.rs"], target_triple=DEFAULT_TARGET, rustc_check=check)
         objects = [rust.emit_object()] + [owned_c(originals[name], name, DEFAULT_TARGET) for name in ("meson_zero.c", "meson_zero_static.c")]
         assert rust.symbols == {"zero":"zero", "zero_static":"zero_static", "adder_add_r":"adder_add_r"}
         asm = '''.intel_syntax noprefix
@@ -150,11 +155,13 @@ _start:
     assert originals == {name: original(UPSTREAM / name) for name in HASHES}
 
 
-def test_original_meson_sources_cross_emit_macho_with_true_external_relocations(monkeypatch):
+@pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
+def test_original_meson_sources_cross_emit_macho_with_true_external_relocations(monkeypatch,tmp_path):
     from pcc.backend import macho_spec
+    check=certify_source(original(UPSTREAM/'meson_adder.rs'),tmp_path/'certifier',target_triple='aarch64-apple-darwin')
     with monkeypatch.context() as guard:
         guard.setattr(subprocess, "Popen", forbidden)
-        rust = compile_rust(original(UPSTREAM / "meson_adder.rs"), target_triple="arm64-apple-darwin", **ATTEST)
+        rust = compile_rust(original(UPSTREAM / "meson_adder.rs"), target_triple="aarch64-apple-darwin", rustc_check=check)
         parsed = macho_spec.parse_object(rust.emit_object())
         symbols = parsed.symbols()
         assert "_adder_add_r" in {symbol["name"] for symbol in symbols}
@@ -167,15 +174,16 @@ def test_original_meson_sources_cross_emit_macho_with_true_external_relocations(
             assert symbol in {item["name"] for item in obj.symbols()}
 
 
-@pytest.mark.pcc_gate(unavailable=NATIVE)
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or NATIVE)
 def test_shared_repr_c_reference_layout_copy_and_rebinding_execute_full_width(tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
     from pcc.backend.x86_64_asm_driver import assemble_file
     source = HERE / "programs" / "references.rs"
     original_bytes = source.read_bytes()
+    check=certify_source(original_bytes.decode(),tmp_path/'certifier')
     with monkeypatch.context() as guard:
         guard.setattr(subprocess, "Popen", forbidden)
-        result = compile_rust(original_bytes.decode(), **ATTEST)
+        result = compile_rust(original_bytes.decode(), rustc_check=check)
         obj = result.emit_object()
         asm = '''.intel_syntax noprefix
 .text
@@ -209,13 +217,15 @@ _start:
     assert source.read_bytes() == original_bytes
 
 
-def test_shared_reference_program_cross_emits_arm64_macho(monkeypatch):
+@pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
+def test_shared_reference_program_cross_emits_arm64_macho(monkeypatch,tmp_path):
     from pcc.backend import macho_spec
     source = HERE / "programs" / "references.rs"
     original_bytes = source.read_bytes()
+    check=certify_source(original_bytes.decode(),tmp_path/'certifier',target_triple='aarch64-apple-darwin')
     with monkeypatch.context() as guard:
         guard.setattr(subprocess, "Popen", forbidden)
-        result = compile_rust(original_bytes.decode(), target_triple="arm64-apple-darwin", **ATTEST)
+        result = compile_rust(original_bytes.decode(), target_triple="aarch64-apple-darwin", rustc_check=check)
         obj = macho_spec.parse_object(result.emit_object())
     assert obj.header["cputype"] == macho_spec.CPU_TYPE_ARM64
     assert "_inspect" in {symbol["name"] for symbol in obj.symbols()}

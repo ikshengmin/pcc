@@ -2,8 +2,9 @@
 
 A body is checked once using declaration-bound, non-Copy type parameters before
 any concrete body is materialized. Concrete substitution is not a substitute
-for that obligation. Only explicit, borrow-free type arguments are admitted;
-trait bounds, generic inference, lifetimes and foreign generic ABI remain gates.
+for that obligation. Explicit or argument-constrained type arguments feed the
+same scheduler; trait bounds, unconstrained result inference, lifetimes and
+foreign generic ABI remain gates.
 """
 from copy import deepcopy
 from dataclasses import replace
@@ -11,13 +12,15 @@ from dataclasses import replace
 from pcc.support.instantiation import InstanceRegistry
 from .generics import PRIMITIVES, bounded_type, children, substitute
 from .moves import MoveChecker
-from .types import SharedReference, TupleType, TypeApplication, TypeParameter
+from .types import FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
 
 MAX_FUNCTION_INSTANCES = 128
 
 
 def type_code(ty):
     """Private deterministic identity spelling, never a host object address."""
+    if isinstance(ty, FixedArrayType):
+        return ['array', ty.length, type_code(ty.element)]
     if isinstance(ty, TupleType):
         return ['tuple', [type_code(item) for item in ty.elements]]
     if isinstance(ty, TypeApplication):
@@ -107,7 +110,8 @@ class GenericFunctions:
         def build(entry):
             function = entry.value
             self.checker.check_body(function, self.scope(function, function.instance_arguments))
-            MoveChecker(self.checker).check_function(function)
+            if not self.checker.externally_checked:
+                MoveChecker(self.checker).check_function(function)
             return function
         # A body can request itself or another specialization. The shared
         # scheduler returns IN_PROGRESS placeholders, then completes FIFO work.

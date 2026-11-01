@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pcc.analysis.ownership import (
     Field,
+    Index,
     LoopEdges,
     Place,
     State,
@@ -23,7 +24,7 @@ from .syntax import Expr
 def structural_place(binding, path) -> Place:
     # Rust sema owns resolving names, dereferences and nominal field ordinals.
     # Shared place identity does not independently prove referent non-aliasing.
-    return Place(binding.serial, tuple(Field(index) for index in path))
+    return Place(binding.serial, tuple(index if isinstance(index, Index) else Field(index) for index in path))
 
 
 class MoveChecker:
@@ -107,6 +108,13 @@ class MoveChecker:
             if not self.checker.through_reference(children[0]):
                 self.loans.append(structural_place(*self.checker.place(children[0])))
             return state
+        if kind in {"index", "array_len"}:
+            target = expr if kind == "index" else children[0]
+            if self.checker.place(target) is not None:
+                self.read_place(target, state, consume=kind == "index")
+            else:
+                state = self.expression(children[0], state)
+            return self.expression(children[1], state) if kind == "index" and state is not None else state
         if kind == "deref":
             return self.expression(children[0], state)
         if kind in {"name", "field", "group"}:

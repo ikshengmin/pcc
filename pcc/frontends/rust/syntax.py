@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .types import SharedReference, TupleType, TypeApplication
+from .types import ArrayLength, FixedArrayType, SharedReference, TupleType, TypeApplication
 
 
 class RustError(ValueError):
@@ -75,6 +75,16 @@ def lex(source: str) -> list[Token]:
                 raise Token("/*", "", ln, column).error("unterminated block comment")
             advance(end)
             continue
+        if char == "'":
+            end = i + 1
+            while end < len(source) and source[end].isascii() and (source[end].isalnum() or source[end] == "_"):
+                end += 1
+            if (end == i + 1 or source[i + 1].isdigit()
+                    or end < len(source) and source[end] == "'"):
+                raise Token(char, "", ln, column).error("character literals are not implemented")
+            tokens.append(Token(source[i:end], "lifetime", ln, column))
+            advance(end)
+            continue
         if char.isascii() and (char.isalpha() or char == "_"):
             end = i + 1
             while end < len(source) and source[end].isascii() and (source[end].isalnum() or source[end] == "_"):
@@ -140,6 +150,8 @@ class Function:
     instance_name: str | None = None
     implementation: Implementation | None = None
     receiver: bool = False
+    lifetime_parameters: tuple[Token, ...] = ()
+    explicit_receiver: bool = False
 
     @property
     def declaration_name(self):
@@ -192,7 +204,7 @@ class Pattern:
     variant: str | None = None
 
 
-_TYPES = {"i32", "i64", "u32", "u64", "bool", "()"}
+_TYPES = {"i32", "i64", "u32", "u64", "isize", "usize", "bool", "()"}
 _PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "||": 2, "&&": 3, "|": 4, "^": 5, "&": 6, "==": 7, "!=": 7, "<": 7, "<=": 7, ">": 7, ">=": 7, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
@@ -234,12 +246,20 @@ class Parser:
     def type(self) -> object:
         token = self.take()
         text = token.text
+        if text == "[":
+            element = self.type()
+            if self.token.text == "]":
+                raise token.error("slice types and array-to-slice unsizing are not implemented")
+            self.expect(";")
+            length = self.expression()
+            self.expect("]")
+            return FixedArrayType(element, ArrayLength(length))
         if text == "&&":
             raise token.error("unit and nested references require additional reference layout/lifetime support")
         if text == "&":
-            if self.token.text == "mut":
-                raise self.token.error("mutable references and borrow checking are not implemented")
-            return SharedReference(self.type())
+            lifetime = self.take().text if self.token.kind == "lifetime" else None
+            mutable = self.accept("mut")
+            return SharedReference(self.type(), mutable, lifetime)
         if text == "(":
             if self.accept(")"):
                 return "()"
@@ -294,7 +314,8 @@ class Parser:
         finally:
             self.type_argument_depth -= 1
 
-    def generic_parameters(self) -> tuple[Token, ...]:
+    def generic_parameters(self, *, allow_lifetimes=False) -> tuple[Token, ...]:
+        self.last_lifetime_parameters = []
         if not self.accept("<"):
             return ()
         if self.token.text == ">":
@@ -303,9 +324,14 @@ class Parser:
         while True:
             if self.token.text == "const":
                 raise self.token.error("const generic parameters are not implemented")
-            parameters.append(self.name())
-            if len(parameters) > 16:
-                raise parameters[-1].error("generic parameter count exceeds implementation limit (16)")
+            if self.token.kind == "lifetime":
+                if not allow_lifetimes:
+                    raise self.token.error("lifetime parameters on data/impl declarations are not implemented")
+                self.last_lifetime_parameters.append(self.take())
+            else:
+                parameters.append(self.name())
+            if len(parameters) + len(self.last_lifetime_parameters) > 16:
+                raise self.token.error("generic parameter count exceeds implementation limit (16)")
             if self.token.text in {":", "="}:
                 raise self.token.error("generic bounds and default arguments require trait/constraint checking, which is not implemented")
             if self.accept(">"):
@@ -426,7 +452,8 @@ class Parser:
     def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None) -> Function:
         self.expect("fn")
         name = self.name()
-        parameters = self.generic_parameters()
+        parameters = self.generic_parameters(allow_lifetimes=True)
+        lifetime_parameters = tuple(self.last_lifetime_parameters)
         if implementation is not None:
             if parameters:
                 raise name.error("method-local generic parameters require separate method inference and are not implemented")
@@ -436,19 +463,22 @@ class Parser:
         self.expect("(")
         params = []
         receiver = False
+        explicit_receiver = False
         if not self.accept(")"):
             while True:
                 mutable = self.accept("mut")
                 if self.token.text == "&":
                     ampersand = self.take()
-                    if mutable or self.accept("mut"):
-                        raise ampersand.error("mutable reference receivers and exclusive borrow checking are not implemented")
+                    if mutable:
+                        raise ampersand.error("mut must follow & in a reference receiver")
+                    lifetime = self.take().text if self.token.kind == "lifetime" else None
+                    reference_mutable = self.accept("mut")
                     param = self.expect("self")
                     if implementation is None or params:
                         raise param.error("self receiver must be the first parameter of an inherent method")
                     if self.token.text == ":":
                         raise self.token.error("explicit receiver types are not implemented")
-                    params.append((param, SharedReference("Self"), False))
+                    params.append((param, SharedReference("Self", reference_mutable, lifetime), False))
                     receiver = True
                     if self.accept(")"):
                         break
@@ -460,9 +490,11 @@ class Parser:
                     param = self.take()
                     if implementation is None or params:
                         raise param.error("self receiver must be the first parameter of an inherent method")
-                    if self.token.text == ":":
-                        raise self.token.error("explicit receiver types are not implemented; use self or mut self")
-                    params.append((param, "Self", mutable))
+                    explicit_receiver = self.accept(":")
+                    receiver_type = self.type() if explicit_receiver else "Self"
+                    if receiver_type != "Self" and not (isinstance(receiver_type, SharedReference) and receiver_type.referent == "Self"):
+                        raise param.error("arbitrary explicit receiver types are not implemented")
+                    params.append((param, receiver_type, mutable))
                     receiver = True
                     if self.accept(")"):
                         break
@@ -489,7 +521,8 @@ class Parser:
         else:
             body = self.block()
         return Function(name, params, result, body, abi, public, no_mangle, unsafe,
-                        type_parameters=parameters, implementation=implementation, receiver=receiver)
+                        type_parameters=parameters, implementation=implementation, receiver=receiver,
+                        lifetime_parameters=lifetime_parameters, explicit_receiver=explicit_receiver)
 
     def block(self) -> Expr:
         token = self.expect("{")
@@ -502,6 +535,8 @@ class Parser:
                 continue
             if self.accept("let"):
                 mutable = self.accept("mut")
+                if self.token.text == "[":
+                    raise self.token.error("array destructuring patterns are not implemented")
                 name = self.name()
                 annotation = self.type() if self.accept(":") else None
                 self.expect("=")
@@ -509,26 +544,51 @@ class Parser:
                 self.expect(";")
                 statements.append(Expr("let", name, (annotation, mutable), [init]))
                 continue
-            expr = self.expression()
+            expr = self.expression(complete_block=True)
             if self.accept(";"):
                 statements.append(Expr("discard", expr.token, children=[expr]))
             elif self.token.text == "}":
                 tail = expr
                 break
-            elif expr.kind in {"if", "block", "while", "unsafe", "match"}:
+            elif expr.kind in {"if", "block", "while", "for", "unsafe", "match"}:
                 statements.append(Expr("statement", expr.token, children=[expr]))
             else:
                 raise self.token.error("expected ';' or end of block")
         self.expect("}")
         return Expr("block", token, len(statements), statements + ([tail] if tail else []))
 
-    def expression(self, minimum: int = 1, allow_struct: bool = True) -> Expr:
+    def if_expression(self, token: Token) -> Expr:
+        condition = self.expression(allow_struct=False)
+        children = [condition, self.block()]
+        if self.accept("else"):
+            # An else-if is an IfExpression, not a fresh postfix expression.
+            # Trailing indexing/field/call syntax belongs to the complete
+            # outer chain in value context (or to its statement boundary).
+            children.append(self.if_expression(self.take()) if self.token.text == "if" else self.block())
+        return Expr("if", token, children=children)
+
+    def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:
         token = self.take()
         text = token.text
         if token.kind == "integer":
             expr = Expr("integer", token, text)
         elif text in {"true", "false"}:
             expr = Expr("bool", token, text == "true")
+        elif text == "[":
+            if self.accept("]"):
+                expr = Expr("array", token, children=[])
+            else:
+                first = self.expression()
+                if self.accept(";"):
+                    length = self.expression()
+                    self.expect("]")
+                    expr = Expr("array_repeat", token, ArrayLength(length), [first])
+                else:
+                    items = [first]
+                    while self.accept(",") and self.token.text != "]":
+                        items.append(self.expression())
+                    self.expect("]")
+                    expr = Expr("array", token, children=items)
         elif text == "(":
             if self.accept(")"):
                 expr = Expr("unit", token)
@@ -551,15 +611,19 @@ class Parser:
         elif text == "unsafe":
             expr = Expr("unsafe", token, children=[self.block()])
         elif text == "if":
-            condition = self.expression(allow_struct=False)
-            yes = self.block()
-            children = [condition, yes]
-            if self.accept("else"):
-                children.append(self.expression(12) if self.token.text == "if" else self.block())
-            expr = Expr("if", token, children=children)
+            expr = self.if_expression(token)
         elif text == "while":
             condition = self.expression(allow_struct=False)
             expr = Expr("while", token, children=[condition, self.block()])
+        elif text == "for":
+            pattern = self.pattern()
+            if pattern.kind not in {"binding", "wildcard"}:
+                raise pattern.token.error("for destructuring/refutable patterns are not implemented; use an identifier or wildcard")
+            self.expect("in")
+            source = self.expression(allow_struct=False)
+            if self.token.text in {"..", "..="}:
+                raise self.token.error("range iterators are not implemented")
+            expr = Expr("for", token, pattern, [source, self.block()])
         elif text == "match":
             scrutinee = self.expression(allow_struct=False)
             self.expect("{")
@@ -569,11 +633,11 @@ class Parser:
                 if self.token.text == "if":
                     raise self.token.error("match guards require additional effect and binding analysis, which is not implemented")
                 self.expect("=>")
-                arm = self.expression()
+                arm = self.expression(complete_block=True)
                 arms.append(arm)
                 if self.accept("}"):
                     break
-                if not self.accept(",") and arm.kind not in {"if", "block", "while", "unsafe", "match"}:
+                if not self.accept(",") and arm.kind not in {"if", "block", "while", "for", "unsafe", "match"}:
                     raise self.token.error("expected ',' between match arms")
             expr = Expr("match", token, patterns, [scrutinee] + arms)
         elif text in {"return", "break", "continue"}:
@@ -586,9 +650,8 @@ class Parser:
         elif text in {"-", "!"}:
             expr = Expr("unary", token, text, [self.expression(12, allow_struct=allow_struct)])
         elif text in {"&", "*"}:
-            if text == "&" and self.accept("mut"):
-                raise token.error("mutable borrowing and exclusive loan checking are not implemented")
-            expr = Expr("borrow" if text == "&" else "deref", token,
+            mutable = text == "&" and self.accept("mut")
+            expr = Expr("borrow" if text == "&" else "deref", token, mutable,
                         children=[self.expression(12, allow_struct=allow_struct)])
         elif (token.kind == "name" and text != "_") or text in {"self", "Self"}:
             owner, variant = self.expression_path(token)
@@ -599,6 +662,14 @@ class Parser:
         else:
             raise token.error(f"unsupported expression {text!r}; borrowing, heap, macros and panic are not implemented")
         while True:
+            # Statement/arm grammar gives a complete ExpressionWithBlock
+            # priority over an ambiguous call/index/infix continuation. Dot
+            # access cannot begin a new expression and remains a continuation.
+            # Grouped expressions and initializer/operand value contexts do
+            # not have this restriction. Keep else-if under the same context.
+            if (complete_block and expr.kind in {"if", "block", "while", "for", "unsafe", "match"}
+                    and self.token.text != "."):
+                break
             if self.token.text == "{" and expr.kind == "name" and allow_struct:
                 self.take()
                 fields, values = [], []
@@ -610,6 +681,12 @@ class Parser:
                         break
                     self.expect(",")
                 expr = Expr("construct", expr.token, fields, values, binding=expr.value)
+                continue
+            if self.token.text == "[":
+                index_token = self.take()
+                index = self.expression()
+                self.expect("]")
+                expr = Expr("index", index_token, children=[expr, index])
                 continue
             if self.token.text == ".":
                 self.take()
@@ -682,6 +759,8 @@ class Parser:
         if alternatives:
             self.accept("|")
         token = self.take()
+        if token.text == "[":
+            raise token.error("array destructuring patterns are not implemented")
         if token.text == "_":
             result = Pattern("wildcard", token)
         elif token.text == "(":

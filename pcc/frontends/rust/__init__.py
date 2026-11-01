@@ -1,14 +1,21 @@
 """Experimental Rust scalar/aggregate frontend; not a safe primary compiler.
 
-No borrow checker is implemented. Callers must explicitly attest that rustc
-already checked the unchanged source. PCC never invokes rustc to compile it.
+No complete borrow checker is implemented. An actual explicit external check
+mints a source-bound token enabling reference address/read-write lowering without
+the legacy partial loan/move admission pass. The owned compiler never invokes
+rustc or consumes MIR; the separately named transition adapter invokes rustc.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .lowering import Lowerer
+from .certification import ExternalRustcCheck
+from .external_check import (
+    CheckedRustSource, RustcToolchain, RustExternalCheckError,
+    check_rust_source, compile_rust_checked,
+)
 from .moves import MoveChecker
+from .reference_admission import reject_uncertified_references as _reject_uncertified_references
 from .semantics import Checker
 from .syntax import Parser, RustError
 from .targets import DEFAULT_TARGET, LINUX_LAYOUT, resolve_target
@@ -21,6 +28,7 @@ class RustCompilation:
     experimental: bool = True
     borrow_checked_by_pcc: bool = False
     overflow_checks: bool = False
+    externally_checked: bool = False
     target_triple: str = DEFAULT_TARGET
     data_layout: str = LINUX_LAYOUT
 
@@ -47,31 +55,51 @@ class RustCompilation:
 
 def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                  overflow_checks: bool = False,
+                 rustc_check: CheckedRustSource | None = None,
                  module_name: str = "rust",
                  target_triple: str = DEFAULT_TARGET) -> RustCompilation:
     """Lower a rustc-checked, nonheap scalar/aggregate crate into PCC's public IR.
 
-    The opt-in is a caller attestation, not a claim that PCC verified a rustc
-    receipt. Arithmetic uses Rust's overflow-checks-off wrapping semantics;
+    The legacy opt-in is caller attestation for value-only experimental input,
+    never authorization for any reference-bearing program. The rustc_check path
+    accepts only an adapter-minted CheckedRustSource after the explicit external
+    check_rust_source phase. Ordinary provenance records do not authorize this
+    path. This owned phase invokes no rustc process and never consumes MIR.
+    Arithmetic uses Rust's overflow-checks-off wrapping semantics;
     foldable literal/operator overflow is rejected; panic-capable division fails
     closed. This does not claim rustc lint or variable-state constprop parity.
     """
-    if experimental_rustc_checked is not True:
-        raise RustError("experimental Rust frontend has no borrow checker; only rustc-checked source is accepted with experimental_rustc_checked=True")
+    if rustc_check is not None and type(rustc_check) is not CheckedRustSource:
+        raise RustError("a caller-constructed external record is not proof of checking; use check_rust_source or compile_rust_checked")
+    if experimental_rustc_checked is not True and rustc_check is None:
+        raise RustError("experimental Rust frontend has no borrow checker; value-only inputs need experimental_rustc_checked=True, while every reference-bearing input requires an actual CheckedRustSource")
     if overflow_checks is not False:
         raise RustError("Rust overflow checks require owned panic support, which is not implemented; only overflow_checks=False is supported")
     if type(module_name) is not str:
         raise RustError("invalid Rust module_name: expected a string label")
     target = resolve_target(target_triple)
+    if rustc_check is not None:
+        rustc_check.validate(source, target_triple=target.triple, overflow_checks=overflow_checks)
     parser = Parser(source)
     functions = parser.parse()
-    checker = Checker(functions, parser.records, parser.enums, parser.implementations)
+    if rustc_check is None:
+        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations)
+    checker = Checker(functions, parser.records, parser.enums, parser.implementations, externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits)
     checker.check()
-    MoveChecker(checker).check()
+    if rustc_check is None:
+        # Fail closed if a future semantic transformation synthesizes a
+        # reference not represented in the original syntax. This is presence
+        # checking only; actual checked input never uses partial borrow legality.
+        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations)
+        MoveChecker(checker).check()
+    from .lowering import Lowerer
+
     lowerer = Lowerer(functions, checker, module_name, target)
     module = lowerer.lower()
-    return RustCompilation(module, dict(lowerer.symbols),
+    return RustCompilation(module, dict(lowerer.symbols), externally_checked=rustc_check is not None,
                            target_triple=target.triple, data_layout=target.data_layout)
 
 
-__all__ = ["RustCompilation", "RustError", "compile_rust"]
+__all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
+           "RustExternalCheckError", "check_rust_source", "compile_rust_checked",
+           "RustCompilation", "RustError", "compile_rust"]

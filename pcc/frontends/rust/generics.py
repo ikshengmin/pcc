@@ -10,15 +10,19 @@ from dataclasses import replace
 from pcc.support.instantiation import InstanceRegistry
 
 from .syntax import Enumeration
-from .types import SharedReference, TupleType, TypeApplication, TypeParameter
+from .types import (
+    INTEGER_TYPES, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter,
+)
 
-PRIMITIVES = {"i32", "i64", "u32", "u64", "bool", "()"}
+PRIMITIVES = INTEGER_TYPES | {"bool", "()"}
 MAX_TYPE_NODES = 128
 MAX_LAYOUT_STEPS = 4096
 MAX_INSTANCES = 128
 
 
 def children(ty):
+    if isinstance(ty, FixedArrayType):
+        return (ty.element,)
     if isinstance(ty, TupleType):
         return ty.elements
     if isinstance(ty, TypeApplication):
@@ -42,6 +46,8 @@ def bounded_type(ty, token):
 
 
 def substitute(ty, bindings):
+    if isinstance(ty, FixedArrayType):
+        return FixedArrayType(substitute(ty.element, bindings), ty.length)
     if isinstance(ty, TypeParameter):
         return bindings.get(ty, ty)
     if isinstance(ty, TupleType):
@@ -49,7 +55,7 @@ def substitute(ty, bindings):
     if isinstance(ty, TypeApplication):
         return TypeApplication(ty.name, tuple(substitute(t, bindings) for t in ty.arguments))
     if isinstance(ty, SharedReference):
-        return SharedReference(substitute(ty.referent, bindings))
+        return SharedReference(substitute(ty.referent, bindings), ty.mutable, ty.lifetime)
     return ty
 
 
@@ -64,10 +70,13 @@ class GenericDeclarations:
     def normalize(self, ty, token, scope=None):
         scope = self.checker.type_scope if scope is None else scope
         bounded_type(ty, token)
+        if isinstance(ty, FixedArrayType):
+            from .arrays import length_value
+            return FixedArrayType(self.normalize(ty.element, token, scope), length_value(self.checker, ty.length, token))
         if isinstance(ty, TupleType):
             return TupleType(tuple(self.normalize(t, token, scope) for t in ty.elements))
         if isinstance(ty, SharedReference):
-            return SharedReference(self.normalize(ty.referent, token, scope))
+            return SharedReference(self.normalize(ty.referent, token, scope), ty.mutable, ty.lifetime)
         if isinstance(ty, TypeApplication):
             if ty.name in scope or ty.name in PRIMITIVES:
                 raise token.error("generic arguments require a named generic data declaration")
@@ -152,6 +161,9 @@ class GenericDeclarations:
                     return
                 if isinstance(ty, SharedReference):
                     raise declaration.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
+                if isinstance(ty, FixedArrayType):
+                    visit(ty.element, stack)
+                    return
                 if isinstance(ty, TupleType):
                     for element in ty.elements:
                         visit(element, stack)

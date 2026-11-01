@@ -29,6 +29,7 @@ def digest(data):
 
 
 @pytest.mark.integration
+@pytest.mark.xdist_group(name="rust-native-reference")
 @pytest.mark.pcc_gate(unavailable=None if (
     sys.platform.startswith('linux') and platform.machine() in {'x86_64', 'AMD64'}
     and shutil.which('rustc') and shutil.which('cc')

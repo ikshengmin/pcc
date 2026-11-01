@@ -1,20 +1,39 @@
 """Typed Rust AST to the public PCC IR builder, shared by owned backends."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pcc.ir.compat import ir
 
+from .iteration import OwnedArrayIteration, StandardIterator
 from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
 from .targets import RustTarget
-from .types import SharedReference, TupleType
+from .types import FixedArrayType, SharedReference, TupleType, integer_bits
 
 
-def ir_type(ty: str):
+def ir_type(ty: str, pointer_bits=None):
     if ty == "()":
         return ir.VoidType()
     if ty == "bool":
         return ir.IntType(1)
-    return ir.IntType(int(ty[1:]))
+    return ir.IntType(integer_bits(ty, pointer_bits))
+
+
+@dataclass(frozen=True)
+class LoopTargets:
+    continue_block: object
+    break_block: object
+    continue_depth: int
+    break_depth: int
+
+
+@dataclass(frozen=True)
+class ArrayIterationScope:
+    plan: OwnedArrayIteration
+    # A cursor denotes the iterator-owned remaining initialized range. None
+    # denotes the per-iteration binding/temporary scope with empty destruction.
+    cursor: object = None
 
 
 class Lowerer:
@@ -22,6 +41,7 @@ class Lowerer:
         # ModuleID is textual IR, not an arbitrary-string transport. Encoding
         # labels prevents quotes/newlines from adding IR directives or globals.
         self.module = ir.Module(name="rust_" + module_name.encode("utf-8", "surrogatepass").hex())
+        self.target = target
         self.module.triple = target.triple
         self.module.data_layout = target.data_layout
         self.functions = [fn for fn in functions if not fn.type_parameters]
@@ -30,11 +50,15 @@ class Lowerer:
         self.symbols: dict[str, str] = {}
         self.slots: dict[int, object] = {}
         self.temps: dict[int, object] = {}
-        self.loops: list[tuple[object, object]] = []
+        self.loops: list[LoopTargets] = []
+        self.iteration_scopes: list[ArrayIterationScope] = []
         self.builder = None
         self.function = None
 
     def type(self, ty):
+        if isinstance(ty, FixedArrayType):
+            element = ir.LiteralStructType([]) if ty.element == "()" else self.type(ty.element)
+            return ir.ArrayType(element, ty.length)
         if isinstance(ty, SharedReference):
             return self.type(ty.referent).as_pointer()
         if self.checker.aggregate(ty):
@@ -54,7 +78,7 @@ class Lowerer:
                 # data layout. No host sizeof, union punning or pointer casts.
                 return ir.LiteralStructType([tag] + [self.type(TupleType(fields)) for fields in enum.payloads.values()])
             return tag
-        return ir_type(ty)
+        return ir_type(ty, self.target.pointer_bits)
 
     def place_pointer(self, expr):
         if expr.kind == "group":
@@ -63,6 +87,22 @@ class Lowerer:
             return self.expression(expr.children[0])
         if expr.kind == "name":
             return self.slots.get(expr.binding.serial)
+        if expr.kind == "index":
+            base = expr.children[0]
+            if isinstance(base.ty, SharedReference):
+                pointer = self.expression(base)
+            elif self.checker.place(base) is not None:
+                pointer = self.place_pointer(base)
+            else:
+                value = self.expression(base)
+                if self.builder.block.is_terminated:
+                    return None
+                pointer = self.temps[("index", id(expr))]
+                self.builder.store(value, pointer)
+            index = self.expression(expr.children[1])
+            if self.builder.block.is_terminated:
+                return None
+            return self.builder.gep(pointer, [ir.Constant(ir.IntType(32), 0), index])
         if expr.kind == "field":
             base = expr.children[0]
             pointer = self.expression(base) if isinstance(base.ty, SharedReference) else self.place_pointer(base)
@@ -86,6 +126,8 @@ class Lowerer:
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.slots = {}
             self.temps = {}
+            self.loops = []
+            self.iteration_scopes = []
             args = iter(self.function.args)
             for binding in self.checker.parameters[fn.identity]:
                 self.allocate(binding)
@@ -107,14 +149,21 @@ class Lowerer:
     def allocate_locals(self, expr: Expr) -> None:
         if expr.kind == "let":
             self.allocate(expr.binding)
+        if expr.kind == "for":
+            if expr.binding is not None:
+                self.allocate(expr.binding)
+            self.temps[("for_array", id(expr))] = self.builder.alloca(self.type(expr.value.array_type), name="for.array")
+            self.temps[("for_cursor", id(expr))] = self.builder.alloca(self.type("usize"), name="for.cursor")
         if expr.kind == "match":
             from .patterns import pattern_bindings
             for pattern in expr.value:
                 for binding in pattern_bindings(pattern):
                     self.allocate(binding)
-        if (expr.kind in {"tuple", "construct", "enum_construct"}
+        if (expr.kind in {"tuple", "construct", "enum_construct", "array", "array_repeat"}
                 or expr.kind == "variant" and self.checker.enums[expr.ty].payloads):
             self.temps[id(expr)] = self.builder.alloca(self.type(expr.ty), name="aggregate")
+        if expr.kind == "index" and not isinstance(expr.children[0].ty, SharedReference) and self.checker.place(expr.children[0]) is None:
+            self.temps[("index", id(expr))] = self.builder.alloca(self.type(expr.children[0].ty), name="indexed_array")
         # Direct-call callee syntax is not a value expression. A qualified
         # method path may share the parser's enum-path shape but has no value
         # type/storage. Method receiver values are already the first actual
@@ -127,8 +176,36 @@ class Lowerer:
         if self.builder.block.is_terminated:
             return None
         kind, children = expr.kind, expr.children
-        if kind in {"group", "unsafe"}:
+        if kind in {"group", "unsafe", "reference_coerce"}:
             return self.expression(children[0])
+        if kind in {"array", "array_repeat"}:
+            values = [self.expression(child) for child in children]
+            if self.builder.block.is_terminated:
+                return None
+            storage = self.temps[id(expr)]
+            if expr.ty.length == 0 or expr.ty.element == "()":
+                self.builder.store(ir.Constant(self.type(expr.ty), None), storage)
+            else:
+                if kind == "array_repeat":
+                    values = values * expr.ty.length
+                for index, value in enumerate(values):
+                    address = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(self.target.pointer_bits), index)])
+                    self.builder.store(value, address)
+            return self.builder.load(storage)
+        if kind == "array_len":
+            base = children[0]
+            if self.checker.place(base) is not None:
+                self.place_pointer(base)
+            else:
+                self.expression(base)
+            if self.builder.block.is_terminated:
+                return None
+            return ir.Constant(self.type("usize"), expr.value)
+        if kind == "index":
+            pointer = self.place_pointer(expr)
+            if self.builder.block.is_terminated or expr.ty == "()":
+                return None
+            return self.builder.load(pointer)
         if kind == "borrow":
             return self.place_pointer(children[0])
         if kind == "deref":
@@ -228,8 +305,8 @@ class Lowerer:
                 return None
             return self.binary(expr.value, left, right, children[0].ty)
         if kind == "assign":
-            # Rust assignment evaluates RHS before the assignee. Supported
-            # field paths contain no effectful index/dereference operations.
+            # Rust assignment evaluates RHS before the assignee, including a
+            # dereference whose reference slot may be rebound by that RHS.
             right = self.expression(children[1])
             if self.builder.block.is_terminated:
                 return None
@@ -254,6 +331,8 @@ class Lowerer:
             return self.match(expr)
         if kind == "if":
             return self.conditional(expr)
+        if kind == "for":
+            return self.array_iteration(expr)
         if kind == "while":
             condition_block = self.function.append_basic_block("while.cond")
             body_block = self.function.append_basic_block("while.body")
@@ -264,7 +343,8 @@ class Lowerer:
             if not self.builder.block.is_terminated:
                 self.builder.cbranch(condition, body_block, done)
             self.builder.position_at_end(body_block)
-            self.loops.append((condition_block, done))
+            depth = len(self.iteration_scopes)
+            self.loops.append(LoopTargets(condition_block, done, depth, depth))
             self.expression(children[1])
             self.loops.pop()
             if not self.builder.block.is_terminated:
@@ -274,15 +354,77 @@ class Lowerer:
         if kind == "return":
             value = self.expression(children[0]) if children else None
             if not self.builder.block.is_terminated:
+                self.finish_iteration_scopes(0)
                 if children and children[0].ty != "()":
                     self.builder.ret(value)
                 else:
                     self.builder.ret_void()
             return None
         if kind in {"break", "continue"}:
-            self.builder.branch(self.loops[-1][1 if kind == "break" else 0])
+            target = self.loops[-1]
+            self.finish_iteration_scopes(target.break_depth if kind == "break" else target.continue_depth)
+            self.builder.branch(target.break_block if kind == "break" else target.continue_block)
             return None
         raise expr.token.error(f"unsupported lowering node {kind}")
+
+    def finish_iteration_scopes(self, depth):
+        """Retire only the scopes actually crossed by this control-flow edge.
+
+        No destructor call is omitted by guessing: semantic admission proved
+        the full concrete element graph has empty destruction. Unknown/Drop
+        types cannot create these scopes. The binding scope has no remaining
+        side effects; the iterator's live suffix is retired by its cursor.
+        """
+        for scope in reversed(self.iteration_scopes[depth:]):
+            assert scope.plan.identity is StandardIterator.OWNED_ARRAY
+            if scope.cursor is not None:
+                self.builder.store(ir.Constant(self.type("usize"), scope.plan.array_type.length), scope.cursor)
+
+    def array_iteration(self, expr):
+        plan = expr.value
+        assert isinstance(plan, OwnedArrayIteration) and plan.identity is StandardIterator.OWNED_ARRAY
+        value = self.expression(expr.children[0])
+        if self.builder.block.is_terminated:
+            return None
+        # Even an empty iterator must evaluate its source, including repeat
+        # operands and calls. Its proven-empty destruction then has no work.
+        if plan.array_type.length == 0:
+            return None
+        storage = self.temps[("for_array", id(expr))]
+        cursor = self.temps[("for_cursor", id(expr))]
+        self.builder.store(value, storage)  # Owned value snapshot, never alias source storage.
+        index_type = self.type("usize")
+        self.builder.store(ir.Constant(index_type, 0), cursor)
+        depth = len(self.iteration_scopes)
+        self.iteration_scopes.append(ArrayIterationScope(plan, cursor))
+        condition = self.function.append_basic_block("for.next")
+        body = self.function.append_basic_block("for.body")
+        done = self.function.append_basic_block("for.end")
+        self.builder.branch(condition)
+        self.builder.position_at_end(condition)
+        index = self.builder.load(cursor)
+        has_next = self.builder.icmp_unsigned("<", index, ir.Constant(index_type, plan.array_type.length))
+        self.builder.cbranch(has_next, body, done)
+        self.builder.position_at_end(body)
+        # The iterator consumes an element before the body. This internal
+        # index is proven in bounds by the dominating next test; no general
+        # source indexing or panic check is elided. N <= 4096 prevents overflow.
+        self.builder.store(self.builder.add(index, ir.Constant(index_type, 1)), cursor)
+        if expr.binding is not None and expr.binding.ty != "()":
+            pointer = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), index])
+            self.builder.store(self.builder.load(pointer), self.slots[expr.binding.serial])
+        self.iteration_scopes.append(ArrayIterationScope(plan))
+        self.loops.append(LoopTargets(condition, done, depth + 1, depth))
+        self.expression(expr.children[1])
+        self.loops.pop()
+        if not self.builder.block.is_terminated:
+            self.finish_iteration_scopes(depth + 1)
+            self.builder.branch(condition)
+        self.iteration_scopes.pop()
+        self.builder.position_at_end(done)
+        self.finish_iteration_scopes(depth)
+        self.iteration_scopes.pop()
+        return None
 
     def binary(self, op: str, left, right, ty: str):
         operations = {"+": self.builder.add, "-": self.builder.sub, "*": self.builder.mul, "&": self.builder.and_, "|": self.builder.or_, "^": self.builder.xor}

@@ -5,7 +5,7 @@ partitions plus an explicit other-value class. This is not match ergonomics,
 a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, bounds, resolve, unify
-from .types import TupleType, TypeApplication, TypeParameter
+from .types import FixedArrayType, TupleType, TypeApplication, TypeParameter
 
 MAX_PATTERN_ROWS = 512
 MAX_COVERAGE_STEPS = 65536
@@ -27,7 +27,7 @@ def check_enums(checker, declarations=None):
                     def unsuffixed(node):
                         if node.kind == "integer":
                             if any(str(node.value).endswith(ty) for ty in INTEGERS):
-                                raise node.token.error("default enum discriminants require unsuffixed integer constants; isize typing is not implemented")
+                                raise node.token.error("default enum discriminants currently require unsuffixed integer constants; typed discriminant expressions are not implemented")
                         elif node.kind not in {"group", "unary", "binary"}:
                             raise node.token.error("default enum discriminants currently require unsuffixed integer constant expressions")
                         for child in node.children:
@@ -116,6 +116,14 @@ def validate_pattern(checker, pattern):
 
 def validate_match(checker, expr):
     from .syntax import Pattern
+
+    from .generics import children
+    pending = [expr.children[0].ty]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, FixedArrayType):
+            raise expr.token.error("array match coverage and destructuring are not implemented")
+        pending.extend(children(item))
 
     def admitted(ty):
         if isinstance(ty, TypeParameter):

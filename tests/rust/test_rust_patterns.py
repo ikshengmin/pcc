@@ -117,11 +117,15 @@ def test_original_match_fixture_full_width_owned_execution(name,tmp_path,monkeyp
     from pcc.backend.x86_64_asm_driver import assemble_file
     path=Path(__file__).parent/'programs'/(name+'.rs')
     original=path.read_bytes()
+    from tests.rust.certification_support import source_has_references, certify_source
+    check = (certify_source(original.decode(), tmp_path/'actual-reference-check')
+             if source_has_references(original.decode()) else None)
     def forbidden(*args,**kwargs):
         raise AssertionError('owned Rust compilation invoked an external tool')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess,'Popen',forbidden)
-        result=compile_source(original.decode())
+        result=compile_source(original.decode(), **({'rustc_check':check} if check is not None else {}))
+        if check is not None: assert result.externally_checked
         obj=result.emit_object()
         observer=assemble_file('''.intel_syntax noprefix
 .text

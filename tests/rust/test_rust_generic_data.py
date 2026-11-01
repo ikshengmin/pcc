@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
+from tests.rust.analysis_only import analyze_source
+from tests.rust.certification_support import source_has_references
 from pcc.frontends.rust.semantics import Checker
 from pcc.frontends.rust.syntax import Parser
 from pcc.frontends.rust.types import TypeApplication, TypeParameter
@@ -69,7 +71,10 @@ def test_generic_declarations_and_uses_are_checked_before_lowering_even_when_unu
         raise AssertionError('invalid or unsupported generic declaration reached lowering')
     monkeypatch.setattr(Lowerer, 'lower', forbidden)
     with pytest.raises(RustError, match=message):
-        compile_source(source)
+        # Reference diagnostics here inspect an internal, non-certifying model.
+        # They do not authorize public compilation or produce pointer IR.
+        if source_has_references(source): analyze_source(source)
+        else: compile_source(source)
 
 
 @pytest.mark.parametrize('source', [

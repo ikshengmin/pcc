@@ -8,7 +8,7 @@ from .syntax import RustError
 DEFAULT_TARGET = "x86_64-unknown-linux-gnu"
 # Both admitted ABIs are little-endian, use 64-bit AS0 pointers, and preserve
 # Rust's explicit i32/i64 widths. These layouts describe the admitted scalar
-# subset; they are not a promise of rustc aggregate layout or usize support.
+# subset; they are not a promise of rustc aggregate layout or additional pointer-width targets.
 LINUX_LAYOUT = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"
 DARWIN_LAYOUT = "e-m:o-p:64:64-i64:64-i128:128-n32:64-S128"
 
@@ -19,6 +19,15 @@ class RustTarget:
     data_layout: str
     identity: str
     object_format: str
+
+    @property
+    def pointer_bits(self):
+        # This is the admitted target IR layout, never Python's host size.
+        pointers = [part.split(':')[1] for part in self.data_layout.split('-')
+                    if part.startswith('p:')]
+        if pointers != ['64']:
+            raise RustError('Rust pointer data model is not yet qualified')
+        return int(pointers[0])
 
 
 def resolve_target(triple: str) -> RustTarget:
