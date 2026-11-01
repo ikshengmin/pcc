@@ -132,6 +132,18 @@ Pyperformance, micro timing and the generated README report are still pending.
 
 ### P0 takeover boundary: `f11a3513d`
 
+The ready-entry CAS preparation over `cbc4dccc8` claims the queued mark before
+publishing a node, counts it before a consumer can remove it, and transfers
+QUEUED directly to RUNNING without exposing an unclaimed intermediate state.
+Stale entries retire only a claim they acquired. The global scheduler mutex
+still protects queues, node pools and wakeup writers; per-carrier locking and
+the sleeper/wakeup protocol remain unfinished. The 22 ordinary checks in
+`test_vthread_ready_claims.py`, `test_vthread_scheduler_signal_after_unlock.py`
+and `test_vthread_finished_reads_without_lock.py` pass with six workers. Their
+deterministic publication interleavings are host models. Candidate native
+GC0-4 execution, whole affected-language lanes, bootstrap and paired QPS are
+not yet run; this preparation makes no lock-removal or throughput claim.
+
 The container dead-branch removal is published in `f11a3513d`; its recorded
 host/model/IR checks do not qualify the pending native GC0-4 execution. The
 takeover started from this clean source identity. No new native execution,

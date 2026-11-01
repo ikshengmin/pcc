@@ -752,13 +752,15 @@ def _publish_ready_node(vthread, node) -> None:
     (1) is not queued twice: a second node let a carrier dequeue it again
     while another ran it, after the stale pop cleared the running mark.
     """
-    if load_i64(vthread, 40) != 0:
+    if atomic_cas_i64(vthread, 40, 0, 1, "acq_rel", "acquire") != 0:
         _ready_release(node)
         return
-    _push_ready_node(node)
-    store_i64(vthread, 40, 1)
+    # Claim the queue entry and count it before a consumer can see the node.
+    # A consumer may immediately claim mark 1 -> 2; publishing must never
+    # overwrite that running mark or increment the count after its decrement.
     _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
     _effect(3, 0, 0, 1)
+    _push_ready_node(node)
     _scheduler_signal()
 
 
@@ -768,14 +770,14 @@ def _step_finished(vthread) -> int:
     # complete/fail on this carrier, after publishing FINISHED. A finished
     # thread is never woken or queued again, so the locked check below
     # (which acts only on a mark of 2) has nothing to do.
-    if atomic_load_i64(vthread, 32, "acquire") == 4 and load_i64(vthread, 40) == 0:
+    if (atomic_load_i64(vthread, 32, "acquire") == 4
+            and atomic_load_i64(vthread, 40, "acquire") == 0):
         return 0
     if _scheduler_lock() != 0:
         return -1
     result: int = 0
-    if load_i64(vthread, 40) == 2:
-        store_i64(vthread, 40, 0)
-        if load_i64(vthread, 32) == 1:
+    if atomic_cas_i64(vthread, 40, 2, 0, "acq_rel", "acquire") == 2:
+        if atomic_load_i64(vthread, 32, "acquire") == 1:
             result = _enqueue(vthread)
     _scheduler_unlock()
     return result
@@ -839,7 +841,8 @@ def _carrier_queues_close() -> None:
 
 
 def _enqueue(vthread) -> int:
-    if load_i64(vthread, 40) != 0 or load_i64(vthread, 32) != 1:
+    if (atomic_load_i64(vthread, 40, "acquire") != 0
+            or atomic_load_i64(vthread, 32, "acquire") != 1):
         return 0
     node = _ready_alloc()
     if ptr_is_null(node):
@@ -850,12 +853,8 @@ def _enqueue(vthread) -> int:
         return -1
     store_ptr(node, 16, handle)
     pcc_gc_store_root(node, vthread)
-    _push_ready_node(node)
-    store_i64(vthread, 40, 1)
-    _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
     _effect(1, 0, 1, -1)
-    _effect(3, 0, 0, 1)
-    _scheduler_signal()
+    _publish_ready_node(vthread, node)
     return 0
 
 
@@ -1961,16 +1960,17 @@ def _dequeue_from(head_slot, tail_slot):
             and is_tagged_int(thread) == 0
             and load_i32(thread, 8) == PY_TYPE_VIRTUAL_THREAD
         ):
-            # A node popped for a thread no longer READY is stale; it must
-            # not clear a mark that another carrier's run owns (2).
-            if load_i64(thread, 40) == 1:
-                store_i64(thread, 40, 0)
-            if load_i64(thread, 32) == 1 and load_i64(thread, 40) == 0:
-                store_i64(thread, 32, 2)
-                # Running on this carrier until _step_finished.
-                store_i64(thread, 40, 2)
-                _effect(7, 0, 0, 2)
-                return thread
+            # A stale entry cannot clear another carrier's running mark.
+            # Keep ownership continuously from QUEUED to RUNNING: an
+            # intermediate zero would permit a second publisher to enqueue.
+            if atomic_cas_i64(thread, 40, 1, 2, "acq_rel", "acquire") == 1:
+                if atomic_cas_i64(thread, 32, 1, 2, "acq_rel", "acquire") == 1:
+                    _effect(7, 0, 0, 2)
+                    return thread
+                # This consumer claimed a parked or finished entry. Only
+                # its own claim may be retired. State/wakeup writers still
+                # use the scheduler lock until the queue-lock transition.
+                atomic_cas_i64(thread, 40, 2, 0, "acq_rel", "acquire")
         if ptr_is_null(thread) == 0:
             py_decref(thread)
 
