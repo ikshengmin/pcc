@@ -1015,17 +1015,10 @@ def py_list_append_fresh_native_instance(lst, item) -> None:
 def py_list_get(lst, i: int):
     if not _list_type_ok(lst, -103):
         return null()
-    # Shared list fields can be replaced while a reader acquires its owner.
-    # Threaded GC0 must load and retain under the writer's graph lock.
-    if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
-        fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-        fast_idx: int = _normalize_index(i, fast_length, 0)
-        if fast_idx < 0:
-            return null()
-        fast_items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-        fast_value = load_ptr(fast_items, fast_idx * 8)
-        py_incref(fast_value)
-        return fast_value
+    taken = stack_alloc(8)
+    fast = _list_get_gc0(lst, i, 0, taken)
+    if load_i64(taken, 0) != 0:
+        return fast
     return _list_get_owned_rooted(lst, i, 0)
 
 
@@ -1036,17 +1029,47 @@ def py_list_getitem(lst, i: int):
     # stays non-raising for other callers. Negative indices normalize.
     if not _list_type_ok(lst, -103):
         return null()
-    if pcc_gc_backend() == 0 and pcc_threads_enabled() == 0:
-        fast_length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-        fast_idx: int = _normalize_index(i, fast_length, 0)
-        if fast_idx < 0:
-            py_raise_owned(py_exc_new(5, cstr("list index out of range")))
-            return null()
-        fast_items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-        fast_value = load_ptr(fast_items, fast_idx * 8)
-        py_incref(fast_value)
-        return fast_value
+    taken = stack_alloc(8)
+    fast = _list_get_gc0(lst, i, 1, taken)
+    if load_i64(taken, 0) != 0:
+        return fast
     return _list_get_owned_rooted(lst, i, 1)
+
+
+def _list_get_gc0(lst, i: int, raising: int, taken):
+    """GC0's container-lock read: the owner under the writers' lock.
+
+    Shared list fields can be replaced while a reader acquires its owner,
+    so the item is loaded and retained (one atomic add) under the list's
+    lock, as appends store it. ``taken`` says whether this answered (a value,
+    or an index error); otherwise the general rooted path runs. (The
+    single-thread reads that stood in both callers never ran: the runtime
+    is always threaded.)
+    """
+    store_i64(taken, 0, 0)
+    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+        return null()
+    _list_lock(lst)
+    if (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) != 0:
+        _list_unlock(lst)
+        return null()
+    index: int = _normalize_index(i, load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET), 0)
+    if index < 0:
+        _list_unlock(lst)
+        store_i64(taken, 0, 1)
+        if raising != 0:
+            py_raise_owned(py_exc_new(5, cstr("list index out of range")))
+        return null()
+    cell = stack_alloc(8)
+    store_ptr(cell, 0, null())
+    source = ptr_add(load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET), index * C_POINTER_SIZE)
+    if pcc_gc_try_init_ptr_locked(cell, source) == 0:
+        _list_unlock(lst)
+        return null()
+    _list_unlock(lst)
+    store_i64(taken, 0, 1)
+    return load_ptr(cell, 0)
 
 
 def _list_get_owned_rooted(lst, i: int, raising: int):
