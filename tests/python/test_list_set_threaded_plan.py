@@ -105,11 +105,20 @@ def test_threaded_store_revalidates_and_commits_under_graph_lock(backend):
     assert model.calls.index(("unlock",)) < model.calls.index(("finish",))
 
 
-def test_threads_off_gc0_keeps_existing_nonparking_store():
-    model = StoreModel(0, 0)
+def test_gc0_transaction_does_not_read_a_thread_mode_switch():
+    model = StoreModel(0, 1)
+
+    def retired_mode_query():
+        raise AssertionError("the permanently threaded transaction queried thread mode")
+
+    model.ns["pcc_threads_enabled"] = retired_mode_query
     assert model.run() == 0
-    assert model.calls == [("unlocked", 2000)]
-    assert model.memory[2000] == 5000
+    assert model.calls == [
+        ("init", 0), ("lock",), ("commit", 3008), ("unlock",),
+        ("finish",), ("root-finish",), ("root-finish",),
+    ]
+    assert model.memory[2000] == 7000
+    assert model.memory[3008] == 5000
 
 
 @pytest.mark.parametrize("shrink,reject", [(True, False), (False, True)])
