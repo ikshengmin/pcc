@@ -276,7 +276,7 @@ class SourceParser:
                 continue
             mods = self.modifiers()
             if not self.class_model and mods == {"static"} and self.peek().text == "{":
-                self.peek().error("source method results currently require boolean, int, long or void",
+                self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.static-initialization")
             if self.class_model and self.peek().text == "{":
                 if mods == {"static"}:
@@ -306,14 +306,14 @@ class SourceParser:
             if not self.class_model and "static" not in mods:
                 self.peek().error("only ordinary static source methods are implemented", code="java.unsupported.instance-methods")
             if self.peek().text == "<":
-                self.peek().error("source method results currently require boolean, int, long or void",
+                self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.generic-declarations")
             if self.peek().text in {"class", "interface", "enum", "record"}:
-                self.peek().error("source method results currently require boolean, int, long or void",
+                self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.member-types")
             result = self.take()
             if result.text not in DECLARED | {"void", "byte", "short", "char"}:
-                self.type_boundary(result, "source method results currently require boolean, int, long or void",
+                self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
             result_type = self.array_suffix(result.text)
             method_name = self.identifier()
@@ -351,12 +351,12 @@ class SourceParser:
             # In model mode, legacy result brackets may follow the parameter
             # list (JLS 8.4); scalar native diagnostics keep their old boundary.
             if not self.class_model and result.text not in DECLARED | {"void"}:
-                self.type_boundary(result, "source method results currently require boolean, int, long or void",
+                self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
             parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
             result_type = self.array_suffix(result_type)
             if result.text not in DECLARED | {"void"} and not isinstance(result_type, ArrayType):
-                self.type_boundary(result, "source method results currently require boolean, int, long or void",
+                self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
             methods.append(SourceMethod(method_name, result_type, parameters, self.block(),
                                         owner=owner, modifiers=frozenset(mods), parameter_types=parameter_types,
@@ -375,13 +375,13 @@ class SourceParser:
                     self.peek().error("duplicate final parameter modifier")
                 dtype = self.take()
                 if dtype.text not in DECLARED and not (self.class_model and dtype.text in ARRAY_COMPONENTS):
-                    self.type_boundary(dtype, "source parameters require boolean, int or long",
+                    self.type_boundary(dtype, "source parameters require boolean or integral primitives",
                                        code="java.unsupported.declared-parameter-type")
                 parameter_type = self.array_suffix(dtype.text)
                 parameters.append(self.identifier())
                 parameter_type = self.array_suffix(parameter_type)
                 if parameter_type not in DECLARED and not isinstance(parameter_type, ArrayType):
-                    self.type_boundary(dtype, "source parameters require boolean, int or long",
+                    self.type_boundary(dtype, "source parameters require boolean or integral primitives",
                                        code="java.unsupported.declared-parameter-type")
                 types.append(parameter_type)
                 if not self.accept(","):
@@ -514,7 +514,7 @@ class SourceParser:
             name = self.identifier()
             dtype = self.array_suffix(dtype)
             if dtype not in DECLARED and not isinstance(dtype, ArrayType):
-                self.type_boundary(type_token, "source locals require boolean, int or long",
+                self.type_boundary(type_token, "source locals require boolean or integral primitives",
                                    code="java.unsupported.declared-local-type")
             if self.accept("="):
                 initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
@@ -526,10 +526,10 @@ class SourceParser:
                 name.error("blank final locals require the definite-unassignment source domain", code="java.unsupported.blank-final-local")
             return Node("var", name, dtype, children, is_final=is_final)
         if is_final and self.peek().text == "var":
-            token.error("final local declarations require boolean, int or long",
+            token.error("final local declarations require boolean or integral primitives",
                         code="java.unsupported.declared-local-type")
         if is_final:
-            self.type_boundary(self.peek(), "final local declarations require boolean, int or long",
+            self.type_boundary(self.peek(), "final local declarations require boolean or integral primitives",
                                code="java.unsupported.declared-local-type", location=token)
         if self.peek(1).text in ASSIGNMENTS | {"++", "--"}:
             name = self.identifier()

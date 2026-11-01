@@ -1,14 +1,14 @@
 """Java scalar conversion and overload rules, independent of bytecode.
 
-Declarations currently admit boolean/int/long. byte/short/char cast values
-participate in Java unary/binary numeric promotion and widening invocation.
+Declarations admit boolean and the five integral primitive types. Narrow
+values participate in Java numeric promotion and widening invocation.
 No boxing, references, floating point or varargs are approximated here.
 """
 from dataclasses import dataclass
 
 
 INTEGRAL = frozenset(("byte", "short", "char", "int", "long"))
-DECLARED = frozenset(("boolean", "int", "long"))
+DECLARED = INTEGRAL | {"boolean"}
 DESCRIPTORS = {"boolean": "Z", "byte": "B", "short": "S", "char": "C",
                "int": "I", "long": "J", "void": "V"}
 ARRAY_COMPONENTS = INTEGRAL | {"boolean"}

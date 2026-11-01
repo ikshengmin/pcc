@@ -25,11 +25,35 @@ class SourceLowerer:
 
     @staticmethod
     def scalar_type(dtype):
+        # Java expression/local representation: narrow integral values are
+        # canonical i32 (signed byte/short, nonnegative char), not ABI lanes.
         if dtype == "void":
             return ir.VoidType()
         return ir.IntType(1 if dtype == "boolean" else 64 if dtype == "long" else 32)
 
+    @classmethod
+    def abi_type(cls, dtype):
+        """PCC scalar native ABI, not a JVM calling convention."""
+        if dtype in ("byte", "short", "char"):
+            return ir.IntType(8 if dtype == "byte" else 16)
+        return cls.scalar_type(dtype)
+
+    def from_abi(self, value, dtype):
+        if dtype in ("byte", "short", "char"):
+            extend = self.builder.zext if dtype == "char" else self.builder.sext
+            return extend(value, self.i32)
+        return value
+
+    def to_abi(self, value, dtype):
+        value = self.coerce(value, dtype)
+        target = self.abi_type(dtype)
+        return value if value.type == target else self.builder.trunc(value, target)
+
     def coerce(self, value, dtype):
+        # Assignment/compound/conditional conversion must normalize even when
+        # source and destination share the physical canonical i32 type.
+        if dtype in ("byte", "short", "char"):
+            return emit_narrow(self.builder, {"byte": "i2b", "short": "i2s", "char": "i2c"}[dtype], value)
         target = self.scalar_type(dtype)
         if value.type == target:
             return value
@@ -41,8 +65,8 @@ class SourceLowerer:
         methods = [method for program in self.programs for method in program.methods]
         for method in methods:
             key = (method.owner, method.token.text, method.descriptor)
-            signature = ir.FunctionType(self.scalar_type(method.result),
-                                        [self.scalar_type(dtype) for dtype in method.parameter_types])
+            signature = ir.FunctionType(self.abi_type(method.result),
+                                        [self.abi_type(dtype) for dtype in method.parameter_types])
             self.functions[key] = ir.Function(self.module, signature, method_symbol(*key))
         for method in methods:
             self.function = self.functions[method.owner, method.token.text, method.descriptor]
@@ -51,7 +75,7 @@ class SourceLowerer:
             self.slots = {binding: self.builder.alloca(self.scalar_type(binding.dtype), name="local_" + str(binding.slot))
                           for binding in method.locals}
             for argument, binding in zip(self.function.args, method.locals):
-                self.builder.store(argument, self.slots[binding])
+                self.builder.store(self.from_abi(argument, binding.dtype), self.slots[binding])
             self.statement(method.body)
             if not self.builder.block.is_terminated:
                 if method.result == "void":
@@ -69,9 +93,10 @@ class SourceLowerer:
         if kind == "name":
             return self.builder.load(self.slots[node.symbol])
         if kind == "call":
-            arguments = [self.coerce(self.expression(argument), dtype)
+            arguments = [self.to_abi(self.expression(argument), dtype)
                          for argument, dtype in zip(node.children, node.symbol.parameter_types)]
-            return self.builder.call(self.functions[node.symbol.owner, node.symbol.token.text, node.symbol.descriptor], arguments)
+            result = self.builder.call(self.functions[node.symbol.owner, node.symbol.token.text, node.symbol.descriptor], arguments)
+            return self.from_abi(result, node.dtype)
         if kind == "group":
             return self.expression(node.children[0])
         if kind == "conditional":
@@ -94,9 +119,7 @@ class SourceLowerer:
             return result
         if kind == "cast":
             value = self.expression(node.children[0])
-            if node.value in ("int", "long", "boolean"):
-                return self.coerce(value, node.value)
-            return emit_narrow(self.builder, {"byte": "i2b", "short": "i2s", "char": "i2c"}[node.value], value)
+            return self.coerce(value, node.value)
         if kind == "unary":
             value = self.expression(node.children[0])
             if node.value == "+":
@@ -167,7 +190,7 @@ class SourceLowerer:
             return
         if kind == "return":
             if node.children:
-                self.builder.ret(self.coerce(self.expression(node.children[0]), self.result_type))
+                self.builder.ret(self.to_abi(self.expression(node.children[0]), self.result_type))
             else:
                 self.builder.ret_void()
             return

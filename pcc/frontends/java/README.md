@@ -24,15 +24,27 @@ Input ordering does not affect IR. Existing `admitted_methods` describes the
 selected entry class; `emitted_class_methods` additionally records `(class, name,
 descriptor)` for the entire source closure.
 
-The current scalar domain is one ordinary class per source unit, static boolean/int/long/void
-methods with boolean/int/long parameters/locals, lexical scopes/definite assignment,
+The current scalar domain is one ordinary class per source unit, static boolean/integral/void
+methods with boolean/integral parameters/locals, lexical scopes/definite assignment,
 if/while/for/break/continue/return, recursive calls, int wrap/bitwise/masked shifts,
 and integral/boolean casts. Primitive overload selection uses parameter types,
 not return context or arity alone; numeric widening, int/long binary promotion,
 compound-assignment narrowing and shift masks are explicit. Boolean does not
-convert to or from an integer. byte/short/char method/local declarations, floating point,
-boxing and varargs remain unsupported. The scalar ABI emits boolean/i32/i64
-IR lanes, and independent assembly tests observe their exact 1/4/8-byte returns. Single-type imports and resolved static
+convert to or from an integer. Floating point, boxing and varargs remain unsupported.
+The PCC native scalar ABI uses i1/i8/i16/i32/i64 lanes (boolean/byte/short or
+char/int/long); this is not a JVM calling convention. Java byte/short/char
+expressions and local slots instead use canonical i32 values, signed for byte
+and short and zero-extended for char. Entry/call-result extension, argument/return
+truncation and store/compound/conditional narrowing are explicit even when the
+physical expression width does not change. On Linux x86-64, the complete Java
+suite passed 960 ordinary and 320 integration cases (including 112 frozen
+class-file compatibility cases, not source acceptance). All 38 complete narrow
+originals matched the selected OpenJDK 21.0.12.1 observer's actual stdout, stderr
+and exit status; 15 invalid originals were rejected. Independent assembly covers
+B/S/C result widths and an eight-argument register/stack entry. The reference uses
+explicit source/target 21 with the current JDK platform, not cross-release API
+compatibility. Managed objects and arrays remain outside native execution.
+Single-type imports and resolved static
 class-qualified calls enforce class/member access and name obscuring. Unknown
 roots of package-qualified calls fail explicitly until the shared bootstrap
 public java.lang type directory can rule out implicit-type obscuring. Literal
@@ -49,7 +61,7 @@ contract and are rejected, even when unused. No Java storage or initialization
 substitute is synthesized. Character literals represent one unsigned UTF-16 code
 unit, with ordinary/octal Java escapes; Unicode-escape translation remains gated.
 
-Initialized `final` boolean/int/long locals and `final` parameters preserve their
+Initialized `final` boolean/integral locals and `final` parameters preserve their
 lexical binding and prohibit reassignment. Only locals initialized by constant
 expressions become constant variables; a runtime call initializer is still
 evaluated exactly once and read from its local slot. Blank final locals remain an
