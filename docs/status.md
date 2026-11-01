@@ -620,13 +620,19 @@ strings, exceptions, classes, generators, four locked threads and json,
 compiled with each arm's own cross-built runtime, prints exactly CPython
 3.15.0's output on x86-64 and AArch64, as do the Darwin builds. Executable
 bytes of the Linux runtimes fall 1.17% (x86-64) and 7.08% (AArch64).
-The Python native GC/thread set (156 files under `tests/python`, enumerated
-on the candidate arm with `-x` and per-round deselection) is still being
-finished: 423 failing nodes so far. Most raise `NativeProvisioningError`:
-they build their own runtime and compile C probes with `cc` against the
-removed C runtime headers, which a sealed arm cannot do. Some need a current
-pcc1 or `PCC_GC_GRAY_COUNT_COMPILER`. The remaining assertion failures are
-being rerun on the base arm and are unclassified until then.
+The Python native GC/thread set (156 files under `tests/python`) was
+enumerated on the candidate arm with `-x` and per-round deselection until a
+whole-set round passed (1,389 tests) with the 432 found nodes deselected.
+282 raise `NativeProvisioningError` (they build their own runtime and
+compile C probes with `cc` against the removed C runtime headers; not run
+on either arm) and 28 need a current pcc1 or `PCC_GC_GRAY_COUNT_COMPILER`
+(not run). Of the 82 assertion failures, each rerun alone on the base arm,
+81 fail there with the same first error;
+`test_instance_attribute_races.py::test_shared_instance_attributes_under_four_carriers`
+passes alone on both arms and failed once under six-worker load. Of the
+first 40 nodes found, 25 `gc_advantage_matrix` nodes pass once the snapshot
+holds `benchmarks/`; the rest fail identically at the base or need
+Stage1/pcc1.
 Not run here: Windows execution (left to CI; Windows x86-64 shares the
 changed emitter), the three-stage bootstrap (no admitted Stage1), tests
 that provision their own runtime, and pcc1-gated tests.
