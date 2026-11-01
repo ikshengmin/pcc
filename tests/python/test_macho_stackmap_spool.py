@@ -405,7 +405,9 @@ def test_spool_helper_is_excluded_from_native_dependency_roots():
 
 @pytest.mark.parametrize("backend", range(5))
 @pytest.mark.parametrize("mode", (1, 3))
-def test_runtime_consumes_original_slots_pcs_and_backend_contract(monkeypatch, backend, mode):
+def test_runtime_consumes_original_slots_and_pcs_on_every_backend(monkeypatch, backend, mode):
+    # Every collector reads the table: the stack walk is the only root source
+    # of the frames a published table describes.
     from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
     from pcc.runtime.py import freestanding_gc_mapped_roots as runtime
 
@@ -445,15 +447,12 @@ def test_runtime_consumes_original_slots_pcs_and_backend_contract(monkeypatch, b
             result = runtime.pcc_gc_consume_precise_stackmap(
                 (table, 0), len(table), pc, frame, wire.ARCH_X86_64, mode,
             )
-            if backend < 3:
-                assert result == 0 and visited == []
-            else:
-                assert result == len(record.locations)
-                assert visited == [(frame, root.offset, None,
-                                    int(not bool(root.flags & wire.LOCATION_OWNED)), mode, 0)
-                                   for root in record.locations]
+            assert result == len(record.locations)
+            assert visited == [(frame, root.offset, None,
+                                int(not bool(root.flags & wire.LOCATION_OWNED)), mode, 0)
+                               for root in record.locations]
             visited.clear()
             result = runtime.pcc_gc_consume_precise_stackmap(
                 (table, 0), len(table), pc + 1, frame, wire.ARCH_X86_64, mode,
             )
-            assert result == (0 if backend < 3 else -13) and visited == []
+            assert result == -13 and visited == []

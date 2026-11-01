@@ -656,14 +656,14 @@ def test_stack_walk_agrees_with_registered_roots_at_automatic_collections(
 @pytest.mark.pcc_gate(probe=lambda: sys.platform == "darwin")
 @pytest.mark.parametrize("table_format", ["2", "3"])
 @pytest.mark.parametrize("program", ["deep", "shapes", "churn"])
-def test_stack_maps_alone_root_the_stack_frames_on_gc3_and_gc4(
+def test_stack_maps_alone_root_the_stack_frames_on_gc1_to_gc4(
     tmp_path, monkeypatch, pcc_stackmap_runtime_archive, python_program_compiler, program,
     table_format,
 ):
-    # Step 3 production consumer: with PCC_GC_STACKMAP_ROOTS the collector
-    # marks (and GC4 rewrites after moving) this thread's frame roots through
-    # the stack walk and skips the registered slots inside the walked stack.
-    # The programs must behave exactly as under CPython.
+    # Production consumer: every tracing collector marks (and GC4 rewrites
+    # after moving) the mapped frame roots through the stack walk; mapped
+    # frames register nothing. The programs must behave exactly as under
+    # CPython. PCC_GC_STACKMAP_ROOTS=report prints one line per root visit.
     import re
 
     text = {"deep": _DEEP_COLLECT, "shapes": _ROOT_SHAPES, "churn": _ALLOCATION_CHURN}[program]
@@ -679,8 +679,8 @@ def test_stack_maps_alone_root_the_stack_frames_on_gc3_and_gc4(
         runtime_archive=str(pcc_stackmap_runtime_archive),
     )
     _assert_linked_table_format(output, table_format)
-    report = re.compile(r"pcc-stackmap-roots mode=\d+ mapped=(\d+) skipped=(\d+)")
-    for gc in (3, 4):
+    report = re.compile(r"pcc-stackmap-roots mode=\d+ mapped=(\d+) registered=(\d+)")
+    for gc in (1, 2, 3, 4):
         ran = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=600,
             env=dict(
@@ -695,8 +695,7 @@ def test_stack_maps_alone_root_the_stack_frames_on_gc3_and_gc4(
             assert found == []  # GC3 young blocks grow without collecting here
             continue
         assert found, ran.stderr[-2000:]
-        assert sum(int(mapped) for mapped, _skipped in found) > 0
-        assert sum(int(skipped) for _mapped, skipped in found) > 0
+        assert sum(int(mapped) for mapped, _registered in found) > 0
 
 
 def _rootless_and_total_records(payload):

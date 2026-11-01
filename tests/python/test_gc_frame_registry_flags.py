@@ -7,11 +7,11 @@ publishes that conjunction as pcc_gc_frame_registry_inactive wherever one of
 the three words changes, so a frame call loads one word instead of three.
 
 Mapped frames on collectors 1-4 asked pcc_gc_stackmap_roots_mode on every
-enter and leave. Its answer becomes final: the setting is read once, a
-validated stack-map index stays valid and a table that failed validation
-stays invalid. pcc_gc_stackmap_walk_state caches it: 1 when the walk roots
-mapped frames (collectors 3 and 4 read the table), 2 when they register
-(collectors 1 and 2 never read it, or PCC_GC_STACKMAP_ROOTS=0).
+enter and leave. Its answer becomes final once a valid table is published:
+pcc_gc_stackmap_walk_state caches it as 1, the stack walk roots mapped
+frames on every collector. No setting turns the walk off
+(PCC_GC_STACKMAP_ROOTS accepts only "report"); a published table that fails
+validation aborts.
 """
 
 import os
@@ -161,11 +161,13 @@ def test_published_frame_flags_match_their_components(frame_flag_program, backen
         assert (roots, inactive) == (0, 1)
     else:
         # Every mapped frame of this run asked, and the answer is final:
-        # collectors 3 and 4 walk the stack, 1 and 2 register mapped frames.
-        assert (inactive, walk_state) == (0, 1 if backend >= 3 else 2)
+        # every collector walks the stack instead of registering them.
+        assert (inactive, walk_state) == (0, 1)
 
 
-@pytest.mark.parametrize("backend", (1, 3, 4), ids=lambda backend: f"gc{backend}")
-def test_registered_mapped_frames_without_the_stack_walk(frame_flag_program, backend):
+@pytest.mark.parametrize("backend", range(1, 5), ids=lambda backend: f"gc{backend}")
+def test_the_stack_walk_cannot_be_turned_off(frame_flag_program, backend):
+    # "0" once made mapped frames register; the walk is now the only root
+    # source of a published table's frames, so the value is ignored.
     flags = _run(frame_flag_program, backend, PCC_GC_STACKMAP_ROOTS="0")
-    assert flags == [1, backend, 0, 0, 2]
+    assert flags == [1, backend, 0, 0, 1]

@@ -60,8 +60,10 @@ RAW_IMPORTS = {
     "pcc_gc_root_slots",
     "pcc_gc_scheduler_root_head",
     "pcc_gc_trace_continuation_roots",
-    # Every mutator's mapped stack frames (a13c5b4a1).
+    # Every mutator's mapped stack frames (a13c5b4a1), walked only while
+    # GC0's frame roots are on.
     "pcc_gc_visit_walked_stack_roots",
+    "pcc_gc_backend0_frame_roots_enabled",
     "pcc_resume_world",
     "pcc_stop_the_world",
     "pcc_thread_safepoint",

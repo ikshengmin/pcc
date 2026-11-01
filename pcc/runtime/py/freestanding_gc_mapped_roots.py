@@ -273,32 +273,30 @@ def pcc_gc_visit_builtin_exception_cache_slots(mode: i64, resolve: i64) -> i64:
 
 @c_abi_export("pcc_gc_stackmap_roots_mode")
 def _pcc_stackmap_roots_mode() -> i64:
-    """1 (default): the precise stack walk roots the mapped stack frames of
-    every mutator thread whenever the program published a valid table;
-    2: the same with a per-visit report (PCC_GC_STACKMAP_ROOTS=report);
-    0 (PCC_GC_STACKMAP_ROOTS=0): mapped frames register like the others.
-    The mode is read once, before main's first frame enters, so every
-    mapped frame enters and leaves under the same answer. Frames of code
-    without records use the plain entries and always register."""
+    """1: the precise stack walk roots the mapped stack frames of every
+    mutator thread, for every collector, once the program published a valid
+    table; 2: the same with a per-visit report (PCC_GC_STACKMAP_ROOTS=report);
+    0: no table is published (yet), so mapped frames register like the
+    others. The walk is the only root source of a published table's frames:
+    there is no setting that turns it off, and a published table that fails
+    validation aborts instead of falling back to registration. Frames of
+    code without records use the plain entries and always register."""
     setting: i64 = load_i32(global_addr("pcc_gc_stackmap_roots_setting"), 0)
     if setting < 0:
         setting = 1
         value = pcc_platform_getenv(cstr("PCC_GC_STACKMAP_ROOTS"))
-        if ptr_is_null(value) == 0 and load_i8(value, 0) == 48 and load_i8(value, 1) == 0:
-            setting = 0
         if ptr_is_null(value) == 0 and load_i8(value, 0) == 114:  # "report"
             setting = 2
         store_i32(global_addr("pcc_gc_stackmap_roots_setting"), 0, setting)
-    if setting != 0 and _pcc_stackmap_index_ready() == 0:
-        # A table that failed validation stays invalid; a missing table may
-        # still be published.
+    if _pcc_stackmap_index_ready() == 0:
         if load_i64(global_addr("pcc_gc_stackmap_index_count"), 0) < 0:
-            store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 2)
+            _pcc_write_text(
+                cstr("pcc runtime: the published stack-map table is invalid\n"), 54
+            )
+            pcc_platform_abort()
+        # A missing table may still be published.
         return 0
-    if setting != 0:
-        store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 1)
-    else:
-        store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 2)
+    store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 1)
     return setting
 
 
@@ -340,8 +338,8 @@ def _pcc_stackmap_visit_frames_from(frame, mode: i64, resolve: i64, bounds) -> i
 def pcc_gc_visit_walked_stack_roots(mode: i64, resolve: i64) -> i64:
     """Visit the mapped stack frames of every mutator thread with ``mode``.
 
-    0 when no walk is active (no published table, or PCC_GC_STACKMAP_ROOTS=0):
-    mapped frames then registered and their owners visit the registry.
+    0 when no walk is active (no published table): mapped frames then
+    registered and their owners visit the registry.
     Another mutator's stack is stable only while it is parked or exited, so
     the visit owns a stopped world, stopping it for the walk when needed.
     """
@@ -552,17 +550,13 @@ def pcc_gc_consume_precise_stackmap(
 ) -> i64:
     """Validate one table and visit the exact record for ``program_counter``.
 
-    This is the backend3/4 differential-consumer boundary.  The normal root
-    walk remains the registered-slot protocol until identity gates prove the
-    two sources equal.  backend0/1/2 return without reading or changing a slot.
+    Every collector reads the table: the stack walk is the root source of
+    the frames it describes.
 
     ``mode`` shares ``pcc_gc_visit_mapped_root_slot``: 1 marks, 3 rewrites.
     A negative result is a fail-closed ABI/PC error; a non-negative result is
     the number of locations visited (or rewritten for mode 3).
     """
-    backend: i64 = gc_backend_current()
-    if backend != 3 and backend != 4:
-        return 0
     if (
         ptr_is_null(payload) != 0
         or ptr_is_null(frame_pointer) != 0
@@ -830,12 +824,9 @@ def _pcc_stackmap_runtime_table_valid(table, arch: i64) -> i64:
 
     Covers everything a frame visit reads: counts, function record ranges,
     strictly increasing pcs inside the code, live-set bounds, and every slot a
-    record roots against its own function's frame size. Backend0/1/2 do not
-    read the table, as with ``pcc_gc_consume_precise_stackmap``.
+    record roots against its own function's frame size. Every collector reads
+    the table, as with ``pcc_gc_consume_precise_stackmap``.
     """
-    backend: i64 = gc_backend_current()
-    if backend != 3 and backend != 4:
-        return 0
     if load_i64(table, 0) != abi_constant("stackmap.magic_i64"):
         return 0
     version_arch_pointer: i64 = _pcc_stackmap_u32(table, 8)

@@ -358,13 +358,13 @@ define_global_i64("pcc_gc_stack_diff_capacity", 0)
 define_global_ptr_null("pcc_gc_stackmap_index")
 define_global_i64("pcc_gc_stackmap_index_count", 0)
 define_global_i64("pcc_gc_stackmap_location_base", 0)
-# PCC_GC_STACKMAP_ROOTS, read once: -1 unread, 0 registered slots root
-# every frame, 1 the stack walk roots this thread's frames, 2 with a report.
+# PCC_GC_STACKMAP_ROOTS, read once: -1 unread, 1 the stack walk roots the
+# frames of a published table, 2 the same with a report.
 define_global_i32("pcc_gc_stackmap_roots_setting", -1)
 # The final pcc_gc_stackmap_roots_mode answer for mapped frame entries:
-# 0 not final yet, 1 the stack walk roots them, 2 they register. The setting
-# is read once, a validated index stays valid and a table that failed
-# validation stays invalid, so a published answer never changes.
+# 0 no valid table yet (they register), 1 the stack walk roots them. A
+# validated index stays valid and a published table that fails validation
+# aborts, so a published 1 never changes.
 define_global_i32("pcc_gc_stackmap_walk_state", 0)
 define_global_ptr_null("pcc_gc_continuation_root_head")
 define_global_ptr_null("pcc_gc_scheduler_root_head")

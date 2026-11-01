@@ -79,8 +79,6 @@ def pcc_gc_frame_slots_walked(slots) -> i64:
     pcc_gc_stackmap_walk_state records the mode's final answer.
     """
     walk: i64 = load_i32(global_addr("pcc_gc_stackmap_walk_state"), 0)
-    if walk == 2:
-        return 0
     if walk == 0 and pcc_gc_stackmap_roots_mode() == 0:
         return 0
     address: i64 = ptr_to_int(slots)

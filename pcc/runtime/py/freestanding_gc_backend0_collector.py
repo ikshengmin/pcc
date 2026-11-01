@@ -284,8 +284,11 @@ def _mark_runtime_roots() -> None:
         )
 
     # Mapped stack frames of every mutator (they do not register while the
-    # precise walk is active), then the registered frames.
-    pcc_gc_visit_walked_stack_roots(6, 0)
+    # precise walk is active), then the registered frames. Without frame
+    # roots, GC0 finds stack references through their counts and its frames
+    # register nothing, so it does not walk.
+    if load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) != 0:
+        pcc_gc_visit_walked_stack_roots(6, 0)
     frame = global_load_ptr("pcc_gc_frame_head")
     while ptr_is_null(frame) == 0:
         frame_map = load_ptr(frame, 0)
