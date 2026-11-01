@@ -140,9 +140,15 @@ still protects queues, node pools and wakeup writers; per-carrier locking and
 the sleeper/wakeup protocol remain unfinished. The 22 ordinary checks in
 `test_vthread_ready_claims.py`, `test_vthread_scheduler_signal_after_unlock.py`
 and `test_vthread_finished_reads_without_lock.py` pass with six workers. Their
-deterministic publication interleavings are host models. Candidate native
-GC0-4 execution, whole affected-language lanes, bootstrap and paired QPS are
-not yet run; this preparation makes no lock-removal or throughput claim.
+deterministic publication interleavings are host models. Frozen `2649b32ed`
+also passes ten host-pcc0/self program executions (synchronous payload and
+async request workload, each GC0-4), the five-GC running-thread regression,
+and the five-GC C-linked ready-pool root probe. The pool probe initially
+failed before compilation because it bypassed the admitted-runtime fixture;
+it now consumes that fixture and passes without rebuilding the archive.
+Four-carrier integration, independent reference comparison, whole affected-
+language lanes, bootstrap and paired QPS are not yet run for this candidate;
+this preparation makes no lock-removal or throughput claim.
 
 The container dead-branch removal is published in `f11a3513d`; its recorded
 host/model/IR checks do not qualify the pending native GC0-4 execution. The

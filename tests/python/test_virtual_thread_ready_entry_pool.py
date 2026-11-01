@@ -5,9 +5,6 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests.runtime_build_cache import cached_pcc_python_runtime
-
-
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 
@@ -18,13 +15,7 @@ def _slice_between(src: str, start: str, end: str) -> str:
     return src[start_idx:end_idx]
 
 
-def _build_runtime(tmp_path: Path) -> Path:
-    del tmp_path
-    return cached_pcc_python_runtime()
-
-
-def _compile(tmp_path: Path, source: str) -> Path:
-    work_runtime = _build_runtime(tmp_path)
+def _compile(tmp_path: Path, source: str, runtime_archive: Path) -> Path:
     src = tmp_path / "vthread_ready_entry_pool_probe.c"
     exe = tmp_path / "vthread_ready_entry_pool_probe.out"
     src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
@@ -32,10 +23,10 @@ def _compile(tmp_path: Path, source: str) -> Path:
         [
             os.environ.get("CC", "cc"),
             "-std=c11",
-            f"-I{work_runtime / 'include'}",
-            f"-I{work_runtime / 'src'}",
+            f"-I{RUNTIME_DIR / 'include'}",
+            f"-I{RUNTIME_DIR / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(runtime_archive),
             "-lm",
             "-o",
             str(exe),
@@ -49,7 +40,7 @@ def _compile(tmp_path: Path, source: str) -> Path:
 
 
 def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
-    tmp_path: Path,
+    tmp_path: Path, pcc_runtime_archive: Path,
 ) -> None:
     # The collector is fixed by the first managed allocation, so each one
     # runs in its own process, selected before anything is allocated.
@@ -113,6 +104,7 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
             return ok ? 0 : (int)(40 + backend);
         }
         """,
+        pcc_runtime_archive,
     )
     for backend in range(5):
         proc = subprocess.run([str(exe), str(backend)], capture_output=True, text=True,
