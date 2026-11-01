@@ -164,14 +164,33 @@ and stdlib gaps (A), slot-call producers (D), class keywords (E), foreign
 super initializers (F), other foreign bases (H), missing attributes (I), and
 unittest execution (J). Bridge removal (G) shares P0 item 19.
 
-The package-parent correction over `0fbc8d977` aligns both import prescans
+The package-parent correction in `eb8c22a31` aligns both import prescans
 with runtime import binding: unaliased `import package.child` retains
 `package` for class-base metadata; explicit aliases still select the child.
-No unittest-specific dispatch is added. Nine ordinary cases in
-`tests/python/test_native_package_parent_class.py` pass, including same-named
-parent/child classes and nested-import predeclaration. Native execution,
-CPython program comparison, affected-module `--modules` reruns, whole Python
-validation and native-pcc1 qualification are pending for this correction.
+No unittest-specific dispatch is added. Native execution then exposed a
+second path: a child-only import omitted the parent's initializer from the
+source closure. `edeaab058` retains real parent initializers while preserving
+namespace packages. Both commits are published. The focused ordinary
+selection passes 201 cases. All seven original-source reference comparisons
+in `tests/python/test_native_package_parent_class.py` pass on pcc0/self,
+with 35 emitted executions across GC0-4, including same-named parent/child
+classes, explicit aliases, and child-only imports.
+
+The `--modules` rerun on frozen `edeaab058` covers all 19 modules previously
+blocked on `unittest.TestCase` or `unittest.SkipTest`. All 19 lose that
+diagnostic; eight compile and eleven reach other compile-time gaps. The
+affected-set native success rate remains 0/1,172 (0.00% before and after),
+with 1,025 baseline-successful cases still unreported natively. Missing
+stdlib modules/attributes, slot ownership, other foreign bases and unittest
+cleanup/subtest execution remain visible. This adds zero successes to the
+historical whole-suite baseline; no new whole-suite rate is claimed.
+Whole Python validation and native-pcc1 qualification remain pending.
+
+The active goal's latest publication instruction is to commit, immediately
+fetch/rebase onto `shenming/master`, and push normally. This supersedes its
+earlier whole-language-before-push ordering; unfinished validation and
+existing failures remain explicit, and full affected-language validation is
+still part of final acceptance.
 
 The nearby `test_live_import_namespace_rebinding.py` selection has the same
 six failures on the candidate and on frozen `0fbc8d977`: a local-import slot
