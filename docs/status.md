@@ -101,6 +101,50 @@ performance and compatibility should README gain the requested "Why PCC?"
 claims. All five collectors, arbitrary-precision integers, identity, exceptions,
 finalizers, weakrefs and resurrection remain required.
 
+P0 package 4 and runtime fast paths, 2026-11-01 evening (Claude). Each
+commit passes its host/IR tests; the native GC0-4 runs of the later ones and
+their A/B timing against s2f (`02acaa2f5`) are pending, as noted:
+- `48bbf5f92`: every collector reads the published stack-map table, so the
+  walk roots mapped frames on GC1/GC2 too (they registered every frame:
+  node, graph lock, cycle request); `PCC_GC_STACKMAP_ROOTS=0` is gone and an
+  invalid published table aborts. `a5f673fd7`: AArch64 Darwin program code
+  compiled for the owned link (`__pcc_owned_gc_walked_frames_v1`) emits no
+  mapped frame enter/leave; runtime and library modules keep them, and a
+  marked program cannot link with cc (main references the table). Native on
+  `a5f673fd7`: frame flags GC0-4, marker, short-path execution and the
+  stack-walk programs on GC1-4 pass (`387185ac4` removed a GC3 exception that
+  only held while the test's regex matched nothing).
+- `3fc929509`: `if x`/`while x` on a frame-private local passes its root
+  slot to `py_obj_truthy_rooted` (no retain/pin/unpin/release; builtins
+  decided by a field read, user `__bool__`/`__len__` retained and pinned in
+  the runtime). Pin plus unpin were 3.6% of GC0 self samples (json request).
+- `efe3ee4f7`: `pcc_gc_store_root` takes the atomic refcount fast paths
+  inline on GC0. Its old inline block, and 31 other fast paths, were gated on
+  `pcc_threads_enabled() == 0`, which never holds since the runtime became
+  threaded-only: 14 in py_list.py and others in py_dict.py, py_set.py,
+  py_list_set_slice.py, py_class.py, py_obj.py, py_gc_backend.py and the GC
+  modules. `1ceb199e5` (append) and `bef096049` (get/getitem) give the list
+  paths GC0 container-lock forms; the rest are open.
+- `59e48f906`: bytes/bytearray `split`/`rsplit` with CPython's arguments
+  (`py_bytes_split_full`; the runtime body matches CPython in 52 modeled
+  cases) and `repr(slice)`.
+- Checked and closed without a change (adjacent occurrences in the
+  1.8M-instruction s2f `sync_payload` binary): store-then-load of one slot
+  169, global-address compare with an extra mov 79.
+- `c2ef0aab5`: `scripts/release_stats/run.py` measures CPython Lib/test,
+  pyperformance 1.14.0 (unchanged programs, `pyperf_shim.py`), pcc's
+  benchmark programs, the top 100 PyPI projects (wheels only; `import`
+  compiled and run natively; native languages of each source distribution),
+  the official C suites by pcc alone and the C++/Go/Java/Rust suites, and
+  renders the README section with SVG charts.
+
+Four-language suites on Darwin arm64 at `a5f673fd7`: ordinary selections
+pass (C++ 2,237 plus 49 subtests, Go 900, Rust 964, Java 981). Their
+integration selections cannot run here: C++ 740 and Go 376 nodes fail with
+"this execution adapter requires Linux x86_64" or a missing
+`PCC_PLATFORM_TEST_COMPILER`/reference owner, and Rust/Java select none.
+Native claims from Linux need a Linux run (Docker here) to be renewed.
+
 Frame registration from one published word (`02acaa2f5`), measured
 2026-11-01 against `c09e3c638` with sealed arms (c09b/s2f; Darwin AArch64,
 host pcc0/self/no-libpython/threaded-atomic; load average 5.0-5.4; receipts
