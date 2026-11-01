@@ -847,10 +847,11 @@ class ListMethodLoweringMixin:
                     source = self._alloca_in_entry(_CSTR, name=self._fresh("list.append.static.source"))
                     self.builder.store(constant, source)
                     _append_from_caller_slots(self, receiver, source, expr.span, permanent_item=True)
+                # _append_from_caller_slots already checked the append; storing
+                # the None result cannot raise, so no second check follows.
                 if not discard_builtin:
                     none_value = self._emit_none_literal()
                     self._publish_slot_call_owned(output, none_value, label="list append result")
-                self._emit_post_call_err_check(expr.span)
                 if item is not None:
                     self._release_slot_call_roots((item,))
                 self.builder.branch(done_block)
