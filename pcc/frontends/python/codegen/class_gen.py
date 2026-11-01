@@ -143,6 +143,7 @@ from pcc.frontends.python.codegen.builtin_exceptions import builtin_exc_tag_or_m
 from pcc.frontends.python.codegen.errors import CPythonValueRequired, L1CodegenError
 from pcc.frontends.python.codegen.host_contract import L1_CODEGEN_HOST_ATTRS
 from pcc.frontends.python.codegen.module_name_lowering import module_symbol_suffix
+from pcc.frontends.python.symbol_names import identifier_symbol
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.self_module_contracts import L1_CODEGEN_HOST_ATTR_CONTRACT, PY_AST_FIELD_ORDER_CONTRACT, module_for_class_symbol_contract, module_has_contract
 
@@ -1110,9 +1111,9 @@ def _classgen_attr_name_ptr(parent, name: str) -> ir.Value:
     if existing is None:
         data = _classgen_utf8_byte_values(stable_name) + [0]
         arr_ty = ir.ArrayType(_I8, len(data))
-        sym = ".pyattr." + stable_name
+        sym = ".pyattr." + identifier_symbol(stable_name)
         if sym in module.globals:
-            sym = ".pyattr." + stable_name + "." + str(len(attr_pool))
+            sym = ".pyattr." + identifier_symbol(stable_name) + "." + str(len(attr_pool))
         gv = ir.GlobalVariable(module, arr_ty, name=sym)
         gv.linkage = "internal"
         gv.global_constant = True
@@ -2109,7 +2110,7 @@ class ClassLowering:
 
     def _fresh(self, hint: str) -> str:
         self._uniq += 1
-        return hint + "." + str(self._uniq)
+        return identifier_symbol(hint) + "." + str(self._uniq)
 
     def _normalize_native_class_bases(self, cd: ClassDef) -> ClassDef:
         """Bind qualified owned bases to their collision-safe class identities.
@@ -3161,7 +3162,7 @@ class ClassLowering:
     def _class_global_name(self, cname: str) -> str:
         mod = self.parent.ast_module.name or "mod"
         sanitised_mod = module_symbol_suffix(mod)
-        return f".class.{sanitised_mod}.{cname}"
+        return f".class.{sanitised_mod}.{identifier_symbol(cname)}"
 
     def _top_level_function_exists(self, name: str) -> bool:
         for stmt in self.parent.ast_module.body:
@@ -3173,8 +3174,8 @@ class ClassLowering:
         mod = self.parent.ast_module.name or "mod"
         sanitised_mod = module_symbol_suffix(mod)
         if self._top_level_function_exists(class_name + "_" + method_name):
-            return f"user_{sanitised_mod}_{class_name}__method_{method_name}"
-        return f"user_{sanitised_mod}_{class_name}_{method_name}"
+            return f"user_{sanitised_mod}_{identifier_symbol(class_name)}__method_{identifier_symbol(method_name)}"
+        return f"user_{sanitised_mod}_{identifier_symbol(class_name)}_{identifier_symbol(method_name)}"
 
     def _collect_fields_and_declare_methods(
         self, cd: ClassDef, info: ClassInfo
@@ -3748,11 +3749,11 @@ class ClassLowering:
         runtime_decl_args = [a for a in decl_args if a.name != ""]
         if kind == "static":
             for ir_arg, ast_arg in zip(fn.args, runtime_decl_args):
-                ir_arg.name = ast_arg.name
+                ir_arg.name = identifier_symbol(ast_arg.name)
         else:
-            fn.args[0].name = runtime_decl_args[0].name  # "self" or "cls"
+            fn.args[0].name = identifier_symbol(runtime_decl_args[0].name)  # "self" or "cls"
             for ir_arg, ast_arg in zip(fn.args[1:], runtime_decl_args[1:]):
-                ir_arg.name = ast_arg.name
+                ir_arg.name = identifier_symbol(ast_arg.name)
         # Methods named via ``@<name>.setter`` / ``@<name>.deleter``
         # re-declare a previously emitted FuncDef — their ``fd.name`` is
         # the property name, so we register them separately rather than
@@ -3791,7 +3792,7 @@ class ClassLowering:
     def _class_attr_global_name(self, class_name: str, attr_name: str) -> str:
         mod = self.parent.ast_module.name or "mod"
         sanitised_mod = module_symbol_suffix(mod)
-        return f".classattr.{sanitised_mod}.{class_name}.{attr_name}"
+        return f".classattr.{sanitised_mod}.{identifier_symbol(class_name)}.{identifier_symbol(attr_name)}"
 
     def mangle_private_attr_name(self, info: ClassInfo, attr_name: str) -> str:
         """Return the lexical Python spelling for a class-private attribute."""
@@ -3938,7 +3939,7 @@ class ClassLowering:
         """
         local = local_name or class_name
         sanitised_mod = module_symbol_suffix(owning_module)
-        g_name = f".class.{sanitised_mod}.{class_name}"
+        g_name = f".class.{sanitised_mod}.{identifier_symbol(class_name)}"
         qualified = f"{owning_module}.{class_name}"
 
         # Extern declarations can be created before type-driven registration

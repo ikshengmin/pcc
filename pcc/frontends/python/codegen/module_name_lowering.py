@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 
 _VOID = ir.VoidType()
@@ -33,7 +34,10 @@ def module_symbol_suffix(name: str) -> str:
         return name
     parts = []
     for character in name:
-        parts.append(character if character in alphabet else "_")
+        if ord(character) >= 128:
+            parts.append(identifier_symbol(character))
+        else:
+            parts.append(character if character in alphabet else "_")
     return "".join(parts)
 
 

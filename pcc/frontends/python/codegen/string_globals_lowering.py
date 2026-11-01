@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.symbol_names import identifier_symbol
+
 from pcc.ir.compat import ir
 
 _I8 = ir.IntType(8)
@@ -84,12 +86,12 @@ class StringGlobalsLoweringMixin:
             data = name_bytes + [0]
             arr_ty = ir.ArrayType(_I8, len(data))
             sym = ".pyattr."
-            sym = sym + stable_name
+            sym = sym + identifier_symbol(stable_name)
             # Multiple distinct attrs may share a name; disambiguate.
             if sym in module.globals:
                 attr_count_text = str(len(attr_pool))
                 sym = ".pyattr."
-                sym = sym + stable_name
+                sym = sym + identifier_symbol(stable_name)
                 sym = sym + "."
                 sym = sym + attr_count_text
             gv = ir.GlobalVariable(module, arr_ty, name=sym)

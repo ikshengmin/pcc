@@ -5,6 +5,7 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
@@ -280,7 +281,7 @@ class CoreHelperMixin:
         end_marker = self.builder._END
         self.builder._block = entry
         self.builder._pos = insert_index
-        alloca = self.builder.alloca(ir_ty, name=name)
+        alloca = self.builder.alloca(ir_ty, name=identifier_symbol(name))
         emitted = 1
         if init_null and isinstance(ir_ty, ir.PointerType):
             if self._ir_type_matches(ir_ty, _CSTR):

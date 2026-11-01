@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "specification": {
+    "title": "Python Language Reference and PEP 3131",
+    "version": "3.15 / Unicode 17.0.0",
+    "url": "https://docs.python.org/3.15/reference/"
+  },
+  "inventory": {
+    "chapters_complete": false,
+    "features_complete": false,
+    "notes": "Initial bounded Python feature row. This is not an inventory of all Python capabilities or a claim of native pcc1 qualification."
+  },
+  "chapters": [
+    {
+      "id": "lexical.identifiers",
+      "title": "Identifiers and keywords",
+      "url": "https://docs.python.org/3.15/reference/lexical_analysis.html#identifiers"
+    },
+    {
+      "id": "pep3131",
+      "title": "Supporting Non-ASCII Identifiers",
+      "url": "https://peps.python.org/pep-3131/"
+    }
+  ],
+  "features": [
+    {
+      "id": "python.lexical.unicode-identifiers",
+      "title": "Unicode identifier classification and NFKC normalization",
+      "chapter_ids": ["lexical.identifiers", "pep3131"],
+      "scope": "Implementation includes owned Unicode 17 XID and NFKC data, UTF-8 source offsets, and preservation of raw soft-keyword spelling. Missing means qualification remains incomplete: host unit checks exist; native program/reference, pcc1, and affected Lib/test results are still pending. No complete Python language claim is made.",
+      "status": "missing",
+      "tests": [
+        "tests/python/test_unicode_identifiers.py::test_identifier_tokens_match_cpython_ast_normalization",
+        "tests/python/test_unicode_identifiers.py::test_identifier_properties_match_cpython_across_unicode",
+        "tests/python/test_unicode_identifiers.py::test_normalization_matches_cpython_decompositions_and_combinations",
+        "tests/python/test_unicode_identifiers.py::test_normalization_does_not_create_soft_keywords",
+        "tests/python/test_unicode_identifiers.py::test_unicode_identifier_programs_match_cpython_on_five_collectors"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    }
+  ],
+  "diagnostics": {
+    "inventory_complete": false,
+    "notes": "The existing Python diagnostic inventory is not yet migrated here. The new lexer errors reject invalid source characters and UTF-8; they are not unimplemented-feature diagnostics.",
+    "codes": [],
+    "message_only": []
+  },
+  "evidence": []
+}

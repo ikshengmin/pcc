@@ -9,6 +9,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Attr, Call, ClassDef, ClassType, DynType, Expr, FuncDef, ImportFrom, ListExpr, Name, Return, StrLit, TupleExpr, TupleType
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.pipeline_closed_world import resolve_class_base_export
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 _I8 = ir.IntType(8)
 _CSTR = _I8.as_pointer()
@@ -150,7 +151,7 @@ class ClassModelLoweringMixin:
                         ".class."
                         + self._module_symbol_suffix(mod_name)
                         + "."
-                        + expr.name
+                        + identifier_symbol(expr.name)
                     )
                     for registered in self.class_lowering.classes.values():
                         if registered.global_var.name == expected_global:
@@ -192,7 +193,7 @@ class ClassModelLoweringMixin:
                         ".class."
                         + self._module_symbol_suffix(mod_name)
                         + "."
-                        + expr.func.name
+                        + identifier_symbol(expr.func.name)
                     )
                     for registered in self.class_lowering.classes.values():
                         if registered.global_var.name == expected_global:

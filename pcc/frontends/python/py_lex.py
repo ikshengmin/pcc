@@ -14,6 +14,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pcc.frontends.python.unicode_identifiers import (
+    is_identifier_continue,
+    is_identifier_start,
+    normalize_identifier,
+)
 # Token kinds. Keep in sync with parser expectations.
 TK_NEWLINE  = "NEWLINE"
 TK_INDENT   = "INDENT"
@@ -139,18 +144,36 @@ def _single_op_text(c: int) -> str:
     return ""
 
 
+_UTF8_SOURCE_CACHE: dict[str, bytes] = {}
+
+
+def _utf8_source(s: str) -> bytes:
+    cached = _UTF8_SOURCE_CACHE.get(s)
+    if cached is None:
+        if len(_UTF8_SOURCE_CACHE) >= 8:
+            _UTF8_SOURCE_CACHE.clear()
+        cached = s.encode("utf-8")
+        _UTF8_SOURCE_CACHE[s] = cached
+    return cached
+
+
 def _pcc_str_byte_len(s: str) -> int:
-    return len(s)
+    return len(s) if s.isascii() else len(_utf8_source(s))
 
 
 def _pcc_str_byte_at(s: str, pos: int) -> int:
-    if pos < len(s):
-        return ord(s[pos])
+    if s.isascii():
+        return ord(s[pos]) if pos < len(s) else -1
+    data = _utf8_source(s)
+    if pos < len(data):
+        return data[pos]
     return -1
 
 
 def _pcc_str_byte_slice(s: str, lo: int, hi: int) -> str:
-    return s[lo:hi]
+    if s.isascii():
+        return s[lo:hi]
+    return _utf8_source(s)[lo:hi].decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -159,6 +182,7 @@ class Token:
     text: str
     line: int
     col: int
+    raw_text: str = ""
 
 
 class LexError(Exception):
@@ -234,7 +258,7 @@ class Lexer:
             ):
                 out.append(self._read_string())
                 continue
-            if _is_alpha_code(ch) or ch == 95:
+            if _is_alpha_code(ch) or ch == 95 or ch >= 128:
                 out.append(self._read_name())
                 continue
             if _is_digit_code(ch) or (
@@ -336,20 +360,55 @@ class Lexer:
         self.line += 1
         self.col = 1
 
+    def _name_codepoint(self) -> tuple[int, int]:
+        first = self._peek_code(0)
+        if first < 128:
+            return first, 1
+        if 0xC2 <= first <= 0xDF:
+            width, code, minimum = 2, first & 0x1F, 0x80
+        elif 0xE0 <= first <= 0xEF:
+            width, code, minimum = 3, first & 0x0F, 0x800
+        elif 0xF0 <= first <= 0xF4:
+            width, code, minimum = 4, first & 0x07, 0x10000
+        else:
+            raise LexError(f"{self.filename}:{self.line}:{self.col}: invalid UTF-8 source")
+        offset = 1
+        while offset < width:
+            continuation = self._peek_code(offset)
+            if not 0x80 <= continuation <= 0xBF:
+                raise LexError(f"{self.filename}:{self.line}:{self.col}: invalid UTF-8 source")
+            code = (code << 6) | (continuation & 0x3F)
+            offset += 1
+        if code < minimum or code > 0x10FFFF or 0xD800 <= code <= 0xDFFF:
+            raise LexError(f"{self.filename}:{self.line}:{self.col}: invalid UTF-8 source")
+        return code, width
+
     def _read_name(self) -> Token:
         start = self.pos
         start_col = self.col
-        while (
-            self.pos < self._src_len
-            and (
-                _is_alnum_code(self._peek_code(0))
-                or self._peek_code(0) == 95
-            )
-        ):
-            self.pos += 1
-            self.col += 1
+        unicode_name = False
+        while self.pos < self._src_len:
+            code = self._peek_code(0)
+            width = 1
+            if code >= 128:
+                code, width = self._name_codepoint()
+                allowed = is_identifier_start(code) if self.pos == start else is_identifier_continue(code)
+                if not allowed:
+                    if self.pos == start:
+                        character = self._slice(self.pos, self.pos + width)
+                        raise LexError(
+                            f"{self.filename}:{self.line}:{self.col}: invalid identifier character {character!r}"
+                        )
+                    break
+                unicode_name = True
+            elif not (_is_alnum_code(code) or code == 95):
+                break
+            self.pos += width
+            self.col += width
         text = self._slice(start, self.pos)
         kind = TK_KEYWORD if text in KEYWORDS else TK_NAME
+        if unicode_name:
+            return Token(kind, normalize_identifier(text), self.line, start_col, text)
         return Token(kind, text, self.line, start_col)
 
     def _read_number(self) -> Token:

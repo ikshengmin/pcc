@@ -14,6 +14,8 @@ from pcc.frontends.python import pipeline_ir_text as _pipeline_ir_text
 from pcc.frontends.python.export_meta import encode_type
 from pcc.frontends.python.raw_pointer_types import resolve_raw_pointer_annotation
 from pcc.frontends.python.pipeline_modes import PyPipelineError
+from pcc.frontends.python.codegen.module_name_lowering import module_symbol_suffix
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 
 _py_ast_field_value = _pipeline_ast_wire._py_ast_field_value
@@ -1908,7 +1910,7 @@ def _export_method_symbol(
     method_name: str,
     top_level_func_names,
 ) -> str:
-    sanitised_mod = module_name.replace(".", "_").replace("-", "_")
+    sanitised_mod = module_symbol_suffix(module_name)
     if class_name + "_" + method_name in top_level_func_names:
-        return f"user_{sanitised_mod}_{class_name}__method_{method_name}"
-    return f"user_{sanitised_mod}_{class_name}_{method_name}"
+        return f"user_{sanitised_mod}_{identifier_symbol(class_name)}__method_{identifier_symbol(method_name)}"
+    return f"user_{sanitised_mod}_{identifier_symbol(class_name)}_{identifier_symbol(method_name)}"

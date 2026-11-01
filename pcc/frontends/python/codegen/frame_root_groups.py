@@ -1,6 +1,7 @@
 """Physical frame registration groups; each cell keeps its ownership lifetime."""
 from pcc.ir.compat import ir
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 _CSTR = ir.IntType(8).as_pointer()
 _I32 = ir.IntType(32)
@@ -97,7 +98,8 @@ def allocate_function_root(host, name, borrowed):
     saved_block = host.builder._block
     host._position_at_entry_hoist_point()
     slot = host.builder.gep(
-        group["base"], [ir.Constant(_I32, 0), ir.Constant(_I32, index)], name=name,
+        group["base"], [ir.Constant(_I32, 0), ir.Constant(_I32, index)],
+        name=identifier_symbol(name),
     )
     host.builder.position_at_end(saved_block)
     group["used"] = index + 1

@@ -8,6 +8,7 @@ import sys
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import FuncDef, IntType, Name, NoneType
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 _I8 = ir.IntType(8)
 _CSTR = _I8.as_pointer()
@@ -99,7 +100,7 @@ class UserFunctionDeclLoweringMixin:
         # valid LLVM identifier (dots in LLVM identifiers work when
         # quoted but read oddly).
         sanitized: str = self._module_symbol_suffix(mod_name)
-        return f"user_{sanitized}_{name}"
+        return f"user_{sanitized}_{identifier_symbol(name)}"
 
     def _func_decorators(self, fd: FuncDef) -> tuple:
         try:
@@ -284,7 +285,7 @@ class UserFunctionDeclLoweringMixin:
             self._c_abi_export_symbols.add(sym)
         runtime_args = [a for a in fd.args if a.name != ""]
         for ir_arg, ast_arg in zip(fn.args, runtime_args):
-            ir_arg.name = ast_arg.name
+            ir_arg.name = identifier_symbol(ast_arg.name)
         self._funcdef_functions[id(fd)] = fn
         self._native_symbol_funcdefs[fn.name] = fd
         if (fd.manual_pointer_abi and (c_abi_sym is not None

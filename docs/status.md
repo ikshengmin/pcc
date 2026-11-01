@@ -186,6 +186,27 @@ cleanup/subtest execution remain visible. This adds zero successes to the
 historical whole-suite baseline; no new whole-suite rate is claimed.
 Whole Python validation and native-pcc1 qualification remain pending.
 
+The Unicode-identifier increment over `7f2611b6b` adds owned Unicode 17 XID
+classification and NFKC normalization, packed reproducible data, consistent
+UTF-8 source offsets, and raw-spelling checks for soft keywords. Generated
+Python identifiers use injective ASCII components in IR symbols while
+Python-visible names and string payloads remain unchanged. The backend is
+unchanged. Forty-eight focused ordinary checks pass, including exhaustive
+Unicode character classification, decomposition/combining/Hangul comparisons
+against CPython 3.15.0, and owned object emission for Darwin arm64, Linux
+x86-64/AArch64 and Windows x86-64, plus cross-module export/definition
+consistency. These are not native execution results.
+The new `specs/features/python.json` row remains `missing` qualification;
+native programs, pcc1 and affected Lib/test reruns are pending.
+
+Four nearby `test_imported_constructor_binding.py` binder-shape assertions
+also fail on frozen `0fbc8d977`, including the separately rerun keyword-map
+expansion case. They remain recorded rather than repaired in this increment.
+The P0 `test_tempdir_state_list_contract.py` fixture omits
+`_list_allocate_unpublished`; executing its list model with `737e42c90`'s
+unchanged `py_list_new` reproduces the same NameError. This is a pre-existing
+model prerequisite failure, not evidence of a new runtime failure.
+
 The active goal's latest publication instruction is to commit, immediately
 fetch/rebase onto `shenming/master`, and push normally. This supersedes its
 earlier whole-language-before-push ordering; unfinished validation and

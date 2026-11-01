@@ -7,6 +7,7 @@ import sys
 from typing import Optional
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 from pcc.frontends.python import low_ir as pcc_low_ir
 from pcc.frontends.python.py_ast import (
@@ -2204,7 +2205,7 @@ class UserFunctionLoweringMixin:
         """
         adapter_name = (
             f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
-            f"_{orig_name}_native_adapter"
+            f"_{identifier_symbol(orig_name)}_native_adapter"
         )
         # The Python name is a live binding and may be reused by a later
         # ``def``.  The native symbol is the stable identity of this exact
@@ -3284,7 +3285,7 @@ class UserFunctionLoweringMixin:
                     break
         if is_module_top_level:
             safe_mod = self._module_symbol_suffix(self.ast_module.name or "mod")
-            safe_name = resolved_name.replace(".", "_").replace("-", "_")
+            safe_name = identifier_symbol(resolved_name.replace(".", "_").replace("-", "_"))
             cache_name = "__pcc_native_func_value_cache_" + safe_mod + "_" + safe_name
             if fd.name in self._duplicate_module_function_names:
                 cache_name = cache_name + "." + full_fn.name
@@ -3425,7 +3426,7 @@ class UserFunctionLoweringMixin:
     def _lru_cache_global_name(self, func_name: str) -> str:
         mod_name = self.ast_module.name or "mod"
         safe_mod = self._module_symbol_suffix(mod_name)
-        safe_func = func_name.replace(".", "_").replace("-", "_")
+        safe_func = identifier_symbol(func_name.replace(".", "_").replace("-", "_"))
         return "__pcc_lru_cache_" + safe_mod + "_" + safe_func
 
     def _emit_lru_cache_dict_for_function(self, func_name: str) -> ir.Value:

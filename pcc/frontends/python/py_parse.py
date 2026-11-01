@@ -513,6 +513,8 @@ class Parser:
             return None
         if text is not None and t.text != text:
             return None
+        if text is not None and kind == TK_NAME and t.raw_text and t.raw_text != text:
+            return None
         self._advance()
         return t
 
@@ -636,7 +638,8 @@ class Parser:
                 return self._parse_with()
             if t.text == "assert":
                 return self._parse_assert()
-        if t.kind == TK_NAME and t.text == "match" and self._looks_like_match_stmt():
+        if (t.kind == TK_NAME and t.text == "match"
+                and not t.raw_text and self._looks_like_match_stmt()):
             return self._parse_match()
         if t.kind == TK_OP and t.text == "@":
             # Decorator chain — followed by either ``def`` or ``class``.

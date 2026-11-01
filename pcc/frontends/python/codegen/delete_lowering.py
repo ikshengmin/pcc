@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 from pcc.frontends.python.py_ast import (
     Attr, ByteArrayType, ClassType, Delete, DictType, DynType, FuncDef, IntType,
@@ -26,7 +27,7 @@ def _retire_module_function_caches(host, name: str) -> None:
     """A deleted public definition must not survive in its compiler cache."""
     module = host.ast_module.name or "mod"
     prefix = "__pcc_native_func_value_cache_" + host._module_symbol_suffix(module) + "_"
-    safe_name = name.replace(".", "_").replace("-", "_")
+    safe_name = identifier_symbol(name.replace(".", "_").replace("-", "_"))
     for statement in host.ast_module.body:
         if not isinstance(statement, FuncDef) or statement.name != name:
             continue

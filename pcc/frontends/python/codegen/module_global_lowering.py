@@ -10,6 +10,7 @@ from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.import_lowering import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty
 from pcc.frontends.python.py_ast import assignment_storage_annotation
+from pcc.frontends.python.symbol_names import identifier_symbol
 
 _I8 = ir.IntType(8)
 _I1 = ir.IntType(1)
@@ -157,7 +158,7 @@ class ModuleGlobalLoweringMixin:
         name: str,
     ) -> str:
         mod_suffix = self._module_symbol_suffix(module_name)
-        name_suffix = name.replace(".", "_").replace("-", "_")
+        name_suffix = identifier_symbol(name.replace(".", "_").replace("-", "_"))
         return f".modvar.{mod_suffix}.{name_suffix}"
 
     def _prescan_nested_imports(self, stmt) -> None:

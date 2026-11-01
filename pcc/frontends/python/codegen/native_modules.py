@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pcc.frontends.python.symbol_names import identifier_symbol
+
 import os
 from typing import Optional
 
@@ -1842,7 +1844,7 @@ class NativeModuleAliasMixin:
                 return True
             semantic_functions.pop(local_name, None)
             sanitised = self._module_symbol_suffix(owning_module)
-            sym = f"user_{sanitised}_{export_name}"
+            sym = f"user_{sanitised}_{identifier_symbol(export_name)}"
             existing = self.module.globals.get(sym)
             if isinstance(existing, ir.Function):
                 fn = existing
@@ -3254,7 +3256,7 @@ class NativeModuleAliasMixin:
             ".class."
             + self._module_symbol_suffix(owning_module)
             + "."
-            + export_name
+            + identifier_symbol(export_name)
         )
 
         # We need to find if this class is already registered under ANY key.
@@ -3564,7 +3566,7 @@ class NativeModuleAliasMixin:
         owning_module = info.get("owning_module", owning_module)
         func_name = info.get("export_name", func_name)
         sanitised = self._module_symbol_suffix(owning_module)
-        sym = f"user_{sanitised}_{func_name}"
+        sym = f"user_{sanitised}_{identifier_symbol(func_name)}"
         existing = self.module.globals.get(sym)
         if isinstance(existing, ir.Function):
             fn = existing
