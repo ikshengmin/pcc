@@ -155,9 +155,13 @@ read, despite the producer still holding the scheduler mutex. The publication
 fix records the known READY state without dereferencing the transferred task;
 timer/IO wakeup events likewise record their published state. The deterministic
 last-root handoff test fails on `86f47de37` and the corrected selection passes
-38 checks. The channel canary now selects GC0-4. These corrections still need
-their own emitted validation. Whole affected-language lanes, bootstrap and
-paired QPS remain pending; the preceding native passes do not close this gap.
+38 checks. Frozen `843fae806` passes ten emitted baseline program runs across
+GC0-4, three ordinary native regressions (now including channels on GC0-4),
+and all seven selected deque/concurrency/IO integration regressions. A new
+native event probe additionally executes the join handoff on GC0-4 and reads
+back exactly one READY wakeup and the expected result, `42 1`. These are host
+pcc0/self and explicitly C-linked runtime probes, not native-pcc1 evidence.
+Whole affected-language lanes, bootstrap and paired QPS remain pending.
 
 The node-pool increment over `f1d8e65d3` gives ready, join and channel free
 lists separate cache-line-spaced no-park locks. Allocation, raw freeing and

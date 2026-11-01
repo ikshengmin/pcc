@@ -306,3 +306,56 @@ def test_failed_reservation_does_not_claim_a_queue_entry(failure):
     assert model.count.fields[0] == 0
     assert model.pop() is None
     assert len(model.freed) == (failure == "registration_fails")
+
+
+@pytest.mark.integration
+def test_native_join_wakeup_records_the_published_ready_state(
+    tmp_path, pcc_runtime_archive,
+):
+    import os
+    import subprocess
+
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = tmp_path / "join_wakeup_event.py"
+    source.write_text('''import pcc.virtual_thread as vt
+from pcc.extern import c_int64, extern
+
+reset = extern("py_virtual_thread_effect_reset", (), c_int64)
+count = extern("py_virtual_thread_effect_count", (), c_int64)
+kind = extern("py_virtual_thread_effect_kind_at", (c_int64,), c_int64)
+detail = extern("py_virtual_thread_effect_detail_at", (c_int64,), c_int64)
+state = extern("py_virtual_thread_effect_state_at", (c_int64,), c_int64)
+
+def child():
+    return 41
+
+def parent():
+    thread = vt.spawn(child)
+    vt.join(thread)
+    return vt.result(thread) + 1
+
+def main():
+    reset()
+    thread = vt.spawn(parent)
+    vt.run(1, 64)
+    wakes = 0
+    for index in range(count()):
+        if kind(index) == 6 and detail(index) == 1:
+            if state(index) != 1:
+                raise RuntimeError("join wakeup did not record READY")
+            wakes += 1
+    print(vt.result(thread), wakes)
+
+main()
+''', encoding="utf-8")
+    binary = tmp_path / "join_wakeup_event"
+    compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
+                   runtime_archive=str(pcc_runtime_archive))
+    for collector in range(5):
+        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
+                                env=dict(os.environ, PCC_GC_BACKEND=str(collector),
+                                         PATH="/nonexistent"))
+        assert (result.returncode, result.stdout, result.stderr) == (0, "42 1\n", ""), (
+            collector, result.stdout, result.stderr,
+        )
