@@ -5,6 +5,7 @@ https://peps.python.org/pep-3131/
 """
 import ast
 import os
+from pathlib import Path
 import random
 import subprocess
 import sys
@@ -178,8 +179,11 @@ main()
 @pytest.mark.integration
 @pytest.mark.parametrize("program", (IDENTIFIER_PROGRAM, LEXER_PROGRAM), ids=("names", "owned-lexer"))
 def test_unicode_identifier_programs_match_cpython_on_five_collectors(
-    tmp_path, program, pcc_runtime_archive, python_program_compiler,
+    tmp_path, monkeypatch, program, pcc_runtime_archive, python_program_compiler,
 ):
+    # The reference sees this source tree through PYTHONPATH; give the native
+    # resolver the same package source instead of relying on an installed pcc.
+    monkeypatch.setenv("PCC_PACKAGE_SITE", str(Path(__file__).resolve().parents[2]))
     source = tmp_path / "unicode_program.py"
     source.write_text(program, encoding="utf-8")
     reference = subprocess.run(
