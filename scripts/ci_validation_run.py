@@ -95,8 +95,13 @@ def batches(rows, lane):
 
 
 def guarded_command(directory, command):
+    # Equal admission floor/ceiling keeps the original exact cap. The shared
+    # selector observes Linux MemAvailable/cgroup headroom or Darwin's existing
+    # reclaimable/swap/disk policy; an explicit cap plus Darwin-only preflight
+    # would reject every Linux invocation before pytest can start.
     return [sys.executable, str(ROOT / "scripts/run_process_tree_sample.py"),
-            "--timeout", str(TIMEOUT), "--max-tree-rss-bytes", str(RSS),
+            "--timeout", str(TIMEOUT), "--auto-tree-rss-ceiling-bytes", str(RSS),
+            "--min-tree-rss-bytes", str(RSS),
             "--performance-lock", "--process-rss-history", "--darwin-preflight-reserve-bytes", "536870912",
             "--cwd", str(ROOT), "--result", str(directory / "result.json"),
             "--samples", str(directory / "samples.tsv"), "--stdout", str(directory / "target.stdout"),

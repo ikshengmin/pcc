@@ -5,6 +5,7 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from scripts import ci_validation_plan as plan
 from scripts import ci_validation_run as run
 from scripts.ci_validation_inventory import classify
 from scripts import ci_validation_tools as tools
+from scripts import run_process_tree_sample as guard
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/pcc1-package-parity.yml"
@@ -133,9 +135,119 @@ def test_guard_keeps_six_workers_90_seconds_1gib_and_fail_fast(tmp_path):
     assert "--collect-only" in collection and "-n0" in collection
     guarded = run.guarded_command(tmp_path, command)
     assert guarded[guarded.index("--timeout") + 1] == "90"
-    assert guarded[guarded.index("--max-tree-rss-bytes") + 1] == "1073741824"
+    assert "--max-tree-rss-bytes" not in guarded
+    assert guarded[guarded.index("--auto-tree-rss-ceiling-bytes") + 1] == "1073741824"
+    assert guarded[guarded.index("--min-tree-rss-bytes") + 1] == "1073741824"
+    assert guarded[guarded.index("--darwin-preflight-reserve-bytes") + 1] == "536870912"
     assert "--performance-lock" in guarded and "--process-rss-history" in guarded
     assert run.DISK_FLOOR == 1073741824
+
+
+def _ci_admission_without_launch(tmp_path, monkeypatch, *, rejection=None):
+    """Exercise the real guard dispatch, stopping after admission, before lock/work."""
+    class AdmissionComplete(Exception):
+        pass
+
+    def boundary():
+        raise AdmissionComplete
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("admission policy test must not launch or sample a target")
+
+    monkeypatch.setattr(guard, "compile_ab", SimpleNamespace(_performance_lock=boundary))
+    monkeypatch.setattr(guard.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(guard, "_process_table", forbidden)
+    monkeypatch.setattr(guard, "_timed_process_table", forbidden)
+    args = guard._parser().parse_args(run.guarded_command(tmp_path, ["unused-target"])[2:])
+    if rejection:
+        with pytest.raises(guard.ProcessTreeSampleError, match=rejection):
+            guard._run(args)
+    else:
+        with pytest.raises(AdmissionComplete):
+            guard._run(args)
+    receipt = json.loads((tmp_path / "result.json").read_text())
+    assert receipt["timeout_s"] == 90
+    assert receipt["status"] == ("PREFLIGHT_REJECTED" if rejection else "RUNNING")
+    if not rejection:
+        assert args.max_tree_rss_bytes == receipt["max_tree_rss_bytes"] == run.RSS
+        assert receipt["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] == str(run.RSS)
+        selection = receipt["memory_budget_selection"]
+        assert selection["default_ceiling_bytes"] == selection["minimum_tree_rss_bytes"] == run.RSS
+    return receipt
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("fault,rejection", [
+    (None, None),
+    ("host-low", "minimum tree budget"),
+    ("ancestor-low", "minimum tree budget"),
+    ("unmapped", "cgroup memory limits cannot be verified"),
+    ("memavailable-missing", "Linux MemAvailable is unavailable"),
+])
+def test_ci_linux_admission_reads_memavailable_and_ancestor_cgroups_fail_closed(
+    tmp_path, monkeypatch, version, fault, rejection,
+):
+    proc = tmp_path / "proc"
+    (proc / "self").mkdir(parents=True)
+    mount = tmp_path / "cgroup"
+    child = mount / "worker"
+    child.mkdir(parents=True)
+    available = 3 * run.RSS // 2 if fault == "host-low" else 100 * run.RSS
+    (proc / "meminfo").write_text(
+        "MemTotal: 268435456 kB\n" +
+        ("" if fault == "memavailable-missing" else f"MemAvailable: {available // 1024} kB\n")
+    )
+    if version == 2:
+        membership, kind, options = "0::/worker\n", "cgroup2", "rw"
+        limit_name, usage_name = "memory.max", "memory.current"
+    else:
+        membership, kind, options = "5:memory:/worker\n", "cgroup", "rw,memory"
+        limit_name, usage_name = "memory.limit_in_bytes", "memory.usage_in_bytes"
+    (proc / "self/cgroup").write_text(membership)
+    (proc / "self/mountinfo").write_text(
+        "" if fault == "unmapped" else f"20 1 0:2 / {mount} rw - {kind} cgroup {options}\n"
+    )
+    (mount / limit_name).write_text(str(8 * run.RSS))
+    usage = 13 * run.RSS // 2 if fault == "ancestor-low" else 6 * run.RSS
+    (mount / usage_name).write_text(str(usage))
+    (child / limit_name).write_text(str(16 * run.RSS))
+    (child / usage_name).write_text(str(run.RSS))
+    observe = guard._linux_memory_observation
+    monkeypatch.setattr(guard.sys, "platform", "linux")
+    monkeypatch.setattr(guard, "_linux_memory_observation", lambda: observe(proc))
+    receipt = _ci_admission_without_launch(tmp_path, monkeypatch, rejection=rejection)
+    if fault is None:
+        observation = receipt["memory_budget_selection"]["observation"]
+        assert observation["platform"] == "linux" and observation["cgroup_limits_verified"]
+        assert observation["mem_available_bytes"] == 100 * run.RSS
+        assert observation["available_bytes"] == 2 * run.RSS
+        assert {row["path"] for row in observation["cgroup_limits"]} == {str(mount), str(child)}
+
+
+@pytest.mark.parametrize("fault,rejection", [
+    (None, None), ("reclaimable-low", "minimum tree budget"),
+    ("disk-low", "minimum tree budget"), ("swap-pressure", "minimum tree budget"),
+])
+def test_ci_darwin_admission_retains_original_reserve_and_pressure_policy(
+    tmp_path, monkeypatch, fault, rejection,
+):
+    observation = {"platform": "darwin", "reclaimable_bytes": 4 * run.RSS,
+                   "disk_free_bytes": 4 * run.RSS, "swap_total_bytes": 0,
+                   "swap_used_bytes": 0, "swap_free_bytes": 0}
+    if fault == "reclaimable-low":
+        observation["reclaimable_bytes"] = run.RSS
+    elif fault == "disk-low":
+        observation["disk_free_bytes"] = run.RSS
+    elif fault == "swap-pressure":
+        observation.update(reclaimable_bytes=2 * run.RSS, swap_total_bytes=2 * run.RSS,
+                           swap_used_bytes=3 * run.RSS // 2, swap_free_bytes=run.RSS // 2)
+    monkeypatch.setattr(guard.sys, "platform", "darwin")
+    monkeypatch.setattr(guard, "_darwin_resource_observation", lambda: observation)
+    receipt = _ci_admission_without_launch(tmp_path, monkeypatch, rejection=rejection)
+    assert receipt["memory_budget_selection"]["observation"] == observation
+    if fault is None:
+        assert receipt["resource_preflight"]["reserve_bytes"] == 536870912
+        assert receipt["resource_preflight"]["required_reclaimable_and_disk_free_bytes"] == 3 * run.RSS // 2
 
 
 def test_missing_rust_target_is_unrun_and_receipt_is_not_a_source_token(tmp_path, monkeypatch):
@@ -171,7 +283,11 @@ def test_one_validation_entrypoint_retains_release_separation_and_platform_guard
     assert "github.event_name == 'release'" in release and "id-token: write" in release
     assert "  push:" not in release and "  pull_request:" not in release
     assert "timeout-minutes: 15" in workflow
-    assert "--timeout 90 --max-tree-rss-bytes 1073741824" in workflow
+    platform = workflow.split('\n  cpp17:\n', 1)[1]
+    assert platform.count("--timeout 90 --auto-tree-rss-ceiling-bytes 1073741824 --min-tree-rss-bytes 1073741824") == 4
+    assert platform.count("--darwin-preflight-reserve-bytes 536870912") == 4
+    assert platform.count("--performance-lock --process-rss-history") == 4
+    assert "--max-tree-rss-bytes" not in platform
 
 
 def test_planner_dependency_does_not_turn_one_producer_into_another_gate():

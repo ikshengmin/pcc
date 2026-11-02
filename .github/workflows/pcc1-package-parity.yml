@@ -1807,7 +1807,8 @@ jobs:
         shell: bash
         run: |
           uv run --offline --no-sync python scripts/run_process_tree_sample.py \
-            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --timeout 90 --auto-tree-rss-ceiling-bytes 1073741824 --min-tree-rss-bytes 1073741824 \
+            --performance-lock --process-rss-history \
             --darwin-preflight-reserve-bytes 536870912 \
             --result "$CPP17_OUT/ordinary.json" --samples "$CPP17_OUT/ordinary.samples.jsonl" \
             --stdout "$CPP17_OUT/ordinary.stdout" --stderr "$CPP17_OUT/ordinary.stderr" -- \
@@ -1822,7 +1823,8 @@ jobs:
         shell: bash
         run: |
           uv run --offline --no-sync python scripts/run_process_tree_sample.py \
-            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --timeout 90 --auto-tree-rss-ceiling-bytes 1073741824 --min-tree-rss-bytes 1073741824 \
+            --performance-lock --process-rss-history \
             --darwin-preflight-reserve-bytes 536870912 \
             --result "$CPP17_OUT/cross.json" --samples "$CPP17_OUT/cross.samples.jsonl" \
             --stdout "$CPP17_OUT/cross.stdout" --stderr "$CPP17_OUT/cross.stderr" -- \
@@ -1833,7 +1835,8 @@ jobs:
         shell: bash
         run: |
           uv run --offline --no-sync python scripts/run_process_tree_sample.py \
-            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --timeout 90 --auto-tree-rss-ceiling-bytes 1073741824 --min-tree-rss-bytes 1073741824 \
+            --performance-lock --process-rss-history \
             --darwin-preflight-reserve-bytes 536870912 \
             --result "$CPP17_OUT/native.json" --samples "$CPP17_OUT/native.samples.jsonl" \
             --stdout "$CPP17_OUT/native.stdout" --stderr "$CPP17_OUT/native.stderr" -- \
@@ -1844,7 +1847,8 @@ jobs:
         shell: bash
         run: |
           uv run --offline --no-sync python scripts/run_process_tree_sample.py \
-            --timeout 90 --max-tree-rss-bytes 1073741824 --performance-lock --process-rss-history \
+            --timeout 90 --auto-tree-rss-ceiling-bytes 1073741824 --min-tree-rss-bytes 1073741824 \
+            --performance-lock --process-rss-history \
             --darwin-preflight-reserve-bytes 536870912 \
             --result "$CPP17_OUT/reference.json" --samples "$CPP17_OUT/reference.samples.jsonl" \
             --stdout "$CPP17_OUT/reference.stdout" --stderr "$CPP17_OUT/reference.stderr" -- \
