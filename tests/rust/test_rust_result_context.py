@@ -114,6 +114,7 @@ def test_unchanged_result_context_originals_match_native_rustc(tmp_path, monkeyp
     reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 def test_reference_context_cross_object_requires_matching_target_check(tmp_path, monkeypatch):
     from tests.rust.test_rust_targets import test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite

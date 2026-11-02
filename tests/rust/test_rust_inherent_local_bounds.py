@@ -85,6 +85,7 @@ def test_inherent_local_originals_cannot_use_only_the_boolean(name, monkeypatch)
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES)
 def test_exact_former_method_controls_are_actual_checked_positives(name, text, tmp_path, monkeypatch):
@@ -92,6 +93,7 @@ def test_exact_former_method_controls_are_actual_checked_positives(name, text, t
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_check_precedes_owned_inherent_local_lowering(name, tmp_path, monkeypatch):
@@ -142,6 +144,7 @@ def test_remaining_conditional_and_trait_contract_domains_are_explicit(name, tex
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_actual_valid_unsupported_forms_are_not_rust_rejections(name, text, message, tmp_path):
@@ -162,6 +165,7 @@ def test_actual_native_inherent_local_programs_match_rustc(tmp_path, monkeypatch
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_method_local_originals(tmp_path, monkeypatch):

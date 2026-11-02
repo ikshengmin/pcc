@@ -61,6 +61,7 @@ def test_target_entry_emits_real_arm64_macho_symbols_and_branch_relocations(trip
     assert text["size"] > 0
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize("name", ["control", "values", "short_circuit", "integer_rules", "grouping", "high_bits"])
 def test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite(name, monkeypatch, tmp_path=None):
     from pcc.backend import macho_spec
@@ -116,6 +117,7 @@ def test_target_selection_is_not_stale_between_modules():
     assert parse_relocatable(last.emit_object()).machine == EM_X86_64
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith("linux") and platform.machine() in {"x86_64", "AMD64"} else "requires Linux x86-64 owned execution")
 def test_public_object_route_links_and_executes_full_width_linux_result(tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable

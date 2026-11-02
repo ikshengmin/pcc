@@ -127,6 +127,7 @@ def test_complete_pinned_core_array_remains_an_explicit_upstream_frontier():
     assert path.read_bytes() == original
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 def test_array_index_alias_invalidity_is_owned_by_actual_external_checker(tmp_path, monkeypatch):
     from pcc.frontends.rust import RustExternalCheckError, compile_rust_checked

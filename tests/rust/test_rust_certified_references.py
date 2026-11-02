@@ -59,6 +59,7 @@ def certify(path, directory):
     return checked
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_external_check_removes_partial_owned_loan_barrier(name, tmp_path, monkeypatch):
@@ -73,6 +74,7 @@ def test_actual_external_check_removes_partial_owned_loan_barrier(name, tmp_path
     assert result.emit_object().startswith(b'\x7fELF')
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 def test_successful_record_is_bound_to_exact_source_options_and_tool_metadata(tmp_path, monkeypatch):
     path = Path(__file__).with_name('programs') / 'certified_mut_scalar.rs'
@@ -108,6 +110,7 @@ INVALID = [
 ]
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 @pytest.mark.parametrize('source,code', INVALID)
 def test_borrow_invalid_original_is_rejected_in_external_phase(source, code, tmp_path, monkeypatch):
@@ -167,6 +170,7 @@ def test_forged_provenance_record_is_not_an_admission_token(monkeypatch):
         CheckedRustSource(source, fake)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 def test_supported_transition_entry_checks_then_compiles_and_rejects_stale_evidence(tmp_path):
     source = 'pub fn answer()->u64{let mut n=41;let p=&mut n;*p+=1;n}'
@@ -177,6 +181,7 @@ def test_supported_transition_entry_checks_then_compiles_and_rejects_stale_evide
         check_rust_source(source, toolchain=toolchain(), evidence_directory=tmp_path / 'fresh')
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 def test_external_adapter_requires_pinned_direct_tool_before_execution(tmp_path, monkeypatch):
     from pcc.frontends.rust import external_check
     monkeypatch.setattr(external_check.subprocess, 'run', lambda *a, **k: pytest.fail('unverified tool executed'))

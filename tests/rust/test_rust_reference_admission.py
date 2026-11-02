@@ -69,6 +69,7 @@ def test_value_bitwise_and_multiplication_are_not_reference_token_heuristics():
     assert not result.externally_checked and result.emit_object().startswith(b'\x7fELF')
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'actual audited rustc certification required; no attestation fallback')
 @pytest.mark.parametrize('name', LEGACY_REFERENCE_PROGRAMS)
 def test_checked_legacy_readonly_originals_bypass_partial_move_admission(name,tmp_path,monkeypatch):
@@ -82,6 +83,7 @@ def test_checked_legacy_readonly_originals_bypass_partial_move_admission(name,tm
     assert path.read_bytes()==original
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'actual audited rustc certification required')
 def test_actual_checker_rejects_unchanged_noncopy_move_before_reference_lowering(tmp_path,monkeypatch):
     source='struct R{x:u64} fn read(p:&R)->u64{p.x} fn f(){let r=R{x:1};let moved=r;read(&r);}'
@@ -104,6 +106,7 @@ def test_semantic_reference_synthesis_cannot_bypass_the_second_guard(monkeypatch
         compile_rust('fn f()->u64{1}',experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'actual audited rustc certification required')
 def test_actual_minted_token_cannot_change_target_or_overflow_options(tmp_path,monkeypatch):
     path=Path(__file__).with_name('programs')/'shared_scalar.rs';source=path.read_text()

@@ -100,6 +100,7 @@ def test_impl_originals_keep_genuine_source_certification(name, monkeypatch):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES + (
     ('empty-local', 'trait A{}struct H<T>{x:T}impl<T:A>H<T>{}'),
@@ -110,6 +111,7 @@ def test_actual_checked_empty_and_former_impl_controls_are_positive(name, text, 
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_same_input_impl_check_precedes_owned_phase(name, tmp_path, monkeypatch):
@@ -159,6 +161,7 @@ def test_remaining_impl_and_coherence_capabilities_are_explicit(name, text, mess
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_actual_valid_unsupported_impl_shapes_are_separate(name, text, message, tmp_path):
@@ -179,6 +182,7 @@ def test_actual_native_inherent_impl_originals_match_rustc(tmp_path, monkeypatch
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_inherent_impl_originals(tmp_path, monkeypatch):

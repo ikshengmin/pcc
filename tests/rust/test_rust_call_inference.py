@@ -84,17 +84,20 @@ def test_invalid_or_unimplemented_inference_fails_before_ir(source,message,monke
         else: compile_source(source)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine()in{'x86_64','AMD64'}else'requires owned Linux execution')
 @pytest.mark.parametrize('name',[pytest.param(n,marks=pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())) if n=='inferred_shared' else n for n in PROGRAMS])
 def test_original_inferred_call_program_full_width_owned_execution(name,tmp_path,monkeypatch):
     _native(name,tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize('name',[pytest.param(n,marks=pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())) if n=='inferred_shared' else n for n in PROGRAMS])
 def test_original_inferred_call_program_arm64_macho_cross_only(name,monkeypatch,tmp_path):
     _cross(name,monkeypatch,tmp_path)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc')else'development rustc unavailable')
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_inferred_call_program_rustc_typechecks(name,tmp_path):

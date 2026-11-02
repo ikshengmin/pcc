@@ -104,6 +104,7 @@ def test_owner_where_originals_cannot_replace_certification_with_a_boolean(name,
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES)
 def test_exact_former_owner_capability_controls_are_checked_positives(name, text, tmp_path, monkeypatch):
@@ -111,6 +112,7 @@ def test_exact_former_owner_capability_controls_are_checked_positives(name, text
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_same_input_owner_check_precedes_owned_object_phase(name, tmp_path, monkeypatch):
@@ -159,6 +161,7 @@ def test_unimplemented_owner_domains_remain_explicit(name, text, message):
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_actual_valid_unsupported_owner_domains_are_separate(name, text, message, tmp_path):
@@ -185,6 +188,7 @@ def test_actual_native_owner_where_originals_match_rustc(tmp_path, monkeypatch):
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_owner_obligations(tmp_path, monkeypatch):

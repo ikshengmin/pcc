@@ -105,6 +105,7 @@ def test_unused_value_only_trait_signature_alone_requires_genuine_marker_context
         compile_rust('trait T{fn unused<U:Copy>(x:U)->U;}', experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('text', PRIOR_CAPABILITIES)
 def test_exact_previous_trait_capability_original_has_checked_positive(text, tmp_path, monkeypatch):
@@ -123,6 +124,7 @@ def test_exact_previous_trait_capability_original_has_checked_positive(text, tmp
     assert (tmp_path / 'check/original.rs').read_text() == text
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_trait_marker_check_precedes_owned_object_phase(name, tmp_path, monkeypatch):
@@ -178,6 +180,7 @@ def test_old_local_signature_controls_need_actual_token_before_sema(name, text, 
         compile_rust(text, experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,trait,bound', PRIOR_LOCAL_CAPABILITIES)
 def test_exact_old_local_signature_controls_are_actual_checked_positives(name, text, trait, bound, tmp_path, monkeypatch):
@@ -202,6 +205,7 @@ def test_excluded_trait_contexts_fail_in_analysis_without_lowering(name, text, m
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_actual_valid_excluded_contexts_are_capability_gaps_not_invalid_rust(name, text, message, tmp_path, monkeypatch):
@@ -224,6 +228,7 @@ def test_actual_native_trait_marker_originals_match_rustc(tmp_path, monkeypatch)
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_the_exact_invalid_trait_marker_originals(tmp_path, monkeypatch):

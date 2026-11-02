@@ -150,6 +150,7 @@ def test_original_core_context_analysis_stops_at_next_unknown_attribute_without_
     assert path.read_bytes()==original
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_stable_reference_rejects_internal_attributes_without_bootstrap(tmp_path,monkeypatch):

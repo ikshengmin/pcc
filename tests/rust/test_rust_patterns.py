@@ -109,6 +109,7 @@ def test_whole_official_sources_remain_explicit_frontiers(name,sha,message):
 PROGRAMS = ["enum_match", "tuple_match", "match_effects", "enum_wide", "match_aggregate_result"]
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith("linux") and platform.machine() in {"x86_64","AMD64"} else "requires Linux x86-64 owned execution")
 @pytest.mark.parametrize("name",PROGRAMS)
 def test_original_match_fixture_full_width_owned_execution(name,tmp_path,monkeypatch):
@@ -152,11 +153,13 @@ _start:
     assert path.read_bytes()==original
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize("name",PROGRAMS)
 def test_match_original_source_cross_emits_darwin(name,monkeypatch):
     _cross(name,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 @pytest.mark.parametrize("name",PROGRAMS)
 def test_development_only_rustc_checks_match_sources(name,tmp_path):

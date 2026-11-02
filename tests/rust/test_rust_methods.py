@@ -106,17 +106,20 @@ def test_methods_use_actual_shared_function_worklist_and_distinct_declaration_id
     assert first.ir_text == second.ir_text and first.emit_object() == second.emit_object()
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution')
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_original_inherent_program_has_full_width_owned_native_result(name, tmp_path, monkeypatch):
     _native(name, tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_original_inherent_program_cross_emits_arm64_macho(name, monkeypatch):
     _cross(name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_development_only_rustc_checks_original_inherent_source(name, tmp_path):

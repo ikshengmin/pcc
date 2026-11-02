@@ -148,6 +148,7 @@ REFERENCE_INVALID = (
 )
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_trait_originals_before_owned_ir(tmp_path, monkeypatch):
@@ -164,6 +165,7 @@ def test_actual_rustc_rejects_exact_invalid_trait_originals_before_owned_ir(tmp_
         assert not (directory / 'checked.rmeta').exists()
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 def test_reference_trait_cross_object_requires_actual_target_check(name, tmp_path, monkeypatch):

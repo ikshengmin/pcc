@@ -64,6 +64,7 @@ def test_omitted_semicolon_requires_unit_but_explicit_discard_does_not():
     assert 'define' in compile_rust(explicit, experimental_rustc_checked=True).ir_text
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 @pytest.mark.parametrize('source,kind', VALUE_FORMS)
 def test_value_forms_have_actual_same_input_external_check_and_owned_object(source, kind, tmp_path):

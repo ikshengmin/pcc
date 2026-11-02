@@ -48,6 +48,7 @@ def test_wildcards_independent_tuple_fields_and_whole_reinitialization_remain_va
     compile_source(source)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 @pytest.mark.parametrize('case', ['original', 'former-positive'])
 def test_development_only_rustc_rejects_same_retained_enum_rematch(case, tmp_path):

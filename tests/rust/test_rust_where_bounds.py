@@ -115,6 +115,7 @@ def test_empty_bounds_and_trailing_separators_are_structural_rust_syntax(text):
     assert function.body is not None
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('text', SYNTAX_POSITIVES)
 def test_actual_rustc_accepts_the_same_empty_and_trailing_bound_forms(text, tmp_path, monkeypatch):
@@ -137,6 +138,7 @@ def test_unused_local_where_bound_needs_token_before_scheduling(monkeypatch):
         compile_rust(PRIOR_CAPABILITIES[2][1], experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES)
 def test_exact_prior_where_controls_are_actual_checked_positive(name, text, tmp_path, monkeypatch):
@@ -144,6 +146,7 @@ def test_exact_prior_where_controls_are_actual_checked_positive(name, text, tmp_
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_certification_precedes_owned_where_lowering(name, tmp_path, monkeypatch):
@@ -203,6 +206,7 @@ def test_unimplemented_predicate_domains_remain_explicit(name, text, message):
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_valid_unsupported_predicates_are_not_rust_rejection_claims(name, text, message, tmp_path):
@@ -230,6 +234,7 @@ def test_actual_native_where_programs_match_rustc(tmp_path, monkeypatch):
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_where_originals(tmp_path, monkeypatch):

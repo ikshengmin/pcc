@@ -122,6 +122,7 @@ def test_structured_doc_prose_does_not_bypass_real_reference_admission():
         compile_source('#[doc(hidden)]fn f(x:&u64)->u64{*x}')
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_ordinary_stability_and_literal_suffix_controls(tmp_path,monkeypatch):

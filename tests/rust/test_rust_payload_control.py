@@ -11,15 +11,18 @@ from tests.rust.test_rust_frontend import test_development_only_rustc_checks_the
 from tests.rust.test_rust_targets import test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite as _cross
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution')
 def test_constructor_return_skips_later_operands_in_complete_original_program(tmp_path,monkeypatch):
     _native('payload_early_return',tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 def test_constructor_return_original_program_cross_emits_macho(monkeypatch):
     _cross('payload_early_return',monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 def test_development_only_rustc_checks_original_constructor_return_program(tmp_path):
     _rustc('payload_early_return',tmp_path)

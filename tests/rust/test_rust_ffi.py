@@ -94,6 +94,7 @@ def test_ffi_capability_and_unsafe_errors_fail_before_object_emission(source, me
         else: compile_rust(source, **ATTEST)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize("source", [
     'extern "C" {fn f();} fn g(){unsafe{f();}}',
     'unsafe extern "C" {pub fn f();} fn g(){unsafe{f();}}',
@@ -107,6 +108,7 @@ def test_ffi_valid_source_shapes(source, tmp_path):
     assert "define" in compile_rust(source, **ATTEST, **({'rustc_check':check} if check is not None else {})).ir_text
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or NATIVE)
 def test_original_meson_rust_and_c_objects_link_and_execute_full_width(tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
@@ -155,6 +157,7 @@ _start:
     assert originals == {name: original(UPSTREAM / name) for name in HASHES}
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 def test_original_meson_sources_cross_emit_macho_with_true_external_relocations(monkeypatch,tmp_path):
     from pcc.backend import macho_spec
@@ -174,6 +177,7 @@ def test_original_meson_sources_cross_emit_macho_with_true_external_relocations(
             assert symbol in {item["name"] for item in obj.symbols()}
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or NATIVE)
 def test_shared_repr_c_reference_layout_copy_and_rebinding_execute_full_width(tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
@@ -217,6 +221,7 @@ _start:
     assert source.read_bytes() == original_bytes
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 def test_shared_reference_program_cross_emits_arm64_macho(monkeypatch,tmp_path):
     from pcc.backend import macho_spec
@@ -232,6 +237,7 @@ def test_shared_reference_program_cross_emits_arm64_macho(monkeypatch,tmp_path):
     assert source.read_bytes() == original_bytes
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which("rustc") else "development-only rustc reference is not installed")
 @pytest.mark.parametrize("relative", ["upstream/meson_adder.rs", "programs/references.rs"])
 def test_development_only_rustc_checks_unchanged_ffi_source(relative, tmp_path):

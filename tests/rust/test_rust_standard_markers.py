@@ -136,6 +136,7 @@ def test_excluded_contexts_and_local_names_never_activate_builtin_contract(name,
         compile_rust(text, experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_same_input_marker_check_precedes_owned_phase(name,tmp_path,monkeypatch):
@@ -160,6 +161,7 @@ def test_actual_same_input_marker_check_precedes_owned_phase(name,tmp_path,monke
     assert result.externally_checked and not result.borrow_checked_by_pcc
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_valid_local_trait_and_dst_sources_remain_capability_gaps_not_rust_rejections(tmp_path):
     for name,text,message in CAPABILITY:
@@ -191,6 +193,7 @@ def test_actual_native_marker_originals_match_rustc(tmp_path,monkeypatch):
     reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_bound_originals(tmp_path,monkeypatch):

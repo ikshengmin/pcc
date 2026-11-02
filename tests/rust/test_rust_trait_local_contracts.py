@@ -98,6 +98,7 @@ def test_trait_local_originals_cannot_use_only_the_opt_in_boolean(name, monkeypa
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES + DECLARATION_CONTROLS)
 def test_actual_checked_required_trait_controls_are_positive(name, text, tmp_path, monkeypatch):
@@ -105,6 +106,7 @@ def test_actual_checked_required_trait_controls_are_positive(name, text, tmp_pat
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_same_input_check_precedes_owned_trait_contract_lowering(name, tmp_path, monkeypatch):
@@ -154,6 +156,7 @@ def test_unimplemented_trait_contract_contexts_stay_explicit(name, text, message
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_actual_valid_unsupported_contract_contexts_are_separate(name, text, message, tmp_path):
@@ -174,6 +177,7 @@ def test_actual_native_trait_local_contract_originals_match_rustc(tmp_path, monk
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_trait_contracts(tmp_path, monkeypatch):

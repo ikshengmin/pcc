@@ -144,6 +144,7 @@ def test_where_originals_cannot_use_opt_in_boolean_instead_of_real_token(name, m
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES + (
     ('empty-bounds', 'trait Ops{fn f<U>(u:U)->U where U:;}struct H{x:u64}impl Ops for H{fn f<V>(v:V)->V{v}}'),
@@ -155,6 +156,7 @@ def test_actual_checked_former_capabilities_and_where_controls(name, text, tmp_p
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('inline,where', SIZED_FORMS)
 def test_actual_checked_sized_predicate_orderings(inline, where, tmp_path, monkeypatch):
@@ -162,6 +164,7 @@ def test_actual_checked_sized_predicate_orderings(inline, where, tmp_path, monke
     checked_owned(sized_contract(inline, where), tmp_path / 'check', monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_same_input_check_precedes_owned_where_lowering(name, tmp_path, monkeypatch):
@@ -218,6 +221,7 @@ def test_other_trait_predicate_contexts_remain_explicit(name, text, message):
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_actual_valid_unsupported_trait_contexts_are_not_invalid_oracles(name, text, message, tmp_path):
@@ -238,6 +242,7 @@ def test_actual_native_where_contract_originals_match_rustc(tmp_path, monkeypatc
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_where_contract_negatives(tmp_path, monkeypatch):

@@ -164,6 +164,7 @@ def test_actual_native_originals_match_unchanged_rustc(tmp_path,monkeypatch):
     reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_genuine_rustc_rejects_the_same_invalid_obligations(tmp_path,monkeypatch):

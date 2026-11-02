@@ -145,6 +145,7 @@ def test_valid_shapes_lower(source):
     assert "define" in compile_source(source).ir_text
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith("linux") and platform.machine() in {"x86_64", "AMD64"} else "requires Linux x86-64 owned execution")
 @pytest.mark.parametrize("name, width, expected", [
     ("control", 4, 42),
@@ -195,6 +196,7 @@ _start:
     assert (PROGRAMS / (name + ".rs")).read_bytes() == original
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which("rustc") else "development-only rustc reference is not installed")
 @pytest.mark.parametrize("name", ["control", "values", "short_circuit", "integer_rules", "grouping", "high_bits"])
 def test_development_only_rustc_checks_the_same_source(name, tmp_path):

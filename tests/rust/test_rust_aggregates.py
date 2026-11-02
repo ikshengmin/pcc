@@ -137,6 +137,7 @@ def test_parenthesized_struct_in_unary_condition_is_accepted(keyword, condition)
     assert "define" in compile_source("struct P{x:bool} struct N{x:i32} fn f(){" + keyword + " " + condition + " {}}").ir_text
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_upstream_meson_adder_is_unchanged_and_lowers_declared_foreign_calls(tmp_path, monkeypatch):
     path = Path(__file__).parent / "upstream" / "meson_adder.rs"
@@ -155,6 +156,7 @@ def test_upstream_meson_adder_is_unchanged_and_lowers_declared_foreign_calls(tmp
     assert result.symbols["adder_add_r"] == "adder_add_r"
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith("linux") and platform.machine() in {"x86_64", "AMD64"} else "requires Linux x86-64 owned execution")
 @pytest.mark.parametrize("name, expected", [
     ("aggregates", 42),
@@ -170,12 +172,14 @@ def test_aggregate_program_runs_owned_native_full_width(name, expected, tmp_path
     _run_owned(name, 8, expected, tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which("rustc") else "development-only rustc reference is not installed")
 @pytest.mark.parametrize("name", ["aggregates", "partial_moves", "loop_moves", "copy_tuples", "aggregate_wide", "unit_fields", "aggregate_branches", "zero_sized_values"])
 def test_development_only_rustc_aggregate_reference(name, tmp_path):
     _rustc_check(name, tmp_path)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize("name", ["aggregates", "partial_moves", "loop_moves", "copy_tuples", "aggregate_wide", "unit_fields", "aggregate_branches", "zero_sized_values"])
 def test_original_aggregate_program_cross_emits_arm64_macho(name, monkeypatch):
     # Cross-only evidence: the shared owned backend emits actual ARM64 Mach-O,

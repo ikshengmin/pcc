@@ -130,6 +130,7 @@ def test_unimplemented_module_context_forms_fail_explicitly(text, message, monke
         compile_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_unused_nested_reference_signature_is_checked_before_owned_lowering(tmp_path, monkeypatch):
     import subprocess
@@ -155,6 +156,7 @@ def test_unchanged_module_originals_match_actual_native_rustc(tmp_path, monkeypa
     reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_the_exact_scoped_invalid_originals(tmp_path, monkeypatch):
@@ -221,6 +223,7 @@ def test_unused_abstract_body_still_rejects_a_lexically_private_type():
         analyze({'src/lib.rs': text})
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_accepts_exact_private_caller_original_before_owned_compile(tmp_path, monkeypatch):
     import subprocess

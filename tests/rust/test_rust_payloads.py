@@ -115,17 +115,20 @@ def test_complete_official_generic_sources_still_fail_at_real_frontier(name,sha)
 PROGRAMS=['enum_payload','payload_tuple_partial_moves','payload_nested','payload_bindings','payload_effects','payload_value_snapshot']
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution')
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_payload_program_full_width_native(name,tmp_path,monkeypatch):
     _native(name,tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_payload_program_cross_macho(name,monkeypatch):
     _cross(name,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_development_only_rustc_checks_original_payload_program(name,tmp_path):

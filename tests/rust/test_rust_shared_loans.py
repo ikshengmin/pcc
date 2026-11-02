@@ -94,18 +94,21 @@ def test_internal_readonly_reference_model_without_ir_or_admission(source):
     analyze_source(source)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite() or (None if sys.platform.startswith('linux') and platform.machine() in {'x86_64','AMD64'} else 'requires Linux x86-64 owned execution'))
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_shared_loan_program_full_width_owned_execution(name,tmp_path,monkeypatch):
     _native(name,tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_shared_loan_program_arm64_macho_cross_only(name,monkeypatch,tmp_path):
     _cross(name,monkeypatch,tmp_path)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development rustc unavailable')
 @pytest.mark.parametrize('name',PROGRAMS)
 def test_original_shared_loan_program_rustc_typechecks(name,tmp_path):
@@ -121,6 +124,7 @@ def test_original_shared_loan_programs_match_native_rustc(tmp_path,monkeypatch):
     reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development rustc unavailable')
 @pytest.mark.parametrize('body',INVALID_BODIES)
 def test_original_conflicting_loans_are_rejected_by_rustc(body,tmp_path):
@@ -159,6 +163,7 @@ def test_internal_model_parameter_rebinding_conservative_boundary_is_not_public_
         analyze_source(source)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development rustc unavailable')
 def test_exact_original_parameter_rebinding_is_rejected_by_rustc(tmp_path):
     original=INVALID_PARAMETER_REBINDING.read_bytes()

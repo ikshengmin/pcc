@@ -62,6 +62,7 @@ def test_public_weaker_contract_still_needs_actual_token(name, monkeypatch):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES)
 def test_exact_former_weaker_controls_are_checked_positive(name, text, tmp_path, monkeypatch):
@@ -80,6 +81,7 @@ def test_exact_former_weaker_controls_are_checked_positive(name, text, tmp_path,
     assert (tmp_path / 'check/original.rs').read_text() == text
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_weaker_marker_check_precedes_owned_object_phase(name, tmp_path, monkeypatch):
@@ -119,6 +121,7 @@ def test_actual_native_weaker_contract_originals_match_rustc(tmp_path, monkeypat
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_weaker_contract_negative_originals(tmp_path, monkeypatch):

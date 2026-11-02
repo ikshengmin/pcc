@@ -55,6 +55,7 @@ def test_method_bounds_do_not_turn_public_flag_into_admission(name,monkeypatch):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_exact_previous_capability_original_now_has_actual_checked_positive(tmp_path,monkeypatch):
     checked = certify_source(PRIOR_CAPABILITY, tmp_path / 'check')
@@ -66,6 +67,7 @@ def test_exact_previous_capability_original_now_has_actual_checked_positive(tmp_
     assert (tmp_path / 'check/original.rs').read_text() == PRIOR_CAPABILITY
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_method_marker_certification_precedes_owned_object_phase(name,tmp_path,monkeypatch):
@@ -105,6 +107,7 @@ CAPABILITY = (
 )
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_valid_excluded_method_contexts_are_actual_positive_owned_gaps(name,text,message,tmp_path,monkeypatch):
@@ -127,6 +130,7 @@ def test_actual_native_method_marker_originals_match_rustc(tmp_path,monkeypatch)
     shared.test_actual_native_marker_originals_match_rustc(tmp_path,monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_exact_invalid_method_bound_originals(tmp_path,monkeypatch):

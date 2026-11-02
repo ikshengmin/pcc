@@ -144,6 +144,7 @@ def test_unchanged_method_generic_originals_match_native_rustc(tmp_path, monkeyp
     reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_checker_rejects_original_generic_method_move_before_ir(tmp_path, monkeypatch):
     from pcc.frontends.rust import RustExternalCheckError, compile_rust_checked
@@ -157,6 +158,7 @@ def test_actual_checker_rejects_original_generic_method_move_before_ir(tmp_path,
     assert not (tmp_path / 'check/checked.rmeta').exists()
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_reference_method_cross_object_requires_matching_target_check(name, tmp_path, monkeypatch):
@@ -164,6 +166,7 @@ def test_reference_method_cross_object_requires_matching_target_check(name, tmp_
     test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite(name, monkeypatch, tmp_path=tmp_path)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_original_u16_result_context_is_valid_rust_but_owned_capability_gap(tmp_path, monkeypatch):
     # Preserve the failed original exactly. u16 is valid Rust, not an invalid

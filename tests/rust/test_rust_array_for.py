@@ -113,6 +113,7 @@ def test_legacy_attestation_does_not_authorize_new_iterator_ownership(name, monk
         compile_rust(source, experimental_rustc_checked=True)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 @pytest.mark.parametrize('source,code', [
     ('struct R{n:u64}fn f(){let a=[R{n:1}];for _ in a{}let b=a;}', 'E0382'),
@@ -134,6 +135,7 @@ def test_original_iterator_ownership_rejections_belong_to_actual_checker(source,
     assert not (tmp_path / 'certifier/checked.rmeta').exists()
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if os.environ.get('PCC_RUSTC_INSTALL_RECEIPT') else 'explicit audited rustc installation receipt required')
 @pytest.mark.parametrize('source,message', [
     ('fn f<T>(a:[T;2]){for _ in a{}}', 'unknown generic element destruction'),

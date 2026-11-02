@@ -112,12 +112,14 @@ def checked_owned(text, directory, monkeypatch):
     return result
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES)
 def test_exact_former_local_bound_controls_are_checked_positives(name, text, tmp_path, monkeypatch):
     checked_owned(text, tmp_path / name, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_actual_same_input_local_bound_check_precedes_owned_object_phase(name, tmp_path, monkeypatch):
@@ -168,6 +170,7 @@ def test_remaining_solver_and_layout_capabilities_are_explicit(name, text, messa
         analyze_source(text)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text,message', CAPABILITY)
 def test_valid_unsupported_bound_forms_are_not_rustc_negative_claims(name, text, message, tmp_path):
@@ -188,6 +191,7 @@ def test_actual_native_local_bound_originals_match_rustc(tmp_path, monkeypatch):
     shared.test_actual_native_marker_originals_match_rustc(tmp_path, monkeypatch)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_actual_rustc_rejects_the_exact_invalid_local_bound_originals(tmp_path, monkeypatch):
