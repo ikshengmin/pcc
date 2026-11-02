@@ -846,6 +846,8 @@ int64_t pcc_thread_stack_high(void);
 int64_t pcc_thread_blocking_enter(void *frame);
 void    pcc_thread_blocking_leave(int64_t entered);
 int64_t pcc_thread_collect_stopped_frames(void *frames, int64_t capacity);
+void pcc_thread_enable_conservative_roots(void);
+int64_t pcc_thread_visit_conservative_words(void *visitor, void *context);
 int64_t pcc_current_thread_id(void);
 void   *pcc_current_native_thread_token(void);
 int64_t pcc_refcount_strategy(void);

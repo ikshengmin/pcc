@@ -19,6 +19,8 @@ from pcc.unsafe import (
     atomic_store_i32,
     atomic_store_i64,
     call_ptr1,
+    call_void_ptr2,
+    capture_gc_registers,
     define_global_i32,
     define_global_i64,
     define_global_null_ptr_array,
@@ -36,6 +38,7 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     malloc,
+    memcpy,
     null,
     ptr_add,
     ptr_is_null,
@@ -94,6 +97,15 @@ define_global_i64("pcc_exited_thread_count_py", 0)
 #      registered root and is reloaded after the poll); 0 in runtime code.
 define_global_ptr_null("pcc_thread_records_head_py")
 define_thread_local_ptr_null("pcc_tls_thread_record_py")
+# Enabled only by the tracing prototype before managed allocation. Snapshots
+# include raw runtime locals which precise application stack maps do not own.
+define_global_i32("pcc_thread_conservative_roots_enabled", 0)
+_THREAD_ROOT_DATA: int = 48
+_THREAD_ROOT_BYTES: int = 56
+_THREAD_ROOT_CAPACITY: int = 64
+_THREAD_ROOT_REGISTERS: int = 80
+_THREAD_ROOT_REGISTER_BYTES: int = 128
+_THREAD_RECORD_BYTES: int = 208
 
 # Only contended acquisitions use these cold structures. A context is keyed by
 # the actual lock-word address, not a hash bucket: unrelated lock critical
@@ -557,7 +569,7 @@ def _outermost_frame_pointer() -> int:
 
 def _thread_record_link(thread_id: int) -> None:
     # Caller holds the world lock and has just counted this thread live.
-    record = malloc(48)
+    record = malloc(_THREAD_RECORD_BYTES)
     if ptr_is_null(record):
         pcc_platform_abort()
         return
@@ -567,6 +579,9 @@ def _thread_record_link(thread_id: int) -> None:
     store_ptr(record, 24, null())
     store_i64(record, 32, _outermost_frame_pointer())
     store_i64(record, 40, 0)
+    store_ptr(record, _THREAD_ROOT_DATA, null())
+    store_i64(record, _THREAD_ROOT_BYTES, 0)
+    store_i64(record, _THREAD_ROOT_CAPACITY, 0)
     global_store_ptr("pcc_thread_records_head_py", record)
     global_store_ptr("pcc_tls_thread_record_py", record)
 
@@ -590,7 +605,71 @@ def _thread_record_unlink() -> None:
         else:
             previous = node
             node = load_ptr(node, 0)
+    free(load_ptr(record, _THREAD_ROOT_DATA))
     free(record)
+
+
+def _thread_snapshot_roots(record) -> None:
+    """Freeze machine words before publishing a parked or exited state.
+
+    A blocking-enter helper can return before the kernel wait. Its spill area
+    can then be overwritten, so retaining only its SP is insufficient. Copy
+    the words while the entire capture frame is live, together with GPRs that
+    have not been spilled. The world lock protects snapshot replacement.
+    """
+    low = capture_gc_registers(ptr_add(record, _THREAD_ROOT_REGISTERS))
+    high: int = load_i64(record, 32) + 16
+    size: int = high - ptr_to_int(low)
+    if (ptr_to_int(low) & 7) != 0 or size <= 0 or size > 1073741824:
+        pcc_platform_abort()
+        return
+    if size > load_i64(record, _THREAD_ROOT_CAPACITY):
+        data = malloc(size)
+        if ptr_is_null(data):
+            pcc_platform_abort()
+            return
+        free(load_ptr(record, _THREAD_ROOT_DATA))
+        store_ptr(record, _THREAD_ROOT_DATA, data)
+        store_i64(record, _THREAD_ROOT_CAPACITY, size)
+    memcpy(load_ptr(record, _THREAD_ROOT_DATA), low, size)
+    store_i64(record, _THREAD_ROOT_BYTES, size)
+
+
+@c_abi_export("pcc_thread_enable_conservative_roots")
+def pcc_thread_enable_conservative_roots() -> None:
+    """One-way startup admission; the collector freezes this before allocation."""
+    atomic_store_i32(global_addr("pcc_thread_conservative_roots_enabled"), 0, 1, "release")
+
+
+@c_abi_export("pcc_thread_visit_conservative_words")
+def pcc_thread_visit_conservative_words(visitor, context) -> int:
+    """Visit every mutator snapshot only while this thread owns the stopped world.
+
+    The callback receives an untrusted machine word, never a proven object.
+    It must resolve allocator/index membership before dereferencing anything.
+    Registration, exit and blocking-leave cannot alter the list during a stop.
+    """
+    if ptr_is_null(visitor) or pcc_thread_world_stop_epoch_held() < 0:
+        return -1
+    visited: int = 0
+    node = global_load_ptr("pcc_thread_records_head_py")
+    while ptr_is_null(node) == 0:
+        size: int = load_i64(node, _THREAD_ROOT_BYTES)
+        data = load_ptr(node, _THREAD_ROOT_DATA)
+        if size <= 0 or ptr_is_null(data):
+            return -1
+        offset: int = 0
+        while offset < _THREAD_ROOT_REGISTER_BYTES:
+            call_void_ptr2(visitor, load_ptr(node, _THREAD_ROOT_REGISTERS + offset), context)
+            offset = offset + 8
+            visited = visited + 1
+        offset = 0
+        while offset < size:
+            call_void_ptr2(visitor, load_ptr(data, offset), context)
+            offset = offset + 8
+            visited = visited + 1
+        node = load_ptr(node, 0)
+    return visited
 
 
 def _thread_record_mark(state: int, frame) -> None:
@@ -598,6 +677,10 @@ def _thread_record_mark(state: int, frame) -> None:
     record = global_load_ptr("pcc_tls_thread_record_py")
     if ptr_is_null(record):
         return
+    if state != 0 and atomic_load_i32(
+        global_addr("pcc_thread_conservative_roots_enabled"), 0, "acquire"
+    ) != 0:
+        _thread_snapshot_roots(record)
     store_i64(record, 16, state)
     store_ptr(record, 24, frame)
 
@@ -1388,6 +1471,10 @@ def pcc_stop_the_world() -> int:
         _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
         _thread_trace(18, epoch, depth, null())
         return 0
+    if atomic_load_i32(
+        global_addr("pcc_thread_conservative_roots_enabled"), 0, "acquire"
+    ) != 0:
+        _thread_snapshot_roots(global_load_ptr("pcc_tls_thread_record_py"))
     atomic_store_i32(
         global_addr("pcc_thread_world_stop_py"), 0, 1, "release"
     )
