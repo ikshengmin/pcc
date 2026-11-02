@@ -5,8 +5,9 @@ https://timsong-cpp.github.io/cppwp/n4659/class.dtor
 https://timsong-cpp.github.io/cppwp/n4659/stmt.jump
 https://timsong-cpp.github.io/cppwp/n4659/stmt.return
 
-No exception unwinding, deleting/base destructor, inline ODR, arrays or
-non-trivial subobject cleanup is claimed by these complete-object programs.
+No exception unwinding, deleting/base destructor, arrays or non-trivial
+subobject cleanup is claimed. The original out-of-class corpus remains intact;
+in-class ODR execution obligations live in test_cpp_inline_destructors.py.
 """
 import pytest
 
@@ -127,7 +128,6 @@ def test_destructor_invalid_rules_fail_before_owned_emission(owned_only, source,
 
 
 UNSUPPORTED_DESTRUCTORS = (
-    'struct S{~S(){}};',
     'struct S{virtual ~S();};',
     'struct S{~S()noexcept;};',
     'struct S{~S()=default;};',
@@ -160,3 +160,12 @@ def test_original_destructor_declaration_is_real_D1_prototype():
 def test_original_constructor_and_destructor_declarations_remain_positive():
     ast = CppParser().parse('struct S{S();~S();};')
     assert [item.name for item in ast.ext[1:]] == ['_ZN1SC1Ev', '_ZN1SD1Ev']
+
+
+def test_original_inline_destructor_definition_preserves_D1_and_odr():
+    # Exact formerly rejected valid input; execution lives in the inline corpus.
+    ast = CppParser().parse('struct S{~S(){}};')
+    assert ast.ext[1].name == '_ZN1SD1Ev'
+    assert ast.ext[1].definition_linkage == 'external'
+    assert ast.ext[2].decl.name == '_ZN1SD1Ev'
+    assert ast.ext[2].decl.definition_linkage == 'external_odr'

@@ -1,8 +1,9 @@
-"""Non-inline complete-object destructors with owned declaration/access rules.
+"""Complete-object destructors with owned declaration/access rules.
 
 N4659 [class.dtor]; Itanium ABI D1 complete-object destructor encoding. There
-is no D0 delete, D2 base destruction, virtual dispatch, inline/COMDAT or unwind
-claim. Scalar/pointer subobjects need no emitted destructor calls.
+is no D0 delete, D2 base destruction, virtual dispatch or unwind claim.
+In-class bodies use the existing completed-class external-ODR method owner;
+scalar/pointer subobjects need no emitted destructor calls.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -70,8 +71,9 @@ def parse_destructor(parser, definition=None):
         raise CppDiagnostic("cpp.destructor-cv", "destructors cannot have cv-qualifiers", parser._peek().coord)
     if parser._peek().value in ("noexcept", "throw"):
         raise CppDiagnostic("cpp.unsupported.exceptions", "destructor exception specifications and unwinding are not implemented", parser._peek().coord)
-    if not outside and parser._peek().value != ";":
-        raise CppDiagnostic("cpp.unsupported.inline-member-functions", "in-class/defaulted destructors require inline special-member emission", name.coord)
+    inline_definition = not outside and parser._peek().value == "{"
+    if not outside and not inline_definition and parser._peek().value != ";":
+        raise CppDiagnostic("cpp.unsupported.inline-member-functions", "defaulted/deleted destructors require special-member rules", name.coord)
     if outside and parser._peek().value != "{":
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class destructor requires a body", name.coord)
     previous = definition.destructor
@@ -104,17 +106,29 @@ def parse_destructor(parser, definition=None):
         parser._decl(this.c_name, this.dtype, name.coord)], name.coord), declaration.type, name.coord)
     if symbol.internal_linkage:
         declaration.storage = ["static"]
+    if inline_definition:
+        if owner.internal_linkage:
+            raise CppDiagnostic("cpp.unsupported.class-linkage",
+                                "in-class destructors of internal-linkage classes require distinct definition ownership", name.coord)
+        from pcc.frontends.cpp.inline_constructors import collect_body
+        from pcc.frontends.cpp.inline_methods import DeferredMethod
+        symbol.definition_linkage = "external_odr"
+        definition.inline_methods.append(DeferredMethod(
+            symbol, "void", parameter_scope, [], declaration, this,
+            collect_body(parser), name.coord,
+        ))
+        return declaration
     if not outside:
         parser._expect(";")
         return declaration
-    previous_member, previous_this, previous_return = parser.member_function, parser.this_symbol, parser.return_type
-    parser.scope = parameter_scope
-    parser.member_function, parser.this_symbol, parser.return_type = symbol, this, "void"
-    try:
-        body = parser._block(new_scope=False)
-    finally:
-        parser.scope = parent
-        parser.member_function, parser.this_symbol, parser.return_type = previous_member, previous_this, previous_return
+    return bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, name.coord)
+
+
+def bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
+    """Use the same member/return/lifetime context for both definition forms."""
+    function = parser._bind_function_body(
+        symbol, "void", parameter_scope, [], declaration, this, definition, coord,
+    )
     from pcc.frontends.cpp.constructors import call_free_body
-    symbol.closed_normal_body = call_free_body(body)
-    return c_ast.FuncDef(declaration, None, body, name.coord)
+    symbol.closed_normal_body = call_free_body(function.body)
+    return function
