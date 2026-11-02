@@ -36,6 +36,7 @@ from tests.cpp.test_cpp_inline_constructors import INLINE_PROGRAMS
 from tests.cpp.test_cpp_inline_methods import SINGLE_PROGRAMS as INLINE_METHOD_PROGRAMS
 from tests.cpp.test_cpp_anonymous_class_enums import SINGLE_PROGRAMS as ANONYMOUS_ENUM_PROGRAMS
 from tests.cpp.test_cpp_pointer_additive import CASES as POINTER_OFFSET_PROGRAMS
+from tests.cpp.test_cpp_default_arguments import CASES as DEFAULT_ARGUMENT_PROGRAMS
 
 
 CASES = tuple(
@@ -59,6 +60,19 @@ FRONTEND_CASES = (
     ("pointer-offset-formal-row-stride", dict(POINTER_OFFSET_PROGRAMS)["formal-row-stride"], 42),
 )
 CASES += FRONTEND_CASES
+
+# Reuse exact single-TU originals on both platform runners. The Linux-only
+# multi-TU/default-argument helper remains selected by the Linux whole suite.
+DEFAULT_ARGUMENT_CASES = tuple(
+    ('default-' + name, dict(DEFAULT_ARGUMENT_PROGRAMS)[name], 42)
+    for name in (
+        'declaration-bound-call-time-value',
+        'omitted-evaluated-once-per-call',
+        'class-complete-private-later-enum',
+        'receiver-before-default',
+    )
+)
+CASES += DEFAULT_ARGUMENT_CASES
 
 
 def _forbidden_process(*args, **kwargs):

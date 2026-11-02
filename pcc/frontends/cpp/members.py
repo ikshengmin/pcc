@@ -109,6 +109,7 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
         candidate = Symbol(method.name, "function", method.coord, dtype=method.dtype,
                            parameters=(object_pointer_type(method),) + method.parameters)
         candidate.member_origin = method
+        candidate.default_arguments = (None,) + tuple(getattr(method, "default_arguments", (None,) * len(method.parameters)))
         candidates.overloads.append(candidate)
     actuals = [object_expression] + arguments
     selected = resolve_overload(candidates, [arg.dtype for arg in actuals], parser.types,
@@ -117,6 +118,8 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     if not address_available:
         raise CppDiagnostic("cpp.unsupported.member-object-address",
                             "dot member calls require shared address-only aggregate lowering", coord)
+    from pcc.frontends.cpp.default_arguments import expand
+    arguments = expand(parser, selected, arguments, coord)
     this_type = object_pointer_type(selected)
     # This is compiler-created storage, not a source local declaration.
     # Its initializer and explicit arguments may themselves name this_argument;
@@ -157,6 +160,8 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     selected = resolve_overload(group, [arg.dtype for arg in arguments], parser.types,
                                 coord, [arg.null_pointer for arg in arguments])
     parser.scope.check_member_access(selected, coord)
+    from pcc.frontends.cpp.default_arguments import expand
+    arguments = expand(parser, selected, arguments, coord)
     converted = [parser._convert(arg, dtype, coord)
                  for arg, dtype in zip(arguments, selected.parameters)]
     node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)

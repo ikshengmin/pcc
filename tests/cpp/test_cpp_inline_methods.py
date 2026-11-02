@@ -126,7 +126,6 @@ def test_inline_method_original_artifacts_are_byte_stable(owned_only,name,units)
     ('struct S{int f(){static int n=0;return n;}};','cpp.unsupported.syntax'),
     ('struct S{int f(){thread_local int n=0;return n;}};','cpp.unsupported.syntax'),
     ('struct S{const char*f(){return "identity";}};','cpp.unsupported.syntax'),
-    ('struct S{int f(int n=42){return n;}};','cpp.unsupported.syntax'),
     ('struct S{~S(){}};','cpp.unsupported.inline-member-functions'),
     ('struct S{int f()noexcept{return 42;}};','cpp.unsupported.exceptions'),
     ('struct S{int f(int n,...){return n;}};','cpp.unsupported.variadic-functions'),

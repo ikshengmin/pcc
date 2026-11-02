@@ -557,8 +557,12 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
                             "pointer-involving template overload sets are not implemented", coord)
     viable = []
     for candidate in group.overloads:
-        if (len(candidate.parameters) > len(arguments)
-                or not candidate.variadic and len(candidate.parameters) != len(arguments)):
+        count = len(candidate.parameters)
+        if len(arguments) < count:
+            defaults = getattr(candidate, "default_arguments", ())
+            if len(defaults) != count or any(value is None for value in defaults[len(arguments):]):
+                continue
+        elif len(arguments) > count and not candidate.variadic:
             continue
         if candidate.template_parameters:
             bindings = deduce(candidate, arguments)

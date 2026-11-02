@@ -773,7 +773,7 @@ class CppParser:
             self.scope = parent
             self.parsing_template = False
 
-    def _parameter_clause(self, params=None, parameter_symbols=None, variadic=None, check_lowering=True):
+    def _parameter_clause(self, params=None, parameter_symbols=None, variadic=None, check_lowering=True, defaults=None):
         # Share the existing fixed-parameter grammar with sizeof type-id
         # parsing. A supplied list keeps the ordinary function's declaration
         # identities and parameter-scope point-of-declaration behavior.
@@ -802,7 +802,7 @@ class CppParser:
                 param = None
                 with self.cursor.tentative():
                     self._abstract_pointer_type(dtype)
-                    unnamed = self._peek().value in (",", ")", "...")
+                    unnamed = self._peek().value in (",", ")", "...", "=")
                 if unnamed:
                     dtype = self._abstract_pointer_type(dtype)
                 else:
@@ -828,6 +828,15 @@ class CppParser:
                 else:
                     parameter_symbols.append(None)
                 params.append((param, dtype))
+                record = None
+                if self._peek().value == "=":
+                    if defaults is None:
+                        raise CppDiagnostic("cpp.unsupported.default-argument-context",
+                                            "default arguments in this declarator context are not implemented", self._peek().coord)
+                    from pcc.frontends.cpp.default_arguments import collect
+                    record = collect(self, dtype)
+                if defaults is not None:
+                    defaults.append(record)
                 if self._peek().value == ")":
                     break
                 if self._peek().value != "...":
@@ -918,8 +927,10 @@ class CppParser:
             parameter_scope.parent = member_owner.scope
 
         variadic = []
+        default_arguments = []
         def parameter_clause():
-            return self._parameter_clause(params, parameter_symbols, variadic, check_lowering=False)
+            return self._parameter_clause(params, parameter_symbols, variadic,
+                                          check_lowering=False, defaults=default_arguments)
 
         from pcc.frontends.cpp.allocation import declaration_name, validate_declaration
         try:
@@ -934,6 +945,10 @@ class CppParser:
         access_scope = member_owner.scope if member_owner is not None else parent
         for accessed, access_coord in return_lookup.deferred_member_access:
             access_scope.check_member_access(accessed, access_coord)
+        if any(default_arguments) and (not is_function or template_parameters or variadic
+                or any(contains_function(dtype) for _, dtype in params)):
+            raise CppDiagnostic("cpp.unsupported.default-argument-context",
+                                "defaults require an ordinary non-variadic function with scalar/object-pointer parameters", name.coord)
         if not is_function:
             if name.kind == "OPERATOR_FUNCTION_ID":
                 raise CppDiagnostic("cpp.invalid-allocation-function", "operator name must declare a function", name.coord)
@@ -1052,6 +1067,8 @@ class CppParser:
         for parameter in parameter_symbols:
             if parameter is not None:
                 parameter.c_name = self._local_projection_name(parameter.name)
+        from pcc.frontends.cpp.default_arguments import merge
+        merge(self, symbol, default_arguments, member_owner.scope if member_owner is not None else registry)
         if template_parameters:
             if not definition:
                 self._expect(";")
@@ -2131,6 +2148,9 @@ class CppParser:
             dtype = None
             if not any(dependent(t) for t in argument_types):
                 selected = resolve_overload(snapshot, argument_types, self.types, coord, null_constants)
+                if len(arguments) < len(selected.parameters):
+                    raise CppDiagnostic("cpp.unsupported.default-argument-context",
+                                        "default arguments at template call sites are not implemented", coord)
                 self._check_call_value_abi(selected, coord)
                 if selected.nonthrowing or selected.noreturn:
                     raise CppDiagnostic("cpp.unsupported.exceptions", "template calls cannot discard declared function contracts", coord)
@@ -2151,12 +2171,17 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.exceptions", "invoking declared noexcept/noreturn contracts requires runtime contract support", coord)
         if any(contains_function(t) for t in (selected.dtype,) + selected.parameters):
             raise CppDiagnostic("cpp.unsupported.function-pointers", "callback invocation semantics are not implemented", coord)
+        if selected.template_origin is not None and getattr(self, "default_argument_binding", None) is not None:
+            raise CppDiagnostic("cpp.unsupported.default-argument-context",
+                                "template calls in default arguments require instantiation-context support", coord)
         if selected.template_origin is not None and not self.unevaluated_depth:
             origin = selected.template_origin
             entry = self.instance_registry.request(
                 (origin, selected.template_arguments), selected, context=coord,
             )
             selected = entry.value
+        from pcc.frontends.cpp.default_arguments import expand
+        arguments = expand(self, selected, arguments, coord)
         converted = [self._convert(arg, dtype, coord)
                      for arg, dtype in zip(arguments, selected.parameters)]
         if selected.variadic:
@@ -2323,11 +2348,22 @@ class CppParser:
             return self._call_expression(symbol, arguments, token.coord)
         if symbol is None:
             raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
+        default_binding = getattr(self, "default_argument_binding", None)
+        if (default_binding is not None and symbol in default_binding.parameters
+                and not self.unevaluated_depth):
+            raise CppDiagnostic("cpp.default-argument-parameter-use",
+                                "a parameter cannot be potentially evaluated in a default argument", token.coord)
         if symbol.kind == "enumerator":
             result = self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
             result.decltype_entity = symbol.dtype
             return result
         if symbol.kind == "member":
+            if default_binding is not None:
+                # [dcl.fct.default]/9 is stricter than the general unevaluated
+                # no-object rule. Explicit obj.member is handled by member_access
+                # instead; pointer-to-member defaults remain a capability gap.
+                raise CppDiagnostic("cpp.unsupported.default-argument-context",
+                                    "bare non-static members cannot be default values here; pointer-to-member defaults are not implemented", token.coord)
             object_available = (self.member_function is not None and self.this_symbol is not None
                                 and self.member_function.class_owner is symbol.class_owner)
             if self.unevaluated_depth and not object_available:

@@ -118,6 +118,7 @@ class ClassDefinition:
         self.method_declarations = []
         self.inline_constructors = []
         self.inline_methods = []
+        self.default_arguments = []
         # ABI lexical ordinal for unnamed class-scope types, including empty ones.
         self.unnamed_type_count = 0
         self.constructors = Symbol(dtype.name, "function", dtype.coord)
@@ -403,6 +404,8 @@ def parse_class(parser):
         parser.scope = parent
     parser._expect(";")
     definition.finish()
+    from pcc.frontends.cpp.default_arguments import bind_class
+    bind_class(parser, definition)
     from pcc.frontends.cpp.default_member_initializers import bind
     bind(parser, definition)
     from pcc.frontends.cpp.inline_constructors import bind_definitions
