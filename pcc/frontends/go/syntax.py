@@ -892,10 +892,12 @@ class GoParser:
                 left = Expr("call", left.token, left.value, args, qualifier=qualifier, callee=left)
             elif self.accept("["):
                 arguments = self.expression_list(terminator="]")
-                trailing_comma = self.tokens[self.index - 1].kind == ","
                 self.take("]")
+                # A final comma does not add another argument. Keep the
+                # single-argument form ambiguous until Sema resolves its base
+                # as an indexable value or a directly instantiated function.
                 left = (Expr("index", arguments[0].token, args=[left, arguments[0]])
-                        if len(arguments) == 1 and not trailing_comma else
+                        if len(arguments) == 1 else
                         Expr("type_apply", left.token, args=arguments, callee=left))
             else:
                 break

@@ -67,8 +67,10 @@ INVALID_CALLS = [
     (PAIR, '_=Pair([2]int{},[2]uint64{})', 'conflicting inferred', 'does not match inferred'),
     (PAIR+';type N int', '_=Pair([2]N{},[2]int{})', 'conflicting inferred', 'does not match inferred'),
     (FIRST+';type N int', '_=First[int]([2]N{})', 'cannot use', 'cannot use'),
-    ('func F[T any](x T,a [2]T)T{return x}', '_=F(256,[2]uint8{})', 'overflows uint8', 'overflows uint8'),
-    ('func F[T any](a [2]T,x T)T{return x}', '_=F([2]uint8{},256)', 'overflows uint8', 'overflows uint8'),
+    ('func F[T any](x T,a [2]T)T{return x}', '_=F(256,[2]uint8{})', 'overflows uint8',
+     r'cannot use 256 \(untyped int constant\) as uint8 value in argument to F \(overflows\)'),
+    ('func F[T any](a [2]T,x T)T{return x}', '_=F([2]uint8{},256)', 'overflows uint8',
+     r'cannot use 256 \(untyped int constant\) as uint8 value in argument to F \(overflows\)'),
     ('func Zero[T any]() [2]T{var z [2]T;return z}', 'var x [2]int=Zero();_=x', 'cannot infer', 'cannot infer'),
 ]
 

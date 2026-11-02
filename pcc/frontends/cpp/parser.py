@@ -2466,6 +2466,9 @@ class CppParser:
             expression.qualified_member = None
             expression.decltype_entity = None
             return expression
+        if token.kind in ("CHAR_CONST", "WCHAR_CONST"):
+            from pcc.frontends.cpp.character_literals import character_expression
+            return character_expression(self, token)
         if token.kind.startswith("INT_CONST_"):
             if (token.kind == "INT_CONST_DEC" and len(token.value) > 1
                     and token.value.startswith("0")):

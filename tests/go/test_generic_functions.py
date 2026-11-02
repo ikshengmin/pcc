@@ -125,11 +125,14 @@ INVALID_CALLS = [
     (IDENTITY, '_=Identity[int,string](3)', 'too many generic', 'got 2 type arguments but want 1'),
     ('func F(x int)int{return x}', '_=F[int](3)', 'nongeneric', 'cannot index'),
     (IDENTITY, 'x:=3;_=Identity[x](4)', 'must denote a type', 'is not a type'),
-    ('func First[T any](a,b T)T{return a}', '_=First(256,uint8(1))', 'overflows uint8', 'overflows uint8'),
+    ('func First[T any](a,b T)T{return a}', '_=First(256,uint8(1))', 'overflows uint8',
+     r'cannot use 256 \(untyped int constant\) as uint8 value in argument to First \(overflows\)'),
     ('func First[T any](a,b T)T{return a};type A int;type B int', '_=First(A(1),B(2))', 'conflicting inferred', 'does not match inferred type'),
     ('func First[T any](a,b T)T{return a}', '_=First(1,"x")', 'cannot infer', 'mismatched types'),
     (IDENTITY+';func Empty(){}', '_=Identity(Empty())', 'void function call', 'no value'),
-    ('', 'a:=[1]int{1};_=a[0,]', 'multiple indices', 'unexpected'),
+    # The exact a[0,] original is valid in official Go and now retained in
+    # test_index_trailing_comma.py as a positive source/native/reference case.
+    ('', 'a:=[1]int{1};_=a[0,0]', 'multiple indices', 'not a generic|more than one index'),
 ]
 
 
