@@ -22,11 +22,9 @@ from .self_backend_aarch64_darwin_mem import (
 )
 from .self_backend_aarch64_darwin_regalloc import (
     allocate_aarch64_block_registers,
-    callee_saved_area_size,
     commit_allocated_scalar_result_indexed,
-    emit_callee_saved_stores,
+    emit_callee_saved_frame,
 )
-from .self_backend_aarch64_darwin_regs import emit_stack_adjust
 from .self_backend_aarch64_darwin_slots import (
     copy_address_to_value_slot,
     store_reg_to_slot,
@@ -147,11 +145,8 @@ def emit_function_prologue(
                 emitted_move_register_line("x29", "sp"),
             ]
         )
-        total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
-        if total_frame:
-            lines.extend(emit_stack_adjust(-total_frame))
         # Save before any argument is committed into a callee-saved register.
-        lines.extend(emit_callee_saved_stores(func))
+        lines.extend(emit_callee_saved_frame(func, False))
     if func.platform_frame_extra:
         # Preserve incoming variadic registers before normal argument lowering.
         for index in range(8):

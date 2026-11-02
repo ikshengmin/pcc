@@ -19,14 +19,13 @@ from .self_backend_aarch64_darwin_regalloc import (
     aarch64_zero_test_operand,
     allocated_scalar_register_indexed,
     callee_saved_area_size,
-    emit_callee_saved_loads,
+    emit_callee_saved_frame,
 )
 from .self_backend_aarch64_darwin_ops import aarch64_cc, aarch64_inverse_cc
 from .self_backend_aarch64_darwin_regs import (
     emit_add_offset,
     emit_const_to_reg,
     emit_const_to_reg_bits,
-    emit_stack_adjust,
 )
 from .self_backend_aarch64_darwin_symbols import block_edge_label, block_label
 from .self_backend_ir import I1, ParsedFunction, TypeDesc
@@ -47,9 +46,7 @@ def emit_epilogue(func: ParsedFunction) -> list[str]:
         return [emitted_fixed_instruction_line("ret")]
     total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
     lines = _restore_fixed_frame_sp(func, total_frame)
-    lines.extend(emit_callee_saved_loads(func))
-    if total_frame:
-        lines.extend(emit_stack_adjust(total_frame))
+    lines.extend(emit_callee_saved_frame(func, True))
     lines.append(emitted_frame_pair_line(True))
     # Reverse-edge protection: authenticate the signed LR before returning. When
     # branch protection is on this emits ``autiasp`` + ``ret`` (SP is the same
@@ -68,9 +65,7 @@ def emit_tail_epilogue(func: ParsedFunction, target: str) -> list[str]:
         return [emitted_branch_line("b", target)]
     total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
     lines = _restore_fixed_frame_sp(func, total_frame)
-    lines.extend(emit_callee_saved_loads(func))
-    if total_frame:
-        lines.extend(emit_stack_adjust(total_frame))
+    lines.extend(emit_callee_saved_frame(func, True))
     lines.append(emitted_frame_pair_line(True))
     if branch_protection_enabled():
         lines.append(emitted_fixed_instruction_line("autiasp"))

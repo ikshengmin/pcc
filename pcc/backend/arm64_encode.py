@@ -1084,10 +1084,12 @@ def _enc_ldstp(load: int, mode: str, rt, rt2, rn, imm: int, is64: bool) -> int:
     return word
 
 
-def encode_emitted_frame_pair_parts(load: bool) -> int:
+def encode_emitted_frame_pair_parts(
+    load: bool, first: int = 29, second: int = 30, frame_bytes: int = 16,
+) -> int:
     if load:
-        return _enc_ldstp(1, "post", 29, 30, 31, 16, True)
-    return _enc_ldstp(0, "pre", 29, 30, 31, -16, True)
+        return _enc_ldstp(1, "post", first, second, 31, frame_bytes, True)
+    return _enc_ldstp(0, "pre", first, second, 31, -frame_bytes, True)
 
 
 def _emitted_register_code_span(text: str, start: int, end: int) -> int:

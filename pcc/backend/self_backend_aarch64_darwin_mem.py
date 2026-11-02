@@ -331,19 +331,24 @@ def emitted_fixed_instruction_line(mnemonic: str) -> str:
     return "  " + mnemonic
 
 
-def emitted_frame_pair_line(load: bool) -> str:
+def emitted_frame_pair_line(
+    load: bool, first: int = 29, second: int = 30, frame_bytes: int = 16,
+) -> str:
     records = _DIRECT_INSTRUCTION_RECORDS
     if records is not None:
         records.append4(
-            encode_emitted_frame_pair_parts(load),
+            encode_emitted_frame_pair_parts(load, first, second, frame_bytes),
             EMITTED_INSTRUCTION_SCALAR,
             0,
             -1,
         )
         return DIRECT_INSTRUCTION_PLACEHOLDER
+    first_register = "xzr" if first == 31 else "x" + str(first)
+    second_register = "xzr" if second == 31 else "x" + str(second)
+    registers = first_register + ", " + second_register
     if load:
-        return "  ldp x29, x30, [sp], #16"
-    return "  stp x29, x30, [sp, #-16]!"
+        return "  ldp " + registers + ", [sp], #" + str(frame_bytes)
+    return "  stp " + registers + ", [sp, #-" + str(frame_bytes) + "]!"
 
 
 def _capture_direct_symbol(symbol: str) -> int:

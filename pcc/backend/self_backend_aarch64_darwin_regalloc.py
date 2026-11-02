@@ -45,9 +45,11 @@ from .self_backend_aarch64_darwin_abi import (
     reg_name_indexed,
 )
 from .self_backend_aarch64_darwin_mem import (
+    emitted_frame_pair_line,
     emitted_memory_instruction_line,
     emitted_move_register_line,
 )
+from .self_backend_aarch64_darwin_regs import emit_stack_adjust
 from .self_backend_kernel import (
     _scalar_window_is_complete,
     IndexedFunctionKernel,
@@ -2308,13 +2310,15 @@ def frame_slot_sp_offset(func: ParsedFunction | None, offset: int, access_bytes:
     return position
 
 
-def emit_callee_saved_stores(func: ParsedFunction) -> list[str]:
+def _emit_callee_saved_accesses(
+    func: ParsedFunction, mnemonic: str, first_index: int,
+) -> list[str]:
     lines: list[str] = []
-    index = 0
+    index = first_index
     while index < len(func.aarch64_callee_saved):
         lines.append(
             emitted_memory_instruction_line(
-                "str",
+                mnemonic,
                 "x" + str(func.aarch64_callee_saved[index]),
                 "sp",
                 func.platform_frame_extra + index * 8,
@@ -2322,22 +2326,43 @@ def emit_callee_saved_stores(func: ParsedFunction) -> list[str]:
         )
         index += 1
     return lines
+
+
+def emit_callee_saved_stores(func: ParsedFunction) -> list[str]:
+    return _emit_callee_saved_accesses(func, "str", 0)
 
 
 def emit_callee_saved_loads(func: ParsedFunction) -> list[str]:
-    lines: list[str] = []
-    index = 0
-    while index < len(func.aarch64_callee_saved):
-        lines.append(
-            emitted_memory_instruction_line(
-                "ldr",
-                "x" + str(func.aarch64_callee_saved[index]),
-                "sp",
-                func.platform_frame_extra + index * 8,
-            )
-        )
-        index += 1
-    return lines
+    return _emit_callee_saved_accesses(func, "ldr", 0)
+
+
+def emit_callee_saved_frame(func: ParsedFunction, load: bool) -> list[str]:
+    """Fold a fixed frame's SP adjustment into its first callee-save pair.
+
+    The frame record, slot offsets and callee-save area keep their layout.
+    A single saved register uses the area's existing alignment padding for
+    XZR. Restore the remaining registers before a post-indexed pair moves SP.
+    STP accepts -512, but LDP's positive limit is 504 bytes.
+    """
+    total_frame = func.frame_size + callee_saved_area_size(func) + func.platform_frame_extra
+    limit = 504 if load else 512
+    if (func.aarch64_callee_saved and not func.aarch64_dynamic_stack
+            and func.platform_frame_extra == 0
+            and 0 < total_frame <= limit and total_frame % 16 == 0):
+        first = func.aarch64_callee_saved[0]
+        second = 31
+        if len(func.aarch64_callee_saved) > 1:
+            second = func.aarch64_callee_saved[1]
+        if load:
+            lines = _emit_callee_saved_accesses(func, "ldr", 2)
+            lines.append(emitted_frame_pair_line(True, first, second, total_frame))
+            return lines
+        lines = [emitted_frame_pair_line(False, first, second, total_frame)]
+        lines.extend(_emit_callee_saved_accesses(func, "str", 2))
+        return lines
+    if load:
+        return emit_callee_saved_loads(func) + emit_stack_adjust(total_frame)
+    return emit_stack_adjust(-total_frame) + emit_callee_saved_stores(func)
 
 
 def allocated_scalar_register_indexed(

@@ -208,8 +208,41 @@ collector lanes; persistent carriers and both prototype programs also pass.
 Three C probes initially failed to compile because the shared test snippet
 preceded its private introspection declaration. Adding the matching prototype
 fixes those probes; the three failed and two previously unrun cases pass on
-rerun against the unchanged admitted runtime. Default-GC0 throughput comparison
-for this cache change is still pending.
+rerun against the unchanged admitted runtime. The default-GC0 comparison with
+`0013c2849` completes all seven rotations: one-worker medians 37,205 -> 37,423
+QPS and four-worker medians 75,035 -> 78,267. Paired median changes are
++1.74%/+3.65% (6/7 positive each); cycles fall 0.96%/3.49% (7/7 each).
+Same-packet CPython 3.15.0 asyncio reaches 86,871/271,201 QPS. Source, archive,
+binary and measurement-input hashes remain unchanged. These are small gains;
+both throughput requirements remain unmet.
+
+### Current owned AArch64 frame work
+
+Identical post-pass IR from `34b484058`, emitted by the production indexed
+structured route and by reference-only LLVM 20.1.8 with matched LSE/PAuth/BTI
+options, still exposes code-quality gaps: `py_incref` has 85 versus 46 static
+instructions and `pcc_gc_load_ptr` 218 versus 103. The owned `py_obj` text is
+byte-identical to the built runtime object. Static instruction counts do not
+measure dynamic execution time, and LLVM is not a production dependency.
+
+The candidate over `1e689b07d` folds a small fixed frame's SP adjustment into
+its first saved-register pair. Frame records and slot offsets retain their
+layout; dynamic stacks, Linux variadic frames and out-of-range adjustments
+keep the existing sequence. A single saved register uses existing alignment
+padding for XZR. Return and tail-call epilogues restore the remaining registers
+before the post-indexed pair changes SP. The asymmetric -512/+504 encoding
+limits are tested along with direct structured-stream order.
+
+The first focused run has 65 passes and one test-fixture failure (`.text` is
+not an owned assembly directive). After using the owned Mach-O section
+directive, all 97 frame/register-capture/TLS checks pass, including executed
+boundary frames, tail calls, recursive C and register-pressure calls. These
+are host pcc0/self results. The next metadata/policy run stops at 59 passes
+and three runtime-fixture setup errors: the newly emitted backend requires a
+fresh admitted runtime, and automatic provisioning is disabled. The remaining
+49 nodes, throughput comparison, whole affected-language ordinary/integration/
+reference suites and native pcc1 qualification remain pending; this candidate
+is not release-qualified.
 
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
