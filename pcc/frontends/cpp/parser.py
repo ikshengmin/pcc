@@ -579,9 +579,10 @@ class CppParser:
                 dtype = self._reference(dtype, token)
         return dtype
 
-    def _apply_declarator(self, declaration, dtype, function=False, member=False, allow_class_element=False):
+    def _apply_declarator(self, declaration, dtype, function=False, member=False, allow_class_element=False,
+                          namespace_function=False):
         name = declaration.name
-        if not member and (name.global_scope or len(name.parts) != 1):
+        if not member and not namespace_function and (name.global_scope or len(name.parts) != 1):
             raise CppDiagnostic("cpp.unsupported.qualified-names",
                                 "out-of-namespace member declarations are not implemented", name.coord)
         chunks = list(declaration.chunks)
@@ -969,18 +970,40 @@ class CppParser:
         parameter_scope = Scope(parent)
         self.scope = parameter_scope
         member_owner = member_definition
+        namespace_owner = None
 
         def declarator_name(name):
-            nonlocal member_owner
+            nonlocal member_owner, namespace_owner
             if member_definition is not None:
                 if name.global_scope or len(name.parts) != 1:
                     raise CppDiagnostic("cpp.invalid-member-declaration", "in-class member names must be unqualified", name.coord)
                 return
-            if len(name.parts) < 2:
+            if len(name.parts) < 2 and not name.global_scope:
                 return
             from pcc.frontends.cpp.declarators import QualifiedName
-            qualifier = QualifiedName(name.tokens[:-1], name.global_scope, name.coord)
-            target = parent.resolve_name(qualifier)
+            if len(name.parts) == 1:
+                nominated = parent.global_scope()
+                target = None
+            else:
+                qualifier = QualifiedName(name.tokens[:-1], name.global_scope, name.coord)
+                target = parent.resolve_name(qualifier, qualifier_only=True)
+                nominated = (target.namespace_scope if target is not None
+                             and target.kind in ("namespace", "namespace-alias") else None)
+            if nominated is not None:
+                # This increment admits ordinary function declarators only;
+                # namespace objects and grouped qualified declarators retain
+                # the existing explicit boundary in _apply_declarator.
+                if self._peek().value != "(":
+                    return
+                from pcc.frontends.cpp.namespace_functions import (
+                    declaration_scope as namespace_declaration_scope,
+                )
+                if template_parameters or self.parsing_template:
+                    raise CppDiagnostic("cpp.unsupported.namespace-templates",
+                                        "qualified function templates require separate template declaration matching", name.coord)
+                namespace_owner = namespace_declaration_scope(nominated, parent, name.parts[-1], name.coord)
+                parameter_scope.parent = namespace_owner
+                return
             if target is None or target.kind != "type" or not is_class_type(target.dtype):
                 return
             owner = unqualified(target.dtype)
@@ -1006,9 +1029,11 @@ class CppParser:
                                           parse_noexcept=self._declaration_noexcept).parse()
             is_function = any(chunk.kind == "function" for chunk in declarator.chunks)
             name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
-                                                       member=member_owner is not None and is_function)
+                                                       member=member_owner is not None and is_function,
+                                                       namespace_function=namespace_owner is not None and is_function)
         finally:
             self.scope = parent
+        function_scope = namespace_owner if namespace_owner is not None else parent
         access_scope = member_owner.scope if member_owner is not None else parent
         for accessed, access_coord in return_lookup.deferred_member_access:
             access_scope.check_member_access(accessed, access_coord)
@@ -1059,7 +1084,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.enum-linkage",
                                     "function signatures involving internal-linkage enum types are not implemented", name.coord)
         if (member_owner is None and name.value == "main" and self.language_linkage is not None
-                and (not parent.namespace_path() or self.language_linkage == "C")):
+                and (not function_scope.namespace_path() or self.language_linkage == "C")):
             raise CppDiagnostic("cpp.main-language-linkage",
                                 "main cannot have a language linkage specification", name.coord)
         definition = self._peek().value == "{"
@@ -1098,11 +1123,11 @@ class CppParser:
                                     "in-class methods of internal-linkage classes require distinct definition ownership", name.coord)
             if member_definition is None and not definition:
                 raise CppDiagnostic("cpp.member-definition-required", "an out-of-class member declaration must be a definition", name.coord)
-        if member_owner is None and name.value == "main" and not parent.namespace_path() and params:
+        if member_owner is None and name.value == "main" and not function_scope.namespace_path() and params:
             self._unsupported(name, "main parameters are not implemented")
-        if member_owner is None and name.value == "main" and not parent.namespace_path() and result_type != "int":
+        if member_owner is None and name.value == "main" and not function_scope.namespace_path() and result_type != "int":
             raise CppDiagnostic("cpp.main-return-type", "main must return int", name.coord)
-        if member_owner is None and name.value == "main" and not parent.namespace_path() and template_parameters:
+        if member_owner is None and name.value == "main" and not function_scope.namespace_path() and template_parameters:
             raise CppDiagnostic("cpp.main-template", "main cannot be a template", name.coord)
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
@@ -1123,16 +1148,21 @@ class CppParser:
                    for dtype in (result_type,) + new_symbol.parameters):
                 raise CppDiagnostic("cpp.unsupported.c-linkage-signature",
                                     "C-linkage signatures require declarable fundamental scalars or pointers", name.coord)
-            if parent.internal_linkage:
+            if function_scope.internal_linkage:
                 raise CppDiagnostic("cpp.unsupported.c-linkage-internal",
                                     "C function type with internal name linkage is not implemented", name.coord)
-        registry = self.scope if declaration_scope is None else declaration_scope
+        registry = function_scope if declaration_scope is None else declaration_scope
         if member_owner is not None:
             from pcc.frontends.cpp.members import declare_member_function
             const = "const" in declarator.chunks[0].qualifiers
             symbol = declare_member_function(member_owner, new_symbol, const,
                                              outside=member_definition is None,
                                              static=storage is not None and storage.value == "static")
+        elif namespace_owner is not None:
+            from pcc.frontends.cpp.namespace_functions import (
+                declare_function as declare_namespace_function,
+            )
+            symbol = declare_namespace_function(namespace_owner, new_symbol, definition)
         else:
             symbol = registry.declare_function(new_symbol, definition)
         if definition and (symbol.nonthrowing or symbol.noreturn):
@@ -1221,7 +1251,8 @@ class CppParser:
             self.return_type = previous_return_type
             self.current_function = previous_function
             self.member_function, self.this_symbol = previous_member, previous_this
-        if member_owner is None and symbol.name == "main" and not parent.namespace_path():
+        if (member_owner is None and symbol.name == "main"
+                and symbol.owner is self.scope.global_scope()):
             # Reaching the end of main is a C++ return of zero, not C's general
             # fallthrough behavior. Appending after a return is harmless AST.
             body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", coord), coord))

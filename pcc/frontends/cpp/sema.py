@@ -188,10 +188,11 @@ class Scope:
             scope = scope.parent
         return None
 
-    def resolve_name(self, name, namespace_only=False):
+    def resolve_name(self, name, namespace_only=False, qualifier_only=False):
         """Resolve a parsed path without replacing it by a flattened spelling."""
         qualifier_kinds = ("namespace", "namespace-alias", "type", "template-type")
-        final_kinds = ("namespace", "namespace-alias") if namespace_only else None
+        final_kinds = (("namespace", "namespace-alias") if namespace_only else
+                       qualifier_kinds if qualifier_only else None)
         scope = self.global_scope() if name.global_scope else self
         symbol = None
         for index, part in enumerate(name.parts):

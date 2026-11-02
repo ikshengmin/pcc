@@ -420,3 +420,23 @@ exercise actual C1/D1 linkage. These host-pcc0 results do not qualify native
 pcc1, full bootstrap, the five collectors, NumPy or unmodified TinyXML2. Its
 in-class constructor/method bodies still require genuine inline/ODR support.
 Rules follow N4659 [class.base.init], [class.dtor], [stmt.jump] and [stmt.return].
+
+### Qualified namespace function declarations
+
+An already-declared non-template namespace function can be defined or
+redeclared through an explicit namespace qualifier, including namespace aliases
+and a unique inline-namespace owner. The return type is looked up before the
+qualified name in the lexical declaration context; parameters, defaults and the
+body use the function's namespace. Definitions preserve the existing canonical
+overload, C/C++ language linkage, default-argument union and mangled name.
+Using-directives may locate a namespace qualifier but do not authorize defining
+an imported function as a member of another namespace. A new overload cannot be
+introduced by a qualified definition.
+
+The CI obligations in `test_cpp_qualified_namespace_functions.py` include the
+unchanged former unsupported original, two translation units, independent
+argument-slot checks and same-original G++17 comparisons. Namespace-object
+definitions, grouped qualified declarators and overload sets spread across
+multiple inline namespace owners remain explicit boundaries. No local test
+execution or whole-project acceptance is claimed by these source additions.
+Rules: N4659 [namespace.memdef]/2, [namespace.qual]/7 and [basic.lookup.qual]/3.

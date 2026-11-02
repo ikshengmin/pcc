@@ -156,7 +156,6 @@ NEGATIVE_CASES = (
     ("namespace A {int f(int);}int g(){ {using A::f;}return f(1);}", "cpp.undeclared"),
     ("namespace A {template<class T>T f(T x){return x;}}", "cpp.unsupported.namespace-templates"),
     ("template<class T>int f(T x){return T::g(x);}", "cpp.unsupported.dependent-lookup"),
-    ("namespace A {int f();}int A::f(){return 1;}", "cpp.unsupported.qualified-names"),
     ("namespace A {int f(){return 1;}}int g(){return A : : f();}", "cpp.invalid-qualified-name"),
 )
 
@@ -206,3 +205,13 @@ def test_original_namespace_destructor_declaration_retains_real_prototype():
     ast = CppParser().parse("namespace A {struct S {~S();};}")
     assert ast.ext[1].name == "_ZN1A1SD1Ev"
     assert len(ast.ext[1].type.args.params) == 1
+
+
+def test_original_qualified_namespace_definition_retains_canonical_symbol():
+    # The exact former unsupported source is now a positive obligation.
+    # The separate qualified-namespace corpus appends only an observer entry.
+    parser = CppParser()
+    tree = parser.parse("namespace A {int f();}int A::f(){return 1;}")
+    namespace = parser.scope.names['A'].namespace_scope
+    assert namespace.names['f'].overloads[0].defined
+    assert tree.ext[-1].decl.name == '_ZN1A1fEv'
