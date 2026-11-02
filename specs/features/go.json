@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete inventory, not a Go coverage denominator. Schema1 status is qualification-only. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten."
+    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source."
   },
   "chapters": [
     {
@@ -1202,16 +1202,66 @@
         "switch",
         "comparison"
       ],
-      "scope": "Comparable pointer expression-switch selectors are not implemented.",
-      "status": "explicitly_unimplemented",
+      "scope": "Comparable pointer expression selectors use captured identity, ordered case evaluation and source-guarded CFG nil proofs. Existing nonescape and storage boundaries remain; no runtime or noalias inference.",
       "tests": [
-        "tests/go/test_pointers.py::test_pointer_capabilities_are_explicit_and_fail_closed",
-        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir"
+        "tests/go/test_pointer_switches.py::test_original_pointer_switch_frontiers_graduate_without_rewriting",
+        "tests/go/test_pointer_switches.py::test_pointer_switch_typing_and_source_guard_shapes",
+        "tests/go/test_pointer_switches.py::test_typed_switch_reuses_one_selector_and_pointer_equality_nodes",
+        "tests/go/test_pointer_switches.py::test_invalid_pointer_switches_fail_before_ir",
+        "tests/go/test_pointer_switches.py::test_unproven_pointer_switch_edges_remain_explicit_frontiers",
+        "tests/go/test_pointer_switches.py::test_pointer_switch_full_width_native_observations",
+        "tests/go/test_pointer_switches.py::test_complete_pointer_switch_program_executes_owned",
+        "tests/go/test_pointer_switches.py::test_identical_pointer_switch_originals_match_official_raw_streams",
+        "tests/go/test_pointer_switches.py::test_official_go_rejects_identical_invalid_pointer_switches",
+        "tests/go/test_pointer_switches.py::test_official_go_builds_identical_unsupported_switch_frontiers_without_execution"
       ],
-      "diagnostics": [
-        "go.unsupported.pointer-switch"
-      ],
-      "evidence": []
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:3d3d7f59ceb97acbe36a6bf702dd8a0bf6cf602c1853d49407ea1bb874038af3",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
+          },
+          {
+            "path": "pcc/frontends/go/pointer_flow.py",
+            "sha256": "7e631d54bc2f7591009244a2191b8099018194b70aec1fd586c5d84c21c5005c"
+          },
+          {
+            "path": "pcc/frontends/go/diagnostics.py",
+            "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "pointer-switch-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Declared complete pointer-switch test obligations, not whole Go",
+          "status": "unrun",
+          "source_revision": "sha256:3d3d7f59ceb97acbe36a6bf702dd8a0bf6cf602c1853d49407ea1bb874038af3",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_pointer_switches.py::test_original_pointer_switch_frontiers_graduate_without_rewriting",
+            "tests/go/test_pointer_switches.py::test_pointer_switch_typing_and_source_guard_shapes",
+            "tests/go/test_pointer_switches.py::test_typed_switch_reuses_one_selector_and_pointer_equality_nodes",
+            "tests/go/test_pointer_switches.py::test_invalid_pointer_switches_fail_before_ir",
+            "tests/go/test_pointer_switches.py::test_unproven_pointer_switch_edges_remain_explicit_frontiers",
+            "tests/go/test_pointer_switches.py::test_pointer_switch_full_width_native_observations",
+            "tests/go/test_pointer_switches.py::test_complete_pointer_switch_program_executes_owned",
+            "tests/go/test_pointer_switches.py::test_identical_pointer_switch_originals_match_official_raw_streams",
+            "tests/go/test_pointer_switches.py::test_official_go_rejects_identical_invalid_pointer_switches",
+            "tests/go/test_pointer_switches.py::test_official_go_builds_identical_unsupported_switch_frontiers_without_execution"
+          ],
+          "evidence": [],
+          "reason": "Source and CI tests authored; no local tests, compiler calls or execution probes were run for this change."
+        }
+      ]
     },
     {
       "id": "go.local-pointer-regions",
@@ -1343,7 +1393,7 @@
         "feature_id": "go.capability.aggregate-comparison",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1351,7 +1401,7 @@
         "feature_id": "go.capability.aggregate-switch",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1359,7 +1409,7 @@
         "feature_id": "go.capability.array-bounds-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1367,7 +1417,7 @@
         "feature_id": "go.capability.array-element-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1375,7 +1425,7 @@
         "feature_id": "go.capability.blank-function-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1383,7 +1433,7 @@
         "feature_id": "go.capability.blank-method-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1391,7 +1441,7 @@
         "feature_id": "go.capability.blank-package-variables",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1399,7 +1449,7 @@
         "feature_id": "go.capability.blank-struct-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1407,7 +1457,7 @@
         "feature_id": "go.capability.blank-type-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1415,7 +1465,7 @@
         "feature_id": "go.capability.complex-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1423,7 +1473,7 @@
         "feature_id": "go.capability.division-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1431,7 +1481,7 @@
         "feature_id": "go.capability.dot-imports",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1439,7 +1489,7 @@
         "feature_id": "go.capability.dynamic-string-concatenation",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1447,7 +1497,7 @@
         "feature_id": "go.capability.dynamic-string-conversion",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1455,7 +1505,7 @@
         "feature_id": "go.capability.embedded-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1463,7 +1513,7 @@
         "feature_id": "go.capability.floating-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1471,7 +1521,7 @@
         "feature_id": "go.capability.interface-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1479,7 +1529,7 @@
         "feature_id": "go.capability.limit-array-elements",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1487,7 +1537,7 @@
         "feature_id": "go.capability.limit-constant-precision",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1495,7 +1545,7 @@
         "feature_id": "go.capability.limit-function-arity",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1503,7 +1553,7 @@
         "feature_id": "go.capability.limit-record-layout",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1511,7 +1561,7 @@
         "feature_id": "go.capability.limit-string-bytes",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1519,7 +1569,7 @@
         "feature_id": "go.capability.limit-struct-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1527,7 +1577,7 @@
         "feature_id": "go.capability.limit-type-expansion",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1535,7 +1585,7 @@
         "feature_id": "go.capability.local-type-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1543,7 +1593,7 @@
         "feature_id": "go.capability.method-values",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1551,7 +1601,7 @@
         "feature_id": "go.capability.negative-shift-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1559,7 +1609,7 @@
         "feature_id": "go.capability.non-array-range",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1567,7 +1617,7 @@
         "feature_id": "go.capability.package-initialization",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1575,7 +1625,7 @@
         "feature_id": "go.capability.predeclared-shadowing",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1583,7 +1633,7 @@
         "feature_id": "go.capability.slice-storage",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1591,7 +1641,7 @@
         "feature_id": "go.capability.string-bounds-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1599,7 +1649,7 @@
         "feature_id": "go.capability.struct-tags",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1607,7 +1657,7 @@
         "feature_id": "go.capability.pointer-escape",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1615,7 +1665,7 @@
         "feature_id": "go.capability.pointer-signatures",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1623,7 +1673,7 @@
         "feature_id": "go.capability.pointer-storage",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1631,7 +1681,7 @@
         "feature_id": "go.capability.pointer-nil",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1639,7 +1689,7 @@
         "feature_id": "go.capability.pointer-iteration-identity",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1647,7 +1697,7 @@
         "feature_id": "go.capability.pointer-composite-address",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1655,15 +1705,7 @@
         "feature_id": "go.capability.pointer-conversions",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-switch",
-        "feature_id": "go.capability.pointer-switch",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       },
       {
@@ -1671,7 +1713,7 @@
         "feature_id": "go.capability.builtin-io",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "9fe7d2205b9ff7e32ac4013f303712517378ab2fc62be3aee841ceb399786ede"
+          "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
         }
       }
     ],
@@ -1752,7 +1794,7 @@
         "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1760,7 +1802,7 @@
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1768,7 +1810,7 @@
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1776,7 +1818,7 @@
         "message": "'switch currently requires integer, boolean or string comparison support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1784,7 +1826,7 @@
         "message": "'range currently requires a fixed array or integer, or a pointer to a fixed array; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1792,7 +1834,7 @@
         "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1800,7 +1842,7 @@
         "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1808,7 +1850,7 @@
         "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -1816,7 +1858,7 @@
         "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "89546f1db9e375af40fdac5995977cf9e4550e91d33d6849fd4206e61938116c"
+          "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }

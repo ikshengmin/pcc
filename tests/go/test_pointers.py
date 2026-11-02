@@ -96,7 +96,12 @@ UNSUPPORTED = [
 # official-reference cases are in test_pointer_array_range.GRADUATED.
 GRADUATED_ARRAY_RANGE = ('non-array-range', 'a:=[2]int{};p:=&a;for range p{}', '')
 assert UNSUPPORTED.count(GRADUATED_ARRAY_RANGE) == 1
-ACTIVE_UNSUPPORTED = [case for case in UNSUPPORTED if case != GRADUATED_ARRAY_RANGE]
+GRADUATED_POINTER_SWITCH = ('pointer-switch', 'x:=1;p:=&x;switch p{case nil:}', '')
+assert UNSUPPORTED.count(GRADUATED_POINTER_SWITCH) == 1
+# Both original source forms remain positive/native/reference obligations in
+# test_pointer_switches; historical unsupported outcomes are not rewritten.
+ACTIVE_UNSUPPORTED = [case for case in UNSUPPORTED
+                      if case not in (GRADUATED_ARRAY_RANGE, GRADUATED_POINTER_SWITCH)]
 
 
 @pytest.mark.parametrize('suffix,body,declarations', ACTIVE_UNSUPPORTED)

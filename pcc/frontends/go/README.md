@@ -543,11 +543,12 @@ PCC native-pcc1, Mac execution, full Go/standard library and shared runtime/GC
 qualification are not established here. Cross-object tests do not renew Mac
 execution evidence.
 
-The current **schema1** `status` remains a legacy qualification field. It has no
-independent machine-readable implementation-status axis. The two columns below
-make the distinction explicit for readers; they do **not** claim that a schema2
-migration or a new machine-enforced dual-axis report has shipped. No ignored
-JSON fields are used to simulate such a migration.
+Legacy **schema1** `status` rows retain their historical qualification meaning.
+The pointer-switch row uses the existing additive schema1 `implementation` and
+`acceptance` objects: implemented source is distinct from acceptance, which is
+**unrun** for this change. No schema2 migration or ignored JSON fields are used.
+Historical evidence keeps its original revision and source hashes; it is not
+rebound to a changed unit file or presented as a new execution.
 
 | Existing feature ID | Implementation status | Acceptance status / test binding | Legacy schema1 status |
 |---|---|---|---|
@@ -614,7 +615,7 @@ JSON fields are used to simulate such a migration.
 | `go.capability.pointer-iteration-identity` | Explicitly unimplemented boundary: per-iteration pointer identity | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-composite-address` | Explicitly unimplemented boundary: addressed composite literal allocation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-conversions` | Explicitly unimplemented boundary: conversions across pointer base types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.pointer-switch` | Explicitly unimplemented boundary: pointer expression switches | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.pointer-switch` | Implemented: bounded comparable-pointer expression switches | Authored complete feature obligations **UNRUN** | Explicit implementation `supported`; acceptance `unrun` |
 | `go.local-pointer-regions` | Implemented: bounded local pointer alias/address/value-update semantics | Renewed in L for LP-U / -P / -D on the current unit file | `supported` |
 | `go.nullable-direct-pointer-parameters` | Implemented: nullable locals and source-guarded non-retaining direct parameters | Renewed in L for NP-U / -P / -D on the current unit file | `supported` |
 
@@ -665,7 +666,7 @@ hashable. The 23
 native official-Go executables **without running them** and do not qualify PCC
 nil-panic/escape support.
 
-The current complete Go selections passed **900 ordinary nodes** (including31
+The prior published complete Go selections passed **900 ordinary nodes** (including31
 simulated reference-protocol checks, not executions) and **619 integration nodes**.
 Integration categories are376 standalone owned-native checks,45 raw-process
 reference comparisons,16 terminal-status/payload comparisons with unequal raw
@@ -711,6 +712,8 @@ uv run python -m pytest -x --maxfail=0 -c pyproject.toml -m 'not integration' te
 uv run python -m pytest -x --maxfail=0 -c pyproject.toml -m integration tests/go
 ```
 
+The pointer-switch source change has **not** run either selection locally; the
+counts above remain historical and are not qualification of that change.
 The second command requires explicit `PCC_GO_REFERENCE` and
 `PCC_GO_REFERENCE_CACHE`. It rebuilds final native/reference outputs; retained
 binaries or old process results are never substituted as a new gate. Raw logs,
@@ -729,3 +732,37 @@ stderr bytes are not fabricated. Named-scalar and multiline panic reports retain
 full implementation-specific stderr differences rather than claiming byte identity.
 The initial authored rune-literal fixture is retained as a separate valid but
 unsupported parser frontier; this output slice does not implement rune syntax.
+
+### Pointer expression switches — source implementation, acceptance unrun
+
+Comparable pointer selectors use the existing typed equality operation and
+single captured selector value. Nil and named-pointer cases follow ordinary
+assignment/comparison rules; cases retain left-to-right, top-to-bottom evaluation,
+first-match dispatch, delayed default and direct fallthrough edges. Pointer
+identity is not pointee equality, and no distinctness is inferred from pointer
+types or from addresses of zero-size variables.
+
+The existing CFG captures an analysis-only pointer fact alongside the selector.
+A nil case refines only its actual dispatch predecessors. Equality with a proven
+nonnil pointer can prove the other operand nonnil without replacing its lifetime;
+inequality does not. Fallthrough bypasses the next case guard, loop continuations
+reach the post statement, and reassignment invalidates the binding's old fact.
+No runtime, backend, allocator, new lifetime extension or noalias promise is added.
+
+`tests/go/test_pointer_switches.py` authors positive typing/IR checks, exact former
+capability originals, fourteen full-width native observations, the complete
+`pointer_switches.go` main, same-input raw PCC/official-Go comparisons, strict
+invalid-source rejection controls and valid-but-unsupported build-only controls.
+All new execution is **UNRUN**. No old rejection PASS is reclassified as a positive
+execution. Historical ledger evidence, including the prior local-pointer unit
+file hash, remains tied to its original revision; a single current source tree
+cannot replay source hashes from several historical revisions.
+
+Pointer-valued returns, pointer-bearing global/aggregate storage, escaping aliases,
+method values, evaluated indirections without a source proof, and addressed
+composite allocation remain explicit separate boundaries. General type switches,
+interface dispatch, shared GC and native-pcc1 execution are not implied.
+
+Rules: [expression switches](https://go.dev/ref/spec#Expression_switches),
+[pointer comparison](https://go.dev/ref/spec#Comparison_operators), and
+[evaluation order](https://go.dev/ref/spec#Order_of_evaluation).

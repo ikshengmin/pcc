@@ -666,10 +666,11 @@ class Analyzer:
             selector = statement.exprs[0] if statement.exprs else Expr("name", statement.token, "true")
             self.expression(selector)
             coerce(selector, default_type(selector.type))
-            if isinstance(underlying(selector.type), PointerType):
-                raise UnsupportedGo(selector.token, 'go.unsupported.pointer-switch',
-                                    "pointer expression switches are not implemented")
-            if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)):
+            # A pointer switch compares identities, never pointee values. The
+            # ordinary equality checker owns nil conversion and named-pointer
+            # assignability; lowering already captures this selector once.
+            if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)
+                    or isinstance(underlying(selector.type), PointerType)):
                 if isinstance(underlying(selector.type), (ArrayType, StructType)):
                     raise UnsupportedGo(selector.token, "go.unsupported.aggregate-switch", "switch currently requires integer, boolean or string comparison support")
                 raise GoDiagnostic(selector.token, "switch currently requires integer, boolean or string comparison support")

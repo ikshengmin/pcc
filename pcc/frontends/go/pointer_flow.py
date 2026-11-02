@@ -35,6 +35,12 @@ class StaticLifetime:
 
 
 @dataclass(frozen=True)
+class SavedPointer:
+    """Analysis-only switch temporary; never an alias to a pointer slot."""
+    expression: int
+
+
+@dataclass(frozen=True)
 class PointerFact:
     nulls: int
     lifetimes: frozenset = frozenset()
@@ -157,7 +163,7 @@ class Graph:
             for clause, body in reversed(list(zip(statement.cases, bodies))):
                 for comparison in reversed(clause.exprs):
                     dispatch = self.add('condition', comparison, [body, dispatch], saved)
-            entry = self.add('evaluate', selector, [dispatch])
+            entry = self.add('switch_selector', selector, [dispatch])
             return (self.statement(statement.init, entry, breaking, continuing, falling)
                     if statement.init is not None else entry)
         return self.add('action', statement, [following])
@@ -252,9 +258,10 @@ class PointerFlow:
         if state is None:
             return UNPROVEN
         if id(expr) in saved:
-            # A switch selector/compound target is already evaluated in this
-            # operation. Nullness still comes from the current symbol state.
-            return self.pointer_value(expr, state)
+            # Preserve the captured pointer fact, including an address-valued
+            # selector. Do not revisit its index/call/dereference operations.
+            # Compound targets and non-pointer switches keep their old path.
+            return state.get(SavedPointer(id(expr)), self.pointer_value(expr, state))
         kind = expr.kind
         if kind == 'nil':
             return NULL
@@ -376,6 +383,18 @@ class PointerFlow:
                     equal = self.refined(state, value, NIL)
                     unequal = self.refined(state, value, NONNULL)
                     return (equal, unequal) if expr.value == '==' else (unequal, equal)
+                if pointer(left.type) and pointer(right.type):
+                    # Equality to a known live pointer proves nonnil, not a
+                    # distinct allocation or a stronger lifetime. This also
+                    # covers pointer switch cases such as `case &value:`.
+                    # Inequality conveys no nonnil fact: nil != &value.
+                    equal = dict(state)
+                    if left_fact.nulls == NONNULL:
+                        equal = self.refined(equal, right, NONNULL)
+                    if equal is not None and right_fact.nulls == NONNULL:
+                        equal = self.refined(equal, left, NONNULL)
+                    unequal = dict(state)
+                    return (equal, unequal) if expr.value == '==' else (unequal, equal)
                 return dict(state), dict(state)
         self.evaluate(expr, state, check, saved)
         return dict(state), dict(state)
@@ -427,10 +446,13 @@ class PointerFlow:
         if node.kind == 'range_check':
             return [(node.edges[0], dict(state) if node.value else None),
                     (node.edges[1], dict(state))]
-        if node.kind in ('evaluate', 'range_pointer'):
+        if node.kind in ('evaluate', 'range_pointer', 'switch_selector'):
             fact = self.evaluate(node.value, state, check)
             if node.kind == 'range_pointer' and check:
                 self.require_nonnull(fact, node.value.token)
+            if node.kind == 'switch_selector' and pointer(node.value.type):
+                state = dict(state)
+                state[SavedPointer(id(node.value))] = fact
         if node.kind == 'action':
             state = self.action(node.value, state, check)
         return [(edge, state) for edge in node.edges]
