@@ -182,7 +182,10 @@ class StaticTraits:
                 if bound.relaxed:
                     raise bound.token.error('local/user trait bounds cannot be relaxed; only canonical ?Sized is supported')
                 if function.implementation is not None:
-                    raise bound.token.error('local/user trait bounds on method parameters are not implemented')
+                    if function.implementation.trait is not None:
+                        raise bound.token.error('local/user trait bounds on trait method parameters are not implemented')
+                    if name.text in {p.text for p in function.implementation.type_parameters}:
+                        raise name.error('local trait bounds on impl-owner parameters require conditional method availability, which is not implemented')
                 if self.checker.module_resolution is not None:
                     raise bound.token.error('module-scoped local trait bounds are not implemented')
                 local.add(bound.path)
@@ -199,7 +202,7 @@ class StaticTraits:
         # bound and checks all obligations, including unused declarations.
         names = {trait.token.text for trait in self.declarations}
         first = next((bound.token for function in self.checker.functions
-                      if function.implementation is None
+                      if function.implementation is None or function.implementation.trait is None
                       for _, bounds in function.effective_parameter_bounds for bound in bounds
                       if bound.path in names and not bound.relaxed
                       and bound.path not in {p.text for p in function.type_parameters}), None)

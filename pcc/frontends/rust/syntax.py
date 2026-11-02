@@ -537,12 +537,15 @@ class Parser:
                 break
         return tuple(bounds)
 
-    def function_where_clause(self, parameters):
+    def function_where_clause(self, parameters, *, owner_parameters=None):
         declared = {parameter.text for parameter in parameters}
         predicates = []
         while self.token.text != '{':
             if self.token.kind == 'lifetime' or self.token.text == 'for':
                 raise self.token.error('lifetime and higher-ranked where predicates are not implemented')
+            if owner_parameters is not None and (self.token.text == 'Self' or
+                    self.token.text in {parameter.text for parameter in owner_parameters}):
+                raise self.token.error('where predicates on impl-owner/Self types require conditional method availability, which is not implemented')
             if self.token.kind != 'name' or self.token.text not in declared:
                 raise self.token.error('where predicate subjects must be declared type parameters; concrete/compound predicates are not implemented')
             parameter = self.take()
@@ -885,6 +888,7 @@ class Parser:
         # separately validates the canonical contract of required/impl methods;
         # an impl prefix still has its own implicit Sized obligations.
         parameters = self.generic_parameters(allow_lifetimes=True, allow_bounds=True)
+        method_parameters = parameters
         parameter_bounds = tuple(self.last_parameter_bounds)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
         if implementation is not None:
@@ -949,9 +953,14 @@ class Parser:
         where_token, where_predicates = None, ()
         if self.token.text == "where":
             where_token = self.take()
-            if implementation is not None or abi != 'Rust' or no_mangle or declaration:
-                raise where_token.error('where constraints are implemented only on ordinary free-function definitions')
-            where_predicates = self.function_where_clause(parameters)
+            if (implementation is not None and implementation.trait is not None
+                    or abi != 'Rust' or no_mangle or declaration):
+                raise where_token.error('where constraints are implemented only on free functions and inherent method type parameters')
+            # An impl prefix determines the receiver's already-known owner.
+            # Conditional owner/Self predicates affect method availability in
+            # addition to suffix inference; do not silently treat them as suffixes.
+            where_predicates = self.function_where_clause(method_parameters,
+                owner_parameters=implementation.type_parameters if implementation is not None else None)
         if declaration:
             if trait_declaration and self.token.text == "{":
                 raise self.token.error("default trait method bodies are not implemented")

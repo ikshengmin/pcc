@@ -100,7 +100,8 @@ def test_impl_prefix_method_suffix_and_registry_identity_are_separate():
     ('struct R{x:u64} impl R{fn bad<U>(self,x:U)->(U,U){(x,x)}}', 'moved'),
     ('struct R{x:u64} impl R{fn bad<U>(self,x:U)->U{x+x}}', 'operator'),
     ('struct R{x:u64} impl R{fn bound<U:Copy>(self,x:U){}}', 'actual source/options-bound CheckedRustSource'),
-    ('struct R{x:u64} impl R{fn bound<U>(self,x:U) where U:Copy{}}', 'where constraints'),
+    # Exact method-where control retained as a genuine-check positive in
+    # test_rust_inherent_local_bounds.
     ('struct R{x:u64} impl R{fn bound<const N:usize>(self){}}', 'const generic'),
     ('struct R{x:u64} impl R{fn pick<U>(self,x:U)->U{x}} fn f(){let g=R::pick::<u64>;}', 'direct call'),
     ('struct R{x:u64} impl R{fn pick<U>(self,x:U)->U{x}} fn f(){R::pick::<u64>(1);}', 'expects 2 arguments'),

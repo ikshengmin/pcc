@@ -181,7 +181,8 @@ REFERENCE_INVALID = (
     ('moved-reference-receiver', 'trait A{fn n(&self)->u64;}fn unused<T>(x:T)where T:A{let y=x;x.n();}', '', 'E0382'),
 )
 CAPABILITY = (
-    ('method', 'struct R{x:u64}impl R{fn f<T>(x:T)->T where T:Copy{x}}', 'where constraints'),
+    # Exact inherent associated-where control is retained as a positive in
+    # test_rust_inherent_local_bounds; trait contracts remain a separate gap.
     ('trait-method', 'trait A{fn f<T>(x:T)->T where T:Copy;}', 'where constraints'),
     ('concrete', 'fn f()where u64:Copy{}', 'subjects must be declared'),
     ('compound', 'fn f<T>()where [T;0]:Copy{}', 'subjects must be declared'),
