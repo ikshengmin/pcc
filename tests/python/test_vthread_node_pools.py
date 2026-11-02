@@ -18,7 +18,8 @@ KINDS = {1: ("_ready_alloc", "pcc_vthread_ready_cached_py"),
 
 
 class Pools:
-    def __init__(self):
+    def __init__(self, pool_address=104):
+        self.pool_address = pool_address
         self.memory = {}
         self.atomic = threading.Lock()
         self.local = threading.local()
@@ -32,6 +33,8 @@ class Pools:
             "global_load_ptr": lambda name: self.load((name, 0), 0),
             "global_store_ptr": lambda name, value: self.store((name, 0), 0, value),
             "ptr_add": lambda base, offset: (base[0], base[1] + offset),
+            "ptr_to_int": lambda base: self.pool_address + base[1],
+            "int_to_ptr": lambda address: ("pcc_vthread_node_pool_locks_py", address - self.pool_address),
             "null": lambda: 0,
             "ptr_is_null": lambda value: value == 0,
             "load_ptr": self.load, "load_i64": self.load,
@@ -172,6 +175,14 @@ def test_failed_allocation_leaves_no_pool_lock_owned(kind):
     pools.outside()
     pools.fail_allocation = False
     assert pools.acquire(kind) != 0
+
+
+@pytest.mark.parametrize("residue", range(0, 128, 8))
+def test_pool_words_do_not_share_the_preceding_globals_cache_line(residue):
+    pools = Pools(pool_address=4096 + residue)
+    offsets = [pools.namespace["_node_pool_lock_word"](kind)[1] for kind in KINDS]
+    assert all((pools.pool_address + offset) % 128 == 0 for offset in offsets)
+    assert offsets[-1] + 8 <= 64 * 8
 
 
 @pytest.mark.parametrize("kind", KINDS)

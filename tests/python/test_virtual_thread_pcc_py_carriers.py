@@ -34,7 +34,7 @@ def threaded_pcc_runtime_archive(threaded_pcc_runtime_archive: Path) -> Path:
 
 def test_pcc_python_runtime_owns_bounded_carrier_policy() -> None:
     source = RUNTIME_SOURCE.read_text(encoding="utf-8")
-    assert 'define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17408)' in source
+    assert 'define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17424)' in source
     assert 'define_thread_local_i32("pcc_current_virtual_thread_carrier_py", -1)' in source
     assert 'function_addr("pcc_vthread_carrier_pool_worker_py")' in source
     assert 'function_addr("pcc_vthread_persistent_carrier_worker_py")' in source

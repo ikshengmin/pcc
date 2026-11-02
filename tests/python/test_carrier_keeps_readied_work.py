@@ -24,7 +24,8 @@ NAMES = (
 
 
 class Scheduler:
-    def __init__(self, carriers, own):
+    def __init__(self, carriers, own, queue_address=0):
+        self.queue_address = queue_address
         self.words = {
             "pcc_vthread_carrier_queue_count_py": carriers,
             "pcc_current_virtual_thread_carrier_py": own,
@@ -44,6 +45,8 @@ class Scheduler:
         namespace = {
             "global_addr": lambda name: (name, 0),
             "ptr_add": lambda base, offset: (base[0], base[1] + offset),
+            "ptr_to_int": lambda base: self.queue_address + base[1],
+            "int_to_ptr": lambda address: ("pcc_vthread_carrier_queues_py", address - self.queue_address),
             "load_i32": self.load_word,
             "load_i64": self.load_word,
             "store_i32": self.store_word,
@@ -252,6 +255,16 @@ def test_push_revalidates_an_open_queue_after_acquiring_its_lock():
     scheduler.push("late")
     assert scheduler.queue(0) == []
     assert scheduler.injection() == ["late"]
+
+
+@pytest.mark.parametrize("residue", range(0, 128, 8))
+def test_every_deque_header_is_aligned_and_the_last_ring_stays_in_storage(residue):
+    scheduler = Scheduler(64, 0, queue_address=4096 + residue)
+    offsets = [scheduler.namespace["_carrier_queue"](index)[1] for index in range(64)]
+    assert all((scheduler.queue_address + offset) % 128 == 0 for offset in offsets)
+    assert offsets[-1] + 2176 <= 17424 * 8
+    scheduler.push("first")
+    assert scheduler.pop() == "first"
 
 
 @pytest.mark.integration

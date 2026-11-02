@@ -130,6 +130,11 @@ def test_local_deque_overflow_and_queued_roots_on_five_collectors(
         #include <unistd.h>
 
         extern int64_t py_virtual_thread_carrier_queue_depth(int64_t);
+        /* Inspect the actual private layout accessor in this runtime probe. */
+        extern void *user_py_virtual_thread_runtime__carrier_queue(int64_t);
+        extern void *user_py_virtual_thread_runtime__node_pool_lock_word(int64_t);
+        extern void *pcc_vthread_carrier_queues_py[];
+        extern void *pcc_vthread_node_pool_locks_py[];
         enum { JOBS = 600 };
         static int seen[JOBS];
         static int executed, parent_done, failure;
@@ -186,6 +191,16 @@ def test_local_deque_overflow_and_queued_roots_on_five_collectors(
 
         int main(int argc, char **argv) {
             if (argc != 2 || pcc_gc_set_backend(atoll(argv[1])) != 0) return 2;
+            uintptr_t storage = (uintptr_t)pcc_vthread_carrier_queues_py;
+            for (int i = 0; i < 64; ++i) {
+                uintptr_t queue = (uintptr_t)user_py_virtual_thread_runtime__carrier_queue(i);
+                if (queue % 128 || queue < storage || queue + 2176 > storage + 17424 * 8) return 19;
+            }
+            storage = (uintptr_t)pcc_vthread_node_pool_locks_py;
+            for (int i = 1; i <= 3; ++i) {
+                uintptr_t word = (uintptr_t)user_py_virtual_thread_runtime__node_pool_lock_word(i);
+                if (word % 128 || word < storage || word + 8 > storage + 64 * 8) return 20;
+            }
             if (start((void *)&parent) != 0) return 3;
             if (py_virtual_thread_carrier_pool_start(1) != 1) return 4;
             for (int i = 0; i < 20000; ++i) {

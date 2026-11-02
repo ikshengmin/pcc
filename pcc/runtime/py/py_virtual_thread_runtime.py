@@ -133,11 +133,12 @@ define_global_i64("pcc_vthread_scheduler_cond_bits_py", 0)
 # only under the scheduler mutex (see _scheduler_unlock).
 define_global_i64("pcc_vthread_scheduler_signal_pending_py", 0)
 # Three independently locked free lists: ready, join, and channel nodes.
-# Each lock owns 128 bytes so unrelated pool traffic does not share a line.
-define_global_null_ptr_array("pcc_vthread_node_pool_locks_py", 48)
-# 64 records, each a 128-byte header and 256 raw ready-node slots.
+# Each lock owns 128 bytes, plus one alignment allowance for the array base.
+define_global_null_ptr_array("pcc_vthread_node_pool_locks_py", 64)
+# 64 records, each a 128-byte header and 256 raw ready-node slots, plus
+# 128 bytes so the effective base can be aligned independently of linking.
 # Nodes retain their separately registered GC roots while queued here.
-define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17408)
+define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17424)
 define_global_i64("pcc_vthread_carrier_queue_count_py", 0)
 define_thread_local_i32("pcc_vthread_local_poll_budget_py", 0)
 define_global_i64("pcc_vthread_sleepers_py", 0)
@@ -567,7 +568,9 @@ def _raw_queue_unlock(word) -> None:
 
 
 def _node_pool_lock_word(kind: int):
-    return ptr_add(global_addr("pcc_vthread_node_pool_locks_py"), (kind - 1) * 128)
+    storage: int = ptr_to_int(global_addr("pcc_vthread_node_pool_locks_py"))
+    aligned = int_to_ptr((storage + 127) & ~127)
+    return ptr_add(aligned, (kind - 1) * 128)
 
 
 # Ready node: thread@0, next@8, root_handle@16, pool_kind@24 (32 bytes).
@@ -768,7 +771,9 @@ def _queue_push(head_slot, tail_slot, node) -> None:
 def _carrier_queue(index: int):
     # CarrierDeque: lock@0, begin@8, length@16, owner_turn@24,
     # padding through 128, then 256 raw ready-node pointers.
-    return ptr_add(global_addr("pcc_vthread_carrier_queues_py"), index * 2176)
+    storage: int = ptr_to_int(global_addr("pcc_vthread_carrier_queues_py"))
+    aligned = int_to_ptr((storage + 127) & ~127)
+    return ptr_add(aligned, index * 2176)
 
 
 def _carrier_begin_slot(queue):

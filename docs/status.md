@@ -172,8 +172,26 @@ iteration, comparison and membership/arithmetic CPython probes on GC0-4.
 The string-membership follow-up reads exact str pairs from caller roots and
 uses the existing byte-search implementation; non-string pairs retain leased
 dispatch. Thirteen focused ordinary checks pass, including typed-str call
-sites, but the new entry has not yet executed natively. Whole-language and
-native-pcc1 gates remain open.
+sites. Frozen `817bffe6d` passes all three unchanged-source CPython probes on
+GC0-4, including empty/Unicode/long-prefix string membership, plus the ten
+baseline emitted-program runs. Whole-language and native-pcc1 gates remain open.
+
+The rooted-operation A/B does not establish a throughput win. Two seven-pair
+comparisons against `843fae806` give one-worker changes -0.46% / -0.58% and
+four-worker changes -7.72% / -1.75%; four-worker cycles rise 8.43% / 2.46%.
+The second capture follows a lower host load and retains the first result.
+Both binaries are profiled on the same one-million-request four-worker input;
+the samples do not isolate a single new owner sufficient to explain the gap.
+Real benchmark IR contains 58 rooted-comparison and 16 rooted-membership call
+sites, but the hot `json._encode_str` root/lease call counts are unchanged.
+
+Inspection finds a separate layout defect: the 128-byte queue/lock strides did
+not align their array bases. The baseline queue address is 0 mod 128; the
+candidate is 104 mod 128, splitting its header across a boundary. The alignment
+fix reserves padding and rounds both deque and pool-lock bases to 128 bytes.
+Fifty-six focused checks cover all 16 pointer-aligned starting residues, storage
+bounds and concurrent reuse. Native accessors and the QPS effect of this fix
+are still unrun; the layout observation is not yet a proven performance cause.
 Static-method generation also exposes the pre-existing `_call_user` and
 `_emit_post_call_err_check` signature drift; this batch preserves those entries
 and adds only its two new method schemas.
