@@ -6,7 +6,8 @@ Only one-dimensional boolean/integral arrays are admitted here. Reference fields
 Object supertypes, clone/casts and multidimensional/reference arrays remain gated.
 """
 from .source_syntax import Node, Token
-from .source_types import ArrayType, INTEGRAL, array_reference, promoted, widening
+from .floating_semantics import converted_constant, floating_binary
+from .source_types import ArrayType, FLOATING, INTEGRAL, array_reference, promoted, widening
 
 
 class ArrayModelAnalyzer:
@@ -90,12 +91,17 @@ class ArrayModelAnalyzer:
                 node.dtype = "boolean"
                 return True
             if left.dtype != "boolean" or right.dtype != "boolean":
-                self.require_int(left)
-                self.require_int(right)
+                self.require_numeric(left)
+                self.require_numeric(right)
                 node.operation_type = promoted(left.dtype, right.dtype)
             node.dtype = "boolean"
             if left.constant is not None and right.constant is not None:
-                node.constant = (left.constant == right.constant) == (node.value == "==")
+                if node.operation_type in FLOATING:
+                    a = converted_constant(left.constant, left.dtype, node.operation_type)
+                    b = converted_constant(right.constant, right.dtype, node.operation_type)
+                    node.constant = floating_binary(node.value, a, b, node.operation_type)
+                else:
+                    node.constant = (left.constant == right.constant) == (node.value == "==")
             return True
         return False
 
@@ -127,10 +133,11 @@ class ArrayModelAnalyzer:
                 if op in {"++", "--"}:
                     node.operation_type = promoted(dtype)
                 else:
-                    self.require_int(rhs)
+                    integral_only = op in {"&=", "|=", "^=", "<<=", ">>=", ">>>="}
+                    (self.require_int if integral_only else self.require_numeric)(rhs)
                     node.operation_type = promoted(dtype, rhs.dtype, shift=op in {"<<=", ">>=", ">>>="})
                 if op in {"/=", "%="}:
-                    self.require_nonzero_constant_divisor(rhs)
+                    self.arithmetic_domain(node, op[:-1], node.operation_type, rhs)
             node.runtime_steps = ("array-reference", "index", "null-check", "bounds-check", "read-component",
                                   *(() if op in {"++", "--"} else ("rhs",)), "operation", "narrow", "store-component")
         # Updating a component does not definitely assign the reference variable.

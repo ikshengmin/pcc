@@ -14,7 +14,7 @@ from .source_array_model import ArrayModelAnalyzer
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
 from .source_syntax import Node, SourceMethod, SourceParser
-from .source_types import INTEGRAL, promoted, select_method
+from .source_types import INTEGRAL, NUMERIC, promoted, select_method
 
 
 @dataclass(frozen=True)
@@ -211,16 +211,17 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             elif node.value in ("&=", "|=", "^=") and field.dtype == node.children[0].dtype == "boolean":
                 node.operation_type = "boolean"
             else:
-                if field.dtype not in INTEGRAL:
-                    node.token.error("instance compound arithmetic requires an integer field")
+                integral_only = node.value in {"&=", "|=", "^=", "<<=", ">>=", ">>>="}
+                if field.dtype not in (INTEGRAL if integral_only else NUMERIC):
+                    node.token.error("instance compound arithmetic requires an integer field or an admissible numeric field")
                 if node.value in ("++", "--"):
                     node.operation_type = promoted(field.dtype)
                 else:
-                    self.require_int(node.children[0])
+                    (self.require_int if integral_only else self.require_numeric)(node.children[0])
                     node.operation_type = promoted(field.dtype, node.children[0].dtype,
                                                    shift=node.value in ("<<=", ">>=", ">>>="))
                 if node.value in ("/=", "%="):
-                    self.require_nonzero_constant_divisor(node.children[0])
+                    self.arithmetic_domain(node, node.value[:-1], node.operation_type, node.children[0])
             return set(assigned)
         return super().statement(node, assigned)
 
@@ -269,7 +270,8 @@ class ClassModelProject(SourceProject):
 
     def analyze(self):
         super().analyze()
-        sizes = {"boolean": 1, "byte": 1, "short": 2, "char": 2, "int": 4, "long": 8}
+        sizes = {"boolean": 1, "byte": 1, "short": 2, "char": 2, "int": 4, "long": 8,
+                 "float": 4, "double": 8}
         for program in self.programs:
             slots, offset, alignment = [], 0, 1
             for field in program.fields:

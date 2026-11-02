@@ -1,6 +1,6 @@
 """Owned Java source syntax; no javac, class encoding or token rewriting.
 
-Initial grammar: one ordinary class, static boolean/int/long/void methods and scalar locals,
+Initial grammar: one ordinary class, static primitive/void methods and scalar locals,
 structured control flow and scalar expressions. Unsupported grammar is never
 discarded. Unicode-escape translation and non-ASCII identifiers are explicit
 boundaries rather than an approximation of Java's lexical translation rules.
@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import re
 
 from .diagnostics import JavaError, UnsupportedJava
+from .floating_semantics import FLOAT_LITERAL
 from .source_types import ARRAY_COMPONENTS, ArrayType, DECLARED, descriptor
 
 
@@ -53,7 +54,7 @@ class Node:
     children: list = field(default_factory=list)
     dtype: str | None = None
     symbol: object = None
-    constant: int | bool | None = None
+    constant: int | float | bool | None = None
     completes: bool = True
     operation_type: str | None = None
     is_final: bool = False
@@ -91,7 +92,7 @@ class SourceField:
     modifiers: frozenset[str]
     owner: str
     ordinal: int
-    constant: int | bool | None = None
+    constant: int | float | bool | None = None
 
 
 @dataclass
@@ -134,7 +135,8 @@ def tokenize(source, filename):
                 Token("/*", filename, line, column).error("unterminated comment")
             pos = end + 2
         else:
-            match = (CHAR_LITERAL if source[pos] == "'" else LEXEME).match(source, pos)
+            match = (CHAR_LITERAL.match(source, pos) if source[pos] == "'" else
+                     FLOAT_LITERAL.match(source, pos) or LEXEME.match(source, pos))
             if not match:
                 if source[pos] == "'":
                     Token("'", filename, line, column).error("invalid Java character literal")
@@ -212,6 +214,9 @@ class SourceParser:
                             code="java.unsupported.array-model-shape")
             if dtype == "void":
                 token.error("an array component cannot have void type")
+            if dtype not in ARRAY_COMPONENTS:
+                token.error("floating array components require the next array semantic domain",
+                            code="java.unsupported.array-model-shape")
             dtype = ArrayType(dtype)
         return dtype
 
@@ -392,7 +397,7 @@ class SourceParser:
                 if not self.accept(","):
                     break
         self.expect(")")
-        if sum(2 if dtype == "long" else 1 for dtype in types) + int(receiver) > 255:
+        if sum(2 if dtype in {"long", "double"} else 1 for dtype in types) + int(receiver) > 255:
             token.error("too many method parameters including receiver" if receiver else "too many static method parameters")
         return tuple(parameters), tuple(types), tuple(finals)
 
@@ -607,7 +612,7 @@ class SourceParser:
             if self.class_model and self.peek().text in ARRAY_COMPONENTS and self.peek(1).text == "[":
                 token.error("array casts require the next reference conversion domain",
                             code="java.unsupported.array-model-shape")
-            if self.peek().text in ("int", "long", "boolean", "byte", "short", "char") and self.peek(1).text == ")":
+            if self.peek().text in DECLARED and self.peek(1).text == ")":
                 dtype = self.take().text
                 self.expect(")")
                 node = Node("cast", token, dtype, [self.expression(11)])
@@ -645,6 +650,8 @@ class SourceParser:
             node = Node("bool", token, token.text == "true")
         elif token.text.startswith("'"):
             node = Node("char", token, token.text)
+        elif FLOAT_LITERAL.fullmatch(token.text):
+            node = Node("floating", token, token.text)
         elif token.text[0:1].isdigit():
             node = Node("integer", token, token.text)
         elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:

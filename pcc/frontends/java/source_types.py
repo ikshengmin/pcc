@@ -1,16 +1,18 @@
 """Java scalar conversion and overload rules, independent of bytecode.
 
-Declarations admit boolean and the five integral primitive types. Narrow
+Declarations admit boolean and all seven numeric primitive types. Narrow
 values participate in Java numeric promotion and widening invocation.
-No boxing, references, floating point or varargs are approximated here.
+No boxing or varargs are approximated here.
 """
 from dataclasses import dataclass
 
 
 INTEGRAL = frozenset(("byte", "short", "char", "int", "long"))
-DECLARED = INTEGRAL | {"boolean"}
+FLOATING = frozenset(("float", "double"))
+NUMERIC = INTEGRAL | FLOATING
+DECLARED = NUMERIC | {"boolean"}
 DESCRIPTORS = {"boolean": "Z", "byte": "B", "short": "S", "char": "C",
-               "int": "I", "long": "J", "void": "V"}
+               "int": "I", "long": "J", "float": "F", "double": "D", "void": "V"}
 ARRAY_COMPONENTS = INTEGRAL | {"boolean"}
 
 
@@ -40,11 +42,17 @@ def widening(source, target):
         return True
     if source == "null" and isinstance(target, ArrayType):
         return True
+    if source in NUMERIC and target in FLOATING:
+        return source != "double"
     return source in INTEGRAL and (target == "long" or target == "int" and source != "long"
                                    or source == "byte" and target == "short")
 
 
 def promoted(left, right=None, *, shift=False):
+    if not shift:
+        for dtype in ("double", "float"):
+            if dtype in (left, right):
+                return dtype
     return "long" if left == "long" or not shift and right == "long" else "int"
 
 
@@ -58,7 +66,7 @@ def conditional_type(yes, no, token):
         return no.dtype
     if no.dtype == "null" and isinstance(yes.dtype, ArrayType):
         return yes.dtype
-    if yes.dtype not in INTEGRAL or no.dtype not in INTEGRAL:
+    if yes.dtype not in NUMERIC or no.dtype not in NUMERIC:
         token.error("reference/boxing conditional operands require the shared Java runtime", code="java.unsupported.reference-conditional")
     if {yes.dtype, no.dtype} == {"byte", "short"}:
         return "short"

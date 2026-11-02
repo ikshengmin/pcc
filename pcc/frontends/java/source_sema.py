@@ -8,10 +8,13 @@ from dataclasses import dataclass
 import re
 
 from .integer_semantics import evaluate_division, wrap_integer
+from .floating_semantics import converted_constant, floating_binary, floating_literal
 from .diagnostics import UnsupportedJava
 
 
-from .source_types import INTEGRAL, conditional_type, promoted, select_method, widening
+from .source_types import (
+    FLOATING, INTEGRAL, NUMERIC, conditional_type, promoted, select_method, widening,
+)
 
 
 @dataclass(frozen=True)
@@ -102,7 +105,7 @@ class SourceAnalyzer:
             self.assignment_value(field.initializer, field.dtype)
             if field.initializer.constant is None:
                 field.token.error("nonconstant static initialization requires the shared Java initialization contract", code="java.unsupported.static-initialization")
-            field.constant = field.initializer.constant
+            field.constant = converted_constant(field.initializer.constant, field.initializer.dtype, field.dtype)
             self.field_states[field.token.text] = "complete"
             return field.constant
         finally:
@@ -145,6 +148,19 @@ class SourceAnalyzer:
         if node.dtype not in INTEGRAL:
             node.token.error("integer value required, got " + str(node.dtype))
 
+    def require_numeric(self, node):
+        if node.dtype not in NUMERIC:
+            # Preserve the old diagnostic substring for nonnumeric operands.
+            node.token.error("integer value required, or a floating numeric value; got " + str(node.dtype))
+
+    def arithmetic_domain(self, node, operator, dtype, divisor):
+        if dtype in FLOATING:
+            if operator == "%":
+                node.token.error("floating remainder requires an owned IEEE truncating-remainder primitive",
+                                 code="java.unsupported.floating-remainder")
+        elif operator in {"/", "%"}:
+            self.require_nonzero_constant_divisor(divisor)
+
     def require_nonzero_constant_divisor(self, node):
         if node.constant is None or node.constant == 0:
             node.token.error("nonconstant or zero integer divisor requires shared ArithmeticException support", code="java.unsupported.arithmetic-exception")
@@ -154,7 +170,7 @@ class SourceAnalyzer:
             if node.dtype != "boolean":
                 node.token.error("boolean value required")
         else:
-            self.require_int(node)
+            self.require_numeric(node)
         bounds = {"byte": (-128, 127), "short": (-32768, 32767), "char": (0, 65535)}
         narrow_constant = (target in bounds and node.dtype in {"byte", "short", "char", "int"}
                            and node.constant is not None and bounds[target][0] <= node.constant <= bounds[target][1])
@@ -232,7 +248,7 @@ class SourceAnalyzer:
                 target.token.error("array length is final and cannot be assigned")
             node.token.error("field and array expression writes require the next variable-access domain",
                              code="java.unsupported.assignment-expression-target")
-        if binding.dtype not in INTEGRAL | {"boolean"}:
+        if binding.dtype not in NUMERIC | {"boolean"}:
             node.token.error("reference expression writes require the next variable-access domain",
                              code="java.unsupported.assignment-expression-target")
         node.symbol, node.dtype = binding, binding.dtype
@@ -254,18 +270,20 @@ class SourceAnalyzer:
         if node.value == "=":
             self.assignment_value(rhs[0], dtype)
         elif node.value in ("++", "--", "post++", "post--"):
-            if dtype not in INTEGRAL:
-                node.token.error("increment/decrement requires an integer variable")
+            if dtype not in NUMERIC:
+                node.token.error("increment/decrement requires an integer variable or floating variable")
             node.operation_type = promoted(dtype)
         elif node.value in ("&=", "|=", "^=") and dtype == rhs[0].dtype == "boolean":
             node.operation_type = "boolean"
         else:
-            if dtype not in INTEGRAL:
-                node.token.error("compound arithmetic requires an integer variable")
-            self.require_int(rhs[0])
+            integral_only = node.value in {"&=", "|=", "^=", "<<=", ">>=", ">>>="}
+            if dtype not in (INTEGRAL if integral_only else NUMERIC):
+                node.token.error("compound arithmetic requires an integer variable" if integral_only
+                                 else "compound arithmetic requires an integer variable or floating variable")
+            (self.require_int if integral_only else self.require_numeric)(rhs[0])
             node.operation_type = promoted(dtype, rhs[0].dtype, shift=node.value in ("<<=", ">>=", ">>>="))
         if node.value in ("/=", "%="):
-            self.require_nonzero_constant_divisor(rhs[0])
+            self.arithmetic_domain(node, node.value[:-1], node.operation_type, rhs[0])
         assigned.add(node.symbol)
 
     def type_expression(self, node, assigned):
@@ -275,6 +293,9 @@ class SourceAnalyzer:
             return
         if kind == "integer":
             node.dtype, node.constant = integer_literal(node)
+            return
+        if kind == "floating":
+            node.dtype, node.constant = floating_literal(node)
             return
         if kind == "bool":
             node.dtype, node.constant = "boolean", op
@@ -319,7 +340,8 @@ class SourceAnalyzer:
             # Both arms must be constant expressions, even when the condition
             # happens to choose a constant arm. This is not value propagation.
             if all(child.constant is not None for child in node.children):
-                node.constant = yes.constant if condition.constant else no.constant
+                chosen = yes if condition.constant else no
+                node.constant = converted_constant(chosen.constant, chosen.dtype, node.dtype)
             return
         # Only an immediately negated decimal minimum may exceed the positive
         # literal limit. Parentheses do not inherit this lexical exception.
@@ -346,11 +368,10 @@ class SourceAnalyzer:
                     node.token.error("boolean casts require boolean operands")
                 node.dtype, node.constant = "boolean", first.constant
                 return
-            self.require_int(first)
+            self.require_numeric(first)
             node.dtype = op
             if first.constant is not None:
-                bits = 8 if op == "byte" else 16 if op in ("short", "char") else 64 if op == "long" else 32
-                node.constant = (first.constant & 0xffff) if op == "char" else wrap_integer(first.constant, bits)
+                node.constant = converted_constant(first.constant, first.dtype, op)
             return
         if kind == "unary":
             if op == "!":
@@ -360,11 +381,12 @@ class SourceAnalyzer:
                 if first.constant is not None:
                     node.constant = not first.constant
             else:
-                self.require_int(first)
+                (self.require_int if op == "~" else self.require_numeric)(first)
                 node.dtype = promoted(first.dtype)
                 if first.constant is not None:
                     value = {"+": lambda x: x, "-": lambda x: -x, "~": lambda x: ~x}[op](first.constant)
-                    node.constant = wrap_integer(value, 64 if node.dtype == "long" else 32)
+                    node.constant = (value if node.dtype in FLOATING else
+                                     wrap_integer(value, 64 if node.dtype == "long" else 32))
             return
         if kind != "binary":
             raise AssertionError("untyped source expression " + kind)
@@ -378,14 +400,20 @@ class SourceAnalyzer:
         elif op in ("&", "|", "^") and first.dtype == second.dtype == "boolean":
             node.dtype = "boolean"
         else:
-            self.require_int(first)
-            self.require_int(second)
+            requirement = self.require_int if op in {"&", "|", "^", "<<", ">>", ">>>"} else self.require_numeric
+            requirement(first)
+            requirement(second)
             node.operation_type = promoted(first.dtype, second.dtype, shift=op in ("<<", ">>", ">>>"))
             node.dtype = "boolean" if op in ("==", "!=", "<", "<=", ">", ">=") else node.operation_type
         if op in ("/", "%"):
-            self.require_nonzero_constant_divisor(second)
+            self.arithmetic_domain(node, op, node.operation_type, second)
         if first.constant is not None and second.constant is not None:
             a, b = first.constant, second.constant
+            if node.operation_type in FLOATING:
+                a = converted_constant(a, first.dtype, node.operation_type)
+                b = converted_constant(b, second.dtype, node.operation_type)
+                node.constant = floating_binary(op, a, b, node.operation_type)
+                return
             width = 64 if node.operation_type == "long" else 32
             wrap = lambda value: wrap_integer(value, width)
             operations = {"+": lambda: wrap(a + b), "-": lambda: wrap(a - b),
@@ -431,7 +459,8 @@ class SourceAnalyzer:
                 self.assignment_value(node.children[0], node.symbol.dtype)
                 assigned.add(node.symbol)
                 if node.is_final and node.children[0].constant is not None:
-                    self.constant_locals[node.symbol] = node.children[0].constant
+                    child = node.children[0]
+                    self.constant_locals[node.symbol] = converted_constant(child.constant, child.dtype, node.symbol.dtype)
         elif kind == "assign":
             node.symbol = self.lookup(node.token)
             self.check_assignment(node, assigned, node.children)

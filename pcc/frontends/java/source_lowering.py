@@ -7,6 +7,7 @@ from pcc.ir.compat import ir
 
 from .artifact import JavaCompilation, method_symbol
 from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
+from .source_types import FLOATING
 
 
 OPERATIONS = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv", "%": "srem", "&": "and", "|": "or", "^": "xor",
@@ -29,6 +30,8 @@ class SourceLowerer:
         # canonical i32 (signed byte/short, nonnegative char), not ABI lanes.
         if dtype == "void":
             return ir.VoidType()
+        if dtype in FLOATING:
+            return ir.FloatType() if dtype == "float" else ir.DoubleType()
         return ir.IntType(1 if dtype == "boolean" else 64 if dtype == "long" else 32)
 
     @classmethod
@@ -50,11 +53,33 @@ class SourceLowerer:
         return value if value.type == target else self.builder.trunc(value, target)
 
     def coerce(self, value, dtype):
+        floating = isinstance(value.type, (ir.FloatType, ir.DoubleType))
+        target = self.scalar_type(dtype)
+        if dtype in FLOATING:
+            if value.type == target:
+                return value
+            if not floating:
+                return self.builder.sitofp(value, target)
+            return (self.builder.fptrunc if dtype == "float" else self.builder.fpext)(value, target)
+        if floating:
+            # JLS 5.1.3: NaN -> 0, truncate/saturate to int or long FIRST;
+            # only then apply byte/short/char narrowing. Never feed an invalid
+            # value to fptosi, even on an unselected result arm (IR poison).
+            lane = ir.IntType(64 if dtype == "long" else 32)
+            limit = 1 << (lane.width - 1)
+            isnan = self.builder.fcmp_unordered("uno", value, value)
+            low = self.builder.fcmp_ordered("<=", value, ir.Constant(value.type, -float(limit)))
+            high = self.builder.fcmp_ordered(">=", value, ir.Constant(value.type, float(limit)))
+            exceptional = self.builder.or_(isnan, self.builder.or_(low, high))
+            safe = self.builder.select(exceptional, ir.Constant(value.type, 0.0), value)
+            integer = self.builder.fptosi(safe, lane)
+            integer = self.builder.select(high, ir.Constant(lane, limit - 1), integer)
+            integer = self.builder.select(low, ir.Constant(lane, -limit), integer)
+            value = self.builder.select(isnan, ir.Constant(lane, 0), integer)
         # Assignment/compound/conditional conversion must normalize even when
         # source and destination share the physical canonical i32 type.
         if dtype in ("byte", "short", "char"):
             return emit_narrow(self.builder, {"byte": "i2b", "short": "i2s", "char": "i2c"}[dtype], value)
-        target = self.scalar_type(dtype)
         if value.type == target:
             return value
         if value.type.width > target.width:
@@ -89,7 +114,8 @@ class SourceLowerer:
 
     def expression(self, node):
         if node.constant is not None:
-            return ir.Constant(self.scalar_type(node.dtype), int(node.constant))
+            value = node.constant if node.dtype in FLOATING else int(node.constant)
+            return ir.Constant(self.scalar_type(node.dtype), value)
         kind = node.kind
         if kind == "mutation":
             return self.assignment(node, node.children[1:])
@@ -128,6 +154,8 @@ class SourceLowerer:
             if node.value == "+":
                 return value
             if node.value == "-":
+                if node.dtype in FLOATING:
+                    return self.builder.fneg(value)
                 return self.builder.sub(ir.Constant(value.type, 0), value)
             return self.builder.not_(value)
         if kind == "binary":
@@ -153,7 +181,13 @@ class SourceLowerer:
             if node.value not in ("<<", ">>", ">>>"):
                 right = self.coerce(right, dtype)
             if node.value in ("==", "!=", "<", "<=", ">", ">="):
+                if dtype in FLOATING:
+                    comparison = self.builder.fcmp_unordered if node.value == "!=" else self.builder.fcmp_ordered
+                    return comparison(node.value, left, right)
                 return self.builder.icmp_signed(node.value, left, right)
+            if dtype in FLOATING:
+                operation = {"+": "fadd", "-": "fsub", "*": "fmul", "/": "fdiv"}[node.value]
+                return getattr(self.builder, operation)(left, right)
             if node.value in ("/", "%"):
                 return emit_nonzero_division(self.builder, OPERATIONS[node.value], left, node.children[1].constant)
             return emit_binary(self.builder, OPERATIONS[node.value], left, right)
@@ -176,8 +210,12 @@ class SourceLowerer:
                 right, operation = self.expression(rhs[0]), OPERATIONS[node.value[:-1]]
             if operation not in ("shl", "ashr", "lshr"):
                 right = self.coerce(right, node.operation_type)
-            value = (emit_nonzero_division(self.builder, operation, left, rhs[0].constant)
-                     if operation in ("sdiv", "srem") else emit_binary(self.builder, operation, left, right))
+            if node.operation_type in FLOATING:
+                fp_operation = {"add": "fadd", "sub": "fsub", "mul": "fmul", "sdiv": "fdiv"}[operation]
+                value = getattr(self.builder, fp_operation)(left, right)
+            else:
+                value = (emit_nonzero_division(self.builder, operation, left, rhs[0].constant)
+                         if operation in ("sdiv", "srem") else emit_binary(self.builder, operation, left, right))
             value = self.coerce(value, node.symbol.dtype)
         self.builder.store(value, slot)
         return old if node.value in ("post++", "post--") else value

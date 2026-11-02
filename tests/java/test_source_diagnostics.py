@@ -49,7 +49,6 @@ CAPABILITIES = [
     ("class Diagnostic{int run(){return 42;}}", "instance-methods", "only ordinary static source methods"),
     ("class Diagnostic{static synchronized int run(){return 42;}}", "special-method-modifiers", "only ordinary static source methods"),
     ("class Diagnostic{static native int run();}", "special-method-modifiers", "only ordinary static source methods"),
-    ("class Diagnostic{static int run(float a){return 42;}}", "declared-parameter-type", "source parameters require"),
     ("class Diagnostic{static Object run(){return null;}}", "declared-result-type", "source method results"),
     ("class Diagnostic{static int[] values;}", "array-storage", "array fields require"),
     ("class Diagnostic{static int value;}", "static-initialization", "mutable static fields"),
@@ -59,7 +58,6 @@ CAPABILITIES = [
     ("class Diagnostic{static final int value=Diagnostic.value;}", "cyclic-initialization", "cyclic field initialization"),
     (original("final int value;return 42;"), "blank-final-local", "blank final locals"),
     (original("final var value=42;return value;"), "declared-local-type", "final local declarations"),
-    (original("float value=1;return 42;"), "declared-local-type", "unsupported Java expression"),
     (original("return 1/0;"), "arithmetic-exception", "ArithmeticException"),
     (original("return true?true:1;"), "reference-conditional", "reference/boxing conditional"),
     (original("return new Object();"), "object-expressions", "unsupported Java expression"),
@@ -72,6 +70,16 @@ CAPABILITIES = [
     (original("return missing.Package.f();"), "implicit-type-metadata", "complete implicit-type metadata"),
     ("package java.lang; class Object{}", "bootstrap-object", "bootstrap Object"),
 ]
+
+
+# The original inputs are retained verbatim as acceptance controls now that
+# their primitive types are implemented; no source is rewritten to pass.
+@pytest.mark.parametrize("source,descriptor", [
+    ("class Diagnostic{static int run(float a){return 42;}}", "(F)I"),
+    (original("float value=1;return 42;"), "()I"),
+])
+def test_former_floating_type_boundaries_now_reach_owned_ir(source, descriptor):
+    assert compile_source(source, descriptor=descriptor).entry[1] == descriptor
 
 
 @pytest.mark.parametrize("source,suffix,message", CAPABILITIES, ids=[row[1] + str(i) for i, row in enumerate(CAPABILITIES)])

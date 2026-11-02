@@ -46,10 +46,11 @@ def observe_i32(compilation, directory, monkeypatch):
 
 
 def observe_scalar(compilation, directory, monkeypatch, arguments=()):
-    """Observe exact boolean/integral result bytes, with independent SysV arguments.
+    """Observe exact primitive result bytes, with independent SysV arguments.
 
     This shim performs no Java arithmetic, comparison, extension or narrowing.
-    ``arguments`` supplies already typed (Z/B/S/C/I/J, value) ABI lanes directly.
+    ``arguments`` supplies already typed (Z/B/S/C/I/J/F/D, value) ABI lanes.
+    F/D values and results are raw unsigned IEEE bits, never host conversions.
     Narrow argument high bits are not interpreted by this observer; the callee
     must normalize the declared low-width lane itself.
     """
@@ -59,27 +60,49 @@ def observe_scalar(compilation, directory, monkeypatch, arguments=()):
                                        "S": (2, "ax", "WORD", True),
                                        "C": (2, "ax", "WORD", False),
                                        "I": (4, "eax", "DWORD", True),
-                                       "J": (8, "rax", "QWORD", True)}[result_type]
+                                       "J": (8, "rax", "QWORD", True),
+                                       "F": (4, "eax", "DWORD", False),
+                                       "D": (8, "rax", "QWORD", False)}[result_type]
     assert compilation.entry[1] == "(" + "".join(kind for kind, _ in arguments) + ")" + result_type
     lines = [".intel_syntax noprefix", ".text", ".globl _start", "_start:", "  and rsp, -16"]
-    stack_size = ((max(0, len(arguments) - 6) * 8 + 15) // 16) * 16
+    # SysV has independent integer and SSE register banks. Overflow arguments
+    # occupy ordered eight-byte stack slots regardless of which bank filled.
+    locations, integer_count, floating_count, stack_count = [], 0, 0, 0
+    for kind, _ in arguments:
+        floating = kind in {"F", "D"}
+        index, limit = (floating_count, 8) if floating else (integer_count, 6)
+        if index < limit:
+            locations.append(("fp" if floating else "gp", index))
+        else:
+            locations.append(("stack", stack_count))
+            stack_count += 1
+        if floating:
+            floating_count += 1
+        else:
+            integer_count += 1
+    stack_size = ((stack_count * 8 + 15) // 16) * 16
     if stack_size:
         lines.append("  sub rsp, " + str(stack_size))
     names = (("edi", "esi", "edx", "ecx", "r8d", "r9d"),
              ("rdi", "rsi", "rdx", "rcx", "r8", "r9"))
-    for index, (kind, value) in enumerate(arguments):
-        assert kind in ("Z", "B", "S", "C", "I", "J") and (kind != "Z" or value in (0, 1))
-        bits = 64 if kind == "J" else 32
+    for (kind, value), (bank, index) in zip(arguments, locations):
+        assert kind in ("Z", "B", "S", "C", "I", "J", "F", "D") and (kind != "Z" or value in (0, 1))
+        bits = 64 if kind in {"J", "D"} else 32
         immediate = hex(value & ((1 << bits) - 1))
-        if index < 6:
+        if bank == "fp":
+            reg, move = ("rax", "movq") if kind == "D" else ("eax", "movd")
+            lines += ["  mov " + reg + ", " + immediate, "  " + move + " xmm" + str(index) + ", " + reg]
+        elif bank == "gp":
             lines.append("  mov " + names[kind == "J"][index] + ", " + immediate)
         else:
-            offset = str((index - 6) * 8)
-            if kind == "J":
+            offset = str(index * 8)
+            if bits == 64:
                 lines += ["  mov rax, " + immediate, "  mov QWORD PTR [rsp+" + offset + "], rax"]
             else:
                 lines.append("  mov DWORD PTR [rsp+" + offset + "], " + immediate)
     lines.append("  call " + compilation.entry_symbol)
+    if result_type in {"F", "D"}:
+        lines.append("  movd eax, xmm0" if result_type == "F" else "  movq rax, xmm0")
     if stack_size:
         lines.append("  add rsp, " + str(stack_size))
     lines += ["  sub rsp, 16", "  mov " + memory + " PTR [rsp], " + register,
