@@ -512,12 +512,43 @@ class SourceParser:
         Local declarations remain a distinct alternative to the list.
         """
         first = self.simple(allow_declaration=allow_declaration)
-        if first.kind == "var" or self.peek().text != ",":
+        if (first.kind == "var" or first.kind == "sequence" and first.value == "local_declarations"
+                or self.peek().text != ","):
             return first
         expressions = [first]
         while self.accept(","):
             expressions.append(self.simple())
         return Node("sequence", first.token, children=expressions)
+
+    def local_declaration(self, type_token, *, is_final):
+        """JLS 14.4/6.3: ordered declarators in the enclosing lexical scope.
+
+        Brackets after a name belong only to that declarator, while brackets
+        after the shared element type belong to all of them. Keep every var
+        node separate: Sema declares each binding immediately before checking
+        its own initializer, then exposes it to subsequent declarators.
+        """
+        common_type = self.array_suffix(type_token.text)
+        declarations = []
+        while True:
+            name = self.identifier()
+            dtype = self.array_suffix(common_type)
+            if dtype not in DECLARED and not isinstance(dtype, ArrayType):
+                self.type_boundary(type_token, "source locals require boolean or integral primitives",
+                                   code="java.unsupported.declared-local-type")
+            if self.accept("="):
+                initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
+                               else self.expression())
+                children = [initializer]
+            else:
+                children = []
+            if is_final and not children:
+                name.error("blank final locals require the definite-unassignment source domain", code="java.unsupported.blank-final-local")
+            declarations.append(Node("var", name, dtype, children, is_final=is_final))
+            if not self.accept(","):
+                break
+        return (declarations[0] if len(declarations) == 1 else
+                Node("sequence", type_token, "local_declarations", declarations))
 
     def simple(self, allow_declaration=False):
         token = self.peek()
@@ -533,23 +564,9 @@ class SourceParser:
             self.peek().error("duplicate final local modifier")
         if self.peek().text in DECLARED or (self.class_model and self.peek().text in ARRAY_COMPONENTS):
             type_token = self.take()
-            dtype = self.array_suffix(type_token.text)
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
-            name = self.identifier()
-            dtype = self.array_suffix(dtype)
-            if dtype not in DECLARED and not isinstance(dtype, ArrayType):
-                self.type_boundary(type_token, "source locals require boolean or integral primitives",
-                                   code="java.unsupported.declared-local-type")
-            if self.accept("="):
-                initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
-                               else self.expression())
-                children = [initializer]
-            else:
-                children = []
-            if is_final and not children:
-                name.error("blank final locals require the definite-unassignment source domain", code="java.unsupported.blank-final-local")
-            return Node("var", name, dtype, children, is_final=is_final)
+            return self.local_declaration(type_token, is_final=is_final)
         if is_final and self.peek().text == "var":
             token.error("final local declarations require boolean or integral primitives",
                         code="java.unsupported.declared-local-type")
